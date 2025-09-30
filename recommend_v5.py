@@ -297,7 +297,7 @@ def run_crypto_strategy(coin_universe: list, log: list):
 
 # --- 5. 결과를 HTML 파일로 저장하는 함수 ---
 def save_portfolio_to_html(log_messages, final_portfolio, stock_portfolio, coin_portfolio, stock_status, coin_status):
-    filepath = '/home/gmoh/mysite/templates/portfolio_result.html'
+    filepath = './portfolio_result.html'
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     kst = timezone(timedelta(hours=9))
     now_kst = datetime.now(kst)
