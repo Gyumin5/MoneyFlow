@@ -1,0 +1,110 @@
+
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>자동 포트폴리오 추천</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; line-height: 1.6; }
+            .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            h1, h2, h3 { color: #2c3e50; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
+            h1 { font-size: 2em; margin-bottom: 0; }
+            h2.subtitle { font-size: 1.2em; color: #888; border: none; margin-top: 5px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; }
+            th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .final-table th { background-color: #3498db; color: white; }
+            .footer { margin-top: 20px; font-size: 0.9em; color: #888; text-align: center; }
+            p { margin: 10px 0; }
+            .error { color: #e74c3c; }
+            pre { background-color: #eee; padding: 10px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; font-family: 'Courier New', Courier, monospace; }
+            .small-table table { width: auto; font-size: 0.9em; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🏆 최종 v5.1 포트폴리오 추천 🏆</h1>
+            <h2 class="subtitle">(2025년 09월 30일 기준)</h2>
+            <p><b>주식 전략 상태:</b> 공격 모드</p>
+            <p><b>코인 전략 상태:</b> 강세장 유지</p>
+            <table class="final-table">
+                <thead><tr><th>종목</th><th>자산군</th><th>최종 비중</th></tr></thead>
+                <tbody>
+    <tr><td>SOL-USD</td><td>코인</td><td>21.09%</td></tr><tr><td>EEM</td><td>주식</td><td>20.00%</td></tr><tr><td>GLD</td><td>주식</td><td>20.00%</td></tr><tr><td>QQQ</td><td>주식</td><td>20.00%</td></tr><tr><td>AVAX-USD</td><td>코인</td><td>18.91%</td></tr>
+                </tbody>
+                <tfoot><tr style="font-weight: bold;"><td colspan="2">총 합계</td><td>100.00%</td></tr></tfoot>
+            </table>
+            <hr>
+            <h1>📜 상세 실행 로그</h1>
+            <h2>🛰️ Step 1: 동적 코인 유니버스 선정 시작 (Live API)</h2><p>  - 1. CoinGecko API 호출: 글로벌 시가총액 상위 20위 코인 조회...</p><p>  - 2. Upbit 원화마켓 교차 확인 및 유동성 필터링...</p><p>    - 기준: 31일 평균/중간 거래대금 1십억 원 이상</p><p>    - 스테이블 코인 제외: USDC</p><p>    - 스테이블 코인 제외: USDT</p><p><b>  -> 최종 선정된 코인 유니버스 (10개):</b> ['ADA-USD', 'AVAX-USD', 'BTC-USD', 'DOGE-USD', 'ETH-USD', 'LINK-USD', 'SOL-USD', 'TRX-USD', 'XLM-USD', 'XRP-USD']</p><h3>✅ 동적 코인 유니버스 선정 완료</h3><h2>📥 Step 2: 필요 데이터 다운로드 및 업데이트 시작</h2><p>  - ADA-USD 데이터 다운로드/업데이트 완료</p><p>  - AVAX-USD 데이터 다운로드/업데이트 완료</p><p>  - BTC-USD 데이터 다운로드/업데이트 완료</p><p>  - DBC 데이터 다운로드/업데이트 완료</p><p>  - DOGE-USD 데이터 다운로드/업데이트 완료</p><p>  - EEM 데이터 다운로드/업데이트 완료</p><p>  - EFA 데이터 다운로드/업데이트 완료</p><p>  - ETH-USD 데이터 다운로드/업데이트 완료</p><p>  - GLD 데이터 다운로드/업데이트 완료</p><p>  - IEF 데이터 다운로드/업데이트 완료</p><p>  - LINK-USD 데이터 다운로드/업데이트 완료</p><p>  - PDBC 데이터 다운로드/업데이트 완료</p><p>  - QQQ 데이터 다운로드/업데이트 완료</p><p>  - SHY 데이터 다운로드/업데이트 완료</p><p>  - SOL-USD 데이터 다운로드/업데이트 완료</p><p>  - SPY 데이터 다운로드/업데이트 완료</p><p>  - TRX-USD 데이터 다운로드/업데이트 완료</p><p>  - VEA 데이터 다운로드/업데이트 완료</p><p>  - VNQ 데이터 다운로드/업데이트 완료</p><p>  - VT 데이터 다운로드/업데이트 완료</p><p>  - XLM-USD 데이터 다운로드/업데이트 완료</p><p>  - XRP-USD 데이터 다운로드/업데이트 완료</p><h3>✅ 데이터 준비 완료</h3><h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2><h2>📈 주식 포트폴리오 분석 시작 (60%)</h2><p>    - VT 최신(2025-09-29): $137.38 | 200일 MA: $122.86</p><p>    - EEM 최신(2025-09-29): $53.19 | 200일 MA: $45.70</p><p><b>    - [결과] ✅ 공격 모드</b></p><p>  - 2단계 (공격 모드): 팩터 기반 자산 선정</p><h4>    - [세부] 공격 모드 팩터 점수:</h4><table border="1" class="dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>Momentum Score</th>
+      <th>Quality (Sharpe)</th>
+    </tr>
+    <tr>
+      <th>Ticker</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>SPY</th>
+      <td>0.134638</td>
+      <td>1.683908</td>
+    </tr>
+    <tr>
+      <th>EFA</th>
+      <td>0.096455</td>
+      <td>1.501821</td>
+    </tr>
+    <tr>
+      <th>QQQ</th>
+      <td>0.175030</td>
+      <td>1.993809</td>
+    </tr>
+    <tr>
+      <th>EEM</th>
+      <td>0.161853</td>
+      <td>2.233667</td>
+    </tr>
+    <tr>
+      <th>VT</th>
+      <td>0.131450</td>
+      <td>1.896590</td>
+    </tr>
+    <tr>
+      <th>VNQ</th>
+      <td>0.020847</td>
+      <td>0.452197</td>
+    </tr>
+    <tr>
+      <th>GLD</th>
+      <td>0.237231</td>
+      <td>2.261909</td>
+    </tr>
+    <tr>
+      <th>PDBC</th>
+      <td>0.025757</td>
+      <td>0.104745</td>
+    </tr>
+    <tr>
+      <th>IEF</th>
+      <td>0.023547</td>
+      <td>1.155750</td>
+    </tr>
+    <tr>
+      <th>VEA</th>
+      <td>0.116730</td>
+      <td>1.849943</td>
+    </tr>
+  </tbody>
+</table><p>    - [세부] 모멘텀 상위 3개: ['GLD', 'QQQ', 'EEM']</p><p>    - [세부] 퀄리티 상위 3개: ['GLD', 'EEM', 'QQQ']</p><p>    - <b>최종 주식 포트폴리오: ['EEM', 'GLD', 'QQQ']</b></p><h2>🪙 코인 포트폴리오 분석 시작 (40%)</h2><p>    - BTC 기준(전날 종가 2025-09-29): <금액> | 100일 MA: <금액></p><p><b>    - [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p><h4>    - [세부] 코인별 헬스체크 결과:</h4><pre>      - ADA-USD: 전날(2025-09-29) ($0.81) > 50일SMA($0.86) = False | 63일수익률(2.01%) > 0 = True<br>      - AVAX-USD: 전날(2025-09-29) ($30.45) > 50일SMA($26.99) = True | 63일수익률(21.39%) > 0 = True<br>      - BTC-USD: 전날(2025-09-29) ($114400.38) > 50일SMA($113734.39) = True | 63일수익률(-2.99%) > 0 = False<br>      - DOGE-USD: 전날(2025-09-29) ($0.24) > 50일SMA($0.24) = False | 63일수익률(4.36%) > 0 = True<br>      - ETH-USD: 전날(2025-09-29) ($4217.34) > 50일SMA($4400.36) = False | 63일수익률(11.35%) > 0 = True<br>      - LINK-USD: 전날(2025-09-29) ($21.75) > 50일SMA($23.41) = False | 63일수익률(20.58%) > 0 = True<br>      - SOL-USD: 전날(2025-09-29) ($213.05) > 50일SMA($209.28) = True | 63일수익률(16.72%) > 0 = True<br>      - TRX-USD: 전날(2025-09-29) ($0.34) > 50일SMA($0.34) = False | 63일수익률(4.76%) > 0 = True<br>      - XLM-USD: 전날(2025-09-29) ($0.37) > 50일SMA($0.39) = False | 63일수익률(-10.99%) > 0 = False<br>      - XRP-USD: 전날(2025-09-29) ($2.88) > 50일SMA($2.96) = False | 63일수익률(-7.48%) > 0 = False</pre><p>    - [세부] 건강한 코인 (2개): ['AVAX-USD', 'SOL-USD']</p><p>    - [세부] 랭킹 점수: {'AVAX-USD': np.float64(1.3202603806385618), 'SOL-USD': np.float64(1.1318280533272744)}</p><p>    - [세부] 최종 선택 코인 (2개): ['AVAX-USD', 'SOL-USD']</p><p>    - <b>최종 코인 포트폴리오: ['AVAX-USD', 'SOL-USD']</b></p>
+            <div class="footer">마지막 업데이트: 2025년 09월 30일 16:56:46 KST</div>
+        </div>
+    </body>
+    </html>
+    
