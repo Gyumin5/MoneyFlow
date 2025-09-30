@@ -1,0 +1,66 @@
+# 워크플로우의 이름
+name: Build and Deploy Portfolio
+
+# 워크플로우가 실행될 조건 설정
+on:
+  # 1. 스케줄에 따라 실행
+  schedule:
+    # 매일 23:00 UTC (한국 시간 오전 8시)에 실행
+    - cron: '0 1 * * *'
+  # 2. 수동으로 실행할 수 있도록 Actions 탭에 버튼 추가
+  workflow_dispatch:
+
+# 워크플로우가 GitHub 저장소에 변경사항을 쓰고, Pages에 배포할 권한 부여
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# 실제 작업(Job) 정의
+jobs:
+  build-and-deploy:
+    # 작업이 실행될 가상 환경 지정 (최신 우분투)
+    runs-on: ubuntu-latest
+
+    # 작업의 단계(Step)들 정의
+    steps:
+      # 1. 저장소의 코드를 가상 환경으로 내려받기 (체크아웃)
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. 파이썬 환경 설정
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9' # 사용할 파이썬 버전
+
+      # 3. 파이썬 라이브러리 설치
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 4. 파이썬 스크립트 실행
+      - name: Run python script
+        run: python recommend_v5.py
+
+      # 5. 변경된 파일(결과 HTML, 데이터)을 저장소에 자동으로 커밋
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Automated portfolio update" # 커밋 메시지
+          file_pattern: "*.html data/*.csv" # 커밋할 파일 지정
+
+      # 6. GitHub Pages에 배포할 파일 준비
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # 현재 폴더의 모든 내용을 업로드
+          path: '.'
+
+      # 7. GitHub Pages에 배포 실행
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
