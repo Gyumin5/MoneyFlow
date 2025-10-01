@@ -1,8 +1,6 @@
 # 워크플로우의 이름
 name: Build and Deploy Portfolio
 
-#
-
 # 워크플로우가 실행될 조건 설정
 on:
   # 1. 스케줄에 따라 실행
