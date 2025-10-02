@@ -84,16 +84,47 @@ def download_required_data(tickers: list, log: list):
     for ticker in sorted(tickers_to_download):
         if ticker == 'Cash': continue
         filepath = os.path.join(DATA_DIR, f"{ticker}.csv")
-        try:
-            url, params = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}", {"period1": start_ts, "period2": end_ts, "interval": "1d", "includeAdjustedClose": "true"}
-            data = session.get(url, params=params, timeout=15).json()['chart']['result'][0]
-            df = pd.DataFrame({'Date': pd.to_datetime(data['timestamp'], unit='s').date, 'Adj_Close': data['indicators']['adjclose'][0]['adjclose']}).dropna()
-            df.to_csv(filepath, index=False)
-            print(f"  - {ticker} 데이터 다운로드/업데이트 완료")
-            log.append(f"<p>  - {ticker} 데이터 다운로드/업데이트 완료</p>")
-        except Exception as e:
-            print(f"  - {ticker} 데이터 다운로드 실패: {e}")
-            log.append(f"<p class='error'>  - {ticker} 데이터 다운로드 실패: {e}</p>")
+        
+        # '-USD'가 포함된 티커는 코인으로 간주하고 바이낸스 API 사용
+        if '-USD' in ticker:
+            try:
+                binance_symbol = ticker.replace('-USD', 'USDT')
+                url = "https://api.binance.com/api/v3/klines"
+                # 전략에 필요한 최대 기간(252일)보다 여유있게 365일치 데이터를 요청합니다.
+                params = {'symbol': binance_symbol, 'interval': '1d', 'limit': 365}
+                
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                
+                data = response.json()
+                
+                columns = ['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'Quote_asset_volume', 'Number_of_trades', 'Taker_buy_base_asset_volume', 'Taker_buy_quote_asset_volume', 'Ignore']
+                df = pd.DataFrame(data, columns=columns)
+                
+                df['Date'] = pd.to_datetime(df['Open_time'], unit='ms').dt.date
+                # 야후파이낸스 데이터와 컬럼명을 맞추기 위해 'Adj_Close'로 변경
+                df['Adj_Close'] = pd.to_numeric(df['Close'])
+                
+                final_df = df[['Date', 'Adj_Close']]
+                final_df.to_csv(filepath, index=False)
+                
+                print(f"  - {ticker} 데이터 다운로드/업데이트 완료 (Binance)")
+                log.append(f"<p>  - {ticker} 데이터 다운로드/업데이트 완료 (Binance)</p>")
+
+            except Exception as e:
+                print(f"  - {ticker} 데이터 다운로드 실패 (Binance): {e}")
+                log.append(f"<p class='error'>  - {ticker} 데이터 다운로드 실패 (Binance): {e}</p>")
+        else: # 그 외에는 주식으로 간주하고 야후 파이낸스 API 사용
+            try:
+                url, params = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}", {"period1": start_ts, "period2": end_ts, "interval": "1d", "includeAdjustedClose": "true"}
+                data = session.get(url, params=params, timeout=15).json()['chart']['result'][0]
+                df = pd.DataFrame({'Date': pd.to_datetime(data['timestamp'], unit='s').date, 'Adj_Close': data['indicators']['adjclose'][0]['adjclose']}).dropna()
+                df.to_csv(filepath, index=False)
+                print(f"  - {ticker} 데이터 다운로드/업데이트 완료 (Yahoo)")
+                log.append(f"<p>  - {ticker} 데이터 다운로드/업데이트 완료 (Yahoo)</p>")
+            except Exception as e:
+                print(f"  - {ticker} 데이터 다운로드 실패 (Yahoo): {e}")
+                log.append(f"<p class='error'>  - {ticker} 데이터 다운로드 실패 (Yahoo): {e}</p>")
         time.sleep(0.2)
     print("--- ✅ 데이터 준비 완료 ---")
     log.append("<h3>✅ 데이터 준비 완료</h3>")
@@ -354,7 +385,7 @@ def save_portfolio_to_html(log_messages, final_portfolio, stock_portfolio, coin_
             </table>
             <hr>
             <h1>📜 상세 실행 로그</h1>
-            {''.join(log_messages)}
+            {' '.join(log_messages)}
             <div class="footer">마지막 업데이트: {update_time}</div>
         </div>
     </body>
