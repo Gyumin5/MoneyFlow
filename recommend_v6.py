@@ -22,7 +22,7 @@ N_FACTOR_ASSETS = 3
 N_SELECTED_COINS = 5
 
 # --- 2. 동적 코인 유니버스 선정 ---
-def get_dynamic_coin_universe(log: list) -> list:
+def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: 동적 코인 유니버스 선정 시작 (Live API) ---")
     log.append("<h2>🛰️ Step 1: 동적 코인 유니버스 선정 시작 (Live API)</h2>")
     
@@ -38,7 +38,8 @@ def get_dynamic_coin_universe(log: list) -> list:
         cg_response = requests.get(COINGECKO_URL, params=cg_params, headers=headers)
         cg_response.raise_for_status()
         cg_data = cg_response.json()
-        cg_symbols = {item['symbol'].upper() for item in cg_data}
+        cg_symbol_to_id_map = {item['symbol'].upper(): item['id'] for item in cg_data}
+        cg_symbols = set(cg_symbol_to_id_map.keys())
         
         print("\n  - 2. Upbit 원화마켓 교차 확인 및 유동성 필터링...")
         log.append("<p>  - 2. Upbit 원화마켓 교차 확인 및 유동성 필터링...</p>")
@@ -46,6 +47,7 @@ def get_dynamic_coin_universe(log: list) -> list:
         upbit_symbols = {ticker.split('-')[1] for ticker in upbit_krw_tickers_full}
         common_symbols = cg_symbols.intersection(upbit_symbols)
         final_universe = []
+        coin_id_map = {}
         
         print(f"    - 기준: {DAYS_TO_CHECK}일 평균/중간 거래대금 {MIN_TRADE_VALUE_KRW / 1_000_000_000:,.0f}십억 원 이상")
         log.append(f"<p>    - 기준: {DAYS_TO_CHECK}일 평균/중간 거래대금 {MIN_TRADE_VALUE_KRW / 1_000_000_000:,.0f}십억 원 이상</p>")
@@ -56,76 +58,81 @@ def get_dynamic_coin_universe(log: list) -> list:
             trade_values = df_ohlcv['value'].iloc[:DAYS_TO_CHECK]
             if trade_values.mean() >= MIN_TRADE_VALUE_KRW and trade_values.median() >= MIN_TRADE_VALUE_KRW:
                 if symbol not in STABLECOINS:
-                    final_universe.append(f"{symbol}-USD")
+                    ticker = f"{symbol}-USD"
+                    final_universe.append(ticker)
+                    if symbol in cg_symbol_to_id_map:
+                        coin_id_map[ticker] = cg_symbol_to_id_map[symbol]
                 else:
                     print(f"    - 스테이블 코인 제외: {symbol}")
                     log.append(f"<p>    - 스테이블 코인 제외: {symbol}</p>")
-            time.sleep(0.2)
+            time.sleep(10)
     except Exception as e:
         print(f"\n  - [오류] 코인 유니버스 선정 실패: {e}")
         log.append(f"<p class='error'>  - [오류] 코인 유니버스 선정 실패: {e}</p>")
-        return []
+        return [], {}
     
     print(f"\n  -> 최종 선정된 코인 유니버스 ({len(final_universe)}개): {final_universe}")
     log.append(f"<p><b>  -> 최종 선정된 코인 유니버스 ({len(final_universe)}개):</b> {final_universe}</p>")
     print("--- ✅ 동적 코인 유니버스 선정 완료 ---")
     log.append("<h3>✅ 동적 코인 유니버스 선정 완료</h3>")
-    return final_universe
+    return final_universe, coin_id_map
 
 # --- 3. 데이터 다운로드 모듈 ---
-def download_required_data(tickers: list, log: list):
+def download_required_data(tickers: list, log: list, coin_id_map: dict):
     print("\n--- 📥 Step 2: 필요 데이터 다운로드 및 업데이트 시작 ---")
     log.append("<h2>📥 Step 2: 필요 데이터 다운로드 및 업데이트 시작</h2>")
     os.makedirs(DATA_DIR, exist_ok=True)
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0"})
-    start_ts, end_ts = int(datetime(2009, 1, 1, tzinfo=timezone.utc).timestamp()), int(datetime.now(timezone.utc).timestamp())
+    
+    yahoo_session = requests.Session()
+    yahoo_session.headers.update({"User-Agent": "Mozilla/5.0"})
+    cg_session = requests.Session()
+    cg_session.headers.update({"accept": "application/json"})
+
     tickers_to_download = list(set(tickers))
     for ticker in sorted(tickers_to_download):
         if ticker == 'Cash': continue
         filepath = os.path.join(DATA_DIR, f"{ticker}.csv")
-        
-        # '-USD'가 포함된 티커는 코인으로 간주하고 바이낸스 API 사용
-        if '-USD' in ticker:
-            try:
-                binance_symbol = ticker.replace('-USD', 'USDT')
-                url = "https://api.binance.com/api/v3/klines"
-                # 전략에 필요한 최대 기간(252일)보다 여유있게 365일치 데이터를 요청합니다.
-                params = {'symbol': binance_symbol, 'interval': '1d', 'limit': 365}
-                
-                response = requests.get(url, params=params)
-                response.raise_for_status()
-                
-                data = response.json()
-                
-                columns = ['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'Quote_asset_volume', 'Number_of_trades', 'Taker_buy_base_asset_volume', 'Taker_buy_quote_asset_volume', 'Ignore']
-                df = pd.DataFrame(data, columns=columns)
-                
-                df['Date'] = pd.to_datetime(df['Open_time'], unit='ms').dt.date
-                # 야후파이낸스 데이터와 컬럼명을 맞추기 위해 'Adj_Close'로 변경
-                df['Adj_Close'] = pd.to_numeric(df['Close'])
-                
-                final_df = df[['Date', 'Adj_Close']]
-                final_df.to_csv(filepath, index=False)
-                
-                print(f"  - {ticker} 데이터 다운로드/업데이트 완료 (Binance)")
-                log.append(f"<p>  - {ticker} 데이터 다운로드/업데이트 완료 (Binance)</p>")
 
-            except Exception as e:
-                print(f"  - {ticker} 데이터 다운로드 실패 (Binance): {e}")
-                log.append(f"<p class='error'>  - {ticker} 데이터 다운로드 실패 (Binance): {e}</p>")
-        else: # 그 외에는 주식으로 간주하고 야후 파이낸스 API 사용
+        if ticker in coin_id_map:
             try:
+                coingecko_id = coin_id_map[ticker]
+                days_to_fetch = 300  # 252일 이상 필요하므로 넉넉하게 300일
+                url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart"
+                params = {'vs_currency': 'usd', 'days': str(days_to_fetch), 'interval': 'daily'}
+                
+                print(f"  - {ticker} (CoinGecko) 데이터 다운로드 중... (id: {coingecko_id}, days: {days_to_fetch})")
+                
+                response = cg_session.get(url, params=params, timeout=15)
+                response.raise_for_status()
+                data = response.json().get('prices')
+
+                if not data:
+                    raise ValueError("CoinGecko API가 가격 데이터를 반환하지 않았습니다.")
+
+                df = pd.DataFrame(data, columns=['timestamp', 'Adj_Close'])
+                df['Date'] = pd.to_datetime(df['timestamp'], unit='ms').dt.date
+                df = df[['Date', 'Adj_Close']].dropna()
+                df.to_csv(filepath, index=False)
+                print(f"  - {ticker} (CoinGecko) 데이터 다운로드/업데이트 완료")
+                log.append(f"<p>  - {ticker} (CoinGecko) 데이터 다운로드/업데이트 완료</p>")
+            except Exception as e:
+                print(f"  - {ticker} (CoinGecko) 데이터 다운로드 실패: {e}")
+                log.append(f"<p class='error'>  - {ticker} (CoinGecko) 데이터 다운로드 실패: {e}</p>")
+        else:  # 주식
+            try:
+                start_ts, end_ts = int(datetime(2009, 1, 1, tzinfo=timezone.utc).timestamp()), int(datetime.now(timezone.utc).timestamp())
                 url, params = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}", {"period1": start_ts, "period2": end_ts, "interval": "1d", "includeAdjustedClose": "true"}
-                data = session.get(url, params=params, timeout=15).json()['chart']['result'][0]
+                data = yahoo_session.get(url, params=params, timeout=15).json()['chart']['result'][0]
                 df = pd.DataFrame({'Date': pd.to_datetime(data['timestamp'], unit='s').date, 'Adj_Close': data['indicators']['adjclose'][0]['adjclose']}).dropna()
                 df.to_csv(filepath, index=False)
-                print(f"  - {ticker} 데이터 다운로드/업데이트 완료 (Yahoo)")
-                log.append(f"<p>  - {ticker} 데이터 다운로드/업데이트 완료 (Yahoo)</p>")
+                print(f"  - {ticker} 데이터 다운로드/업데이트 완료")
+                log.append(f"<p>  - {ticker} 데이터 다운로드/업데이트 완료</p>")
             except Exception as e:
-                print(f"  - {ticker} 데이터 다운로드 실패 (Yahoo): {e}")
-                log.append(f"<p class='error'>  - {ticker} 데이터 다운로드 실패 (Yahoo): {e}</p>")
-        time.sleep(0.2)
+                print(f"  - {ticker} 데이터 다운로드 실패: {e}")
+                log.append(f"<p class='error'>  - {ticker} 데이터 다운로드 실패: {e}</p>")
+        
+        time.sleep(10)
+        
     print("--- ✅ 데이터 준비 완료 ---")
     log.append("<h3>✅ 데이터 준비 완료</h3>")
 
@@ -246,14 +253,16 @@ def run_crypto_strategy_v6(coin_universe: list, log: list):
     print("\n--- 🪙 코인 포트폴리오 분석 시작 (40%) - v6 ---")
     log.append("<h2>🪙 코인 포트폴리오 분석 시작 (40%)</h2>")
     btc = load_price_data('BTC-USD')
-    if btc is None or len(btc.dropna()) < 100: return {CASH_ASSET: 1.0}, "데이터 부족"
+    # 마지막 줄은 실시간 가격, 그 윗줄이 전날 종가이므로, 계산에 필요한 최소 데이터 길이를 1씩 늘림
+    if btc is None or len(btc.dropna()) < 101: return {CASH_ASSET: 1.0}, "데이터 부족"
     
-    # Use latest available data, handling potential delays in updates
-    use_yesterday = btc.index[-1].date() == datetime.now(timezone.utc).date()
-    btc_series = btc.iloc[:-1] if use_yesterday else btc
+    # 사용자의 요청에 따라, 마지막 줄은 현재가로 간주하고, 그 윗 줄을 전날 종가로 사용.
+    # 따라서 모든 계산에서 마지막 줄을 제외한 시리즈를 사용.
+    btc_series = btc.iloc[:-1]
+    
     btc_price = btc_series.iloc[-1]
     btc_sma_100 = calculate_sma(btc_series, 100)
-    btc_date_str = f"{'전날' if use_yesterday else '최신'} 종가 {btc_series.index[-1].date()}"
+    btc_date_str = f"전날 종가 {btc_series.index[-1].date()}"
 
     print(f"    - BTC 기준({btc_date_str}): ${btc_price:,.2f} | 100일 MA: ${btc_sma_100:,.2f}")
     log.append(f"<p>    - BTC 기준({btc_date_str}): ${btc_price:,.2f} | 100일 MA: ${btc_sma_100:,.2f}</p>")
@@ -271,13 +280,13 @@ def run_crypto_strategy_v6(coin_universe: list, log: list):
     healthy, health_check_logs = [], []
     for t in coin_universe:
         p = load_price_data(t)
-        if p is None or len(p.dropna()) < 64:
+        if p is None or len(p.dropna()) < 65: # 63일 수익률 + 50일 SMA -> 64일 필요 + 1(마지막줄)
             health_check_logs.append(f"      - {t}: 데이터 부족 (건너김)")
             continue
         
-        p_series = p.iloc[:-1] if p.index[-1].date() == datetime.now(timezone.utc).date() else p
+        p_series = p.iloc[:-1]
         current_price, sma_50, ret_63 = p_series.iloc[-1], calculate_sma(p_series, 50), calculate_return(p_series, 63)
-        date_str = f"{'전날' if use_yesterday else '최신'}({p_series.index[-1].date()})"
+        date_str = f"전날({p_series.index[-1].date()})"
         
         condition_sma, condition_return = current_price > sma_50, ret_63 > 0
         log_line = f"      - {t}: {date_str} (${current_price:.2f}) > 50일SMA(${sma_50:.2f}) = {condition_sma} | 63일수익률({ret_63:.2%}) > 0 = {condition_return}"
@@ -301,8 +310,9 @@ def run_crypto_strategy_v6(coin_universe: list, log: list):
     ranked_scores = {}
     for t in healthy:
         p = load_price_data(t)
-        if p is None or len(p.dropna()) < 253: continue
-        series_for_sharpe = p.iloc[:-1] if p.index[-1].date() == datetime.now(timezone.utc).date() else p
+        if p is None or len(p.dropna()) < 254: # 252일 샤프지수 -> 253일 필요 + 1(마지막줄)
+            continue
+        series_for_sharpe = p.iloc[:-1]
         score = calculate_sharpe_ratio(series_for_sharpe, 126) + calculate_sharpe_ratio(series_for_sharpe, 252)
         if not np.isnan(score): ranked_scores[t] = score
     if not ranked_scores: 
@@ -312,7 +322,7 @@ def run_crypto_strategy_v6(coin_universe: list, log: list):
     
     selected = sorted(ranked_scores, key=ranked_scores.get, reverse=True)[:N_SELECTED_COINS]
     
-    vols = {t: calculate_volatility((p.iloc[:-1] if (p := load_price_data(t)).index[-1].date() == datetime.now(timezone.utc).date() else p), 90) for t in selected}
+    vols = {t: calculate_volatility(load_price_data(t).iloc[:-1], 90) for t in selected}
     inv_vols = {t: 1/v if v > 0 else 0 for t, v in vols.items()}
     total_inv_vol = sum(inv_vols.values())
     if total_inv_vol == 0: 
@@ -385,7 +395,7 @@ def save_portfolio_to_html(log_messages, final_portfolio, stock_portfolio, coin_
             </table>
             <hr>
             <h1>📜 상세 실행 로그</h1>
-            {' '.join(log_messages)}
+            {''.join(log_messages)}
             <div class="footer">마지막 업데이트: {update_time}</div>
         </div>
     </body>
@@ -398,10 +408,14 @@ def save_portfolio_to_html(log_messages, final_portfolio, stock_portfolio, coin_
 if __name__ == "__main__":
     log_messages = []
     
-    current_coin_universe = get_dynamic_coin_universe(log_messages)
+    current_coin_universe, coin_id_map = get_dynamic_coin_universe(log_messages)
+    
+    # BTC는 항상 필요하므로 수동으로 추가
+    if 'BTC-USD' not in coin_id_map:
+        coin_id_map['BTC-USD'] = 'bitcoin'
     
     tickers_to_download = list(set(OFFENSIVE_STOCK_UNIVERSE + DEFENSIVE_STOCK_UNIVERSE + current_coin_universe + ['BTC-USD', 'VT', 'EEM']))
-    download_required_data(tickers_to_download, log_messages)
+    download_required_data(tickers_to_download, log_messages, coin_id_map)
     
     print("\n--- 🚀 Step 3: 전략 실행 및 포트폴리오 분석 ---")
     log_messages.append("<h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2>")
