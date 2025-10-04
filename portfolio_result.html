@@ -4,40 +4,67 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>자동 포트폴리오 추천 (v6)</title>
+        <title>자동 포트폴리오 추천 (v7)</title>
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; line-height: 1.6; }
             .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            h1, h2, h3 { color: #2c3e50; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
+            h1, h2, h3, h4, h5 { color: #2c3e50; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
             h1 { font-size: 2em; margin-bottom: 0; }
             h2.subtitle { font-size: 1.2em; color: #888; border: none; margin-top: 5px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; }
-            th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; font-size: 0.9em; }
+            th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
             th { background-color: #f2f2f2; }
             .final-table th { background-color: #3498db; color: white; }
             .footer { margin-top: 20px; font-size: 0.9em; color: #888; text-align: center; }
             p { margin: 10px 0; }
             .error { color: #e74c3c; }
-            pre { background-color: #eee; padding: 10px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; font-family: 'Courier New', Courier, monospace; }
-            .small-table table { width: auto; font-size: 0.9em; }
+            .small-table table { width: auto; }
+            .dataframe { border-collapse: collapse; width: auto; margin-bottom: 15px; }
+            .dataframe th, .dataframe td { padding: 5px 8px; border: 1px solid #ccc; text-align: right; }
+            .dataframe thead th { background-color: #f2f2f2; text-align: center; }
+            .calculator-container { background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 20px; margin-top: 30px; border-radius: 8px; }
+            .calculator-container input[type="number"] { width: 200px; padding: 8px; margin-right: 10px; border: 1px solid #ccc; border-radius: 4px; }
+            .calculator-container button { padding: 8px 15px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            .calculator-container button:hover { background-color: #2980b9; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🏆 최종 v6 포트폴리오 추천 🏆</h1>
-            <h2 class="subtitle">(2025년 10월 04일 기준)</h2>
+            <h1>🏆 최종 v7 포트폴리오 추천 🏆</h1>
+            <h2 class="subtitle">
+            (2025년 10월 04일 기준)</h2>
             <p><b>주식 전략 상태:</b> 공격 모드</p>
             <p><b>코인 전략 상태:</b> 강세장 (동적 비중)</p>
             <table class="final-table">
                 <thead><tr><th>종목</th><th>자산군</th><th>최종 비중</th></tr></thead>
                 <tbody>
-    <tr><td>BTC-USD</td><td>코인</td><td>15.15%</td></tr><tr><td>EEM</td><td>주식</td><td>15.00%</td></tr><tr><td>GLD</td><td>주식</td><td>15.00%</td></tr><tr><td>QQQ</td><td>주식</td><td>15.00%</td></tr><tr><td>VT</td><td>주식</td><td>15.00%</td></tr><tr><td>ETH-USD</td><td>코인</td><td>6.67%</td></tr><tr><td>XRP-USD</td><td>코인</td><td>6.48%</td></tr><tr><td>SOL-USD</td><td>코인</td><td>6.05%</td></tr><tr><td>AVAX-USD</td><td>코인</td><td>5.65%</td></tr>
+                    <tr><td>Cash</td><td>현금</td><td>24.00%</td></tr><tr><td>EEM</td><td>주식</td><td>15.00%</td></tr><tr><td>GLD</td><td>주식</td><td>15.00%</td></tr><tr><td>QQQ</td><td>주식</td><td>15.00%</td></tr><tr><td>VT</td><td>주식</td><td>15.00%</td></tr><tr><td>BTC-USD</td><td>코인</td><td>11.62%</td></tr><tr><td>AVAX-USD</td><td>코인</td><td>4.38%</td></tr>
                 </tbody>
                 <tfoot><tr style="font-weight: bold;"><td colspan="2">총 합계</td><td>100.00%</td></tr></tfoot>
             </table>
+
+            <div class="calculator-container">
+                <h3>🧮 총 자산 배분 계산기</h3>
+                <p>총 투자 예정 금액(원)을 입력하시면 각 자산에 얼마씩 배분해야 하는지 계산합니다.</p>
+                <input type="number" id="total-assets-input" placeholder="총 자산액 (원)" min="0">
+                <button id="calculate-total">계산하기</button>
+                <div id="total-assets-results" style="margin-top: 15px;"></div>
+            </div>
+
+            <div class="calculator-container">
+                <h3>🪙 코인 자산 배분 계산기</h3>
+                <p>코인에만 투자할 총 금액(원)을 입력하시면 코인과 현금의 배분 금액을 계산합니다.</p>
+                <input type="number" id="coin-assets-input" placeholder="코인 총 자산액 (원)" min="0">
+                <button id="calculate-coin">계산하기</button>
+                <div id="coin-assets-results" style="margin-top: 15px;"></div>
+            </div>
+
+            <h2>🔄 코인 포트폴리오 턴오버 분석</h2>
+            <p>어제(2025-10-03)와 오늘(2025년 10월 04일) 코인 포트폴리오 간의 턴오버 비율: <b>60.00%</b></p>
+
             <hr>
             <h1>📜 상세 실행 로그</h1>
-            <h2>🛰️ Step 1: 동적 코인 유니버스 선정 시작 (Live API)</h2><p>  - 1. CoinGecko API 호출: 글로벌 시가총액 상위 20위 코인 조회...</p><p>  - 2. Upbit 원화마켓 교차 확인 및 유동성 필터링...</p><p>    - 기준: 31일 평균/중간 거래대금 1십억 원 이상</p><p>    - 스테이블 코인 제외: USDC</p><p>    - 스테이블 코인 제외: USDT</p><p><b>  -> 최종 선정된 코인 유니버스 (10개):</b> ['ADA-USD', 'AVAX-USD', 'BTC-USD', 'DOGE-USD', 'ETH-USD', 'LINK-USD', 'SOL-USD', 'TRX-USD', 'XLM-USD', 'XRP-USD']</p><h3>✅ 동적 코인 유니버스 선정 완료</h3><h2>📥 Step 2: 필요 데이터 다운로드 및 업데이트 시작</h2><p>  - ADA-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - AVAX-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - BTC-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - DBC 데이터 다운로드/업데이트 완료</p><p>  - DOGE-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - EEM 데이터 다운로드/업데이트 완료</p><p>  - EFA 데이터 다운로드/업데이트 완료</p><p>  - ETH-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - GLD 데이터 다운로드/업데이트 완료</p><p>  - IEF 데이터 다운로드/업데이트 완료</p><p>  - LINK-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - PDBC 데이터 다운로드/업데이트 완료</p><p>  - QQQ 데이터 다운로드/업데이트 완료</p><p>  - SOL-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - SPY 데이터 다운로드/업데이트 완료</p><p>  - TRX-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - VEA 데이터 다운로드/업데이트 완료</p><p>  - VNQ 데이터 다운로드/업데이트 완료</p><p>  - VT 데이터 다운로드/업데이트 완료</p><p>  - XLM-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - XRP-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><h3>✅ 데이터 준비 완료</h3><h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2><h2>📈 주식 포트폴리오 분석 시작 (60%)</h2><p>    - VT 최신(2025-10-03): $139.08 | 200일 MA: $123.23</p><p>    - EEM 최신(2025-10-03): $54.23 | 200일 MA: $45.92</p><p><b>    - [결과] ✅ 공격 모드</b></p><p>  - 2단계 (공격 모드): 팩터 기반 자산 선정</p><h4>    - [세부] 공격 모드 팩터 점수:</h4><table border="1" class="dataframe small-table">
+            <h2>🛰️ Step 1: 동적 코인 유니버스 선정 시작 (Live API)</h2><p>  - 1. CoinGecko API 호출: 글로벌 시가총액 상위 20위 코인 조회...</p><p>  - 2. Upbit 원화마켓 교차 확인 및 유동성 필터링...</p><p>    - 기준: 31일 평균/중간 거래대금 1십억 원 이상</p><p>    - 스테이블 코인 제외: USDC</p><p>    - 스테이블 코인 제외: USDT</p><p><b>  -> 최종 선정된 코인 유니버스 (10개):</b> ['ADA-USD', 'AVAX-USD', 'BTC-USD', 'DOGE-USD', 'ETH-USD', 'LINK-USD', 'SOL-USD', 'SUI-USD', 'TRX-USD', 'XRP-USD']</p><h3>✅ 동적 코인 유니버스 선정 완료</h3><h2>📥 Step 2: 필요 데이터 다운로드 및 업데이트 시작</h2><p>  - ADA-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - AVAX-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - BTC-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - DOGE-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - EEM 데이터 다운로드/업데이트 완료</p><p>  - EFA 데이터 다운로드/업데이트 완료</p><p>  - ETH-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - GLD 데이터 다운로드/업데이트 완료</p><p>  - IEF 데이터 다운로드/업데이트 완료</p><p>  - LINK-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - PDBC 데이터 다운로드/업데이트 완료</p><p>  - QQQ 데이터 다운로드/업데이트 완료</p><p>  - SOL-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - SPY 데이터 다운로드/업데이트 완료</p><p>  - SUI-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - TRX-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - VEA 데이터 다운로드/업데이트 완료</p><p>  - VNQ 데이터 다운로드/업데이트 완료</p><p>  - VT 데이터 다운로드/업데이트 완료</p><p>  - XRP-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><h3>✅ 데이터 준비 완료</h3><h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2><h2>📈 주식 포트폴리오 분석 시작 (60%)</h2><p>    - VT 최신(2025-10-03): $139.08 | 200일 MA: $123.23</p><p>    - EEM 최신(2025-10-03): $54.23 | 200일 MA: $45.92</p><p><b>    - [결과] ✅ 공격 모드</b></p><h4>  - 2단계 (공격 모드): 팩터 기반 자산 선정</h4><h5>    - [세부] 공격 모드 팩터 점수:</h5><table border="1" class="dataframe dataframe small-table">
   <thead>
     <tr style="text-align: right;">
       <th></th>
@@ -53,58 +80,447 @@
   <tbody>
     <tr>
       <th>SPY</th>
-      <td>0.155046</td>
-      <td>2.148091</td>
-    </tr>
-    <tr>
-      <th>EFA</th>
-      <td>0.134375</td>
-      <td>2.022845</td>
+      <td>0.16</td>
+      <td>2.15</td>
     </tr>
     <tr>
       <th>QQQ</th>
-      <td>0.201425</td>
-      <td>2.451667</td>
+      <td>0.20</td>
+      <td>2.45</td>
+    </tr>
+    <tr>
+      <th>EFA</th>
+      <td>0.13</td>
+      <td>2.02</td>
     </tr>
     <tr>
       <th>EEM</th>
-      <td>0.187444</td>
-      <td>2.663331</td>
+      <td>0.19</td>
+      <td>2.66</td>
     </tr>
     <tr>
       <th>VT</th>
-      <td>0.155218</td>
-      <td>2.419980</td>
-    </tr>
-    <tr>
-      <th>VNQ</th>
-      <td>0.031146</td>
-      <td>0.712593</td>
-    </tr>
-    <tr>
-      <th>GLD</th>
-      <td>0.247597</td>
-      <td>2.331874</td>
-    </tr>
-    <tr>
-      <th>PDBC</th>
-      <td>0.010441</td>
-      <td>0.236490</td>
-    </tr>
-    <tr>
-      <th>IEF</th>
-      <td>0.025344</td>
-      <td>0.723042</td>
+      <td>0.16</td>
+      <td>2.42</td>
     </tr>
     <tr>
       <th>VEA</th>
-      <td>0.153788</td>
-      <td>2.361429</td>
+      <td>0.15</td>
+      <td>2.36</td>
+    </tr>
+    <tr>
+      <th>VNQ</th>
+      <td>0.03</td>
+      <td>0.71</td>
+    </tr>
+    <tr>
+      <th>GLD</th>
+      <td>0.25</td>
+      <td>2.33</td>
+    </tr>
+    <tr>
+      <th>PDBC</th>
+      <td>0.01</td>
+      <td>0.24</td>
     </tr>
   </tbody>
-</table><p>    - [세부] 모멘텀 상위 3개: ['GLD', 'QQQ', 'EEM']</p><p>    - [세부] 퀄리티 상위 3개: ['EEM', 'QQQ', 'VT']</p><p>    - <b>최종 주식 포트폴리오: ['EEM', 'GLD', 'QQQ', 'VT']</b></p><h2>🪙 코인 포트폴리오 분석 시작 (40%)</h2><p>    - BTC 기준(전날 종가 2025-10-04): $122,250.15 | 100일 MA: $114,286.98</p><p><b>    - [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p><h4>    - [세부] 코인별 헬스체크 결과:</h4><pre>      - ADA-USD: 전날(2025-10-04) ($0.87) > 50일SMA($0.86) = True | 63일수익률(21.26%) > 0 = True<br>      - AVAX-USD: 전날(2025-10-04) ($31.38) > 50일SMA($27.51) = True | 63일수익률(45.72%) > 0 = True<br>      - BTC-USD: 전날(2025-10-04) ($122250.15) > 50일SMA($113619.18) = True | 63일수익률(7.96%) > 0 = True<br>      - DOGE-USD: 전날(2025-10-04) ($0.26) > 50일SMA($0.24) = True | 63일수익률(28.64%) > 0 = True<br>      - ETH-USD: 전날(2025-10-04) ($4515.76) > 50일SMA($4387.17) = True | 63일수익률(29.64%) > 0 = True<br>      - LINK-USD: 전날(2025-10-04) ($22.54) > 50일SMA($23.37) = False | 63일수익률(40.01%) > 0 = True<br>      - SOL-USD: 전날(2025-10-04) ($233.06) > 50일SMA($211.98) = True | 63일수익률(43.17%) > 0 = True<br>      - TRX-USD: 전날(2025-10-04) ($0.34) > 50일SMA($0.34) = False | 63일수익률(5.73%) > 0 = True<br>      - XLM-USD: 전날(2025-10-04) ($0.41) > 50일SMA($0.38) = True | 63일수익률(6.39%) > 0 = True<br>      - XRP-USD: 전날(2025-10-04) ($3.04) > 50일SMA($2.94) = True | 63일수익률(2.68%) > 0 = True</pre><p>    - <b>[v6] 건강한 코인 수: 8개 -> 코인 투자 비중: 100%, 현금 비중: 0%</b></p><p>    - <b>최종 코인 포트폴리오: ['ETH-USD', 'BTC-USD', 'XRP-USD', 'SOL-USD', 'AVAX-USD']</b></p>
-            <div class="footer">마지막 업데이트: 2025년 10월 04일 11:14:30 KST</div>
+</table><p>    - <b>최종 주식 포트폴리오: ['EEM', 'GLD', 'QQQ', 'VT']</b></p>
+            <h3>오늘 코인 포트폴리오 상세 로그 (2025년 10월 04일)</h3>
+            <h3>코인 포트폴리오 분석 (기준일: 2025-10-04)</h3><h4>1. 카나리 신호 확인</h4><p>    - BTC 기준(종가 2025-10-04): $122,440.94 | 50일 MA: $113,721.20</p><p><b>    - [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p><h4>2. 헬스 체크 결과</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>현재가</th>
+      <th>30일 SMA</th>
+      <th>SMA 통과</th>
+      <th>21일 수익률</th>
+      <th>수익률 통과</th>
+      <th>최종 결과</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ADA-USD</td>
+      <td>$0.85</td>
+      <td>$0.85</td>
+      <td>❌</td>
+      <td>-8.94%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>AVAX-USD</td>
+      <td>$30.33</td>
+      <td>$29.96</td>
+      <td>✅</td>
+      <td>0.98%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>BTC-USD</td>
+      <td>$122,440.94</td>
+      <td>$114,521.54</td>
+      <td>✅</td>
+      <td>5.58%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>$0.25</td>
+      <td>$0.25</td>
+      <td>✅</td>
+      <td>-13.03%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>ETH-USD</td>
+      <td>$4,507.53</td>
+      <td>$4,356.60</td>
+      <td>✅</td>
+      <td>-3.43%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>LINK-USD</td>
+      <td>$22.12</td>
+      <td>$22.75</td>
+      <td>❌</td>
+      <td>-11.08%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>$229.18</td>
+      <td>$223.17</td>
+      <td>✅</td>
+      <td>-5.56%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>SUI-USD</td>
+      <td>$3.57</td>
+      <td>$3.50</td>
+      <td>✅</td>
+      <td>-6.41%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>TRX-USD</td>
+      <td>$0.34</td>
+      <td>$0.34</td>
+      <td>✅</td>
+      <td>-2.64%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>XRP-USD</td>
+      <td>$3.00</td>
+      <td>$2.95</td>
+      <td>✅</td>
+      <td>-4.09%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+  </tbody>
+</table><p>    - <b>건강한 코인 수: 2개 -> 코인 투자 비중: 40%, 현금 비중: 60%</b></p><h4>3. 코인 선정 (샤프 지수 랭킹)</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>126일 샤프</th>
+      <th>252일 샤프</th>
+      <th>종합 점수</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BTC-USD</td>
+      <td>0.09</td>
+      <td>0.04</td>
+      <td>0.13</td>
+    </tr>
+    <tr>
+      <td>AVAX-USD</td>
+      <td>0.09</td>
+      <td>0.01</td>
+      <td>0.10</td>
+    </tr>
+  </tbody>
+</table><p>  - <b>상위 2개 코인 선정:</b> ['BTC-USD', 'AVAX-USD']</p><h4>4. 최종 비중 결정 (상관관계 조정)</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>역변동성 점수</th>
+      <th>다각화 점수</th>
+      <th>최종 점수</th>
+      <th>최종 비중</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BTC-USD</td>
+      <td>59.53</td>
+      <td>0.6</td>
+      <td>35.66</td>
+      <td>72.65%</td>
+    </tr>
+    <tr>
+      <td>AVAX-USD</td>
+      <td>22.41</td>
+      <td>0.6</td>
+      <td>13.43</td>
+      <td>27.35%</td>
+    </tr>
+  </tbody>
+</table><p>    - <b>최종 코인 포트폴리오: ['BTC-USD', 'AVAX-USD', 'Cash']</b></p>
+            <h3>어제 코인 포트폴리오 상세 로그 (2025-10-03)</h3>
+            <h3>코인 포트폴리오 분석 (기준일: 2025-10-03)</h3><h4>1. 카나리 신호 확인</h4><p>    - BTC 기준(종가 2025-10-03): $120,611.72 | 50일 MA: $113,542.29</p><p><b>    - [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p><h4>2. 헬스 체크 결과</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>현재가</th>
+      <th>30일 SMA</th>
+      <th>SMA 통과</th>
+      <th>21일 수익률</th>
+      <th>수익률 통과</th>
+      <th>최종 결과</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ADA-USD</td>
+      <td>$0.87</td>
+      <td>$0.85</td>
+      <td>✅</td>
+      <td>-2.77%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>AVAX-USD</td>
+      <td>$30.99</td>
+      <td>$29.55</td>
+      <td>✅</td>
+      <td>6.20%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>BTC-USD</td>
+      <td>$120,611.72</td>
+      <td>$113,779.71</td>
+      <td>✅</td>
+      <td>4.42%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>$0.26</td>
+      <td>$0.25</td>
+      <td>✅</td>
+      <td>2.38%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>ETH-USD</td>
+      <td>$4,484.01</td>
+      <td>$4,347.42</td>
+      <td>✅</td>
+      <td>0.55%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>LINK-USD</td>
+      <td>$22.75</td>
+      <td>$22.79</td>
+      <td>❌</td>
+      <td>-6.93%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>$234.62</td>
+      <td>$221.54</td>
+      <td>✅</td>
+      <td>2.59%</td>
+      <td>✅</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>SUI-USD</td>
+      <td>$3.58</td>
+      <td>$3.48</td>
+      <td>✅</td>
+      <td>-2.23%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>TRX-USD</td>
+      <td>$0.34</td>
+      <td>$0.34</td>
+      <td>✅</td>
+      <td>-0.97%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>XRP-USD</td>
+      <td>$3.04</td>
+      <td>$2.93</td>
+      <td>✅</td>
+      <td>-0.17%</td>
+      <td>❌</td>
+      <td>🔴 비건강</td>
+    </tr>
+  </tbody>
+</table><p>    - <b>건강한 코인 수: 5개 -> 코인 투자 비중: 100%, 현금 비중: 0%</b></p><h4>3. 코인 선정 (샤프 지수 랭킹)</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>126일 샤프</th>
+      <th>252일 샤프</th>
+      <th>종합 점수</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ETH-USD</td>
+      <td>0.14</td>
+      <td>0.05</td>
+      <td>0.19</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>0.09</td>
+      <td>0.02</td>
+      <td>0.11</td>
+    </tr>
+    <tr>
+      <td>BTC-USD</td>
+      <td>0.07</td>
+      <td>0.04</td>
+      <td>0.11</td>
+    </tr>
+    <tr>
+      <td>AVAX-USD</td>
+      <td>0.08</td>
+      <td>0.01</td>
+      <td>0.09</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>0.06</td>
+      <td>0.00</td>
+      <td>0.06</td>
+    </tr>
+  </tbody>
+</table><p>  - <b>상위 5개 코인 선정:</b> ['ETH-USD', 'SOL-USD', 'BTC-USD', 'AVAX-USD', 'DOGE-USD']</p><h4>4. 최종 비중 결정 (상관관계 조정)</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>역변동성 점수</th>
+      <th>다각화 점수</th>
+      <th>최종 점수</th>
+      <th>최종 비중</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ETH-USD</td>
+      <td>25.90</td>
+      <td>0.24</td>
+      <td>6.17</td>
+      <td>16.41%</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>23.71</td>
+      <td>0.23</td>
+      <td>5.54</td>
+      <td>14.72%</td>
+    </tr>
+    <tr>
+      <td>BTC-USD</td>
+      <td>59.54</td>
+      <td>0.25</td>
+      <td>15.02</td>
+      <td>39.91%</td>
+    </tr>
+    <tr>
+      <td>AVAX-USD</td>
+      <td>21.78</td>
+      <td>0.26</td>
+      <td>5.71</td>
+      <td>15.18%</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>21.85</td>
+      <td>0.24</td>
+      <td>5.19</td>
+      <td>13.78%</td>
+    </tr>
+  </tbody>
+</table><p>    - <b>최종 코인 포트폴리오: ['ETH-USD', 'SOL-USD', 'BTC-USD', 'AVAX-USD', 'DOGE-USD']</b></p>
+
+            <div class="footer">마지막 업데이트: 2025년 10월 04일 23:17:47 KST</div>
         </div>
+        <script>
+            const finalPortfolio = {"Cash": 0.24, "EEM": 0.15, "GLD": 0.15, "QQQ": 0.15, "VT": 0.15, "BTC-USD": 0.11623845072502222, "AVAX-USD": 0.043761549274977794};
+            const coinStrategyPortfolio = {"BTC-USD": 0.29059612681255553, "AVAX-USD": 0.10940387318744448, "Cash": 0.6};
+
+            function formatKRW(num) {
+                return new Intl.NumberFormat('ko-KR').format(num) + ' 원';
+            }
+
+            document.getElementById('calculate-total').addEventListener('click', function() {
+                const totalValue = parseFloat(document.getElementById('total-assets-input').value);
+                const resultsDiv = document.getElementById('total-assets-results');
+                if (isNaN(totalValue) || totalValue <= 0) {
+                    resultsDiv.innerHTML = '<p style="color:red;">유효한 금액을 입력하세요.</p>';
+                    return;
+                }
+                
+                let tableHtml = '<table class="small-table"><thead><tr><th>종목</th><th>예상 배분 금액</th></tr></thead><tbody>';
+                const sortedItems = Object.entries(finalPortfolio).sort(([,a],[,b]) => b-a);
+                for (const [ticker, weight] of sortedItems) {
+                    const amount = totalValue * weight;
+                    tableHtml += `<tr><td>${ticker}</td><td>${formatKRW(Math.round(amount))}</td></tr>`;
+                }
+                tableHtml += '</tbody></table>';
+                resultsDiv.innerHTML = tableHtml;
+            });
+
+            document.getElementById('calculate-coin').addEventListener('click', function() {
+                const totalValue = parseFloat(document.getElementById('coin-assets-input').value);
+                const resultsDiv = document.getElementById('coin-assets-results');
+                if (isNaN(totalValue) || totalValue <= 0) {
+                    resultsDiv.innerHTML = '<p style="color:red;">유효한 금액을 입력하세요.</p>';
+                    return;
+                }
+
+                let tableHtml = '<table class="small-table"><thead><tr><th>자산</th><th>예상 배분 금액</th></tr></thead><tbody>';
+                const sortedItems = Object.entries(coinStrategyPortfolio).sort(([,a],[,b]) => b-a);
+                for (const [ticker, weight] of sortedItems) {
+                    const amount = totalValue * weight;
+                    tableHtml += `<tr><td>${ticker}</td><td>${formatKRW(Math.round(amount))}</td></tr>`;
+                }
+                tableHtml += '</tbody></table>';
+                resultsDiv.innerHTML = tableHtml;
+            });
+        </script>
     </body>
     </html>
     
