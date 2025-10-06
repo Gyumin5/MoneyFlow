@@ -1,3 +1,5 @@
+
+
 import pandas as pd
 import numpy as np
 import os
@@ -151,37 +153,36 @@ def load_price_data(ticker: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 def calculate_sma(s: pd.Series, w: int) -> float: 
-    if s is None or len(s.dropna()) < w: return np.nan
-    return s.rolling(window=w).mean().iloc[-1]
+    if s is None or len(s.dropna()) < w + 1: return np.nan
+    return s.rolling(window=w).mean().iloc[-2]
 
 def calculate_return(s: pd.Series, d: int) -> float: 
-    if s is None or len(s.dropna()) < d + 1: return np.nan
-    if s.iloc[-1 - d] == 0: return -np.inf
-    return (s.iloc[-1] / s.iloc[-1 - d]) - 1
+    if s is None or len(s.dropna()) < d + 2: return np.nan
+    if s.iloc[-2 - d] == 0: return -np.inf
+    return (s.iloc[-2] / s.iloc[-2 - d]) - 1
 
 def calculate_sharpe_ratio(s: pd.Series, d: int) -> float:
-    if s is None or len(s.dropna()) < d + 1: return np.nan
-    ret = s.pct_change().iloc[-d:].dropna()
+    if s is None or len(s.dropna()) < d + 2: return np.nan
+    ret = s.iloc[:-1].pct_change().iloc[-d:].dropna()
     if ret.empty or ret.std() == 0: return 0.0
     return ret.mean() / ret.std() if ret.std() != 0 else 0.0
 
 def run_stock_strategy_v1(log: list, all_prices: dict, target_date: pd.Timestamp):
     log.append("<h2>📈 주식 포트폴리오 분석 시작 (60%)</h2>")
     
-    # target_date까지의 데이터만 사용하도록 슬라이싱
     prices_sliced = {t: p.loc[:target_date] for t, p in all_prices.items() if t in CANARY_ASSETS and not p.loc[:target_date].empty}
 
     vt_prices, eem_prices = prices_sliced.get('VT'), prices_sliced.get('EEM')
 
-    if vt_prices.empty or len(vt_prices.dropna()) < STOCK_CANARY_MA_PERIOD or eem_prices.empty or len(eem_prices.dropna()) < STOCK_CANARY_MA_PERIOD:
+    if vt_prices.empty or len(vt_prices.dropna()) < STOCK_CANARY_MA_PERIOD + 1 or eem_prices.empty or len(eem_prices.dropna()) < STOCK_CANARY_MA_PERIOD + 1:
         log.append(f"<p class='error'>    - [결과] 🚨 VT/EEM 데이터 부족. 수비 모드로 전환합니다.</p>")
         return _run_defensive_stock_engine_v1(log, all_prices, target_date), "데이터 부족 (수비 모드)"
 
-    vt_price, eem_price = vt_prices.iloc[-1], eem_prices.iloc[-1]
+    vt_price, eem_price = vt_prices.iloc[-2], eem_prices.iloc[-2]
     vt_sma, eem_sma = calculate_sma(vt_prices, STOCK_CANARY_MA_PERIOD), calculate_sma(eem_prices, STOCK_CANARY_MA_PERIOD)
     
-    log.append(f"<p>    - VT 최신({vt_prices.index[-1].date()}): ${vt_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${vt_sma:,.2f}</p>")
-    log.append(f"<p>    - EEM 최신({eem_prices.index[-1].date()}): ${eem_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${eem_sma:,.2f}</p>")
+    log.append(f"<p>    - VT 최신({vt_prices.index[-2].date()}): ${vt_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${vt_sma:,.2f}</p>")
+    log.append(f"<p>    - EEM 최신({eem_prices.index[-2].date()}): ${eem_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${eem_sma:,.2f}</p>")
     
     if (vt_price > vt_sma) and (eem_price > eem_sma):
         log.append(f"<p><b>    - [결과] ✅ 공격 모드</b></p>")
@@ -195,10 +196,10 @@ def _run_offensive_stock_engine_v1(log: list, all_prices: dict, target_date: pd.
     factor_details = []
     for ticker in OFFENSIVE_STOCK_UNIVERSE:
         p = all_prices.get(ticker)
-        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 253: continue
+        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 253 + 1: continue
         p_sliced = p.loc[:target_date]
         ret_63, ret_126, ret_252 = calculate_return(p_sliced, 63), calculate_return(p_sliced, 126), calculate_return(p_sliced, 252)
-        sharpe_126 = calculate_sharpe_ratio(p_sliced, 126) * np.sqrt(252) # 연율화
+        sharpe_126 = calculate_sharpe_ratio(p_sliced, 126) * np.sqrt(252)
         if not any(np.isnan([ret_63, ret_126, ret_252, sharpe_126])) and not any(r == -np.inf for r in [ret_63, ret_126, ret_252]):
             momentum_score = (0.5 * ret_63) + (0.3 * ret_126) + (0.2 * ret_252)
             factor_details.append({'Ticker': ticker, 'Momentum Score': round(momentum_score, 2), 'Quality (Sharpe)': round(sharpe_126, 2)})
@@ -219,7 +220,7 @@ def _run_defensive_stock_engine_v1(log: list, all_prices: dict, target_date: pd.
     momentum_results = []
     for ticker in DEFENSIVE_STOCK_UNIVERSE:
         p = all_prices.get(ticker)
-        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 127: continue
+        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 127 + 1: continue
         p_sliced = p.loc[:target_date]
         ret_126 = calculate_return(p_sliced, 126)
         if not np.isnan(ret_126) and ret_126 != -np.inf:
@@ -240,20 +241,18 @@ def _run_defensive_stock_engine_v1(log: list, all_prices: dict, target_date: pd.
 def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: pd.Timestamp, log_for_date: list) -> (dict, str, list):
     log_for_date.append(f"<h3>코인 포트폴리오 분석 (기준일: {target_date.date()})</h3>")
     
-    # target_date까지의 데이터만 사용하도록 슬라이싱
     prices = {t: p.loc[:target_date] for t, p in all_prices.items() if not p.loc[:target_date].empty}
 
-    # 1. 카나리 신호 확인
     log_for_date.append("<h4>1. 카나리 신호 확인</h4>")
     btc = prices.get('BTC-USD')
-    if btc is None or len(btc) < COIN_CANARY_MA_PERIOD:
+    if btc is None or len(btc) < COIN_CANARY_MA_PERIOD + 1:
         log_for_date.append(f"<p class='error'>    - [결과] 🚨 BTC 데이터 부족. 코인 비중을 '{CASH_ASSET}'으로 전환합니다.</p>")
         return {CASH_ASSET: 1.0}, "데이터 부족", log_for_date
     
-    btc_price = btc.iloc[-1]
+    btc_price = btc.iloc[-2]
     btc_sma = calculate_sma(btc, COIN_CANARY_MA_PERIOD)
     
-    log_for_date.append(f"<p>    - BTC 기준(종가 {btc.index[-1].date()}): ${btc_price:,.2f} | {COIN_CANARY_MA_PERIOD}일 MA: ${btc_sma:,.2f}</p>")
+    log_for_date.append(f"<p>    - BTC 기준(종가 {btc.index[-2].date()}): ${btc_price:,.2f} | {COIN_CANARY_MA_PERIOD}일 MA: ${btc_sma:,.2f}</p>")
     
     if btc_price <= btc_sma:
         log_for_date.append(f"<p><b>    - [결과] 🚨 약세장. 코인 비중을 '{CASH_ASSET}'으로 전환합니다.</b></p>")
@@ -261,23 +260,22 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
     
     log_for_date.append("<p><b>    - [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p>")
 
-    # 2. 헬스 체크
     log_for_date.append("<h4>2. 헬스 체크 결과</h4>")
     health_check_details = []
     healthy_coins = []
     for t in coin_universe:
         p = prices.get(t)
-        if p is None or len(p) < HEALTH_FILTER_MA_PERIOD or len(p) < HEALTH_FILTER_RETURN_PERIOD + 1: continue
+        if p is None or len(p) < HEALTH_FILTER_MA_PERIOD + 1 or len(p) < HEALTH_FILTER_RETURN_PERIOD + 2: continue
         
         sma_val = calculate_sma(p, HEALTH_FILTER_MA_PERIOD)
         ret_val = calculate_return(p, HEALTH_FILTER_RETURN_PERIOD)
 
-        sma_pass = p.iloc[-1] > sma_val
+        sma_pass = p.iloc[-2] > sma_val
         ret_pass = ret_val > 0
         is_healthy = sma_pass and ret_pass
         
         details = {
-            "코인": t, "현재가": f"${p.iloc[-1]:,.2f}", f"{HEALTH_FILTER_MA_PERIOD}일 SMA": f"${sma_val:,.2f}", "SMA 통과": "✅" if sma_pass else "❌",
+            "코인": t, "현재가": f"${p.iloc[-2]:,.2f}", f"{HEALTH_FILTER_MA_PERIOD}일 SMA": f"${sma_val:,.2f}", "SMA 통과": "✅" if sma_pass else "❌",
             f"{HEALTH_FILTER_RETURN_PERIOD}일 수익률": f"{ret_val:.2%}", "수익률 통과": "✅" if ret_pass else "❌",
             "최종 결과": "🟢 건강" if is_healthy else "🔴 비건강"
         }
@@ -289,19 +287,17 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
     else:
         log_for_date.append("<p>  - 헬스 체크를 수행할 코인이 없습니다.</p>")
 
-    # 3. 동적 자산 배분
     coin_alloc_ratio = min(len(healthy_coins) * 0.2, 1.0)
     cash_ratio = 1.0 - coin_alloc_ratio
     log_for_date.append(f"<p>    - <b>건강한 코인 수: {len(healthy_coins)}개 -> 코인 투자 비중: {coin_alloc_ratio:.0%}, 현금 비중: {cash_ratio:.0%}</b></p>")
 
     if not healthy_coins: return {CASH_ASSET: 1.0}, "건강한 코인 없음", log_for_date
 
-    # 4. 코인 선정 (샤프 지수)
     log_for_date.append("<h4>3. 코인 선정 (샤프 지수 랭킹)</h4>")
     sharpe_scores = []
     for t in healthy_coins:
         p = prices.get(t)
-        if p is None or len(p) < 253: continue
+        if p is None or len(p) < 253 + 1: continue
         sharpe_126 = calculate_sharpe_ratio(p, 126)
         sharpe_252 = calculate_sharpe_ratio(p, 252)
         if not np.isnan(sharpe_126) and not np.isnan(sharpe_252):
@@ -317,14 +313,13 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
     selected_coins = sharpe_df['코인'].head(N_SELECTED_COINS).tolist()
     log_for_date.append(f"<p>  - <b>상위 {len(selected_coins)}개 코인 선정:</b> {selected_coins}</p>")
 
-    # 5. 비중 결정 (상관관계 조정)
     log_for_date.append("<h4>4. 최종 비중 결정 (상관관계 조정)</h4>")
     
-    returns_df = pd.DataFrame({t: prices[t].pct_change() for t in selected_coins}).iloc[-CORRELATION_WINDOW:].dropna()
+    returns_df = pd.DataFrame({t: prices[t].iloc[:-1].pct_change() for t in selected_coins}).iloc[-CORRELATION_WINDOW:].dropna()
     weights = {}
     if returns_df.empty or len(returns_df.columns) < 2:
         log_for_date.append("<p>  - 상관관계 계산 불가. 역변동성 가중치 적용.</p>")
-        vols = {t: prices[t].pct_change().iloc[-VOLATILITY_WINDOW:].std() for t in selected_coins}
+        vols = {t: prices[t].iloc[:-1].pct_change().iloc[-VOLATILITY_WINDOW:].std() for t in selected_coins}
         inv_vols = {t: 1/v if v > 0 else 0 for t, v in vols.items()}
         total_inv_vol = sum(inv_vols.values())
         weights = {t: v / total_inv_vol for t, v in inv_vols.items()} if total_inv_vol > 0 else {t: 1/len(selected_coins) for t in selected_coins}
@@ -360,7 +355,6 @@ def calculate_turnover(p_yesterday: dict, p_today: dict) -> float:
     turnover = 0.5 * sum(abs(p_today.get(asset, 0) - p_yesterday.get(asset, 0)) for asset in all_assets)
     return turnover
 
-# --- 5. 결과를 HTML 파일로 저장하는 함수 ---
 def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfolio: dict, coin_portfolio_today: dict, stock_status: str, coin_status_today: str, portfolio_yesterday_coin_only: dict, portfolio_today_coin_only: dict, turnover: float, log_yesterday: list, log_today: list, date_yesterday: pd.Timestamp):
     filepath = './portfolio_result.html'
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -382,7 +376,7 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
     if cash_item:
         sorted_final_portfolio_items = [cash_item] + other_items
     else:
-        sorted_portfolio_items = other_items
+        sorted_final_portfolio_items = other_items
 
     tbody_html = ""
     for item in sorted_final_portfolio_items:
@@ -392,7 +386,6 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
 
     final_portfolio_json = json.dumps({p['종목']: p['최종 비중'] for p in sorted_final_portfolio_items})
     
-    # 코인 전략 포트폴리오 (코인 전략 내 비중, 현금 포함) - 오늘
     coin_strategy_portfolio_today_normalized = {}
     if coin_portfolio_today:
         total_coin_weight = sum(coin_portfolio_today.values())
@@ -400,20 +393,22 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
             coin_strategy_portfolio_today_normalized = {t: w / total_coin_weight for t, w in coin_portfolio_today.items()}
     coin_strategy_json = json.dumps(coin_strategy_portfolio_today_normalized)
 
-    # 어제 코인 포트폴리오 (코인 전략 내 비중, 현금 포함) - 정규화된 값
-    coin_strategy_portfolio_yesterday_normalized = {}
-    if portfolio_yesterday_coin_only:
-        total_coin_weight_yesterday = sum(portfolio_yesterday_coin_only.values())
-        if total_coin_weight_yesterday > 0:
-            coin_strategy_portfolio_yesterday_normalized = {t: w / total_coin_weight_yesterday for t, w in portfolio_yesterday_coin_only.items()}
+    symbol_to_ticker_map = {}
+    if coin_strategy_json:
+        coin_strategy_portfolio_for_map = json.loads(coin_strategy_json)
+        for ticker in coin_strategy_portfolio_for_map.keys():
+            if ticker != CASH_ASSET and ticker.endswith('-USD'):
+                symbol = ticker.replace('-USD', '')
+                symbol_to_ticker_map[symbol] = ticker
+    symbol_to_ticker_map_json = json.dumps(symbol_to_ticker_map)
 
-    html_template = """
+    html_template = f"""
     <!DOCTYPE html>
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>자동 포트폴리오 추천 (v7)</title>
+        <title>자동 포트폴리오 추천 및 내 포트폴리오 턴오버 분석 (v7)</title>
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; line-height: 1.6; }}
             .container {{ max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
@@ -432,9 +427,10 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
             .dataframe th, .dataframe td {{ padding: 5px 8px; border: 1px solid #ccc; text-align: right; }}
             .dataframe thead th {{ background-color: #f2f2f2; text-align: center; }}
             .calculator-container {{ background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 20px; margin-top: 30px; border-radius: 8px; }}
-            .calculator-container input[type="number"] {{ width: 200px; padding: 8px; margin-right: 10px; border: 1px solid #ccc; border-radius: 4px; }}
+            .calculator-container input[type="text"], .calculator-container input[type="number"] {{ width: 95%; padding: 8px; margin-right: 10px; border: 1px solid #ccc; border-radius: 4px; }}
             .calculator-container button {{ padding: 8px 15px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; }}
             .calculator-container button:hover {{ background-color: #2980b9; }}
+            #my-turnover-result-container {{ margin-top: 20px; padding: 15px; background-color: #eaf5ff; border: 1px solid #b8d9f3; border-radius: 5px; }}
         </style>
     </head>
     <body>
@@ -449,7 +445,7 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
                 <tbody>
                     {tbody_html}
                 </tbody>
-                <tfoot><tr style="font-weight: bold;"><td colspan="2">총 합계</td><td>{total_weight_str}</td></tr></tfoot>
+                <tfoot><tr style="font-weight: bold;"><td colspan="2">총 합계</td><td>{total_weight:.2%}</td></tr></tfoot>
             </table>
 
             <div class="calculator-container">
@@ -468,22 +464,49 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
                 <div id="coin-assets-results" style="margin-top: 15px;"></div>
             </div>
 
-            <h2>🔄 코인 포트폴리오 턴오버 분석</h2>
-            <p>어제({yesterday_date})와 오늘({today_date}) 코인 포트폴리오 간의 턴오버 비율: <b>{turnover:.2%}</b></p>
+            <h2>🔄 코인 포트폴리오 턴오버 분석 (추천 포트폴리오 간)</h2>
+            <p>어제({date_yesterday.date()})와 오늘({portfolio_date}) 코인 포트폴리오 간의 턴오버 비율: <b>{turnover:.2%}</b></p>
+
+            <hr>
+
+            <div class="calculator-container">
+                <h1>🪙 내 포트폴리오 턴오버 계산기</h1>
+                <p>현재 보유하고 계신 코인과 현금 보유액을 원화(KRW) 기준으로 입력하시면, 추천 포트폴리오와의 턴오버를 계산해 드립니다.</p>
+                
+                <h2>1. 내 보유자산 입력</h2>
+                <table id="my-portfolio-table">
+                    <thead>
+                        <tr>
+                            <th>자산 (예: BTC, ETH, Cash)</th>
+                            <th>보유액 (원)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {''.join(['<tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr>' for _ in range(6)])}
+                    </tbody>
+                </table>
+                <button id="calculate-my-turnover">내 턴오버 계산하기</button>
+
+                <div id="my-turnover-result-container" style="display:none;">
+                    <h2>2. 계산 결과</h2>
+                    <div id="my-turnover-result"></div>
+                </div>
+            </div>
 
             <hr>
             <h1>📜 상세 실행 로그</h1>
-            {global_log_html}
-            <h3>오늘 코인 포트폴리오 상세 로그 ({today_date})</h3>
-            {log_today_html}
-            <h3>어제 코인 포트폴리오 상세 로그 ({yesterday_date})</h3>
-            {log_yesterday_html}
+            {''.join(global_log)}
+            <h3>오늘 코인 포트폴리오 상세 로그 ({portfolio_date})</h3>
+            {''.join(log_today)}
+            <h3>어제 코인 포트폴리오 상세 로그 ({date_yesterday.date()})</h3>
+            {''.join(log_yesterday)}
 
             <div class="footer">마지막 업데이트: {update_time}</div>
         </div>
         <script>
             const finalPortfolio = {final_portfolio_json};
             const coinStrategyPortfolio = {coin_strategy_json};
+            const symbolToTickerMap = {symbol_to_ticker_map_json};
 
             function formatKRW(num) {{
                 return new Intl.NumberFormat('ko-KR').format(num) + ' 원';
@@ -524,28 +547,83 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
                 tableHtml += '</tbody></table>';
                 resultsDiv.innerHTML = tableHtml;
             }});
+
+            document.getElementById('calculate-my-turnover').addEventListener('click', function() {{
+                const myPortfolio = {{}};
+                let totalValue = 0;
+                const rows = document.querySelectorAll('#my-portfolio-table tbody tr');
+                
+                rows.forEach(row => {{
+                    const tickerInput = row.querySelector('.ticker-input');
+                    const amountInput = row.querySelector('.amount-input');
+                    const tickerRaw = tickerInput.value.trim();
+                    const amount = parseFloat(amountInput.value);
+
+                    if (tickerRaw && !isNaN(amount) && amount > 0) {{
+                        let ticker = tickerRaw;
+                        if (ticker.toLowerCase() === 'cash') {{
+                            ticker = 'Cash';
+                        }} else {{
+                            ticker = ticker.toUpperCase();
+                            if (symbolToTickerMap[ticker]) {{
+                                ticker = symbolToTickerMap[ticker];
+                            }}
+                        }}
+                        myPortfolio[ticker] = (myPortfolio[ticker] || 0) + amount;
+                        totalValue += amount;
+                    }}
+                }});
+
+                if (totalValue === 0) {{
+                    alert("유효한 보유자산을 입력해주세요.");
+                    return;
+                }}
+
+                const myPortfolioWeights = {{}};
+                for (const ticker in myPortfolio) {{
+                    myPortfolioWeights[ticker] = myPortfolio[ticker] / totalValue;
+                }}
+
+                const recommended = coinStrategyPortfolio || {{}};
+                const allAssets = new Set([...Object.keys(myPortfolioWeights), ...Object.keys(recommended)]);
+                let turnover = 0;
+
+                let resultHtml = '<h3>포트폴리오 비교</h3>';
+                resultHtml += '<table class="small-table"><thead><tr><th>자산</th><th>내 비중</th><th>추천 비중</th><th>차이</th></tr></thead><tbody>';
+
+                const sortedAssets = Array.from(allAssets).sort();
+
+                sortedAssets.forEach(asset => {{
+                    const myWeight = myPortfolioWeights[asset] || 0;
+                    const recommendedWeight = recommended[asset] || 0;
+                    const diff = Math.abs(myWeight - recommendedWeight);
+                    turnover += diff;
+
+                    resultHtml += `
+                        <tr>
+                            <td>${{asset}}</td>
+                            <td>${{(myWeight * 100).toFixed(2)}}%</td>
+                            <td>${{(recommendedWeight * 100).toFixed(2)}}%</td>
+                            <td>${{(diff * 100).toFixed(2)}}%</td>
+                        </tr>
+                    `;
+                }});
+                
+                turnover = turnover / 2;
+
+                resultHtml += '</tbody></table>';
+                resultHtml += `<h3>🔄 계산된 턴오버: <strong>${{(turnover * 100).toFixed(2)}}%</strong></h3>`;
+                resultHtml += '<p>턴오버는 현재 포트폴리오에서 추천 포트폴리오로 변경하기 위해 매매해야 할 자산의 비율을 의미합니다.</p>';
+
+                document.getElementById('my-turnover-result').innerHTML = resultHtml;
+                document.getElementById('my-turnover-result-container').style.display = 'block';
+            }});
         </script>
     </body>
     </html>
     """
-    html_content = html_template.format(
-        portfolio_date=portfolio_date,
-        stock_status=stock_status,
-        coin_status_today=coin_status_today,
-        tbody_html=tbody_html,
-        total_weight_str=f"{total_weight:.2%}",
-        global_log_html=''.join(global_log),
-        log_today_html=''.join(log_today),
-        log_yesterday_html=''.join(log_yesterday),
-        update_time=update_time,
-        final_portfolio_json=final_portfolio_json,
-        coin_strategy_json=coin_strategy_json,
-        turnover=turnover,
-        today_date=portfolio_date,
-        yesterday_date=date_yesterday.date() # Corrected line
-    )
     with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(html_content)
+        f.write(html_template)
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
@@ -556,7 +634,7 @@ if __name__ == "__main__":
     if not current_coin_universe: 
         global_log.append("<p class='error'>코인 유니버스 선정에 실패하여 프로그램을 종료합니다.</p>")
         print("\n" + "".join(global_log))
-        exit()
+        sys.exit(1)
 
     if 'BTC-USD' not in coin_id_map:
         coin_id_map['BTC-USD'] = 'bitcoin'
@@ -575,33 +653,28 @@ if __name__ == "__main__":
         if len(available_dates) < 2:
             global_log.append("<p class='error'>데이터가 충분하지 않아 어제/오늘 포트폴리오를 계산할 수 없습니다. 종료합니다.</p>")
             print("\n" + "".join(global_log))
-            exit()
+            sys.exit(1)
         date_today = available_dates[-1]
         date_yesterday = available_dates[-2]
     else:
         global_log.append("<p class='error'>BTC 데이터가 없어 날짜를 설정할 수 없습니다. 종료합니다.</p>")
         print("\n" + "".join(global_log))
-        exit()
+        sys.exit(1)
 
-    # 주식 포트폴리오 (오늘 기준)
     stock_portfolio, stock_status = run_stock_strategy_v1(global_log, all_prices, date_today)
 
-    # 코인 포트폴리오 (오늘 기준)
     log_today_coin_calc = []
     coin_portfolio_today, coin_status_today, log_today_coin_calc = run_crypto_strategy_v7(current_coin_universe, all_prices, date_today, log_today_coin_calc)
     
-    # 코인 포트폴리오 (어제 기준)
     log_yesterday_coin_calc = []
     coin_portfolio_yesterday, coin_status_yesterday, log_yesterday_coin_calc = run_crypto_strategy_v7(current_coin_universe, all_prices, date_yesterday, log_yesterday_coin_calc)
 
-    # 턴오버 계산
     turnover = calculate_turnover(coin_portfolio_yesterday, coin_portfolio_today)
 
     final_portfolio = {}
     for t, w in stock_portfolio.items(): final_portfolio[t] = final_portfolio.get(t, 0) + w * STOCK_RATIO
     for t, w in coin_portfolio_today.items(): final_portfolio[t] = final_portfolio.get(t, 0) + w * COIN_RATIO
     
-    # --- 최종 터미널 출력 ---
     print("\n" + "=" * 60)
     print("               🏆 최종 v7 포트폴리오 추천 🏆")
     print("=" * 60)
