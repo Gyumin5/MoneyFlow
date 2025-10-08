@@ -1,5 +1,4 @@
 
-
 import pandas as pd
 import numpy as np
 import os
@@ -153,17 +152,17 @@ def load_price_data(ticker: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 def calculate_sma(s: pd.Series, w: int) -> float: 
-    if s is None or len(s.dropna()) < w + 1: return np.nan
-    return s.rolling(window=w).mean().iloc[-2]
+    if s is None or len(s.dropna()) < w: return np.nan
+    return s.rolling(window=w).mean().iloc[-1]
 
 def calculate_return(s: pd.Series, d: int) -> float: 
-    if s is None or len(s.dropna()) < d + 2: return np.nan
-    if s.iloc[-2 - d] == 0: return -np.inf
-    return (s.iloc[-2] / s.iloc[-2 - d]) - 1
+    if s is None or len(s.dropna()) < d + 1: return np.nan
+    if s.iloc[-1 - d] == 0: return -np.inf
+    return (s.iloc[-1] / s.iloc[-1 - d]) - 1
 
 def calculate_sharpe_ratio(s: pd.Series, d: int) -> float:
-    if s is None or len(s.dropna()) < d + 2: return np.nan
-    ret = s.iloc[:-1].pct_change().iloc[-d:].dropna()
+    if s is None or len(s.dropna()) < d + 1: return np.nan
+    ret = s.pct_change().iloc[-d:].dropna()
     if ret.empty or ret.std() == 0: return 0.0
     return ret.mean() / ret.std() if ret.std() != 0 else 0.0
 
@@ -174,15 +173,15 @@ def run_stock_strategy_v1(log: list, all_prices: dict, target_date: pd.Timestamp
 
     vt_prices, eem_prices = prices_sliced.get('VT'), prices_sliced.get('EEM')
 
-    if vt_prices.empty or len(vt_prices.dropna()) < STOCK_CANARY_MA_PERIOD + 1 or eem_prices.empty or len(eem_prices.dropna()) < STOCK_CANARY_MA_PERIOD + 1:
+    if vt_prices.empty or len(vt_prices.dropna()) < STOCK_CANARY_MA_PERIOD or eem_prices.empty or len(eem_prices.dropna()) < STOCK_CANARY_MA_PERIOD:
         log.append(f"<p class='error'>    - [결과] 🚨 VT/EEM 데이터 부족. 수비 모드로 전환합니다.</p>")
         return _run_defensive_stock_engine_v1(log, all_prices, target_date), "데이터 부족 (수비 모드)"
 
-    vt_price, eem_price = vt_prices.iloc[-2], eem_prices.iloc[-2]
+    vt_price, eem_price = vt_prices.iloc[-1], eem_prices.iloc[-1]
     vt_sma, eem_sma = calculate_sma(vt_prices, STOCK_CANARY_MA_PERIOD), calculate_sma(eem_prices, STOCK_CANARY_MA_PERIOD)
     
-    log.append(f"<p>    - VT 최신({vt_prices.index[-2].date()}): ${vt_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${vt_sma:,.2f}</p>")
-    log.append(f"<p>    - EEM 최신({eem_prices.index[-2].date()}): ${eem_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${eem_sma:,.2f}</p>")
+    log.append(f"<p>    - VT 최신({vt_prices.index[-1].date()}): ${vt_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${vt_sma:,.2f}</p>")
+    log.append(f"<p>    - EEM 최신({eem_prices.index[-1].date()}): ${eem_price:,.2f} | {STOCK_CANARY_MA_PERIOD}일 MA: ${eem_sma:,.2f}</p>")
     
     if (vt_price > vt_sma) and (eem_price > eem_sma):
         log.append(f"<p><b>    - [결과] ✅ 공격 모드</b></p>")
@@ -196,7 +195,7 @@ def _run_offensive_stock_engine_v1(log: list, all_prices: dict, target_date: pd.
     factor_details = []
     for ticker in OFFENSIVE_STOCK_UNIVERSE:
         p = all_prices.get(ticker)
-        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 253 + 1: continue
+        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 253: continue
         p_sliced = p.loc[:target_date]
         ret_63, ret_126, ret_252 = calculate_return(p_sliced, 63), calculate_return(p_sliced, 126), calculate_return(p_sliced, 252)
         sharpe_126 = calculate_sharpe_ratio(p_sliced, 126) * np.sqrt(252)
@@ -220,7 +219,7 @@ def _run_defensive_stock_engine_v1(log: list, all_prices: dict, target_date: pd.
     momentum_results = []
     for ticker in DEFENSIVE_STOCK_UNIVERSE:
         p = all_prices.get(ticker)
-        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 127 + 1: continue
+        if p is None or p.loc[:target_date].empty or len(p.loc[:target_date].dropna()) < 127: continue
         p_sliced = p.loc[:target_date]
         ret_126 = calculate_return(p_sliced, 126)
         if not np.isnan(ret_126) and ret_126 != -np.inf:
@@ -238,21 +237,31 @@ def _run_defensive_stock_engine_v1(log: list, all_prices: dict, target_date: pd.
         log.append(f"<p>    - <b>최종 수비 자산: {CASH_ASSET} (모든 자산 6개월 모멘텀 음수)</b></p>")
         return {CASH_ASSET: 1.0}
 
-def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: pd.Timestamp, log_for_date: list) -> (dict, str, list):
+def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: pd.Timestamp, log_for_date: list, is_today_run: bool) -> (dict, str, list):
     log_for_date.append(f"<h3>코인 포트폴리오 분석 (기준일: {target_date.date()})</h3>")
     
     prices = {t: p.loc[:target_date] for t, p in all_prices.items() if not p.loc[:target_date].empty}
 
+    prices_for_calc = {}
+    all_coin_tickers = list(set(coin_universe + ['BTC-USD', 'ETH-USD']))
+
+    for ticker, p_series in prices.items():
+        is_coin = ticker in all_coin_tickers
+        if is_coin and is_today_run and len(p_series) > 1:
+            prices_for_calc[ticker] = p_series.iloc[:-1]
+        else:
+            prices_for_calc[ticker] = p_series
+
     log_for_date.append("<h4>1. 카나리 신호 확인</h4>")
-    btc = prices.get('BTC-USD')
-    if btc is None or len(btc) < COIN_CANARY_MA_PERIOD + 1:
+    btc = prices_for_calc.get('BTC-USD')
+    if btc is None or len(btc) < COIN_CANARY_MA_PERIOD:
         log_for_date.append(f"<p class='error'>    - [결과] 🚨 BTC 데이터 부족. 코인 비중을 '{CASH_ASSET}'으로 전환합니다.</p>")
         return {CASH_ASSET: 1.0}, "데이터 부족", log_for_date
     
-    btc_price = btc.iloc[-2]
+    btc_price = btc.iloc[-1]
     btc_sma = calculate_sma(btc, COIN_CANARY_MA_PERIOD)
     
-    log_for_date.append(f"<p>    - BTC 기준(종가 {btc.index[-2].date()}): ${btc_price:,.2f} | {COIN_CANARY_MA_PERIOD}일 MA: ${btc_sma:,.2f}</p>")
+    log_for_date.append(f"<p>    - BTC 기준(종가 {btc.index[-1].date()}): ${btc_price:,.2f} | {COIN_CANARY_MA_PERIOD}일 MA: ${btc_sma:,.2f}</p>")
     
     if btc_price <= btc_sma:
         log_for_date.append(f"<p><b>    - [결과] 🚨 약세장. 코인 비중을 '{CASH_ASSET}'으로 전환합니다.</b></p>")
@@ -264,18 +273,18 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
     health_check_details = []
     healthy_coins = []
     for t in coin_universe:
-        p = prices.get(t)
-        if p is None or len(p) < HEALTH_FILTER_MA_PERIOD + 1 or len(p) < HEALTH_FILTER_RETURN_PERIOD + 2: continue
+        p = prices_for_calc.get(t)
+        if p is None or len(p) < HEALTH_FILTER_MA_PERIOD or len(p) < HEALTH_FILTER_RETURN_PERIOD + 1: continue
         
         sma_val = calculate_sma(p, HEALTH_FILTER_MA_PERIOD)
         ret_val = calculate_return(p, HEALTH_FILTER_RETURN_PERIOD)
 
-        sma_pass = p.iloc[-2] > sma_val
+        sma_pass = p.iloc[-1] > sma_val
         ret_pass = ret_val > 0
         is_healthy = sma_pass and ret_pass
         
         details = {
-            "코인": t, "현재가": f"${p.iloc[-2]:,.2f}", f"{HEALTH_FILTER_MA_PERIOD}일 SMA": f"${sma_val:,.2f}", "SMA 통과": "✅" if sma_pass else "❌",
+            "코인": t, "현재가": f"${p.iloc[-1]:,.2f}", f"{HEALTH_FILTER_MA_PERIOD}일 SMA": f"${sma_val:,.2f}", "SMA 통과": "✅" if sma_pass else "❌",
             f"{HEALTH_FILTER_RETURN_PERIOD}일 수익률": f"{ret_val:.2%}", "수익률 통과": "✅" if ret_pass else "❌",
             "최종 결과": "🟢 건강" if is_healthy else "🔴 비건강"
         }
@@ -296,8 +305,8 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
     log_for_date.append("<h4>3. 코인 선정 (샤프 지수 랭킹)</h4>")
     sharpe_scores = []
     for t in healthy_coins:
-        p = prices.get(t)
-        if p is None or len(p) < 253 + 1: continue
+        p = prices_for_calc.get(t)
+        if p is None or len(p) < 253: continue
         sharpe_126 = calculate_sharpe_ratio(p, 126)
         sharpe_252 = calculate_sharpe_ratio(p, 252)
         if not np.isnan(sharpe_126) and not np.isnan(sharpe_252):
@@ -315,11 +324,11 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
 
     log_for_date.append("<h4>4. 최종 비중 결정 (상관관계 조정)</h4>")
     
-    returns_df = pd.DataFrame({t: prices[t].iloc[:-1].pct_change() for t in selected_coins}).iloc[-CORRELATION_WINDOW:].dropna()
+    returns_df = pd.DataFrame({t: prices_for_calc[t].pct_change() for t in selected_coins}).iloc[-CORRELATION_WINDOW:].dropna()
     weights = {}
     if returns_df.empty or len(returns_df.columns) < 2:
         log_for_date.append("<p>  - 상관관계 계산 불가. 역변동성 가중치 적용.</p>")
-        vols = {t: prices[t].iloc[:-1].pct_change().iloc[-VOLATILITY_WINDOW:].std() for t in selected_coins}
+        vols = {t: prices_for_calc[t].pct_change().iloc[-VOLATILITY_WINDOW:].std() for t in selected_coins}
         inv_vols = {t: 1/v if v > 0 else 0 for t, v in vols.items()}
         total_inv_vol = sum(inv_vols.values())
         weights = {t: v / total_inv_vol for t, v in inv_vols.items()} if total_inv_vol > 0 else {t: 1/len(selected_coins) for t in selected_coins}
@@ -650,7 +659,7 @@ if __name__ == "__main__":
 
     if not all_prices.get('BTC-USD', pd.Series(dtype=float)).empty:
         available_dates = all_prices['BTC-USD'].index.unique().sort_values()
-        if len(available_dates) < 2:
+        if len(available_dates) < 3: # 3일치 데이터 확인
             global_log.append("<p class='error'>데이터가 충분하지 않아 어제/오늘 포트폴리오를 계산할 수 없습니다. 종료합니다.</p>")
             print("\n" + "".join(global_log))
             sys.exit(1)
@@ -664,10 +673,10 @@ if __name__ == "__main__":
     stock_portfolio, stock_status = run_stock_strategy_v1(global_log, all_prices, date_today)
 
     log_today_coin_calc = []
-    coin_portfolio_today, coin_status_today, log_today_coin_calc = run_crypto_strategy_v7(current_coin_universe, all_prices, date_today, log_today_coin_calc)
+    coin_portfolio_today, coin_status_today, log_today_coin_calc = run_crypto_strategy_v7(current_coin_universe, all_prices, date_today, log_today_coin_calc, is_today_run=True)
     
     log_yesterday_coin_calc = []
-    coin_portfolio_yesterday, coin_status_yesterday, log_yesterday_coin_calc = run_crypto_strategy_v7(current_coin_universe, all_prices, date_yesterday, log_yesterday_coin_calc)
+    coin_portfolio_yesterday, coin_status_yesterday, log_yesterday_coin_calc = run_crypto_strategy_v7(current_coin_universe, all_prices, date_yesterday, log_yesterday_coin_calc, is_today_run=False)
 
     turnover = calculate_turnover(coin_portfolio_yesterday, coin_portfolio_today)
 
