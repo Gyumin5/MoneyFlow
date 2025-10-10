@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import os
@@ -147,6 +146,7 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
 def load_price_data(ticker: str) -> pd.Series:
     try:
         df = pd.read_csv(os.path.join(DATA_DIR, f"{ticker}.csv"), parse_dates=['Date'])
+        df = df.drop_duplicates(subset=['Date'], keep='first')
         return df.set_index('Date').sort_index()['Adj_Close']
     except Exception:
         return pd.Series(dtype=float)
@@ -246,11 +246,7 @@ def run_crypto_strategy_v7(coin_universe: list, all_prices: dict, target_date: p
     all_coin_tickers = list(set(coin_universe + ['BTC-USD', 'ETH-USD']))
 
     for ticker, p_series in prices.items():
-        is_coin = ticker in all_coin_tickers
-        if is_coin and is_today_run and len(p_series) > 1:
-            prices_for_calc[ticker] = p_series.iloc[:-1]
-        else:
-            prices_for_calc[ticker] = p_series
+        prices_for_calc[ticker] = p_series
 
     log_for_date.append("<h4>1. 카나리 신호 확인</h4>")
     btc = prices_for_calc.get('BTC-USD')
@@ -364,7 +360,7 @@ def calculate_turnover(p_yesterday: dict, p_today: dict) -> float:
     turnover = 0.5 * sum(abs(p_today.get(asset, 0) - p_yesterday.get(asset, 0)) for asset in all_assets)
     return turnover
 
-def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfolio: dict, coin_portfolio_today: dict, stock_status: str, coin_status_today: str, portfolio_yesterday_coin_only: dict, portfolio_today_coin_only: dict, turnover: float, log_yesterday: list, log_today: list, date_yesterday: pd.Timestamp):
+def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfolio: dict, coin_portfolio_today: dict, stock_status: str, coin_status_today: str, portfolio_yesterday_coin_only: dict, turnover: float, log_yesterday: list, log_today: list, date_yesterday: pd.Timestamp, asset_prices_krw: dict):
     filepath = './portfolio_result.html'
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     kst = timezone(timedelta(hours=9))
@@ -410,6 +406,7 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
                 symbol = ticker.replace('-USD', '')
                 symbol_to_ticker_map[symbol] = ticker
     symbol_to_ticker_map_json = json.dumps(symbol_to_ticker_map)
+    asset_prices_json = json.dumps(asset_prices_krw)
 
     html_template = f"""
     <!DOCTYPE html>
@@ -516,6 +513,7 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
             const finalPortfolio = {final_portfolio_json};
             const coinStrategyPortfolio = {coin_strategy_json};
             const symbolToTickerMap = {symbol_to_ticker_map_json};
+            const assetPrices = {asset_prices_json};
 
             function formatKRW(num) {{
                 return new Intl.NumberFormat('ko-KR').format(num) + ' 원';
@@ -529,11 +527,23 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
                     return;
                 }}
                 
-                let tableHtml = '<table class="small-table"><thead><tr><th>종목</th><th>예상 배분 금액</th></tr></thead><tbody>';
+                let tableHtml = '<table class="small-table"><thead><tr><th>종목</th><th>예상 배분 금액</th><th>기준 단가(원)</th><th>예상 수량</th></tr></thead><tbody>';
                 const sortedItems = Object.entries(finalPortfolio).sort(([,a],[,b]) => b-a);
                 for (const [ticker, weight] of sortedItems) {{
                     const amount = totalValue * weight;
-                    tableHtml += `<tr><td>${{ticker}}</td><td>${{formatKRW(Math.round(amount))}}</td></tr>`;
+                    let quantity = '-';
+                    let priceStr = '-';
+                    if (ticker !== 'Cash' && assetPrices[ticker]) {{
+                        const price = assetPrices[ticker];
+                        priceStr = formatKRW(Math.round(price));
+                        const num_units = amount / price;
+                        if (num_units < 10) {{
+                            quantity = num_units.toFixed(4);
+                        }} else {{
+                            quantity = num_units.toFixed(2);
+                        }}
+                    }}
+                    tableHtml += `<tr><td>${{ticker}}</td><td>${{formatKRW(Math.round(amount))}}</td><td>${{priceStr}}</td><td>${{quantity}}</td></tr>`;
                 }}
                 tableHtml += '</tbody></table>';
                 resultsDiv.innerHTML = tableHtml;
@@ -547,11 +557,23 @@ def save_portfolio_to_html(global_log: list, final_portfolio: dict, stock_portfo
                     return;
                 }}
 
-                let tableHtml = '<table class="small-table"><thead><tr><th>자산</th><th>예상 배분 금액</th></tr></thead><tbody>';
+                let tableHtml = '<table class="small-table"><thead><tr><th>자산</th><th>예상 배분 금액</th><th>기준 단가(원)</th><th>예상 수량</th></tr></thead><tbody>';
                 const sortedItems = Object.entries(coinStrategyPortfolio).sort(([,a],[,b]) => b-a);
                 for (const [ticker, weight] of sortedItems) {{
                     const amount = totalValue * weight;
-                    tableHtml += `<tr><td>${{ticker}}</td><td>${{formatKRW(Math.round(amount))}}</td></tr>`;
+                    let quantity = '-';
+                    let priceStr = '-';
+                    if (ticker !== 'Cash' && assetPrices[ticker]) {{
+                        const price = assetPrices[ticker];
+                        priceStr = formatKRW(Math.round(price));
+                        const num_units = amount / price;
+                        if (num_units < 10) {{
+                            quantity = num_units.toFixed(4);
+                        }} else {{
+                            quantity = num_units.toFixed(2);
+                        }}
+                    }}
+                    tableHtml += `<tr><td>${{ticker}}</td><td>${{formatKRW(Math.round(amount))}}</td><td>${{priceStr}}</td><td>${{quantity}}</td></tr>`;
                 }}
                 tableHtml += '</tbody></table>';
                 resultsDiv.innerHTML = tableHtml;
@@ -659,7 +681,7 @@ if __name__ == "__main__":
 
     if not all_prices.get('BTC-USD', pd.Series(dtype=float)).empty:
         available_dates = all_prices['BTC-USD'].index.unique().sort_values()
-        if len(available_dates) < 3: # 3일치 데이터 확인
+        if len(available_dates) < 3:
             global_log.append("<p class='error'>데이터가 충분하지 않아 어제/오늘 포트폴리오를 계산할 수 없습니다. 종료합니다.</p>")
             print("\n" + "".join(global_log))
             sys.exit(1)
@@ -684,6 +706,30 @@ if __name__ == "__main__":
     for t, w in stock_portfolio.items(): final_portfolio[t] = final_portfolio.get(t, 0) + w * STOCK_RATIO
     for t, w in coin_portfolio_today.items(): final_portfolio[t] = final_portfolio.get(t, 0) + w * COIN_RATIO
     
+    try:
+        usdt_krw_rate = pyupbit.get_current_price("KRW-USDT")
+        if usdt_krw_rate is None: raise ValueError("Failed to fetch KRW-USDT rate")
+        print(f"\n- 적용 환율: {usdt_krw_rate:,.2f} KRW/USD")
+    except Exception as e:
+        usdt_krw_rate = 1350.0 # Fallback
+        print(f"\n- [경고] 환율 정보 조회 실패. 기본값 {usdt_krw_rate:,.2f} KRW/USD 적용.")
+        global_log.append(f"<p class='error'>- [경고] 환율 정보 조회 실패. 기본값 {usdt_krw_rate:,.2f} KRW/USD 적용.</p>")
+
+    asset_prices_krw = {}
+    all_assets_in_port = set(final_portfolio.keys()) | set(coin_portfolio_today.keys())
+    for asset in all_assets_in_port:
+        if asset == CASH_ASSET or asset not in all_prices: continue
+        
+        price_series = all_prices[asset]
+        is_coin = asset in coin_id_map or 'USD' in asset
+        
+        price_usd = 0
+        if len(price_series) > 0:
+            price_usd = price_series.iloc[-1]
+        
+        if price_usd > 0:
+            asset_prices_krw[asset] = price_usd * usdt_krw_rate
+
     print("\n" + "=" * 60)
     print("               🏆 최종 v7 포트폴리오 추천 🏆")
     print("=" * 60)
@@ -707,5 +753,5 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"\n🔄 코인 포트폴리오 턴오버 (어제/오늘): {turnover:.2%}")
 
-    save_portfolio_to_html(global_log, final_portfolio, stock_portfolio, coin_portfolio_today, stock_status, coin_status_today, coin_portfolio_yesterday, coin_portfolio_today, turnover, log_yesterday_coin_calc, log_today_coin_calc, date_yesterday)
+    save_portfolio_to_html(global_log, final_portfolio, stock_portfolio, coin_portfolio_today, stock_status, coin_status_today, coin_portfolio_yesterday, turnover, log_yesterday_coin_calc, log_today_coin_calc, date_yesterday, asset_prices_krw)
     print(f"\n웹 결과가 portfolio_result.html 에 저장되었습니다.")
