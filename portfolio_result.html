@@ -4,17 +4,17 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>자동 포트폴리오 추천 및 내 포트폴리오 턴오버 분석 (v7)</title>
+        <title>자동 포트폴리오 추천 및 내 포트폴리오 턴오버 분석 (v8)</title>
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; line-height: 1.6; }
             .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            h1, h2, h3, h4, h5 { color: #2c3e50; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
+            h1, h2, h3, h4, h5 { color: #27ae60; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
             h1 { font-size: 2em; margin-bottom: 0; }
             h2.subtitle { font-size: 1.2em; color: #888; border: none; margin-top: 5px; }
             table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; font-size: 0.9em; }
             th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
             th { background-color: #f2f2f2; }
-            .final-table th { background-color: #3498db; color: white; }
+            .final-table th { background-color: #27ae60; color: white; }
             .footer { margin-top: 20px; font-size: 0.9em; color: #888; text-align: center; }
             p { margin: 10px 0; }
             .error { color: #e74c3c; }
@@ -24,14 +24,14 @@
             .dataframe thead th { background-color: #f2f2f2; text-align: center; }
             .calculator-container { background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 20px; margin-top: 30px; border-radius: 8px; }
             .calculator-container input[type="text"], .calculator-container input[type="number"] { width: 95%; padding: 8px; margin-right: 10px; border: 1px solid #ccc; border-radius: 4px; }
-            .calculator-container button { padding: 8px 15px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; }
-            .calculator-container button:hover { background-color: #2980b9; }
-            #my-turnover-result-container { margin-top: 20px; padding: 15px; background-color: #eaf5ff; border: 1px solid #b8d9f3; border-radius: 5px; }
+            .calculator-container button { padding: 8px 15px; background-color: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            .calculator-container button:hover { background-color: #229954; }
+            #my-turnover-result-container { margin-top: 20px; padding: 15px; background-color: #e8f8f5; border: 1px solid #a9dfbf; border-radius: 5px; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🏆 최종 v7 포트폴리오 추천 🏆</h1>
+            <h1>🏆 최종 v8 포트폴리오 추천 🏆</h1>
             <h2 class="subtitle">
             (2025년 10월 11일 기준)</h2>
             <p><b>주식 전략 상태:</b> 공격 모드</p>
@@ -61,7 +61,7 @@
             </div>
 
             <h2>🔄 코인 포트폴리오 턴오버 분석 (추천 포트폴리오 간)</h2>
-            <p>어제(2025-10-10)와 오늘(2025년 10월 11일) 코인 포트폴리오 간의 턴오버 비율: <b>20.00%</b></p>
+            <p>어제(2025-10-10)와 오늘(2025년 10월 11일) 코인 포트폴리오 간의 턴오버 비율: <b>100.00%</b></p>
 
             <hr>
 
@@ -151,7 +151,7 @@
       <td>0.77</td>
     </tr>
   </tbody>
-</table><p>    - <b>최종 주식 포트폴리오: ['EEM', 'GLD', 'QQQ', 'VEA', 'VT']</b></p>
+</table><p>    - <b>최종 주식 포트폴리오: ['EEM', 'GLD', 'QQQ', 'VEA', 'VT']</b></p><p>- 적용 환율: 1,421.03 KRW/USD (Source: Forex API)</p>
             <h3>오늘 코인 포트폴리오 상세 로그 (2025년 10월 11일)</h3>
             <h3>코인 포트폴리오 분석 (기준일: 2025-10-11)</h3><h4>1. 카나리 신호 확인</h4><p>    - BTC 기준(종가 2025-10-11): $113,201.74 | 50일 MA: $114,466.10</p><p><b>    - [결과] 🚨 약세장. 코인 비중을 'Cash'으로 전환합니다.</b></p>
             <h3>어제 코인 포트폴리오 상세 로그 (2025-10-10)</h3>
@@ -259,7 +259,7 @@
       <td>🔴 비건강</td>
     </tr>
   </tbody>
-</table><p>    - <b>건강한 코인 수: 1개 -> 코인 투자 비중: 20%, 현금 비중: 80%</b></p><h4>3. 코인 선정 (샤프 지수 랭킹)</h4><table border="1" class="dataframe dataframe small-table">
+</table><p>    - <b>건강한 코인 수: 1개 -> Full Allocation 적용 (코인 투자 비중: 100%)</b></p><h4>3. 코인 선정 (샤프 지수 랭킹)</h4><table border="1" class="dataframe dataframe small-table">
   <thead>
     <tr style="text-align: right;">
       <th>코인</th>
@@ -276,15 +276,15 @@
       <td>0.14</td>
     </tr>
   </tbody>
-</table><p>  - <b>상위 1개 코인 선정:</b> ['BTC-USD']</p><h4>4. 최종 비중 결정 (상관관계 조정)</h4><p>  - 상관관계 계산 불가. 역변동성 가중치 적용.</p><p>    - <b>최종 코인 포트폴리오: ['BTC-USD', 'Cash']</b></p>
+</table><p>  - <b>상위 1개 코인 선정:</b> ['BTC-USD']</p><h4>4. 최종 비중 결정 (상관관계 조정)</h4><p>  - 상관관계 계산 불가. 역변동성 가중치 적용.</p><p>    - <b>최종 코인 포트폴리오: ['BTC-USD']</b></p>
 
-            <div class="footer">마지막 업데이트: 2025년 10월 11일 11:23:37 KST</div>
+            <div class="footer">마지막 업데이트: 2025년 10월 11일 21:36:27 KST</div>
         </div>
         <script>
             const finalPortfolio = {"Cash": 0.4, "EEM": 0.12, "GLD": 0.12, "QQQ": 0.12, "VEA": 0.12, "VT": 0.12};
             const coinStrategyPortfolio = {"Cash": 1.0};
             const symbolToTickerMap = {};
-            const assetPrices = {"QQQ": 898398.0, "VEA": 90190.32046508789, "EEM": 79156.55790710448, "VT": 205983.8455810547, "GLD": 562538.8725585938};
+            const assetPrices = {"GLD": 524530.586661377, "EEM": 73808.29624851226, "VT": 192066.42000396727, "VEA": 84096.55583366394, "QQQ": 837697.1849999999};
 
             function formatKRW(num) {
                 return new Intl.NumberFormat('ko-KR').format(num) + ' 원';
