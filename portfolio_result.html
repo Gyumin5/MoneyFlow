@@ -4,7 +4,7 @@
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>자동 포트폴리오 추천 및 내 포트폴리오 턴오버 분석 (v8)</title>
+        <title>Cap Defend V9 포트폴리오 (Fusion)</title>
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; line-height: 1.6; }
             .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -31,15 +31,14 @@
     </head>
     <body>
         <div class="container">
-            <h1>🏆 최종 v8 포트폴리오 추천 🏆</h1>
-            <h2 class="subtitle">
-            (2025년 12월 30일 기준)</h2>
-            <p><b>주식 전략 상태:</b> 공격 모드</p>
-            <p><b>코인 전략 상태:</b> 약세장 진입</p>
+            <h1>🏆 Cap Defend V9 포트폴리오</h1>
+            <h2 class="subtitle">(2025년 12월 30일 기준)</h2>
+            <p><b>주식 전략 (V3) 상태:</b> Attack</p>
+            <p><b>코인 전략 (V4) 상태:</b> Full Invest</p>
             <table class="final-table">
                 <thead><tr><th>종목</th><th>자산군</th><th>최종 비중</th></tr></thead>
                 <tbody>
-                    <tr><td>Cash</td><td>현금</td><td>40.00%</td></tr><tr><td>EEM</td><td>주식</td><td>15.00%</td></tr><tr><td>GLD</td><td>주식</td><td>15.00%</td></tr><tr><td>VEA</td><td>주식</td><td>15.00%</td></tr><tr><td>VT</td><td>주식</td><td>15.00%</td></tr>
+                    <tr><td>TRX-USD</td><td>코인</td><td>40.00%</td></tr><tr><td>SPY</td><td>주식</td><td>15.00%</td></tr><tr><td>GLD</td><td>주식</td><td>15.00%</td></tr><tr><td>IWM</td><td>주식</td><td>15.00%</td></tr><tr><td>EEM</td><td>주식</td><td>15.00%</td></tr>
                 </tbody>
                 <tfoot><tr style="font-weight: bold;"><td colspan="2">총 합계</td><td>100.00%</td></tr></tfoot>
             </table>
@@ -61,7 +60,7 @@
             </div>
 
             <h2>🔄 코인 포트폴리오 턴오버 분석 (추천 포트폴리오 간)</h2>
-            <p>어제(2025-12-29)와 오늘(2025년 12월 30일) 코인 포트폴리오 간의 턴오버 비율: <b>0.00%</b></p>
+            <p>어제(2025-12-29)와 오늘(2025년 12월 30일) 코인 포트폴리오 간의 턴오버 비율: <b>100.00%</b></p>
 
             <hr>
 
@@ -91,12 +90,12 @@
 
             <hr>
             <h1>📜 상세 실행 로그</h1>
-            <h2>🛰️ Step 1: 동적 코인 유니버스 선정 시작 (Live API)</h2><p>  - 1. CoinGecko API 호출: 글로벌 시가총액 상위 20위 코인 조회...</p><p>  - 2. Upbit 원화마켓 교차 확인 및 유동성 필터링...</p><p>    - 기준: 31일 평균/중간 거래대금 1십억 원 이상</p><p>    - 스테이블 코인 제외: USDT</p><p><b>  -> 최종 선정된 코인 유니버스 (8개):</b> ['ADA-USD', 'BCH-USD', 'BTC-USD', 'DOGE-USD', 'ETH-USD', 'SOL-USD', 'TRX-USD', 'XRP-USD']</p><h3>✅ 동적 코인 유니버스 선정 완료</h3><h2>📥 Step 2: 필요 데이터 다운로드 및 업데이트 시작</h2><p>  - ADA-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - BCH-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - BTC-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - DOGE-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - EEM 데이터 다운로드/업데이트 완료</p><p>  - EFA 데이터 다운로드/업데이트 완료</p><p>  - ETH-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - GLD 데이터 다운로드/업데이트 완료</p><p>  - IEF 데이터 다운로드/업데이트 완료</p><p>  - PDBC 데이터 다운로드/업데이트 완료</p><p>  - QQQ 데이터 다운로드/업데이트 완료</p><p>  - SOL-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - SPY 데이터 다운로드/업데이트 완료</p><p>  - TRX-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><p>  - VEA 데이터 다운로드/업데이트 완료</p><p>  - VNQ 데이터 다운로드/업데이트 완료</p><p>  - VT 데이터 다운로드/업데이트 완료</p><p>  - XRP-USD (CoinGecko) 데이터 다운로드/업데이트 완료</p><h3>✅ 데이터 준비 완료</h3><h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2><h2>📈 주식 포트폴리오 분석 시작 (60%)</h2><p>    - VT 최신(2025-12-29): $142.01 | 200일 MA: $128.52</p><p>    - EEM 최신(2025-12-29): $54.66 | 200일 MA: $48.74</p><p><b>    - [결과] ✅ 공격 모드</b></p><h4>  - 2단계 (공격 모드): 팩터 기반 자산 선정</h4><h5>    - [세부] 공격 모드 팩터 점수:</h5><table border="1" class="dataframe dataframe small-table">
+            <h2>🛰️ Step 1: Coin Universe (Top 30 Cap)</h2><p>Selected 10 coins from Top 30: ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD', 'TRX-USD', 'DOGE-USD', 'ADA-USD', 'BCH-USD', 'LINK-USD', 'XLM-USD']</p><h2>📥 Step 2: Downloading Data</h2><h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2><h2>📈 Stock Strategy V3 (Global Balanced) - 60%</h2><p><b>[Canary] ✅ Risk-On (Attack)</b>: SPY/EEM Dual SMA Bullish</p><h5>- [세부] 공격 모드 팩터 점수:</h5><table border="1" class="dataframe dataframe small-table">
   <thead>
     <tr style="text-align: right;">
       <th></th>
-      <th>Momentum Score</th>
-      <th>Quality (Sharpe)</th>
+      <th>Momentum</th>
+      <th>Quality</th>
     </tr>
     <tr>
       <th>Ticker</th>
@@ -107,63 +106,262 @@
   <tbody>
     <tr>
       <th>SPY</th>
-      <td>0.09</td>
-      <td>2.14</td>
+      <td>0.119681</td>
+      <td>2.142060</td>
     </tr>
     <tr>
       <th>QQQ</th>
-      <td>0.09</td>
-      <td>1.70</td>
+      <td>0.128255</td>
+      <td>1.700869</td>
     </tr>
     <tr>
-      <th>EFA</th>
-      <td>0.12</td>
-      <td>1.67</td>
+      <th>IWM</th>
+      <td>0.165157</td>
+      <td>1.695965</td>
+    </tr>
+    <tr>
+      <th>VGK</th>
+      <td>0.092683</td>
+      <td>1.577844</td>
+    </tr>
+    <tr>
+      <th>EWJ</th>
+      <td>0.122103</td>
+      <td>1.435004</td>
     </tr>
     <tr>
       <th>EEM</th>
-      <td>0.13</td>
-      <td>2.17</td>
-    </tr>
-    <tr>
-      <th>VT</th>
-      <td>0.10</td>
-      <td>2.17</td>
-    </tr>
-    <tr>
-      <th>VEA</th>
-      <td>0.14</td>
-      <td>2.14</td>
+      <td>0.149300</td>
+      <td>2.168022</td>
     </tr>
     <tr>
       <th>VNQ</th>
-      <td>0.01</td>
-      <td>0.35</td>
+      <td>0.018534</td>
+      <td>0.352914</td>
+    </tr>
+    <tr>
+      <th>DBC</th>
+      <td>0.065884</td>
+      <td>1.113555</td>
     </tr>
     <tr>
       <th>GLD</th>
-      <td>0.29</td>
-      <td>2.80</td>
+      <td>0.307614</td>
+      <td>2.803302</td>
     </tr>
     <tr>
-      <th>PDBC</th>
-      <td>0.05</td>
-      <td>1.07</td>
+      <th>TLT</th>
+      <td>0.024108</td>
+      <td>0.549003</td>
+    </tr>
+    <tr>
+      <th>HYG</th>
+      <td>0.033973</td>
+      <td>2.094774</td>
+    </tr>
+    <tr>
+      <th>LQD</th>
+      <td>0.037561</td>
+      <td>1.523543</td>
+    </tr>
+    <tr>
+      <th>QUAL</th>
+      <td>0.102775</td>
+      <td>1.961789</td>
+    </tr>
+    <tr>
+      <th>MTUM</th>
+      <td>0.060174</td>
+      <td>0.885943</td>
+    </tr>
+    <tr>
+      <th>IQLT</th>
+      <td>0.065786</td>
+      <td>1.212083</td>
+    </tr>
+    <tr>
+      <th>IMTM</th>
+      <td>0.090357</td>
+      <td>1.605800</td>
     </tr>
   </tbody>
-</table><p>    - <b>최종 주식 포트폴리오: ['EEM', 'GLD', 'VEA', 'VT']</b></p><p>- 적용 환율: 1,437.15 KRW/USD (Source: Forex API)</p>
+</table><p>- 최종 주식 포트폴리오: ['SPY', 'GLD', 'IWM', 'EEM']</p>
             <h3>오늘 코인 포트폴리오 상세 로그 (2025년 12월 30일)</h3>
-            <h3>코인 포트폴리오 분석 (기준일: 2025-12-30)</h3><h4>1. 카나리 신호 확인</h4><p>    - BTC 기준(종가 2025-12-30): $87,156.56 | 50일 MA: $90,475.14</p><p><b>    - [결과] 🚨 약세장. 코인 비중을 'Cash'으로 전환합니다.</b></p>
+            <h3>Coin Strategy V4 (Aggressive Alpha) (Date: 2025-12-30)</h3><h4>1. 카나리 신호 확인</h4><p>- BTC 기준(종가 2025-12-30): $87,385.51 | 50일 MA: $nan</p><p><b>- [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p><h4>2. 헬스 체크 결과</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>현재가</th>
+      <th>SMA30</th>
+      <th>Mom21</th>
+      <th>최종 결과</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BTC-USD</td>
+      <td>$87,385.51</td>
+      <td>$nan</td>
+      <td>-5.72%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>ETH-USD</td>
+      <td>$2,948.19</td>
+      <td>$nan</td>
+      <td>-11.23%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>XRP-USD</td>
+      <td>$1.85</td>
+      <td>$1.97</td>
+      <td>-10.88%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>$123.91</td>
+      <td>$nan</td>
+      <td>-10.15%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>TRX-USD</td>
+      <td>$0.28</td>
+      <td>$0.28</td>
+      <td>1.12%</td>
+      <td>🟢 건강</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>$0.12</td>
+      <td>$nan</td>
+      <td>-16.52%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>ADA-USD</td>
+      <td>$0.35</td>
+      <td>$nan</td>
+      <td>-25.23%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>BCH-USD</td>
+      <td>$596.42</td>
+      <td>$nan</td>
+      <td>1.88%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>LINK-USD</td>
+      <td>$12.29</td>
+      <td>$13.07</td>
+      <td>-10.58%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>XLM-USD</td>
+      <td>$0.22</td>
+      <td>$0.23</td>
+      <td>-10.27%</td>
+      <td>🔴 비건강</td>
+    </tr>
+  </tbody>
+</table><h4>3. 코인 선정 (샤프 지수 랭킹)</h4><p>- <b>상위 1개 코인 선정:</b> ['TRX-USD']</p><h4>4. 최종 비중 결정 (역변동성)</h4>
             <h3>어제 코인 포트폴리오 상세 로그 (2025-12-29)</h3>
-            <h3>코인 포트폴리오 분석 (기준일: 2025-12-29)</h3><h4>1. 카나리 신호 확인</h4><p>    - BTC 기준(종가 2025-12-29): $87,822.91 | 50일 MA: $90,826.20</p><p><b>    - [결과] 🚨 약세장. 코인 비중을 'Cash'으로 전환합니다.</b></p>
+            <h3>Coin Strategy V4 (Aggressive Alpha) (Date: 2025-12-29)</h3><h4>1. 카나리 신호 확인</h4><p>- BTC 기준(종가 2025-12-29): $nan | 50일 MA: $nan</p><p><b>- [결과] ✅ 강세장. 코인 투자를 진행합니다.</b></p><h4>2. 헬스 체크 결과</h4><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>코인</th>
+      <th>현재가</th>
+      <th>SMA30</th>
+      <th>Mom21</th>
+      <th>최종 결과</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BTC-USD</td>
+      <td>$nan</td>
+      <td>$nan</td>
+      <td>nan%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>ETH-USD</td>
+      <td>$nan</td>
+      <td>$nan</td>
+      <td>nan%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>XRP-USD</td>
+      <td>$1.86</td>
+      <td>$1.98</td>
+      <td>-8.58%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>$nan</td>
+      <td>$nan</td>
+      <td>nan%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>TRX-USD</td>
+      <td>$0.28</td>
+      <td>$0.28</td>
+      <td>-0.69%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>$nan</td>
+      <td>$nan</td>
+      <td>nan%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>ADA-USD</td>
+      <td>$nan</td>
+      <td>$nan</td>
+      <td>nan%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>BCH-USD</td>
+      <td>$nan</td>
+      <td>$nan</td>
+      <td>nan%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>LINK-USD</td>
+      <td>$12.47</td>
+      <td>$13.09</td>
+      <td>-8.47%</td>
+      <td>🔴 비건강</td>
+    </tr>
+    <tr>
+      <td>XLM-USD</td>
+      <td>$0.22</td>
+      <td>$0.23</td>
+      <td>-7.02%</td>
+      <td>🔴 비건강</td>
+    </tr>
+  </tbody>
+</table><p>- 건강한 코인이 없습니다. 현금 전환.</p>
 
-            <div class="footer">마지막 업데이트: 2025년 12월 30일 12:00:40 KST</div>
+            <div class="footer">마지막 업데이트: 2025년 12월 30일 17:00:54 KST</div>
         </div>
         <script>
-            const finalPortfolio = {"Cash": 0.4, "EEM": 0.15, "GLD": 0.15, "VEA": 0.15, "VT": 0.15};
-            const coinStrategyPortfolio = {"Cash": 1.0};
-            const symbolToTickerMap = {};
-            const assetPrices = {"VT": 204089.66360549929, "VEA": 90138.04975433351, "GLD": 572847.9987716675, "EEM": 78554.61878070832};
+            const finalPortfolio = {"TRX-USD": 0.4, "SPY": 0.15, "GLD": 0.15, "IWM": 0.15, "EEM": 0.15};
+            const coinStrategyPortfolio = {"TRX-USD": 1.0};
+            const symbolToTickerMap = {"TRX": "TRX-USD"};
+            const assetPrices = {"IWM": 359115.049017334, "GLD": 572847.9987716675, "SPY": 988543.5924133301, "TRX-USD": 416.0, "EEM": 78554.61878070832};
 
             function formatKRW(num) {
                 return new Intl.NumberFormat('ko-KR').format(num) + ' 원';
