@@ -14,10 +14,9 @@ STOCK_RATIO, COIN_RATIO = 0.60, 0.40
 CASH_ASSET = 'Cash'
 
 # Stock V3 Universe (Global Balanced)
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'IWM', 'VGK', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD', 
-                           'QUAL', 'MTUM', 'IQLT', 'IMTM'] 
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'EFA', 'EEM', 'VT', 'VEA', 'GLD', 'PDBC', 'QUAL', 'MTUM', 'IQLT', 'IMTM']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
-CANARY_ASSETS = ['SPY', 'EEM', 'VT']
+CANARY_ASSETS = ['VT', 'EEM']
 
 # Coin V4 Universe
 COIN_CANARY_ASSET = 'BTC-USD'
@@ -44,21 +43,28 @@ def calculate_dual_sma_check(s):
     sma20 = s.rolling(20).mean().iloc[-1]
     sma100 = s.rolling(100).mean().iloc[-1]
     return sma20 > sma100
+def calculate_weighted_momentum(s):
+    # Stock V3: 0.5 * 3m + 0.3 * 6m + 0.2 * 12m
+    if s is None or len(s.dropna()) < 253: return np.nan
+    ret3 = calculate_return(s, 63)
+    ret6 = calculate_return(s, 126)
+    ret12 = calculate_return(s, 252)
+    return 0.5 * (ret3 if pd.notna(ret3) else 0) + 0.3 * (ret6 if pd.notna(ret6) else 0) + 0.2 * (ret12 if pd.notna(ret12) else 0)
 
 def check_stock_canary_v3(all_prices, target_date, lookback=7):
-    spy = all_prices.get('SPY')
+    vt = all_prices.get('VT')
     eem = all_prices.get('EEM')
-    if spy is None or eem is None: return False 
+    if vt is None or eem is None: return False 
     
-    valid_dates = spy.loc[:target_date].index
+    valid_dates = vt.loc[:target_date].index
     if len(valid_dates) < lookback + 100: return False
     check_dates = valid_dates[-lookback:]
     
     raw_signals = []
     for d in check_dates:
-        spy_sub = spy.loc[:d]
+        vt_sub = vt.loc[:d]
         eem_sub = eem.loc[:d]
-        raw_signals.append(calculate_dual_sma_check(spy_sub) and calculate_dual_sma_check(eem_sub))
+        raw_signals.append(calculate_dual_sma_check(vt_sub) and calculate_dual_sma_check(eem_sub))
         
     return sum(raw_signals) > (lookback / 2)
 
@@ -167,8 +173,8 @@ def run_stock_strategy_v3(log, all_prices, target_date):
         scores = []
         for t in candidates:
             p = all_prices[t].loc[:target_date]
-            if len(p) < 130: continue
-            mom = calculate_return(p, 126)
+            if len(p) < 253: continue
+            mom = calculate_weighted_momentum(p)
             qual = calculate_sharpe(p, 126)
             scores.append({'Ticker': t, 'Momentum': mom, 'Quality': qual})
             
@@ -199,6 +205,10 @@ def run_stock_strategy_v3(log, all_prices, target_date):
                     if r > best_ret:
                         best_ret = r
                         best_t = t
+        if best_ret < 0:
+            log.append(f"<p>🚨 Best Defense ({best_t}) 6m Ret < 0. Safety Exit to CASH.</p>")
+            return {CASH_ASSET: 1.0}, "Defend (Cash)"
+            
         if results:
              log.append(pd.DataFrame(results).sort_values('Ret', ascending=False).to_html(classes='dataframe small-table'))
              
