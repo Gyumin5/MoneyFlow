@@ -42,7 +42,7 @@ jobs:
 
       # 4. 파이썬 스크립트 실행
       - name: Run python script
-        run: python recommend_v8.py
+        run: python recommend_v9.py
 
       # 5. 변경된 파일(결과 HTML, 데이터)을 저장소에 자동으로 커밋
       - name: Commit and push changes
