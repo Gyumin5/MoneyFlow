@@ -134,6 +134,7 @@ def download_data(tickers, log, coin_id_map):
                     ts = res['timestamp']
                     adj = res['indicators']['adjclose'][0]['adjclose']
                     df = pd.DataFrame({'Date': pd.to_datetime(ts, unit='s').date, 'Adj_Close': adj})
+                    df = df.dropna().drop_duplicates(subset=['Date'], keep='last').sort_values('Date')
                     df.to_csv(fp, index=False)
                     print(f"Downloaded {t} (Yahoo)")
                 else:
@@ -148,7 +149,7 @@ def load_prices(tickers):
         fp = os.path.join(DATA_DIR, f"{t}.csv")
         if os.path.exists(fp):
             df = pd.read_csv(fp, parse_dates=['Date'])
-            df = df.drop_duplicates(subset=['Date'], keep='first')
+            df = df.dropna().drop_duplicates(subset=['Date'], keep='last')
             prices[t] = df.set_index('Date')['Adj_Close'].sort_index()
     return prices
 
@@ -215,6 +216,11 @@ def run_coin_strategy_v4(coin_universe, all_prices, target_date, log, is_today=T
     
     log.append("<h4>1. 카나리 신호 확인</h4>")
     log.append(f"<p>- BTC 기준(종가 {target_date.date()}): ${cur:,.2f} | 50일 MA: ${sma:,.2f}</p>")
+    log.append(f"<p>- [데이터 진단] 사용가능 데이터 수: {len(btc.loc[:target_date])}개</p>")
+    
+    if pd.isna(sma):
+        log.append(f"<p class='error'>- [오류] 50일 이평선 계산 불가 (데이터 부족: {len(btc.loc[:target_date])} < 50)</p>")
+        return {CASH_ASSET: 1.0}, "데이터 부족", log
     
     if cur <= sma:
         log.append(f"<p><b>- [결과] 🚨 약세장. 코인 비중을 '{CASH_ASSET}'으로 전환합니다.</b></p>")
