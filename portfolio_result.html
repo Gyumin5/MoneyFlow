@@ -3,99 +3,94 @@
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend V9 포트폴리오 (Fusion)</title>
+        <title>Cap Defend V10 Recommendation</title>
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 20px; background-color: #f9f9f9; color: #333; line-height: 1.6; }
-            .container { max-width: 900px; margin: auto; background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            h1, h2, h3, h4, h5 { color: #27ae60; border-bottom: 1px solid #eaecef; padding-bottom: 10px; }
-            h1 { font-size: 2em; margin-bottom: 0; }
-            h2.subtitle { font-size: 1.2em; color: #888; border: none; margin-top: 5px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; margin-bottom: 20px; font-size: 0.9em; }
-            th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .final-table th { background-color: #27ae60; color: white; }
-            .footer { margin-top: 20px; font-size: 0.9em; color: #888; text-align: center; }
-            p { margin: 10px 0; }
-            .error { color: #e74c3c; }
-            .small-table table { width: auto; }
-            .dataframe { border-collapse: collapse; width: auto; margin-bottom: 15px; }
-            .dataframe th, .dataframe td { padding: 5px 8px; border: 1px solid #ccc; text-align: right; }
-            .dataframe thead th { background-color: #f2f2f2; text-align: center; }
-            .calculator-container { background-color: #f8f9fa; border: 1px solid #e9ecef; padding: 20px; margin-top: 30px; border-radius: 8px; }
-            .calculator-container input[type="text"], .calculator-container input[type="number"] { width: 95%; padding: 8px; margin-right: 10px; border: 1px solid #ccc; border-radius: 4px; }
-            .calculator-container button { padding: 8px 15px; background-color: #27ae60; color: white; border: none; border-radius: 4px; cursor: pointer; }
-            .calculator-container button:hover { background-color: #229954; }
-            #my-turnover-result-container { margin-top: 20px; padding: 15px; background-color: #e8f8f5; border: 1px solid #a9dfbf; border-radius: 5px; }
+            body { font-family: 'Segoe UI', sans-serif; background: #f4f6f8; margin: 20px; color: #333; }
+            .container { max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+            h1 { color: #2980b9; border-bottom: 2px solid #2980b9; padding-bottom: 10px; }
+            h2 { color: #2c3e50; margin-top: 30px; border-bottom: 1px solid #eee; padding-bottom: 5px;}
+            table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+            th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
+            th { background: #f8f9fa; }
+            .small-table table { width: auto; font-size: 0.9em; }
+            .calculator { background: #ebf5fb; padding: 20px; border-radius: 8px; margin-top: 20px; }
+            input, button { padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #ccc; }
+            button { background: #2980b9; color: white; border: none; cursor: pointer; }
+            button:hover { background: #1f618d; }
+            .highlight { color: #e74c3c; font-weight: bold; }
+            .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+            .card { background: #fff; padding: 20px; border-radius: 12px; border: 1px solid #e1e4e8; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+            .calc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
+            .calc-box { background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🏆 Cap Defend V9 포트폴리오</h1>
-            <h2 class="subtitle">(2025년 12월 31일 기준)</h2>
-            <p><b>주식 전략 (V3) 상태:</b> Attack</p>
-            <p><b>코인 전략 (V4) 상태:</b> Risk-Off</p>
-            <table class="final-table">
-                <thead><tr><th>종목</th><th>자산군</th><th>최종 비중</th></tr></thead>
-                <tbody>
-                    <tr><td>Cash</td><td>현금</td><td>40.00%</td></tr><tr><td>GLD</td><td>주식</td><td>20.00%</td></tr><tr><td>EEM</td><td>주식</td><td>20.00%</td></tr><tr><td>VEA</td><td>주식</td><td>20.00%</td></tr>
-                </tbody>
-                <tfoot><tr style="font-weight: bold;"><td colspan="2">총 합계</td><td>100.00%</td></tr></tfoot>
-            </table>
-
-            <div class="calculator-container">
-                <h3>🧮 총 자산 배분 계산기</h3>
-                <p>총 투자 예정 금액(원)을 입력하시면 각 자산에 얼마씩 배분해야 하는지 계산합니다.</p>
-                <input type="number" id="total-assets-input" placeholder="총 자산액 (원)" min="0">
-                <button id="calculate-total">계산하기</button>
-                <div id="total-assets-results" style="margin-top: 15px;"></div>
-            </div>
-
-            <div class="calculator-container">
-                <h3>🪙 코인 자산 배분 계산기</h3>
-                <p>코인에만 투자할 총 금액(원)을 입력하시면 코인과 현금의 배분 금액을 계산합니다.</p>
-                <input type="number" id="coin-assets-input" placeholder="코인 총 자산액 (원)" min="0">
-                <button id="calculate-coin">계산하기</button>
-                <div id="coin-assets-results" style="margin-top: 15px;"></div>
-            </div>
-
-            <h2>🔄 코인 포트폴리오 턴오버 분석 (추천 포트폴리오 간)</h2>
-            <p>어제(2025-12-30)와 오늘(2025년 12월 31일) 코인 포트폴리오 간의 턴오버 비율: <b>0.00%</b></p>
-
-            <hr>
-
-            <div class="calculator-container">
-                <h1>🪙 내 포트폴리오 턴오버 계산기</h1>
-                <p>현재 보유하고 계신 코인과 현금 보유액을 원화(KRW) 기준으로 입력하시면, 추천 포트폴리오와의 턴오버를 계산해 드립니다.</p>
-                
-                <h2>1. 내 보유자산 입력</h2>
-                <table id="my-portfolio-table">
-                    <thead>
-                        <tr>
-                            <th>자산 (예: BTC, ETH, Cash)</th>
-                            <th>보유액 (원)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr><tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr><tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr><tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr><tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr><tr><td><input type="text" class="ticker-input" placeholder="코인 티커 또는 Cash"></td><td><input type="number" class="amount-input" placeholder="보유액 (원)" min="0"></td></tr>
-                    </tbody>
-                </table>
-                <button id="calculate-my-turnover">내 턴오버 계산하기</button>
-
-                <div id="my-turnover-result-container" style="display:none;">
-                    <h2>2. 계산 결과</h2>
-                    <div id="my-turnover-result"></div>
+            <h1>🚀 Cap Defend V10 (Grand Optimal)</h1>
+            <p><strong>주식(V3 Mod) + 코인(V10 Original) + 방어(Enhanced)</strong> | 기준일: 2025-12-31</p>
+            
+            <div class="dashboard-grid">
+                <div class="card">
+                    <h3>🛡️ Market Pulse (Signal)</h3>
+                    <p style="font-size:0.9em; color:#666;">추세선(MA) 이격도 (0% 근접 시 반전 주의)</p>
+                    <div style='display:flex; gap: 10px; margin-bottom: 20px;'><div><strong>BTC:</strong> <span style='background:#e74c3c; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;'>-1.67%</span> (vs MA50)</div><div><strong>VT:</strong> <span style='background:#27ae60; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;'>+10.36%</span> (vs MA200)</div><div><strong>EEM:</strong> <span style='background:#27ae60; color:white; padding:4px 8px; border-radius:4px; font-weight:bold;'>+12.46%</span> (vs MA200)</div></div>
+                </div>
+                <div class="card">
+                     <h3>🧠 Strategy Insights</h3>
+                     <p><strong>Top Momentum (3):</strong> GLD, VEA, EEM</p>
+                     <p><strong>Top Quality (3):</strong> GLD, EEM, VEA</p>
                 </div>
             </div>
 
-            <hr>
-            <h1>📜 상세 실행 로그</h1>
-            <h2>🛰️ Step 1: Coin Universe (Top 30 Cap)</h2><p>Selected 10 coins from Top 30: ['BTC-USD', 'ETH-USD', 'XRP-USD', 'SOL-USD', 'TRX-USD', 'DOGE-USD', 'ADA-USD', 'BCH-USD', 'LINK-USD', 'XLM-USD']</p><h2>📥 Step 2: Downloading Data</h2><h2>🚀 Step 3: 전략 실행 및 포트폴리오 분석</h2><h2>📈 Stock Strategy V3 (Global Balanced) - 60%</h2><p><b>[Canary] ✅ Risk-On (Attack)</b>: SPY/EEM Dual SMA Bullish</p><h5>- [세부] 공격 모드 팩터 점수:</h5><table border="1" class="dataframe dataframe small-table">
+            <div style="display: flex; justify-content: space-between; background: #ecf0f1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <div><strong>주식 상태:</strong> 공격 모드</div>
+                <div><strong>코인 상태:</strong> Risk-Off</div>
+                <div><strong>코인 턴오버:</strong> 0.00%</div>
+            </div>
+
+            <h2>📊 최종 추천 포트폴리오</h2>
+            <table>
+                <thead><tr><th>종목</th><th>자산군</th><th>비중</th></tr></thead>
+                <tbody><tr><td>EEM</td><td>주식</td><td>20.00%</td></tr><tr><td>GLD</td><td>주식</td><td>20.00%</td></tr><tr><td>VEA</td><td>주식</td><td>20.00%</td></tr><tr><td>Cash</td><td>현금</td><td>40.00%</td></tr></tbody>
+            </table>
+
+            <h2>🧮 투자 배분 계산기</h2>
+            <div class="calc-grid">
+                <div class="calc-box">
+                    <h3>💰 전체 투자금</h3>
+                    <input type="number" id="invest-amt" placeholder="전체 투자금 (원)" style="width:90%">
+                    <button onclick="calc('total')" style="width:100%">계산 (6:4 배분)</button>
+                </div>
+                <div class="calc-box">
+                    <h3>📈 주식만 계산</h3>
+                    <input type="number" id="stock-amt" placeholder="주식 투자금 (원)" style="width:90%">
+                    <button onclick="calc('stock')" style="width:100%">주식 배분</button>
+                </div>
+                <div class="calc-box">
+                    <h3>🪙 코인만 계산</h3>
+                    <input type="number" id="coin-amt" placeholder="코인 투자금 (원)" style="width:90%">
+                    <button onclick="calc('coin')" style="width:100%">코인 배분</button>
+                </div>
+            </div>
+            <div id="calc-res" class="calculator" style="display:none;"></div>
+
+            <div class="calculator">
+                <h3>🪙 코인 턴오버 계산기</h3>
+                <p>현재 보유 코인 입력 시 추천 포트폴리오와의 차이를 계산합니다.</p>
+                <div id="my-assets">
+                    <!-- JS generated rows -->
+                </div>
+                <button onclick="calcTurnover()">내 턴오버 계산</button>
+                <div id="turnover-res"></div>
+            </div>
+
+            <h2>📜 상세 분석 로그</h2>
+            <h2>🛰️ Step 1: 동적 코인 유니버스 선정 (Live API)</h2><p>선정된 유니버스 (9개): ['ADA-USD', 'BCH-USD', 'BTC-USD', 'DOGE-USD', 'ETH-USD', 'LINK-USD', 'SOL-USD', 'TRX-USD', 'XRP-USD']</p><h2>📥 Step 2: 필요 데이터 다운로드 및 업데이트</h2><h2>📈 주식 포트폴리오 분석 (V10 - V3 Univ + V1 Canary)</h2><p><b>[Canary]</b> VT: $141.98 (+10.36%) | EEM: $54.88 (+12.46%) vs MA200</p><p>✅ <b>Risk-On (공격)</b>: VT와 EEM 모두 200일선 상회</p><h4>🚀 공격 모드: 팩터 유니버스(V3) 선정</h4><h5>팩터 점수:</h5><table border="1" class="dataframe dataframe small-table">
   <thead>
     <tr style="text-align: right;">
       <th></th>
-      <th>Momentum</th>
-      <th>Quality</th>
+      <th>Mom</th>
+      <th>Qual</th>
     </tr>
     <tr>
       <th>Ticker</th>
@@ -107,7 +102,7 @@
     <tr>
       <th>SPY</th>
       <td>0.083937</td>
-      <td>2.124933</td>
+      <td>2.124934</td>
     </tr>
     <tr>
       <th>QQQ</th>
@@ -132,7 +127,7 @@
     <tr>
       <th>VEA</th>
       <td>0.140072</td>
-      <td>2.174577</td>
+      <td>2.174575</td>
     </tr>
     <tr>
       <th>GLD</th>
@@ -147,7 +142,7 @@
     <tr>
       <th>QUAL</th>
       <td>0.066835</td>
-      <td>1.857485</td>
+      <td>1.857486</td>
     </tr>
     <tr>
       <th>MTUM</th>
@@ -165,154 +160,193 @@
       <td>1.802995</td>
     </tr>
   </tbody>
-</table><p>- 최종 주식 포트폴리오: ['GLD', 'EEM', 'VEA']</p>
-            <h3>오늘 코인 포트폴리오 상세 로그 (2025년 12월 31일)</h3>
-            <h3>Coin Strategy V4 (Aggressive Alpha) (Date: 2025-12-31)</h3><h4>1. 카나리 신호 확인</h4><p>- BTC 기준(종가 2025-12-31): $88,512.64 | 50일 MA: $90,127.21</p><p>- [데이터 진단] 사용가능 데이터 수: 365개</p><p><b>- [결과] 🚨 약세장. 코인 비중을 'Cash'으로 전환합니다.</b></p>
-            <h3>어제 코인 포트폴리오 상세 로그 (2025-12-30)</h3>
-            <h3>Coin Strategy V4 (Aggressive Alpha) (Date: 2025-12-30)</h3><h4>1. 카나리 신호 확인</h4><p>- BTC 기준(종가 2025-12-30): $87,156.56 | 50일 MA: $90,475.14</p><p>- [데이터 진단] 사용가능 데이터 수: 364개</p><p><b>- [결과] 🚨 약세장. 코인 비중을 'Cash'으로 전환합니다.</b></p>
+</table><p>최종 주식 포트폴리오: <b>['EEM', 'GLD', 'VEA']</b></p>
+            <h3>🪙 코인 포트폴리오 (V10) (2025-12-31)</h3><p>[BTC Canary] $88,346 (-1.67%) vs MA50 $89,846</p><table border="1" class="dataframe dataframe small-table">
+  <thead>
+    <tr style="text-align: right;">
+      <th>Coin</th>
+      <th>Price</th>
+      <th>SMA30</th>
+      <th>Mom21</th>
+      <th>Score</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>BCH-USD</td>
+      <td>$599.14</td>
+      <td>$581.31</td>
+      <td>4.46%</td>
+      <td>1.77</td>
+      <td>🟢</td>
+    </tr>
+    <tr>
+      <td>ETH-USD</td>
+      <td>$2,969.71</td>
+      <td>$3,026.02</td>
+      <td>-10.70%</td>
+      <td>-0.20</td>
+      <td>🔴</td>
+    </tr>
+    <tr>
+      <td>TRX-USD</td>
+      <td>$0.28</td>
+      <td>$0.28</td>
+      <td>1.45%</td>
+      <td>-0.79</td>
+      <td>🟢</td>
+    </tr>
+    <tr>
+      <td>SOL-USD</td>
+      <td>$125.63</td>
+      <td>$129.16</td>
+      <td>-7.94%</td>
+      <td>-1.22</td>
+      <td>🔴</td>
+    </tr>
+    <tr>
+      <td>BTC-USD</td>
+      <td>$88,346.41</td>
+      <td>$89,041.26</td>
+      <td>-3.99%</td>
+      <td>-1.35</td>
+      <td>🔴</td>
+    </tr>
+    <tr>
+      <td>DOGE-USD</td>
+      <td>$0.12</td>
+      <td>$0.13</td>
+      <td>-14.40%</td>
+      <td>-1.46</td>
+      <td>🔴</td>
+    </tr>
+    <tr>
+      <td>LINK-USD</td>
+      <td>$12.35</td>
+      <td>$13.05</td>
+      <td>-12.56%</td>
+      <td>-1.51</td>
+      <td>🔴</td>
+    </tr>
+    <tr>
+      <td>XRP-USD</td>
+      <td>$1.87</td>
+      <td>$1.96</td>
+      <td>-8.59%</td>
+      <td>-1.53</td>
+      <td>🔴</td>
+    </tr>
+    <tr>
+      <td>ADA-USD</td>
+      <td>$0.35</td>
+      <td>$0.39</td>
+      <td>-22.58%</td>
+      <td>-3.02</td>
+      <td>🔴</td>
+    </tr>
+  </tbody>
+</table><p>🚨 <b>Risk-Off</b>: BTC 약세장. 전량 현금.</p>
 
-            <div class="footer">마지막 업데이트: 2025년 12월 31일 11:55:23 KST</div>
         </div>
-        <script>
-            const finalPortfolio = {"Cash": 0.4, "GLD": 0.19999999999999998, "EEM": 0.19999999999999998, "VEA": 0.19999999999999998};
-            const coinStrategyPortfolio = {"Cash": 1.0};
-            const symbolToTickerMap = {};
-            const assetPrices = {"GLD": 575977.2366516114, "EEM": 79243.977542305, "VEA": 90665.62182197571};
 
-            function formatKRW(num) {
-                return new Intl.NumberFormat('ko-KR').format(num) + ' 원';
+        <script>
+            const finalP = {"EEM": 0.19999999999999998, "GLD": 0.19999999999999998, "VEA": 0.19999999999999998, "Cash": 0.4};
+            const stockP = {"EEM": 0.3333333333333333, "GLD": 0.3333333333333333, "VEA": 0.3333333333333333};
+            const coinP = {"Cash": 1.0};
+            
+            const prices = {"EEM": 79685.76155090332, "GLD": 579188.3012695312, "VEA": 91171.0813293457};
+            const symMap = {};
+
+            function fmt(n) { return new Intl.NumberFormat('ko-KR').format(Math.round(n)) + ' 원'; }
+
+            function calc(type) {
+                let amt = 0;
+                let port = {};
+                let title = "";
+                
+                if(type === 'total') {
+                    amt = parseFloat(document.getElementById('invest-amt').value);
+                    port = finalP;
+                    title = "전체 포트폴리오 배분 결과 (주식 60% : 코인 40%)";
+                } else if(type === 'stock') {
+                    amt = parseFloat(document.getElementById('stock-amt').value);
+                    port = stockP;
+                    title = "주식 포트폴리오 배분 결과 (주식 100%)";
+                } else if(type === 'coin') {
+                    amt = parseFloat(document.getElementById('coin-amt').value);
+                    port = coinP;
+                    title = "코인 포트폴리오 배분 결과 (코인 100%)";
+                }
+                
+                if(!amt) return;
+                
+                let h = `<h3>${title}</h3>`;
+                h += '<table><thead><tr><th>종목</th><th>비중</th><th>금액</th><th>단가</th><th>수량</th></tr></thead><tbody>';
+                
+                let sortedKeys = Object.keys(port).sort((a,b) => port[b] - port[a]);
+                
+                for(let k of sortedKeys) {
+                    const w = port[k];
+                    const val = amt * w;
+                    let pr = prices[k] || 0;
+                    let qty = pr > 0 ? (val/pr).toFixed(4) : '-';
+                    h += `<tr><td>${k}</td><td>${(w*100).toFixed(1)}%</td><td>${fmt(val)}</td><td>${fmt(pr)}</td><td>${qty}</td></tr>`;
+                }
+                h += '</tbody></table>';
+                
+                const resDiv = document.getElementById('calc-res');
+                resDiv.style.display = 'block';
+                resDiv.innerHTML = h;
             }
 
-            document.getElementById('calculate-total').addEventListener('click', function() {
-                const totalValue = parseFloat(document.getElementById('total-assets-input').value);
-                const resultsDiv = document.getElementById('total-assets-results');
-                if (isNaN(totalValue) || totalValue <= 0) {
-                    resultsDiv.innerHTML = '<p style="color:red;">유효한 금액을 입력하세요.</p>';
-                    return;
-                }
-                
-                let tableHtml = '<table class="small-table"><thead><tr><th>종목</th><th>예상 배분 금액</th><th>기준 단가(원)</th><th>예상 수량</th></tr></thead><tbody>';
-                const sortedItems = Object.entries(finalPortfolio).sort(([,a],[,b]) => b-a);
-                for (const [ticker, weight] of sortedItems) {
-                    const amount = totalValue * weight;
-                    let quantity = '-';
-                    let priceStr = '-';
-                    if (ticker !== 'Cash' && assetPrices[ticker]) {
-                        const price = assetPrices[ticker];
-                        priceStr = formatKRW(Math.round(price));
-                        const num_units = amount / price;
-                        if (num_units < 10) {
-                            quantity = num_units.toFixed(4);
-                        } else {
-                            quantity = num_units.toFixed(2);
-                        }
-                    }
-                    tableHtml += `<tr><td>${ticker}</td><td>${formatKRW(Math.round(amount))}</td><td>${priceStr}</td><td>${quantity}</td></tr>`;
-                }
-                tableHtml += '</tbody></table>';
-                resultsDiv.innerHTML = tableHtml;
-            });
+            // Init User Input Rows
+            let rows = '<table>';
+            for(let i=0; i<6; i++) {
+                rows += `<tr><td><input class="u-tick" placeholder="Ticker (e.g. BTC)"></td><td><input class="u-amt" type="number" placeholder="Value (KRW)"></td></tr>`;
+            }
+            rows += '</table>';
+            document.getElementById('my-assets').innerHTML = rows;
 
-            document.getElementById('calculate-coin').addEventListener('click', function() {
-                const totalValue = parseFloat(document.getElementById('coin-assets-input').value);
-                const resultsDiv = document.getElementById('coin-assets-results');
-                if (isNaN(totalValue) || totalValue <= 0) {
-                    resultsDiv.innerHTML = '<p style="color:red;">유효한 금액을 입력하세요.</p>';
-                    return;
-                }
-
-                let tableHtml = '<table class="small-table"><thead><tr><th>자산</th><th>예상 배분 금액</th><th>기준 단가(원)</th><th>예상 수량</th></tr></thead><tbody>';
-                const sortedItems = Object.entries(coinStrategyPortfolio).sort(([,a],[,b]) => b-a);
-                for (const [ticker, weight] of sortedItems) {
-                    const amount = totalValue * weight;
-                    let quantity = '-';
-                    let priceStr = '-';
-                    if (ticker !== 'Cash' && assetPrices[ticker]) {
-                        const price = assetPrices[ticker];
-                        priceStr = formatKRW(Math.round(price));
-                        const num_units = amount / price;
-                        if (num_units < 10) {
-                            quantity = num_units.toFixed(4);
-                        } else {
-                            quantity = num_units.toFixed(2);
-                        }
-                    }
-                    tableHtml += `<tr><td>${ticker}</td><td>${formatKRW(Math.round(amount))}</td><td>${priceStr}</td><td>${quantity}</td></tr>`;
-                }
-                tableHtml += '</tbody></table>';
-                resultsDiv.innerHTML = tableHtml;
-            });
-
-            document.getElementById('calculate-my-turnover').addEventListener('click', function() {
-                const myPortfolio = {};
-                let totalValue = 0;
-                const rows = document.querySelectorAll('#my-portfolio-table tbody tr');
-                
-                rows.forEach(row => {
-                    const tickerInput = row.querySelector('.ticker-input');
-                    const amountInput = row.querySelector('.amount-input');
-                    const tickerRaw = tickerInput.value.trim();
-                    const amount = parseFloat(amountInput.value);
-
-                    if (tickerRaw && !isNaN(amount) && amount > 0) {
-                        let ticker = tickerRaw;
-                        if (ticker.toLowerCase() === 'cash') {
-                            ticker = 'Cash';
-                        } else {
-                            ticker = ticker.toUpperCase();
-                            if (symbolToTickerMap[ticker]) {
-                                ticker = symbolToTickerMap[ticker];
-                            }
-                        }
-                        myPortfolio[ticker] = (myPortfolio[ticker] || 0) + amount;
-                        totalValue += amount;
-                    }
-                });
-
-                if (totalValue === 0) {
-                    alert("유효한 보유자산을 입력해주세요.");
-                    return;
-                }
-
-                const myPortfolioWeights = {};
-                for (const ticker in myPortfolio) {
-                    myPortfolioWeights[ticker] = myPortfolio[ticker] / totalValue;
-                }
-
-                const recommended = coinStrategyPortfolio || {};
-                const allAssets = new Set([...Object.keys(myPortfolioWeights), ...Object.keys(recommended)]);
-                let turnover = 0;
-
-                let resultHtml = '<h3>포트폴리오 비교</h3>';
-                resultHtml += '<table class="small-table"><thead><tr><th>자산</th><th>내 비중</th><th>추천 비중</th><th>차이</th></tr></thead><tbody>';
-
-                const sortedAssets = Array.from(allAssets).sort();
-
-                sortedAssets.forEach(asset => {
-                    const myWeight = myPortfolioWeights[asset] || 0;
-                    const recommendedWeight = recommended[asset] || 0;
-                    const diff = Math.abs(myWeight - recommendedWeight);
-                    turnover += diff;
-
-                    resultHtml += `
-                        <tr>
-                            <td>${asset}</td>
-                            <td>${(myWeight * 100).toFixed(2)}%</td>
-                            <td>${(recommendedWeight * 100).toFixed(2)}%</td>
-                            <td>${(diff * 100).toFixed(2)}%</td>
-                        </tr>
-                    `;
-                });
-                
-                turnover = turnover / 2;
-
-                resultHtml += '</tbody></table>';
-                resultHtml += `<h3>🔄 계산된 턴오버: <strong>${(turnover * 100).toFixed(2)}%</strong></h3>`;
-                resultHtml += '<p>턴오버는 현재 포트폴리오에서 추천 포트폴리오로 변경하기 위해 매매해야 할 자산의 비율을 의미합니다.</p>';
-
-                document.getElementById('my-turnover-result').innerHTML = resultHtml;
-                document.getElementById('my-turnover-result-container').style.display = 'block';
-            });
+            function calcTurnover() {
+               const inputs = document.querySelectorAll('.u-tick');
+               const amts = document.querySelectorAll('.u-amt');
+               let myP = {}, tot = 0;
+               
+               inputs.forEach((inp, i) => {
+                   let t = inp.value.toUpperCase().trim();
+                   let v = parseFloat(amts[i].value);
+                   if(t && v > 0) {
+                       if(symMap[t]) t = symMap[t];
+                       else if(t !== 'CASH' && !t.endsWith('-USD')) t += '-USD';
+                       
+                       myP[t] = (myP[t]||0) + v;
+                       tot += v;
+                   }
+               });
+               
+               if(tot===0) return;
+               
+               let myW = {};
+               for(let k in myP) myW[k] = myP[k]/tot;
+               
+               let diff = 0;
+               let allK = new Set([...Object.keys(myW), ...Object.keys(coinP)]);
+               
+               let h = '<table><thead><tr><th>Asset</th><th>My</th><th>Target</th><th>Diff</th></tr></thead><tbody>';
+               
+               allK.forEach(k => {
+                   let w1 = myW[k] || 0;
+                   let w2 = coinP[k] || 0;
+                   let d = Math.abs(w1-w2);
+                   diff += d;
+                   h += `<tr><td>${k}</td><td>${(w1*100).toFixed(1)}%</td><td>${(w2*100).toFixed(1)}%</td><td>${(d*100).toFixed(1)}%</td></tr>`;
+               });
+               diff /= 2;
+               h += '</tbody></table>';
+               
+               document.getElementById('turnover-res').innerHTML = `<h3>Turnover: ${ (diff*100).toFixed(2) }%</h3>` + h;
+            }
         </script>
     </body>
     </html>
