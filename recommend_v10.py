@@ -236,7 +236,7 @@ def run_stock_strategy_v10(log, all_prices, target_date):
         
         df = pd.DataFrame(scores).set_index('Ticker')
         log.append("<h5>팩터 점수:</h5>")
-        log.append(df.to_html(classes='dataframe small-table'))
+        log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table')}</div>")
         
         # Momentum Sorting
         df_m = df.sort_values('Mom', ascending=False)
@@ -272,13 +272,13 @@ def run_stock_strategy_v10(log, all_prices, target_date):
                 if r > best_r:
                     best_r, best_t = r, t
         
-        log.append(pd.DataFrame(res).sort_values('6m Ret', ascending=False).to_html(classes='dataframe small-table'))
+        log.append(f"<div class='table-wrap'>{pd.DataFrame(res).sort_values('6m Ret', ascending=False).to_html(classes='dataframe small-table')}</div>")
         
         if best_r < 0:
-            log.append(f"<p>모든 방어 자산 모멘텀 음수. 현금(Cash) 보유.</p>")
+            log.append(f"<p>모든 방어 자산(BIL 포함)의 6개월 모멘텀이 음수입니다. <b>현금(Cash)</b>을 보유합니다.</p>")
             return {CASH_ASSET: 1.0}, "수비 (현금)", meta
         
-        log.append(f"<p>최종 방어 자산: <b>{best_t}</b> (6m: {best_r:.2%})</p>")
+        log.append(f"<p>최종 방어 자산: <b>{best_t}</b> (6m: {best_r:.2%})<br><small>* BIL보다 수익률이 낮거나 음수면 현금 보유</small></p>")
         return {best_t: 1.0}, f"수비 ({best_t})", meta
 
 def run_coin_strategy_v10(coin_universe, all_prices, target_date, log, is_today=True):
@@ -351,7 +351,7 @@ def run_coin_strategy_v10(coin_universe, all_prices, target_date, log, is_today=
         })
         if c['IsOk']: healthy.append(c['Coin'])
         
-    log.append(pd.DataFrame(rows).to_html(classes='dataframe small-table', index=False))
+    log.append(f"<div class='table-wrap'>{pd.DataFrame(rows).to_html(classes='dataframe small-table', index=False)}</div>")
 
     if cur <= sma50:
         log.append("<p>🚨 <b>Risk-Off</b>: BTC 약세장. 전량 현금.</p>")
@@ -380,7 +380,7 @@ def run_coin_strategy_v10(coin_universe, all_prices, target_date, log, is_today=
     
     # Log Score Table
     log.append("<h4>🏆 최종 선발 (Sharpe V10)</h4>")
-    log.append(score_df.head(10).to_html(classes='dataframe small-table', float_format=lambda x: f"{x:.2f}"))
+    log.append(f"<div class='table-wrap'>{score_df.head(10).to_html(classes='dataframe small-table', float_format=lambda x: f'{x:.2f}')}</div>")
     
     top5 = score_df.head(5)['Coin'].tolist()
     
@@ -398,7 +398,7 @@ def run_coin_strategy_v10(coin_universe, all_prices, target_date, log, is_today=
     
     # Log weights
     w_rows = [{'Coin': t, 'Vol(90d)': f"{vols[t]:.4f}", 'Weight': f"{w:.2%}"} for t, w in weights.items()]
-    log.append(pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False))
+    log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     
     return weights, "Full Invest", meta
 
@@ -464,56 +464,79 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Cap Defend V10 Recommendation</title>
         <style>
-            body {{ font-family: 'Segoe UI', sans-serif; background: #f4f6f8; margin: 20px; color: #333; }}
-            .container {{ max-width: 1000px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }}
-            h1 {{ color: #2980b9; border-bottom: 2px solid #2980b9; padding-bottom: 10px; }}
-            h2 {{ color: #2c3e50; margin-top: 30px; border-bottom: 1px solid #eee; padding-bottom: 5px;}}
-            table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
-            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
-            th {{ background: #f8f9fa; }}
-            .small-table table {{ width: auto; font-size: 0.9em; }}
-            .calculator {{ background: #ebf5fb; padding: 20px; border-radius: 8px; margin-top: 20px; }}
-            input, button {{ padding: 10px; margin: 5px 0; border-radius: 4px; border: 1px solid #ccc; }}
-            button {{ background: #2980b9; color: white; border: none; cursor: pointer; }}
-            button:hover {{ background: #1f618d; }}
-            .highlight {{ color: #e74c3c; font-weight: bold; }}
-            .dashboard-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }}
-            .card {{ background: #fff; padding: 20px; border-radius: 12px; border: 1px solid #e1e4e8; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
-            .calc-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }}
-            .calc-box {{ background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 10px; color: #333; }}
+            .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }}
+            h1 {{ color: #1a73e8; font-size: 1.5rem; margin-bottom: 5px; border-bottom: none; }}
+            h2 {{ font-size: 1.2rem; color: #202124; margin-top: 25px; border-bottom: 2px solid #f1f3f4; padding-bottom: 10px; }}
+            h3 {{ font-size: 1.1rem; margin-top: 0; }}
+            p {{ line-height: 1.5; margin: 5px 0; font-size: 0.95rem; }}
+            
+            /* Responsive Tables */
+            .table-wrap {{ overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 10px 0; border-radius: 8px; border: 1px solid #e0e0e0; }}
+            table {{ width: 100%; border-collapse: collapse; white-space: nowrap; }}
+            th, td {{ padding: 12px 15px; border-bottom: 1px solid #f1f3f4; text-align: left; font-size: 0.9rem; }}
+            th {{ background: #f8f9fa; color: #5f6368; font-weight: 600; position: sticky; top: 0; }}
+            tr:last-child td {{ border-bottom: none; }}
+            
+            /* Cards & Grid */
+            .dashboard-grid {{ display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px; }}
+            @media (min-width: 600px) {{ .dashboard-grid {{ flex-direction: row; }} }}
+            
+            .card {{ background: #fff; padding: 20px; border-radius: 12px; border: 1px solid #e0e0e0; flex: 1; }}
+            
+            /* Status Bar */
+            .status-bar {{ display: flex; flex-wrap: wrap; gap: 10px; background: #e8f0fe; padding: 15px; border-radius: 12px; margin-bottom: 20px; color: #1967d2; font-weight: 500; font-size: 0.9rem; }}
+            .status-bar div {{ flex: 1 1 auto; white-space: nowrap; }}
+            
+            /* Calculator */
+            .calc-grid {{ display: flex; flex-direction: column; gap: 15px; }}
+            @media (min-width: 600px) {{ .calc-grid {{ flex-direction: row; }} }}
+            .calc-box {{ background: #f8f9fa; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; flex: 1; }}
+            
+            input, button {{ width: 100%; padding: 12px; margin: 5px 0; border-radius: 8px; border: 1px solid #dadce0; font-size: 1rem; box-sizing: border-box; }}
+            button {{ background: #1a73e8; color: white; border: none; font-weight: 600; cursor: pointer; transition: background 0.2s; }}
+            button:active {{ background: #1765cc; }}
+            
+            .calculator {{ background: #fff; padding: 20px; border-radius: 12px; border: 1px solid #e0e0e0; margin-top: 25px; }}
+            
+            /* Utils */
+            .error {{ color: #d93025; background: #fce8e6; padding: 10px; border-radius: 8px; }}
+            .small-text {{ font-size: 0.85rem; color: #5f6368; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V10 (Grand Optimal)</h1>
-            <p><strong>주식(V3 Mod) + 코인(V10 Original) + 방어(Enhanced)</strong> | 기준일: {date_today.strftime('%Y-%m-%d')}</p>
+            <h1>🚀 Cap Defend V10</h1>
+            <p class="small-text">기준일: {date_today.strftime('%Y-%m-%d')}</p>
             
             <div class="dashboard-grid">
                 <div class="card">
-                    <h3>🛡️ Market Pulse (Signal)</h3>
-                    <p style="font-size:0.9em; color:#666;">추세선(MA) 이격도 (0% 근접 시 반전 주의)</p>
+                    <h3>🛡️ Market Signal</h3>
                     {signal_html}
                 </div>
                 <div class="card">
-                     <h3>🧠 Strategy Insights</h3>
-                     <p><strong>Top Momentum (3):</strong> {mom_picks}</p>
-                     <p><strong>Top Quality (3):</strong> {qual_picks}</p>
+                    <h3>🧠 Strategy Insights</h3>
+                    <p><strong>Top Mom:</strong> {mom_picks}</p>
+                    <p><strong>Top Qual:</strong> {qual_picks}</p>
                 </div>
             </div>
 
-            <div style="display: flex; justify-content: space-between; background: #ecf0f1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                <div><strong>주식 상태:</strong> {s_stat}</div>
-                <div><strong>코인 상태:</strong> {c_stat}</div>
-                <div><strong>코인 턴오버:</strong> {turnover:.2%}</div>
+            <div class="status-bar">
+                <div>📉 주식: {s_stat}</div>
+                <div>🪙 코인: {c_stat}</div>
+                <div>🔄 턴오버: {turnover:.1%}</div>
             </div>
 
             <h2>📊 최종 추천 포트폴리오</h2>
-            <table>
-                <thead><tr><th>종목</th><th>자산군</th><th>비중</th></tr></thead>
-                <tbody>{tbody}</tbody>
-            </table>
+            <div class="table-wrap">
+                <table>
+                    <thead><tr><th>종목</th><th>자산군</th><th>비중</th></tr></thead>
+                    <tbody>{tbody}</tbody>
+                </table>
+            </div>
 
             <h2>🧮 투자 배분 계산기</h2>
             <div class="calc-grid">
@@ -582,7 +605,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 
                 if(!amt) return;
                 
-                let h = `<h3>${{title}}</h3>`;
+                let h = `<h3>${{title}}</h3><div class="table-wrap">`;
                 h += '<table><thead><tr><th>종목</th><th>비중</th><th>금액</th><th>단가</th><th>수량</th></tr></thead><tbody>';
                 
                 let sortedKeys = Object.keys(port).sort((a,b) => port[b] - port[a]);
@@ -594,7 +617,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     let qty = pr > 0 ? (val/pr).toFixed(4) : '-';
                     h += `<tr><td>${{k}}</td><td>${{(w*100).toFixed(1)}}%</td><td>${{fmt(val)}}</td><td>${{fmt(pr)}}</td><td>${{qty}}</td></tr>`;
                 }}
-                h += '</tbody></table>';
+                h += '</tbody></table></div>';
                 
                 const resDiv = document.getElementById('calc-res');
                 resDiv.style.display = 'block';
@@ -602,11 +625,11 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             }}
 
             // Init User Input Rows
-            let rows = '<table>';
+            let rows = '<div class="table-wrap"><table>';
             for(let i=0; i<6; i++) {{
                 rows += `<tr><td><input class="u-tick" placeholder="Ticker (e.g. BTC)"></td><td><input class="u-amt" type="number" placeholder="Value (KRW)"></td></tr>`;
             }}
-            rows += '</table>';
+            rows += '</table></div>';
             document.getElementById('my-assets').innerHTML = rows;
 
             function calcTurnover() {{
@@ -632,19 +655,19 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                for(let k in myP) myW[k] = myP[k]/tot;
                
                let diff = 0;
-               let allK = new Set([...Object.keys(myW), ...Object.keys(coinP)]);
-               
-               let h = '<table><thead><tr><th>Asset</th><th>My</th><th>Target</th><th>Diff</th></tr></thead><tbody>';
+                let allK = new Set([...Object.keys(myW), ...Object.keys(coinP)]);
+                
+                let h = '<div class="table-wrap"><table><thead><tr><th>Asset</th><th>My</th><th>Target</th><th>Diff</th></tr></thead><tbody>';
                
                allK.forEach(k => {{
                    let w1 = myW[k] || 0;
                    let w2 = coinP[k] || 0;
                    let d = Math.abs(w1-w2);
                    diff += d;
-                   h += `<tr><td>${{k}}</td><td>${{(w1*100).toFixed(1)}}%</td><td>${{(w2*100).toFixed(1)}}%</td><td>${{(d*100).toFixed(1)}}%</td></tr>`;
-               }});
-               diff /= 2;
-               h += '</tbody></table>';
+                    h += `<tr><td>${{k}}</td><td>${{(w1*100).toFixed(1)}}%</td><td>${{(w2*100).toFixed(1)}}%</td><td>${{(d*100).toFixed(1)}}%</td></tr>`;
+                }});
+                diff /= 2;
+                h += '</tbody></table></div>';
                
                document.getElementById('turnover-res').innerHTML = `<h3>Turnover: ${{ (diff*100).toFixed(2) }}%</h3>` + h;
             }}
@@ -693,11 +716,23 @@ if __name__ == "__main__":
     # Yesterday for Turnover
     c_port_y, _, _, _ = run_coin_strategy_v10(c_univ, prices, yest, [], False)
     turnover = calculate_turnover(c_port_y, c_port)
-    
     # Final Combine
     final = {}
     for t, w in s_port.items(): final[t] = final.get(t,0) + w*STOCK_RATIO
     for t, w in c_port.items(): final[t] = final.get(t,0) + w*COIN_RATIO
+    
+    # --- EVENT TRIGGER CHECK (Canary Flip) ---
+    # Check Yesterday's Stock Status
+    # We need to re-run s_port logic for yesterday? Yes, cheap.
+    s_port_y, s_stat_y, _ = run_stock_strategy_v10([], prices, yest)
+    
+    is_canary_flip = (s_stat != s_stat_y)
+    if is_canary_flip:
+        msg = f"🚨 EVENT TRIGGER: 주식 상태 변경됨! ({s_stat_y} -> {s_stat})"
+        print(msg)
+        log.append(f"<div style='background:#e74c3c; color:white; padding:15px; border-radius:8px; margin:20px 0;'><h3>{msg}</h3><p>즉시 전체 리밸런싱을 권장합니다. (+0.7% Alpha)</p></div>")
+    else:
+        log.append(f"<p>주식 상태 유지 중 ({s_stat})</p>")
     
     # Get KRW Prices (Approx)
     krw_prices = {}
