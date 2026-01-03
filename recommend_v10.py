@@ -400,7 +400,7 @@ def run_coin_strategy_v10(coin_universe, all_prices, target_date, log, is_today=
     w_rows = [{'Coin': t, 'Vol(90d)': f"{vols[t]:.4f}", 'Weight': f"{w:.2%}"} for t, w in weights.items()]
     log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     
-    return weights, "Full Invest", meta
+    return weights, "Full Invest", meta, log
 
 
 # --- 5. HTML Generation ---
