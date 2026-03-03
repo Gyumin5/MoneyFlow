@@ -1,0 +1,15 @@
+# config/upbit.py — 업비트 전용 설정 파일
+# cp config/upbit.example.py config/upbit.py
+
+UPBIT_ACCESS_KEY = "YOUR_UPBIT_ACCESS_KEY"
+UPBIT_SECRET_KEY = "YOUR_UPBIT_SECRET_KEY"
+
+TELEGRAM_BOT_TOKEN = ""
+TELEGRAM_CHAT_ID = ""
+
+DRY_RUN = False
+MAX_BUDGET = None
+TURNOVER_THRESHOLD = 0.30
+EXECUTION_TIME = "09:00"
+RETRY_COUNT = 3
+RETRY_DELAY = 5

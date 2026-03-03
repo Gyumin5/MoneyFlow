@@ -1,0 +1,35 @@
+# Sensitive config files (contain API keys)
+config/settings.py
+config/upbit.py
+config/bithumb.py
+
+# Legacy config names (in case they exist)
+config_v12.py
+config_v12_upbit.py
+config_v12_bithumb.py
+
+# SSH keys and server info backup
+backup_20260125/
+
+# Server operation manual (contains SSH/IP info)
+V12_Server_Operation_Manual.md
+
+# Data files
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# CSV data files
+*.csv
+
+# JSON data (chart data, etc.)
+v12_chart_data.json
+
+# Logs
+*.log
+
+# Generated reports
+portfolio_result*.html
