@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MoneyFlow — Strategy Dashboard</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, sans-serif;
+        background: #0f1117;
+        color: #e0e0e0;
+        min-height: 100vh;
+      }
+      .header {
+        padding: 40px 20px 20px;
+        text-align: center;
+      }
+      .header h1 {
+        font-size: 2em;
+        font-weight: 700;
+        color: #fff;
+      }
+      .header p {
+        color: #888;
+        margin-top: 8px;
+      }
+      .grid {
+        max-width: 800px;
+        margin: 30px auto;
+        padding: 0 20px;
+        display: grid;
+        gap: 16px;
+      }
+      .card {
+        background: #1a1d27;
+        border: 1px solid #2a2d3a;
+        border-radius: 12px;
+        padding: 24px;
+        transition: border-color 0.2s;
+      }
+      .card:hover {
+        border-color: #4a7dff;
+      }
+      .card h2 {
+        font-size: 1.3em;
+        color: #fff;
+        margin-bottom: 8px;
+      }
+      .card .tag {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.8em;
+        font-weight: 500;
+        margin-bottom: 12px;
+      }
+      .tag.active {
+        background: #1a3a2a;
+        color: #4ade80;
+      }
+      .card p {
+        color: #999;
+        line-height: 1.6;
+        font-size: 0.95em;
+      }
+      .links {
+        margin-top: 16px;
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .links a {
+        color: #4a7dff;
+        text-decoration: none;
+        font-size: 0.9em;
+        padding: 6px 14px;
+        border: 1px solid #2a2d3a;
+        border-radius: 8px;
+        transition: all 0.2s;
+      }
+      .links a:hover {
+        background: #4a7dff22;
+        border-color: #4a7dff;
+      }
+      .footer {
+        text-align: center;
+        padding: 40px 20px;
+        color: #555;
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>MoneyFlow</h1>
+      <p>Quantitative Investment Strategies</p>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Cap Defend</h2>
+        <span class="tag active">Active</span>
+        <p>
+          주식+코인 통합 자산배분. 카나리아 시그널(VT/EEM MA200, BTC MA50)로
+          Risk-On/Off 전환. 모멘텀+퀄리티 기반 종목 선정, 역변동성 가중 배분.
+          Stock 60% / Coin 40%.
+        </p>
+        <div class="links">
+          <a href="strategies/cap_defend/README.md">Strategy Details</a>
+          <a href="strategies/cap_defend/report.html">Backtest Report</a>
+        </div>
+      </div>
+
+      <!-- 새 전략 추가 시:
+        <div class="card">
+            <h2>New Strategy Name</h2>
+            <span class="tag active">Active</span>
+            <p>전략 설명</p>
+            <div class="links">
+                <a href="strategies/new_strategy/README.md">Strategy Details</a>
+            </div>
+        </div>
+        -->
+    </div>
+
+    <div class="footer">
+      MoneyFlow &mdash; Quantitative Investment Framework
+    </div>
+  </body>
+</html>
