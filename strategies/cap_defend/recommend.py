@@ -90,7 +90,7 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
         log.append("<p class='error'>❌ All Methods Failed. Using Hardcoded Fallback.</p>")
         return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'DOGE-USD'], {}
     
-    cg_symbol_to_id_map = {item['symbol'].upper(): item['id'] for item in cg_data}
+    cg_symbol_to_id_map = {f"{item['symbol'].upper()}-USD": item['id'] for item in cg_data}
     
     try:
         upbit_krw_tickers = pyupbit.get_tickers(fiat="KRW")

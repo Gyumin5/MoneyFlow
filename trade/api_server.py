@@ -10,6 +10,8 @@ from flask import Flask, jsonify, request
 import subprocess
 import threading
 
+from config.settings import TRADE_PASSWORD
+
 app = Flask(__name__)
 
 # CORS 허용 (브라우저에서 다른 포트 접근 허용)
@@ -51,15 +53,23 @@ def run_trade_async(exchange: str, force: bool = False, trade: bool = True, targ
     
     return task_id
 
+def verify_password(data):
+    """서버 측 거래 비밀번호 검증"""
+    pwd = data.get('password', '')
+    return pwd == TRADE_PASSWORD
+
 @app.route('/api/trade/upbit', methods=['POST'])
 def trade_upbit():
     """업비트 Force Trade 실행 (--trade --force --amount)"""
+    data = request.get_json(silent=True) or {}
+    if not verify_password(data):
+        return jsonify({"error": "암호가 틀렸습니다."}), 403
+
     # 이미 실행 중인지 확인
     for tid, task in running_tasks.items():
         if "upbit" in tid and task.get("status") == "running":
             return jsonify({"error": "Upbit trade is already running", "task_id": tid}), 409
-    
-    data = request.get_json(silent=True) or {}
+
     target_amount = int(data.get('target_amount', 0))
     
     # 비동기 실행
@@ -72,12 +82,15 @@ def trade_upbit():
 @app.route('/api/trade/bithumb', methods=['POST'])
 def trade_bithumb():
     """빗썸 Force Trade 실행 (--trade --force --amount)"""
+    data = request.get_json(silent=True) or {}
+    if not verify_password(data):
+        return jsonify({"error": "암호가 틀렸습니다."}), 403
+
     # 이미 실행 중인지 확인
     for tid, task in running_tasks.items():
         if "bithumb" in tid and task.get("status") == "running":
             return jsonify({"error": "Bithumb trade is already running", "task_id": tid}), 409
-    
-    data = request.get_json(silent=True) or {}
+
     target_amount = int(data.get('target_amount', 0))
     
     # 비동기 실행

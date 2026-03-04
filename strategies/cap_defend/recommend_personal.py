@@ -24,7 +24,7 @@ from datetime import datetime, timezone, timedelta
 import pyupbit
 
 # --- Configuration for Auto Turnover ---
-from config.settings import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY, TRADE_PASSWORD
+from config.settings import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY
 ACCESS_KEY = UPBIT_ACCESS_KEY
 SECRET_KEY = UPBIT_SECRET_KEY
 
@@ -105,7 +105,7 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
         fallback = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'DOGE-USD', 'ADA-USD', 'AVAX-USD', 'LINK-USD', 'SHIB-USD', 'TRX-USD']
         return fallback, {}
     
-    cg_symbol_to_id_map = {item['symbol'].upper(): item['id'] for item in cg_data}
+    cg_symbol_to_id_map = {f"{item['symbol'].upper()}-USD": item['id'] for item in cg_data}
     
     print("  - Fetching Upbit KRW Market...")
     try:
@@ -171,7 +171,7 @@ def get_current_upbit_holdings(log):
         if krw is None:
             print("⚠️ Upbit API Connection Failed (Check Access/Secret Keys)")
             log.append("<p class='error'>❌ Upbit API 연결 실패 (키 확인 필요)</p>")
-            return {}, {}
+            return {}, {}, 0.0
         
         # Get currently listed coins in Upbit KRW market
         try:
@@ -499,12 +499,6 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     for t, w in final_port.items(): items.append({'종목': t, '자산군': "현금" if t == CASH_ASSET else ("코인" if t in c_port else "주식"), '비중': w})
     items.sort(key=lambda x: (x['자산군']!='현금', x['비중']), reverse=True)
     
-def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None):
-    filepath = "portfolio_result_gmoh.html"
-    items = []
-    for t, w in final_port.items(): items.append({'종목': t, '자산군': "현금" if t == CASH_ASSET else ("코인" if t in c_port else "주식"), '비중': w})
-    items.sort(key=lambda x: (x['자산군']!='현금', x['비중']), reverse=True)
-    
     tbody = "".join([f"<tr><td>{i['종목']}</td><td>{i['자산군']}</td><td>{i['비중']:.2%}</td></tr>" for i in items])
     
     # [Table] Integrated Portfolio (My vs Target)
@@ -627,45 +621,39 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             </div>
             
             <script>
-            const TRADE_PASSWORD = '{TRADE_PASSWORD}';
-            
             async function forceTrade(exchange) {{
                 const btn = document.getElementById('forceTrade' + exchange.charAt(0).toUpperCase() + exchange.slice(1) + 'Btn');
                 const status = document.getElementById('tradeStatus');
                 const exchangeName = exchange === 'upbit' ? 'Upbit' : 'Bithumb';
-                
-                // 암호 입력
+
+                // 암호 입력 → 서버에서 검증
                 const inputPwd = prompt('거래 암호를 입력하세요:');
-                if (inputPwd !== TRADE_PASSWORD) {{
-                    status.innerHTML = '❌ 암호가 틀렸습니다.';
-                    status.style.color = '#d93025';
-                    return;
-                }}
-                
+                if (!inputPwd) return;
+
                 // 금액 입력 (0 또는 빈값: 전체 자산 운용)
                 const amountInput = prompt('운용 금액을 입력하세요 (원):\\n(0 또는 빈값 입력 시 전체 자산 운용)', '0');
-                if (amountInput === null) return; // 취소
+                if (amountInput === null) return;
                 const amount = parseInt(amountInput.replace(/,/g, '')) || 0;
-                
+
                 const amountText = amount > 0 ? amount.toLocaleString() + '원' : '전체 자산';
                 if (!confirm(exchangeName + ' Force Trade를 실행하시겠습니까?\\n운용 금액: ' + amountText + '\\n(실거래가 발생합니다!)')) {{
                     return;
                 }}
-                
+
                 btn.disabled = true;
                 btn.style.opacity = '0.6';
                 status.innerHTML = '⏳ ' + exchangeName + ' 실행 중... (' + amountText + ')';
                 status.style.color = '#1967d2';
-                
+
                 try {{
                     const response = await fetch('http://' + window.location.hostname + ':5000/api/trade/' + exchange, {{
                         method: 'POST',
                         headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ target_amount: amount }})
+                        body: JSON.stringify({{ target_amount: amount, password: inputPwd }})
                     }});
-                    
+
                     const data = await response.json();
-                    
+
                     if (response.ok) {{
                         status.innerHTML = '✅ ' + data.message;
                         status.style.color = '#0d904f';
@@ -677,7 +665,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     status.innerHTML = '❌ API 연결 실패 (서버 확인 필요)';
                     status.style.color = '#d93025';
                 }}
-                
+
                 setTimeout(() => {{
                     btn.disabled = false;
                     btn.style.opacity = '1';
@@ -773,16 +761,10 @@ if __name__ == "__main__":
     healthy_set = set(healthy_coins)
     
     for t in cur_assets_close.keys():
-        coin_sym = t.replace('-USD','')
-        # 보유 코인이 헬스체크 목록에 없고 & 타겟 비중도 0이면 퇴출 대상
-        # (주의: c_port는 '-USD' 붙은 키일 수 있음)
-        if t not in c_port and t not in healthy_set and f"{t}-USD" not in healthy_set: 
-             # 정확한 티커 매칭을 위해 검증
-             # cur_assets_close 키는 'TRX-USD' 형태
-             # healthy_set은 'TRX-USD' 형태
-             if t not in healthy_set:
-                 has_bad_coin = True
-                 bad_coins.append(t.replace('-USD',''))
+        # cur_assets_close 키: 'TRX-USD', healthy_set 키: 'TRX-USD'
+        if t not in c_port and t not in healthy_set:
+            has_bad_coin = True
+            bad_coins.append(t.replace('-USD', ''))
 
     # [통합 테이블 데이터 생성]
     # 모든 자산 (내 보유 + 타겟) 합집합
@@ -862,7 +844,7 @@ if __name__ == "__main__":
     for t, w in s_port.items(): 
         key = t if t!=CASH_ASSET else CASH_ASSET
         final_port[key] = final_port.get(key, 0) + w * STOCK_RATIO
-    for t, w in c_port.items(): 
+    for t, w in c_port_buffered.items():
         key = t if t!=CASH_ASSET else CASH_ASSET
         final_port[key] = final_port.get(key, 0) + w * COIN_RATIO
     
