@@ -1,20 +1,17 @@
 """
 V12 Upbit Auto Trader (CoinGecko Global Universe)
 ==================================================
-recommend_v12_personal.py와 동일한 전략 사용
+recommend_personal.py와 동일한 전략 사용
 - 턴오버 계산: Yahoo USD 종가 × 환율
 - 헬스체크 실패 보유 코인 발견 시 강제 리밸런싱
 - 실제 매매 기능 구현 (pyupbit Market Order)
 - 매도/매수 주문 확실성 강화 (재시도 로직)
 """
 
-import os
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-
 import time
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
@@ -23,7 +20,7 @@ import pandas as pd
 import numpy as np
 import requests
 
-from config.settings import (
+from config import (
     UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY,
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
     TURNOVER_THRESHOLD, RETRY_COUNT, RETRY_DELAY
@@ -74,7 +71,7 @@ class V12UpbitTrader:
         if is_force: mode += " (FORCE MODE)"
         log("=" * 60)
         log(f"V12 Upbit Trader [{mode}]")
-        log("전략: recommend_v12_personal.py와 동일")
+        log("전략: recommend_personal.py와 동일")
         log("=" * 60)
         
         try:
@@ -87,7 +84,7 @@ class V12UpbitTrader:
     def get_coingecko_top100(self) -> Tuple[List[str], dict]:
         log("")
         log("📡 CoinGecko Global Top 100 조회 중...")
-        UNIVERSE_CACHE_FILE = "./universe_upbit_v12_cache.json"
+        UNIVERSE_CACHE_FILE = "./universe_upbit_cache.json"
         
         cg_data = []
         max_retries = 3

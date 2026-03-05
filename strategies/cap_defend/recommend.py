@@ -49,7 +49,7 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
     DAYS_TO_CHECK = 260 
     headers = {"accept": "application/json", "User-Agent": "Mozilla/5.0"}
     
-    UNIVERSE_CACHE_FILE = os.path.join(DATA_DIR, "universe_v12_cache.json")
+    UNIVERSE_CACHE_FILE = os.path.join(DATA_DIR, "universe_cache.json")
     cg_data = []
     
     # 1. Try Fetching from CoinGecko (Retry 5 times)

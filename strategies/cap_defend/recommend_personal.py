@@ -14,7 +14,7 @@ V13: Multi Bonus Scoring - RSI(45-70→+0.2), MACD hist>0→+0.2, BB %B>0.5→+0
 
 import os
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pandas as pd
 import numpy as np
@@ -25,12 +25,80 @@ from datetime import datetime, timezone, timedelta
 import pyupbit
 
 # --- Configuration for Auto Turnover ---
-from config.settings import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY
+from config import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY
 ACCESS_KEY = UPBIT_ACCESS_KEY
 SECRET_KEY = UPBIT_SECRET_KEY
 
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
+STRATEGY_VERSION = "V13"
+VERSION_HISTORY = [
+    ("V13", "2026-03",
+     "Multi Bonus scoring, 1% Hysteresis signal flip, T25%+C3d stock rebalancing trigger",
+     """<b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+
+<b>\u25b6 주식 전략 (V11 기반)</b>
+\u2022 <b>유니버스:</b> 공격 12종 (SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC, QUAL, MTUM, IQLT, IMTM) / 수비 5종 (IEF, BIL, BNDX, GLD, PDBC)
+\u2022 <b>Canary Signal:</b> VT AND EEM \u003e SMA200 \u2192 Risk-On / \uc544\ub2c8\uba74 Risk-Off
+\u2022 <b>Signal Flip Guard (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>1% Hysteresis</span> \u2014 SMA200\xd71.01 \uc774\uc0c1\uc77c \ub54c Risk-On \uc9c4\uc785, SMA200\xd70.99 \uc774\ud558\uc77c \ub54c Risk-Off \uc9c4\uc785. \ud718\uc18c (\ube48\ubc88\ud55c \uc2e0\ud638 \uc804\ud658) 62% \uac10\uc18c
+\u2022 <b>\uacf5\uaca9 \ubaa8\ub4dc:</b> \uac00\uc911 \ubaa8\uba58\ud140(50/30/20% for 3M/6M/12M) Top 3 + Sharpe(126d) Top 3 \ud569\uc9d1\ud569 \u2192 \uade0\ub4f1\ubc30\ubd84
+\u2022 <b>\uc218\ube44 \ubaa8\ub4dc:</b> \uc218\ube44 5\uc885 \uc911 6\uac1c\uc6d4 \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
+\u2022 <b>\uc885\ubaa9 \ub9ac\ubc38\ub7f0\uc2f1 (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>T25%+C3d</span> \u2014 \ud134\uc624\ubc84 \u226525%\uac00 3\uc601\uc5c5\uc77c \uc5f0\uc18d \uc720\uc9c0\ub418\uba74 \ub9ac\ubc38\ub7f0\uc2f1 \uc2e0\ud638 \ubc1c\uc0dd
+
+<b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uae30\ubc18)</b>
+\u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 \uc2dc\uac00\ucd1d\uc561\uc21c \u2192 Upbit KRW \uc0c1\uc7a5 + 253\uc77c \ud788\uc2a4\ud1a0\ub9ac + 30\uc77c \ud3c9\uade0 \uac70\ub798\ub300\uae08 10\uc5b5\uc6d0\uc774\uc0c1 \ud544\ud130
+\u2022 <b>Canary:</b> BTC \u003e SMA50 \u2192 \ud22c\uc790, \uc544\ub2c8\uba74 \ud604\uae08
+\u2022 <b>Health Filter:</b> Price \u003e SMA30 AND Mom21 \u003e 0 AND Vol90 \u2264 10%
+\u2022 <b>Scoring (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>Multi Bonus</span> = Sharpe(126d)+Sharpe(252d) + RSI(45~70 \u2192 +0.2) + MACD hist\u003e0 \u2192 +0.2 + BB %B\u003e0.5 \u2192 +0.2
+\u2022 <b>\uc120\uc815:</b> Multi Bonus Score Top 5
+\u2022 <b>\ubc30\ubd84:</b> 90\uc77c \uc5ed\ubcc0\ub3d9\uc131 \uac00\uc911 (1/Vol)
+
+<b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1 \uaddc\uce59</b>
+\u2022 \ucf54\uc778: \uc6d4\uac04 \uc2a4\ucf00\uc904 + \ud134\uc624\ubc84 30%\u2191 \ub610\ub294 Health \uc2e4\ud328 \uc2dc \uc989\uc2dc
+\u2022 \uc8fc\uc2dd: \uc6d4\uac04 \uc2a4\ucf00\uc904 + Signal Flip(1% Hysteresis) + T25%+C3d \uc885\ubaa9 \ub9ac\ubc38\ub7f0\uc2f1"""),
+
+    ("V12", "2026-01",
+     "Weighted momentum, Sharpe quality, inverse volatility weighting, health check",
+     """<b>\uc790\uc0b0\ubc30\ubd84:</b> \uc8fc\uc2dd 60% / \ucf54\uc778 40% (\ud604\uae08 \ubc84\ud37c 2%)
+
+<b>\u25b6 \uc8fc\uc2dd \uc804\ub7b5 (V11 \ub3d9\uc77c)</b>
+\u2022 <b>Canary:</b> VT AND EEM \u003e SMA200 \u2192 Risk-On
+\u2022 <b>\uacf5\uaca9:</b> 12\uc885 \uc720\ub2c8\ubc84\uc2a4, \uac00\uc911 \ubaa8\uba58\ud140(50/30/20%) Top 3 + Sharpe(126d) Top 3 \ud569\uc9d1\ud569, \uade0\ub4f1\ubc30\ubd84
+\u2022 <b>\uc218\ube44:</b> 5\uc885 \uc911 6M \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
+\u2022 Signal flip guard \uc5c6\uc74c (SMA200 \uc790\uccb4 \ub2e8\uc21c \ube44\uad50)
+
+<b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uc2e0\uaddc)</b>
+\u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 + Upbit KRW \ud544\ud130 (253\uc77c \ud788\uc2a4\ud1a0\ub9ac, 10\uc5b5\uc6d0 \uac70\ub798\ub300\uae08)
+\u2022 <b>Canary:</b> BTC \u003e SMA50
+\u2022 <b>Health Filter (V12 \uc2e0\uaddc):</b> Price \u003e SMA30 AND Mom21 \u003e 0 AND Vol90 \u2264 10%
+\u2022 <b>Scoring:</b> Sharpe(126d) + Sharpe(252d) (\ubcf4\ub108\uc2a4 \uc5c6\uc74c)
+\u2022 <b>\uc120\uc815:</b> Top 5
+\u2022 <b>\ubc30\ubd84 (V12 \uc2e0\uaddc):</b> 90\uc77c \uc5ed\ubcc0\ub3d9\uc131 \uac00\uc911 (1/Vol)
+
+<b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1</b>
+\u2022 \uc6d4\uac04 + \ud134\uc624\ubc84 30%\u2191 \ub610\ub294 Health \uc2e4\ud328 \uc2dc"""),
+
+    ("V11", "2025-12",
+     "Dual canary, offensive Top3+Top3 union, defensive 6M best",
+     """<b>\uc790\uc0b0\ubc30\ubd84:</b> \uc8fc\uc2dd 60% / \ucf54\uc778 40% (\ud604\uae08 \ubc84\ud37c 2%)
+
+<b>\u25b6 \uc8fc\uc2dd \uc804\ub7b5 (V11 \uc2e0\uaddc)</b>
+\u2022 <b>Canary (V11 \uc2e0\uaddc):</b> Dual Canary \u2014 VT AND EEM \ub458 \ub2e4 SMA200 \uc774\uc0c1\uc774\uc5b4\uc57c Risk-On
+\u2022 <b>\uacf5\uaca9 \uc720\ub2c8\ubc84\uc2a4:</b> SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC, QUAL, MTUM, IQLT, IMTM (12\uc885)
+\u2022 <b>\uacf5\uaca9 \uc120\uc815 (V11 \uc2e0\uaddc):</b> \uac00\uc911\ubaa8\uba58\ud140(50/30/20%) Top 3 + Sharpe(126d) Top 3 \u2192 \ud569\uc9d1\ud569 (3~6\uc885), \uade0\ub4f1\ubc30\ubd84
+\u2022 <b>\uc218\ube44 \uc720\ub2c8\ubc84\uc2a4:</b> IEF, BIL, BNDX, GLD, PDBC (5\uc885)
+\u2022 <b>\uc218\ube44 \uc120\uc815 (V11 \uc2e0\uaddc):</b> 6\uac1c\uc6d4 \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
+
+<b>\u25b6 \ucf54\uc778 \uc804\ub7b5</b>
+\u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 + Upbit KRW
+\u2022 <b>Canary:</b> BTC \u003e SMA50
+\u2022 <b>Health Filter:</b> \uc5c6\uc74c (V12\uc5d0\uc11c \ucd94\uac00)
+\u2022 <b>Scoring:</b> Sharpe(126d) + Sharpe(252d), Top 5 \uade0\ub4f1\ubc30\ubd84
+
+<b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1</b>
+\u2022 \uc6d4\uac04 \uc2a4\ucf00\uc904 \uae30\ubc18"""),
+]
+
 STOCK_RATIO, COIN_RATIO = 0.60, 0.40
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT = 0.02 # 2% Cash Buffer
@@ -63,7 +131,7 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
     DAYS_TO_CHECK = 260 
     headers = {"accept": "application/json", "User-Agent": "Mozilla/5.0"}
     
-    UNIVERSE_CACHE_FILE = os.path.join(DATA_DIR, "universe_v12_cache.json")
+    UNIVERSE_CACHE_FILE = os.path.join(DATA_DIR, "universe_cache.json")
     cg_data = []
 
     # 1. Try Fetching from CoinGecko (Retry 5 times)
@@ -551,8 +619,47 @@ def run_coin_strategy_v12(coin_universe, all_prices, target_date, log, is_today=
     
     return weights, "Full Invest", meta, log, healthy
 
-def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None):
+def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None, stock_trigger_info=None):
     filepath = "portfolio_result_gmoh.html"
+
+    # Generate stock trigger HTML
+    stock_trigger_html = ""
+    if stock_trigger_info:
+        ti = stock_trigger_info
+        my_tickers = ti.get('my_tickers', [])
+        rec_tickers = ti.get('rec_tickers', [])
+        turnover_pct = ti.get('turnover', 0)
+        consec_days = ti.get('consec_days', 0)
+        should_rebal = ti.get('should_rebal', False)
+
+        if my_tickers:
+            added = sorted(set(rec_tickers) - set(my_tickers))
+            removed = sorted(set(my_tickers) - set(rec_tickers))
+
+            changes_html = ""
+            if added:
+                changes_html += f"<span style='color:#d93025; font-weight:600;'>+ {', '.join(added)}</span> "
+            if removed:
+                changes_html += f"<span style='color:#1a73e8; font-weight:600;'>- {', '.join(removed)}</span>"
+            if not added and not removed:
+                changes_html = "<span style='color:#0d904f;'>변동 없음</span>"
+
+            alert_style = "background: #fce8e6; border: 2px solid #d93025; padding: 12px; border-radius: 8px; margin-top: 10px;" if should_rebal else "background: #e8f0fe; padding: 12px; border-radius: 8px; margin-top: 10px;"
+            alert_icon = "\U0001f6a8" if should_rebal else "\u2139\ufe0f"
+            alert_msg = f"<b>REBALANCE \uad8c\uace0</b> (Turnover {turnover_pct:.0%}, {consec_days}\uc77c \uc5f0\uc18d)" if should_rebal else f"Turnover {turnover_pct:.0%}, {consec_days}\uc77c \uc5f0\uc18d (3\uc77c \ubbf8\ub9cc \ub610\ub294 25% \ubbf8\ub9cc)"
+
+            stock_trigger_html = f"""
+                <div style="margin-top: 10px;">
+                    <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 8px;">
+                        <div><b>My:</b> {', '.join(my_tickers)} ({len(my_tickers)})</div>
+                        <div><b>Rec:</b> {', '.join(rec_tickers)} ({len(rec_tickers)})</div>
+                    </div>
+                    <div style="margin-bottom: 8px;">Changes: {changes_html}</div>
+                    <div style="{alert_style}">
+                        {alert_icon} {alert_msg}
+                    </div>
+                </div>"""
+
     items = []
     for t, w in final_port.items(): items.append({'종목': t, '자산군': "현금" if t == CASH_ASSET else ("코인" if t in c_port else "주식"), '비중': w})
     items.sort(key=lambda x: (x['자산군']!='현금', x['비중']), reverse=True)
@@ -579,13 +686,116 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         integrated_html += f"<tr><td data-label='Total' style='font-weight:bold;'>Total</td><td data-label='Value (KRW)' style='font-weight:bold;'>{int(total_value_sum):,}</td><td data-label='My'></td><td data-label='Target'></td><td data-label='Diff'></td><td data-label='Action'></td></tr>"
         integrated_html += "</tbody></table>"
 
+    # Strategy documentation link
+    version_html = f"""
+            <div style="margin:20px 0; text-align:center;">
+                <a href="strategy.html" style="display:inline-block; padding:10px 24px; background:#f0f4ff; border:1px solid #1a73e8; border-radius:8px; color:#1a73e8; text-decoration:none; font-weight:600;">
+                    \U0001f4cb \uc804\ub7b5 \ubc84\uc804 \ud788\uc2a4\ud1a0\ub9ac ({STRATEGY_VERSION})
+                </a>
+            </div>
+    """
+
+    # Embed recommended stock tickers for client-side calculation
+    rec_stock_list = sorted([t for t in s_port.keys() if t != 'Cash'])
+    rec_stock_json = json.dumps(rec_stock_list)
+
+    stock_holdings_js = """
+            <script>
+            const REC_STOCK_TICKERS = """ + rec_stock_json + """;
+
+            function calcTrigger(myTickers, recTickers) {
+                if (!myTickers.length || !recTickers.length) return null;
+                const allT = [...new Set([...myTickers, ...recTickers])];
+                let totalDiff = 0;
+                allT.forEach(t => {
+                    const myW = myTickers.includes(t) ? 1.0/myTickers.length : 0;
+                    const recW = recTickers.includes(t) ? 1.0/recTickers.length : 0;
+                    totalDiff += Math.abs(recW - myW);
+                });
+                const turnover = totalDiff / 2;
+
+                const added = recTickers.filter(t => !myTickers.includes(t));
+                const removed = myTickers.filter(t => !recTickers.includes(t));
+                return { turnover, added, removed };
+            }
+
+            function renderTrigger(myTickers) {
+                const result = calcTrigger(myTickers, REC_STOCK_TICKERS);
+                const el = document.getElementById('triggerResult');
+                if (!el || !result) return;
+
+                let changesHtml = '';
+                if (result.added.length)
+                    changesHtml += '<span style="color:#d93025; font-weight:600;">+ ' + result.added.join(', ') + '</span> ';
+                if (result.removed.length)
+                    changesHtml += '<span style="color:#1a73e8; font-weight:600;">- ' + result.removed.join(', ') + '</span>';
+                if (!result.added.length && !result.removed.length)
+                    changesHtml = '<span style="color:#0d904f;">\u2705 \ubcc0\ub3d9 \uc5c6\uc74c</span>';
+
+                const pct = (result.turnover * 100).toFixed(0);
+                const isHigh = result.turnover >= 0.25;
+                const bgStyle = isHigh
+                    ? 'background: #fce8e6; border: 2px solid #d93025; padding: 12px; border-radius: 8px; margin-top: 10px;'
+                    : 'background: #e8f0fe; padding: 12px; border-radius: 8px; margin-top: 10px;';
+                const msg = isHigh
+                    ? '\U0001f6a8 <b>Turnover ' + pct + '%</b> \u2014 \uc885\ubaa9 \ubcc0\ub3d9\uc774 \ud06c\ub2c8 \ub9ac\ubc38\ub7f0\uc2f1\uc744 \uace0\ub824\ud558\uc138\uc694'
+                    : '\u2139\ufe0f Turnover ' + pct + '% \u2014 \uc720\uc9c0';
+
+                el.innerHTML = '<div style="margin-top: 10px;">'
+                    + '<div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:8px;">'
+                    + '<div><b>My:</b> ' + myTickers.join(', ') + ' (' + myTickers.length + ')</div>'
+                    + '<div><b>Rec:</b> ' + REC_STOCK_TICKERS.join(', ') + ' (' + REC_STOCK_TICKERS.length + ')</div>'
+                    + '</div>'
+                    + '<div style="margin-bottom:8px;">Changes: ' + changesHtml + '</div>'
+                    + '<div style="' + bgStyle + '">' + msg + '</div>'
+                    + '</div>';
+            }
+
+            // Load on page init
+            (async function() {
+                try {
+                    const res = await fetch('http://' + window.location.hostname + ':5000/api/holdings');
+                    const data = await res.json();
+                    if (data.tickers && data.tickers.length > 0) {
+                        document.getElementById('stockInput').value = data.tickers.join(' ');
+                        document.getElementById('holdingsStatus').innerHTML =
+                            '\u2705 \uc800\uc7a5\ub428: ' + data.tickers.join(', ') + ' (' + data.updated + ')';
+                        renderTrigger(data.tickers);
+                    }
+                } catch(e) {
+                    document.getElementById('holdingsStatus').innerHTML = '\u26a0\ufe0f API \uc5f0\uacb0 \uc2e4\ud328';
+                }
+            })();
+
+            async function saveHoldings() {
+                const input = document.getElementById('stockInput').value.trim();
+                const status = document.getElementById('holdingsStatus');
+                try {
+                    const res = await fetch('http://' + window.location.hostname + ':5000/api/holdings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ tickers: input })
+                    });
+                    const data = await res.json();
+                    status.innerHTML = '\u2705 ' + data.message + ' (' + data.holdings.tickers.join(', ') + ')';
+                    status.style.color = '#0d904f';
+                    // Immediately calculate and show trigger
+                    renderTrigger(data.holdings.tickers);
+                } catch(e) {
+                    status.innerHTML = '\u274c \uc800\uc7a5 \uc2e4\ud328';
+                    status.style.color = '#d93025';
+                }
+            }
+            </script>
+    """
+
     html = f"""
     <!DOCTYPE html>
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend V13 Recommendation (Personal)</title>
+        <title>Cap Defend {STRATEGY_VERSION} Recommendation (Personal)</title>
          <style>
             body {{ font-family: -apple-system, sans-serif; background: #f0f2f5; padding: 10px; color: #333; }}
             .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; }}
@@ -637,7 +847,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V13 (Personal)</h1>
+            <h1>🚀 Cap Defend {STRATEGY_VERSION} (Personal)</h1>
             <p>기준일: {date_today.strftime('%Y-%m-%d')} | 종가 기준</p>
             
             <div class="status-bar">
@@ -661,20 +871,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 ">
                     ⚡ Force Trade (Upbit)
                 </button>
-                <button id="forceTradeBithumbBtn" onclick="forceTrade('bithumb')" style="
-                    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    border-radius: 8px;
-                    font-size: 1em;
-                    font-weight: 600;
-                    cursor: pointer;
-                    box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4);
-                    transition: all 0.3s ease;
-                ">
-                    ⚡ Force Trade (Bithumb)
-                </button>
+
                 <span id="tradeStatus" style="margin-left: 10px; font-weight: 500;"></span>
             </div>
             
@@ -682,7 +879,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             async function forceTrade(exchange) {{
                 const btn = document.getElementById('forceTrade' + exchange.charAt(0).toUpperCase() + exchange.slice(1) + 'Btn');
                 const status = document.getElementById('tradeStatus');
-                const exchangeName = exchange === 'upbit' ? 'Upbit' : 'Bithumb';
+                const exchangeName = 'Upbit';
 
                 // 암호 입력 → 서버에서 검증
                 const inputPwd = prompt('거래 암호를 입력하세요:');
@@ -731,6 +928,26 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             }}
             </script>
             
+
+            <!-- Stock Holdings & Rebalancing Trigger -->
+            <h2>📈 주식 ETF 리밸런싱</h2>
+            <div class="card">
+                <div style="margin-bottom: 15px;">
+                    <label style="font-weight: 600; color: #555;">현재 보유 주식 (띄어쓰기로 구분):</label>
+                    <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
+                        <input id="stockInput" type="text" placeholder="예: SPY QQQ MTUM GLD EFA QUAL"
+                            style="flex: 1; min-width: 200px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 1em; font-family: monospace;" />
+                        <button onclick="saveHoldings()" style="
+                            background: #1a73e8; color: white; border: none; padding: 10px 20px;
+                            border-radius: 8px; font-weight: 600; cursor: pointer;">저장</button>
+                    </div>
+                    <div id="holdingsStatus" style="margin-top: 8px; font-size: 0.9em; color: #666;"></div>
+                </div>
+                <div id="triggerResult"></div>
+            </div>
+
+            {stock_holdings_js}
+
             <h2>🪙 통합 포트폴리오 현황</h2>
             <div class="card">
                 {integrated_html}
@@ -739,6 +956,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             <h2>📊 최종 추천 비중 (Stock + Coin)</h2>
             <table><thead><tr><th>종목</th><th>자산군</th><th>비중</th></tr></thead><tbody>{tbody}</tbody></table>
             
+            {version_html}
+
             <h2>📜 상세 로그</h2>
             {''.join(log_global)}
         </div>
@@ -910,4 +1129,69 @@ if __name__ == "__main__":
     krw_prices = {}
         
     # Pass my_holdings_krw, integrated_rows for unified display
-    save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows)
+    # --- Stock Rebalancing Trigger (T25%+C3d) ---
+    import json as _json
+    STOCK_HOLDINGS_FILE = '/home/ubuntu/my_stock_holdings.json'
+    STOCK_TRIGGER_FILE = '/home/ubuntu/stock_trigger_history.json'
+
+    stock_trigger_info = None
+    try:
+        # Load my stock holdings
+        with open(STOCK_HOLDINGS_FILE, 'r') as _f:
+            _holdings = _json.load(_f)
+        my_stock_tickers = sorted([t.upper() for t in _holdings.get('tickers', [])])
+
+        # Get today's recommended stock tickers
+        rec_stock_tickers = sorted([t for t in s_port.keys() if t != CASH_ASSET])
+
+        if my_stock_tickers:
+            # Calculate turnover (equal weight based)
+            all_t = set(my_stock_tickers) | set(rec_stock_tickers)
+            my_w = {t: 1.0/len(my_stock_tickers) if t in my_stock_tickers else 0 for t in all_t}
+            rec_w = {t: 1.0/len(rec_stock_tickers) if t in rec_stock_tickers else 0 for t in all_t} if rec_stock_tickers else {t: 0 for t in all_t}
+            stock_turnover = sum(abs(rec_w[t] - my_w[t]) for t in all_t) / 2
+
+            # Load trigger history
+            try:
+                with open(STOCK_TRIGGER_FILE, 'r') as _f:
+                    _hist = _json.load(_f)
+            except:
+                _hist = {"consec_days": 0, "last_rec": [], "last_date": ""}
+
+            # Check consecutive days
+            last_rec = sorted(_hist.get("last_rec", []))
+            if rec_stock_tickers == last_rec:
+                consec = _hist.get("consec_days", 0) + 1
+            else:
+                consec = 1
+
+            # Save today's state
+            _hist = {
+                "consec_days": consec,
+                "last_rec": rec_stock_tickers,
+                "last_date": target_date.strftime('%Y-%m-%d'),
+                "turnover": stock_turnover
+            }
+            with open(STOCK_TRIGGER_FILE, 'w') as _f:
+                _json.dump(_hist, _f, indent=2)
+
+            # Trigger: turnover >= 25% AND consec >= 3
+            should_rebal = stock_turnover >= 0.25 and consec >= 3
+
+            stock_trigger_info = {
+                "my_tickers": my_stock_tickers,
+                "rec_tickers": rec_stock_tickers,
+                "turnover": stock_turnover,
+                "consec_days": consec,
+                "should_rebal": should_rebal
+            }
+
+            trigger_str = "REBALANCE" if should_rebal else "HOLD"
+            print(f"[Stock Trigger] My: {my_stock_tickers} -> Rec: {rec_stock_tickers}")
+            print(f"[Stock Trigger] Turnover: {stock_turnover:.1%}, Consec: {consec}d -> {trigger_str}")
+    except FileNotFoundError:
+        print("[Stock Trigger] No holdings file found - skipping trigger check")
+    except Exception as _e:
+        print(f"[Stock Trigger] Error: {_e}")
+
+    save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows, stock_trigger_info)
