@@ -1,6 +1,7 @@
 """
-Cap Defend V12 Recommendation Script (Standard Version - Clean)
+Cap Defend V13 Recommendation Script (Standard Version - Clean)
 =============================================================
+V13: Multi Bonus Scoring - RSI(45-70→+0.2), MACD hist>0→+0.2, BB %B>0.5→+0.2
 - Pure Strategy Recommendation (No Personal Asset Data)
 - Dynamic Coin Universe (CoinGecko Top 50 + Upbit Filter)
 - No Manual Ticker Mapping (e.g. No POL->MATIC)
@@ -256,6 +257,43 @@ def calc_weighted_mom(s):
     r3, r6, r12 = calc_ret(s, 63), calc_ret(s, 126), calc_ret(s, 252)
     return 0.5*r3 + 0.3*r6 + 0.2*r12
 
+# --- Multi Bonus Indicators (V13) ---
+def calc_rsi(s, period=14):
+    if len(s) < period + 1: return np.nan
+    delta = s.diff().iloc[-period-1:]
+    gain = delta.clip(lower=0).rolling(period).mean().iloc[-1]
+    loss = (-delta.clip(upper=0)).rolling(period).mean().iloc[-1]
+    if loss == 0: return 100.0
+    return 100 - (100 / (1 + gain / loss))
+
+def calc_macd_hist(s):
+    if len(s) < 35: return np.nan
+    ema12 = s.ewm(span=12, adjust=False).mean()
+    ema26 = s.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal = macd_line.ewm(span=9, adjust=False).mean()
+    return (macd_line - signal).iloc[-1]
+
+def calc_bb_pctb(s, period=20):
+    if len(s) < period: return np.nan
+    sma = s.rolling(period).mean()
+    std = s.rolling(period).std()
+    upper = sma + 2 * std
+    lower = sma - 2 * std
+    band_width = upper.iloc[-1] - lower.iloc[-1]
+    if band_width == 0: return 0.5
+    return (s.iloc[-1] - lower.iloc[-1]) / band_width
+
+def calc_multi_bonus_score(s):
+    base = calc_sharpe(s, 126) + calc_sharpe(s, 252)
+    rsi = calc_rsi(s)
+    macd_h = calc_macd_hist(s)
+    pctb = calc_bb_pctb(s)
+    if pd.notna(rsi) and 45 <= rsi <= 70: base += 0.2
+    if pd.notna(macd_h) and macd_h > 0: base += 0.2
+    if pd.notna(pctb) and pctb > 0.5: base += 0.2
+    return base, rsi, macd_h, pctb
+
 def run_stock_strategy_v11(log, all_prices):
     log.append("<h2>📈 주식 포트폴리오 분석 (V11)</h2>")
     vt, eem = all_prices.get('VT'), all_prices.get('EEM')
@@ -345,10 +383,26 @@ def run_coin_strategy_v12(coin_universe, all_prices, target_date, log):
     
     if not healthy: return {CASH_ASSET: 1.0}, "No Healthy"
     
-    scores = [{'Coin': t, 'Score': calc_sharpe(all_prices[t], 126) + calc_sharpe(all_prices[t], 252)} for t in healthy]
+    # V13: Multi Bonus Scoring (Sharpe + RSI/MACD/BB bonuses)
+    scores = []
+    for t in healthy:
+        score, rsi, macd_h, pctb = calc_multi_bonus_score(all_prices[t])
+        bonus_flags = []
+        if pd.notna(rsi) and 45 <= rsi <= 70: bonus_flags.append('RSI')
+        if pd.notna(macd_h) and macd_h > 0: bonus_flags.append('MACD')
+        if pd.notna(pctb) and pctb > 0.5: bonus_flags.append('BB')
+        scores.append({
+            'Coin': t, 'Score': score,
+            'RSI': f"{rsi:.1f}" if pd.notna(rsi) else "-",
+            'MACD_H': f"{macd_h:.4f}" if pd.notna(macd_h) else "-",
+            'BB%B': f"{pctb:.2f}" if pd.notna(pctb) else "-",
+            'Bonus': '+'.join(bonus_flags) if bonus_flags else '-'
+        })
     score_df = pd.DataFrame(scores).sort_values('Score', ascending=False)
-    
-    try: log.append(f"<div class='table-wrap'>{score_df.head(10).to_html(classes='dataframe small-table')}</div>")
+
+    try:
+        log.append(f"<p><b>[V13 Multi Bonus]</b> RSI(45-70→+0.2) | MACD hist>0→+0.2 | BB %B>0.5→+0.2</p>")
+        log.append(f"<div class='table-wrap'>{score_df.head(10).to_html(classes='dataframe small-table')}</div>")
     except: pass
     
     top5 = score_df.head(5)['Coin'].tolist()
@@ -387,7 +441,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend V12 Recommendation</title>
+        <title>Cap Defend V13 Recommendation</title>
          <style>
             body {{ font-family: -apple-system, sans-serif; background: #f0f2f5; padding: 10px; color: #333; }}
             .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; }}
@@ -404,7 +458,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V12</h1>
+            <h1>🚀 Cap Defend V13</h1>
             <p>기준일: {date_today.strftime('%Y-%m-%d')}</p>
             
             <div class="status-bar">
