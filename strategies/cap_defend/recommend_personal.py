@@ -31,6 +31,7 @@ SECRET_KEY = UPBIT_SECRET_KEY
 
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
+SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 STRATEGY_VERSION = "V13"
 VERSION_HISTORY = [
     ("V13", "2026-03",
@@ -109,6 +110,7 @@ OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'EFA', 'EEM', 'VT', 'VEA', 'GLD', 'PDB
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['VT', 'EEM']
 STOCK_CANARY_MA_PERIOD = 200
+HYSTERESIS_BAND = 0.01  # 1% Hysteresis: enter Risk-On at SMA200*1.01, exit at SMA200*0.99
 N_FACTOR_ASSETS = 3
 
 # Coin V11 Configuration
@@ -483,11 +485,43 @@ def run_stock_strategy_v11(log, all_prices, target_date):
         vt_sma, eem_sma = vt.rolling(200).mean().iloc[-1], eem.rolling(200).mean().iloc[-1]
         vt_cur, eem_cur = vt.iloc[-1], eem.iloc[-1]
         meta['signal_dist'] = {'VT': (vt_cur-vt_sma)/vt_sma, 'EEM': (eem_cur-eem_sma)/eem_sma}
-        risk_on = vt_cur > vt_sma and eem_cur > eem_sma
         
-        log.append(f"<p><b>[Canary]</b> VT: ${vt_cur:.2f} | EEM: ${eem_cur:.2f} vs MA200</p>")
-        if risk_on: log.append("<p>✅ <b>Risk-On</b></p>")
-        else: log.append("<p>🚨 <b>Risk-Off</b></p>")
+        # Load previous signal state
+        prev_risk_on = None
+        try:
+            with open(SIGNAL_STATE_FILE, 'r') as _sf:
+                prev_risk_on = json.load(_sf).get('risk_on')
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        
+        # 1% Hysteresis Signal Flip Guard
+        upper = 1 + HYSTERESIS_BAND  # 1.01
+        lower = 1 - HYSTERESIS_BAND  # 0.99
+        
+        if prev_risk_on is None:
+            # First run: use simple comparison
+            risk_on = vt_cur > vt_sma and eem_cur > eem_sma
+        elif prev_risk_on:
+            # Currently Risk-On: only flip to Off if BELOW lower band
+            risk_on = not (vt_cur < vt_sma * lower or eem_cur < eem_sma * lower)
+        else:
+            # Currently Risk-Off: only flip to On if ABOVE upper band
+            risk_on = vt_cur > vt_sma * upper and eem_cur > eem_sma * upper
+        
+        # Save new state
+        with open(SIGNAL_STATE_FILE, 'w') as _sf:
+            json.dump({'risk_on': bool(risk_on), 'updated': datetime.now().strftime('%Y-%m-%d %H:%M')}, _sf)
+        
+        # Logging
+        hyst_info = f"(Hyst {HYSTERESIS_BAND:.0%}: enter >{upper:.2f}x, exit <{lower:.2f}x)"
+        flip_info = ""
+        if prev_risk_on is not None and prev_risk_on != risk_on:
+            flip_info = " \U0001f504 <b>SIGNAL FLIP</b>"
+        
+        log.append(f"<p><b>[Canary]</b> VT: ${vt_cur:.2f} (MA200 ${vt_sma:.2f}, {meta['signal_dist']['VT']:+.2%}) | EEM: ${eem_cur:.2f} (MA200 ${eem_sma:.2f}, {meta['signal_dist']['EEM']:+.2%})</p>")
+        log.append(f"<p><b>[Hysteresis]</b> {hyst_info} | Prev: {'On' if prev_risk_on else 'Off' if prev_risk_on is not None else 'N/A'}{flip_info}</p>")
+        if risk_on: log.append("<p>\u2705 <b>Risk-On</b></p>")
+        else: log.append("<p>\U0001f6a8 <b>Risk-Off</b></p>")
     else: 
         risk_on = False
         log.append("<p class='error'>Canary Data Missing</p>")
