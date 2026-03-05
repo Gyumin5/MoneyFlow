@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cap Defend Strategy Documentation</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; line-height: 1.6; }
+        .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+        h1 { text-align: center; margin: 30px 0 10px; font-size: 1.8em; color: #1a73e8; }
+        .subtitle { text-align: center; color: #888; margin-bottom: 30px; font-size: 0.95em; }
+        .version-card {
+            background: white;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            overflow: hidden;
+        }
+        .version-card.current { border: 2px solid #1a73e8; }
+        .version-card details { border: none; }
+        .version-header {
+            padding: 16px 20px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #fafafa;
+            user-select: none;
+        }
+        .version-header:hover { background: #f0f4ff; }
+        .badge {
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.95em;
+            white-space: nowrap;
+        }
+        .badge-current { background: #1a73e8; color: white; }
+        .badge-old { background: #e0e0e0; color: #555; }
+        .version-date { color: #888; font-size: 0.85em; min-width: 70px; }
+        .version-summary { font-size: 0.92em; color: #444; }
+        .version-detail {
+            padding: 20px 24px;
+            font-size: 0.9em;
+            line-height: 1.8;
+            border-top: 1px solid #eee;
+        }
+        .version-detail b { color: #333; }
+        .section-title {
+            display: inline-block;
+            background: #f0f4ff;
+            padding: 4px 10px;
+            border-radius: 4px;
+            margin: 12px 0 6px;
+            font-weight: 700;
+            color: #1a73e8;
+            font-size: 0.95em;
+        }
+        .new-tag {
+            color: #d93025;
+            font-weight: 600;
+        }
+        .param {
+            font-family: 'SF Mono', Monaco, monospace;
+            background: #f0f4ff;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        .nav-link {
+            display: inline-block;
+            margin: 20px 0;
+            color: #1a73e8;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        .nav-link:hover { text-decoration: underline; }
+        .overview-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0 30px;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .overview-table th {
+            background: #1a73e8;
+            color: white;
+            padding: 10px 14px;
+            text-align: left;
+            font-size: 0.85em;
+        }
+        .overview-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #eee;
+            font-size: 0.85em;
+        }
+        .overview-table tr:last-child td { border-bottom: none; }
+        .check { color: #0d904f; }
+        .cross { color: #999; }
+        @media (max-width: 600px) {
+            .container { padding: 12px; }
+            .version-header { flex-wrap: wrap; }
+            .version-detail { padding: 14px 16px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Cap Defend Strategy</h1>
+        <p class="subtitle">Version History & Full Documentation</p>
+
+        <a class="nav-link" href="portfolio_result_gmoh.html">&larr; Back to Dashboard</a>
+
+        <!-- Feature comparison table -->
+        <table class="overview-table">
+            <thead>
+                <tr>
+                    <th>Feature</th>
+                    <th>V11 (2025-12)</th>
+                    <th>V12 (2026-01)</th>
+                    <th>V13 (2026-03)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Dual Canary (VT+EEM &gt; MA200)</td><td class="check">&#10003;</td><td class="check">&#10003;</td><td class="check">&#10003;</td></tr>
+                <tr><td>1% Hysteresis Signal Flip Guard</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td><td class="check">&#10003;</td></tr>
+                <tr><td>Offensive Top3+Top3 Union</td><td class="check">&#10003;</td><td class="check">&#10003;</td><td class="check">&#10003;</td></tr>
+                <tr><td>Weighted Momentum (50/30/20%)</td><td class="check">&#10003;</td><td class="check">&#10003;</td><td class="check">&#10003;</td></tr>
+                <tr><td>Coin Health Filter (SMA30/Mom21/Vol90)</td><td class="cross">&mdash;</td><td class="check">&#10003;</td><td class="check">&#10003;</td></tr>
+                <tr><td>Inverse Volatility Weighting</td><td class="cross">&mdash;</td><td class="check">&#10003;</td><td class="check">&#10003;</td></tr>
+                <tr><td>Multi Bonus Scoring (RSI/MACD/BB)</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td><td class="check">&#10003;</td></tr>
+                <tr><td>T25%+C3d Stock Rebalancing Trigger</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td><td class="check">&#10003;</td></tr>
+                <tr><td>Stock Holdings UI</td><td class="cross">&mdash;</td><td class="cross">&mdash;</td><td class="check">&#10003;</td></tr>
+            </tbody>
+        </table>
+
+        <!-- V13 -->
+        <div class="version-card current">
+            <details open>
+                <summary class="version-header">
+                    <span class="badge badge-current">V13</span>
+                    <span class="version-date">2026-03</span>
+                    <span class="version-summary">Multi Bonus scoring, 1% Hysteresis signal flip, T25%+C3d stock rebalancing</span>
+                </summary>
+                <div class="version-detail">
+                    <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+
+                    <div class="section-title">&#9654; 주식 전략 (V11 기반)</div>
+                    <ul>
+                        <li><b>공격 유니버스 (12종):</b> SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC, QUAL, MTUM, IQLT, IMTM</li>
+                        <li><b>수비 유니버스 (5종):</b> IEF, BIL, BNDX, GLD, PDBC</li>
+                        <li><b>Canary Signal:</b> VT AND EEM &gt; SMA200 &rarr; Risk-On, 아니면 Risk-Off</li>
+                        <li><b class="new-tag">[V13 신규] Signal Flip Guard:</b> <b>1% Hysteresis</b> &mdash; SMA200&times;1.01 이상일 때 Risk-On 진입, SMA200&times;0.99 이하일 때 Risk-Off 진입. 휘소(빈번한 신호 전환) 62% 감소. 백테스트 기간: 2017~2025, 7개 리밸런싱 타이밍, Avg Sharpe 0.833 (No Guard 0.772 대비 +0.061)</li>
+                        <li><b>공격 모드 선정:</b> 가중 모멘텀(<span class="param">50%&times;3M + 30%&times;6M + 20%&times;12M</span>) Top 3 + Sharpe(126d) Top 3 합집합 &rarr; 균등배분</li>
+                        <li><b>수비 모드 선정:</b> 수비 5종 중 6개월 수익률 최고 1개 (음수면 현금)</li>
+                        <li><b class="new-tag">[V13 신규] 종목 리밸런싱 트리거:</b> <b>T25%+C3d</b> &mdash; 추천 종목 변경으로 턴오버 &ge;25% 상태가 3영업일 연속 유지되면 리밸런싱 신호 발생. 백테스트 결과: 32개 트리거 중 Avg Sharpe 1위 (0.855), 7개 타이밍 중 6개에서 baseline 초과</li>
+                    </ul>
+
+                    <div class="section-title">&#9654; 코인 전략 (V12 기반)</div>
+                    <ul>
+                        <li><b>유니버스:</b> CoinGecko 시가총액 Top 50 &rarr; Upbit KRW 상장 + 253일 히스토리 + 30일 평균 거래대금 10억원 이상 필터</li>
+                        <li><b>Canary:</b> BTC &gt; SMA50 &rarr; 투자, 아니면 현금</li>
+                        <li><b>Health Filter:</b> Price &gt; SMA30 AND Mom21 &gt; 0 AND Vol90 &le; 10%</li>
+                        <li><b class="new-tag">[V13 신규] Multi Bonus Scoring:</b> <span class="param">Sharpe(126d) + Sharpe(252d)</span> + RSI bonus(<span class="param">45~70 &rarr; +0.2</span>) + MACD histogram bonus(<span class="param">&gt;0 &rarr; +0.2</span>) + BB %B bonus(<span class="param">&gt;0.5 &rarr; +0.2</span>)</li>
+                        <li><b>선정:</b> Multi Bonus Score Top 5</li>
+                        <li><b>배분:</b> 90일 역변동성 가중 (1/Vol)</li>
+                    </ul>
+
+                    <div class="section-title">&#9654; 리밸런싱 규칙</div>
+                    <ul>
+                        <li><b>코인:</b> 월간 스케줄 + 턴오버 30%&uarr; 또는 Health 실패 시 즉시</li>
+                        <li><b>주식:</b> 월간 스케줄 + Signal Flip (1% Hysteresis) + T25%+C3d 종목 리밸런싱</li>
+                    </ul>
+                </div>
+            </details>
+        </div>
+
+        <!-- V12 -->
+        <div class="version-card">
+            <details>
+                <summary class="version-header">
+                    <span class="badge badge-old">V12</span>
+                    <span class="version-date">2026-01</span>
+                    <span class="version-summary">Weighted momentum, Sharpe quality, inverse volatility weighting, health check</span>
+                </summary>
+                <div class="version-detail">
+                    <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+
+                    <div class="section-title">&#9654; 주식 전략 (V11 동일)</div>
+                    <ul>
+                        <li><b>Canary:</b> VT AND EEM &gt; SMA200 &rarr; Risk-On</li>
+                        <li><b>공격:</b> 12종 유니버스, 가중 모멘텀(50/30/20%) Top 3 + Sharpe(126d) Top 3 합집합, 균등배분</li>
+                        <li><b>수비:</b> 5종 중 6M 수익률 최고 1개 (음수면 현금)</li>
+                        <li>Signal flip guard 없음 (SMA200 자체 단순 비교)</li>
+                    </ul>
+
+                    <div class="section-title">&#9654; 코인 전략 (V12 신규)</div>
+                    <ul>
+                        <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW 필터 (253일 히스토리, 10억원 거래대금)</li>
+                        <li><b>Canary:</b> BTC &gt; SMA50</li>
+                        <li><b class="new-tag">[V12 신규] Health Filter:</b> Price &gt; SMA30 AND Mom21 &gt; 0 AND Vol90 &le; 10%</li>
+                        <li><b>Scoring:</b> Sharpe(126d) + Sharpe(252d) (보너스 없음)</li>
+                        <li><b>선정:</b> Top 5</li>
+                        <li><b class="new-tag">[V12 신규] 배분:</b> 90일 역변동성 가중 (1/Vol)</li>
+                    </ul>
+
+                    <div class="section-title">&#9654; 리밸런싱</div>
+                    <ul>
+                        <li>월간 + 턴오버 30%&uarr; 또는 Health 실패 시</li>
+                    </ul>
+                </div>
+            </details>
+        </div>
+
+        <!-- V11 -->
+        <div class="version-card">
+            <details>
+                <summary class="version-header">
+                    <span class="badge badge-old">V11</span>
+                    <span class="version-date">2025-12</span>
+                    <span class="version-summary">Dual canary, offensive Top3+Top3 union, defensive 6M best</span>
+                </summary>
+                <div class="version-detail">
+                    <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+
+                    <div class="section-title">&#9654; 주식 전략 (V11 신규)</div>
+                    <ul>
+                        <li><b class="new-tag">[V11 신규] Canary:</b> Dual Canary &mdash; VT AND EEM 둘 다 SMA200 이상이어야 Risk-On</li>
+                        <li><b>공격 유니버스:</b> SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC, QUAL, MTUM, IQLT, IMTM (12종)</li>
+                        <li><b class="new-tag">[V11 신규] 공격 선정:</b> 가중모멘텀(50/30/20%) Top 3 + Sharpe(126d) Top 3 &rarr; 합집합 (3~6종), 균등배분</li>
+                        <li><b>수비 유니버스:</b> IEF, BIL, BNDX, GLD, PDBC (5종)</li>
+                        <li><b class="new-tag">[V11 신규] 수비 선정:</b> 6개월 수익률 최고 1개 (음수면 현금)</li>
+                    </ul>
+
+                    <div class="section-title">&#9654; 코인 전략</div>
+                    <ul>
+                        <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW</li>
+                        <li><b>Canary:</b> BTC &gt; SMA50</li>
+                        <li>Health Filter: 없음 (V12에서 추가)</li>
+                        <li><b>Scoring:</b> Sharpe(126d) + Sharpe(252d), Top 5 균등배분</li>
+                    </ul>
+
+                    <div class="section-title">&#9654; 리밸런싱</div>
+                    <ul>
+                        <li>월간 스케줄 기반</li>
+                    </ul>
+                </div>
+            </details>
+        </div>
+
+        <div style="text-align:center; margin:30px 0; color:#aaa; font-size:0.8em;">
+            Cap Defend Strategy Documentation &mdash; Auto-generated
+        </div>
+    </div>
+</body>
+</html>

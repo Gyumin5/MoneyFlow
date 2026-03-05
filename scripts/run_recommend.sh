@@ -1,21 +1,20 @@
 #!/bin/bash
 # run_recommend.sh - flock wrapper for recommend scripts
-# Usage: ./scripts/run_recommend.sh [general|personal]
+# Usage: ./run_recommend.sh [general|personal]
 #
 # Example crontab entries:
-# 00 09 * * * /home/ubuntu/MoneyFlow/scripts/run_recommend.sh general
-# 00 09 * * * /home/ubuntu/MoneyFlow/scripts/run_recommend.sh personal
+# 00 09 * * * /home/ubuntu/run_recommend.sh general
+# 00 09 * * * /home/ubuntu/run_recommend.sh personal
 
 set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TYPE="${1:-general}"
 
 if [ "$TYPE" = "personal" ]; then
-    SCRIPT="$PROJECT_DIR/strategies/cap_defend/recommend_personal.py"
+    SCRIPT="/home/ubuntu/recommend_personal.py"
     LOCK_FILE="/tmp/recommend_personal.lock"
 else
-    SCRIPT="$PROJECT_DIR/strategies/cap_defend/recommend.py"
+    SCRIPT="/home/ubuntu/recommend.py"
     LOCK_FILE="/tmp/recommend_general.lock"
 fi
 
@@ -32,8 +31,8 @@ if ! flock -n 200; then
     exit 0
 fi
 
-# Run the script from project root
+# Run the script
 echo "[$(date)] Starting recommend ($TYPE)..."
-cd "$PROJECT_DIR"
+cd /home/ubuntu
 python3 "$SCRIPT"
 echo "[$(date)] Recommend ($TYPE) finished."

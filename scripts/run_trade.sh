@@ -1,19 +1,18 @@
 #!/bin/bash
 # run_trade.sh - flock wrapper for auto_trade scripts
-# Usage: ./scripts/run_trade.sh [upbit|bithumb] [--trade] [--force]
+# Usage: ./run_trade.sh [upbit|bithumb] [--trade] [--force]
 #
 # Example crontab entries:
-# 05 09 * * * /home/ubuntu/MoneyFlow/scripts/run_trade.sh upbit --trade
-# 10 09 * * * /home/ubuntu/MoneyFlow/scripts/run_trade.sh bithumb --trade
+# 05 09 * * * /home/ubuntu/run_trade.sh upbit --trade
+# 10 09 * * * /home/ubuntu/run_trade.sh bithumb --trade
 
 set -e
 
-PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXCHANGE="${1:-upbit}"
 shift || true
 
 LOCK_FILE="/tmp/auto_trade_${EXCHANGE}.lock"
-SCRIPT="$PROJECT_DIR/trade/auto_trade_${EXCHANGE}.py"
+SCRIPT="/home/ubuntu/auto_trade_${EXCHANGE}.py"
 
 # Check if script exists
 if [ ! -f "$SCRIPT" ]; then
@@ -28,8 +27,8 @@ if ! flock -n 200; then
     exit 0
 fi
 
-# Run the script from project root
+# Run the script
 echo "[$(date)] Starting $EXCHANGE bot..."
-cd "$PROJECT_DIR"
+cd /home/ubuntu
 python3 "$SCRIPT" "$@"
 echo "[$(date)] $EXCHANGE bot finished."
