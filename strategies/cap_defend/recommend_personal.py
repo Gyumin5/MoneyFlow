@@ -509,8 +509,9 @@ def run_stock_strategy_v11(log, all_prices, target_date):
             risk_on = vt_cur > vt_sma * upper and eem_cur > eem_sma * upper
         
         # Save new state
+        signal_flipped = (prev_risk_on is not None and prev_risk_on != risk_on)
         with open(SIGNAL_STATE_FILE, 'w') as _sf:
-            json.dump({'risk_on': bool(risk_on), 'updated': datetime.now().strftime('%Y-%m-%d %H:%M')}, _sf)
+            json.dump({'risk_on': bool(risk_on), 'signal_flipped': signal_flipped, 'updated': datetime.now().strftime('%Y-%m-%d %H:%M')}, _sf)
         
         # Logging
         hyst_info = f"(Hyst {HYSTERESIS_BAND:.0%}: enter >{upper:.2f}x, exit <{lower:.2f}x)"
@@ -695,9 +696,22 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     rec_stock_list = sorted([t for t in s_port.keys() if t != 'Cash'])
     rec_stock_json = json.dumps(rec_stock_list)
 
+    # Read signal state for UI
+    signal_flipped = False
+    current_risk_on = True
+    try:
+        with open(SIGNAL_STATE_FILE, 'r') as _sf:
+            _state = json.load(_sf)
+            signal_flipped = _state.get('signal_flipped', False)
+            current_risk_on = _state.get('risk_on', True)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
     stock_holdings_js = """
             <script>
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
+            const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
+            const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
 
             function calcTrigger(myTickers, recTickers) {
                 if (!myTickers.length || !recTickers.length) return null;
@@ -729,13 +743,17 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     changesHtml = '<span style="color:#0d904f;">\\u2705 \\ub3d9\\uc77c \\uc885\\ubaa9</span>';
 
                 const pct = Math.round(result.turnover * 100);
+                const regime = RISK_ON ? 'Risk-On &#x1F7E2;' : 'Risk-Off &#x1F534;';
                 let statusHtml = '';
-                if (pct === 0) {
+                if (SIGNAL_FLIPPED) {
+                    statusHtml = '<div style="background:#fce8e6; border:2px solid #d93025; padding:12px; border-radius:8px; margin-top:10px;">'
+                        + '&#x1F6A8; <b>Signal Flip \ubc1c\uc0dd (' + regime + ') \u2014 \uc989\uc2dc \ub9ac\ubc38\ub7f0\uc2f1 \ud544\uc694</b></div>';
+                } else if (pct === 0) {
                     statusHtml = '<div style="background:#e8f5e9; padding:12px; border-radius:8px; margin-top:10px;">'
-                        + '\\u2705 \\ud604\\uc7ac \\ubcf4\\uc720 = \\ucd94\\ucc9c \\uc885\\ubaa9 (\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694)</div>';
+                        + '\u2705 ' + regime + ' | \ud604\uc7ac \ubcf4\uc720 = \ucd94\ucc9c \uc885\ubaa9 (\ub9ac\ubc38\ub7f0\uc2f1 \ubd88\ud544\uc694)</div>';
                 } else {
                     statusHtml = '<div style="background:#fff3e0; border:1px solid #ff9800; padding:12px; border-radius:8px; margin-top:10px;">'
-                        + '\\U0001f504 Turnover ' + pct + '% \\u2014 <b>\\uc6d4\\ub9d0 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\uc2dc \\ubc18\\uc601</b></div>';
+                        + '&#x1F504; ' + regime + ' | Turnover ' + pct + '% \u2014 <b>\uc6d4\ub9d0 \ub9ac\ubc38\ub7f0\uc2f1 \uc2dc \ubc18\uc601</b></div>';
                 }
 
                 el.innerHTML = '<div style="margin-top: 10px;">'
