@@ -733,9 +733,18 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     rec_stock_list = sorted([t for t in s_port.keys() if t != 'Cash'])
     rec_stock_json = json.dumps(rec_stock_list)
 
+    # Embed consec days for client-side display
+    _consec_days = 0
+    _stock_turnover_pct = 0
+    if stock_trigger_info:
+        _consec_days = stock_trigger_info.get('consec_days', 0)
+        _stock_turnover_pct = round(stock_trigger_info.get('turnover', 0) * 100)
+
     stock_holdings_js = """
             <script>
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
+            const CONSEC_DAYS = """ + str(_consec_days) + """;
+            const SERVER_TURNOVER = """ + str(_stock_turnover_pct) + """;
 
             function calcTrigger(myTickers, recTickers) {
                 if (!myTickers.length || !recTickers.length) return null;
@@ -746,7 +755,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     const recW = recTickers.includes(t) ? 1.0/recTickers.length : 0;
                     totalDiff += Math.abs(recW - myW);
                 });
-                const turnover = totalDiff / 2;
+                const turnover = Math.round(totalDiff / 2 * 10000) / 10000;
 
                 const added = recTickers.filter(t => !myTickers.includes(t));
                 const removed = myTickers.filter(t => !recTickers.includes(t));
@@ -764,16 +773,25 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 if (result.removed.length)
                     changesHtml += '<span style="color:#1a73e8; font-weight:600;">- ' + result.removed.join(', ') + '</span>';
                 if (!result.added.length && !result.removed.length)
-                    changesHtml = '<span style="color:#0d904f;">\u2705 \ubcc0\ub3d9 \uc5c6\uc74c</span>';
+                    changesHtml = '<span style="color:#0d904f;">\\u2705 \\ubcc0\\ub3d9 \\uc5c6\\uc74c</span>';
 
-                const pct = (result.turnover * 100).toFixed(0);
-                const isHigh = result.turnover >= 0.25;
-                const bgStyle = isHigh
-                    ? 'background: #fce8e6; border: 2px solid #d93025; padding: 12px; border-radius: 8px; margin-top: 10px;'
-                    : 'background: #e8f0fe; padding: 12px; border-radius: 8px; margin-top: 10px;';
-                const msg = isHigh
-                    ? '\U0001f6a8 <b>Turnover ' + pct + '%</b> \u2014 \uc885\ubaa9 \ubcc0\ub3d9\uc774 \ud06c\ub2c8 \ub9ac\ubc38\ub7f0\uc2f1\uc744 \uace0\ub824\ud558\uc138\uc694'
-                    : '\u2139\ufe0f Turnover ' + pct + '% \u2014 \uc720\uc9c0';
+                const pct = Math.round(result.turnover * 100);
+                const isHigh = pct >= 25;
+                const consec = CONSEC_DAYS;
+                const needDays = Math.max(0, 3 - consec);
+                const triggered = isHigh && consec >= 3;
+
+                let statusHtml = '';
+                if (!isHigh) {
+                    statusHtml = '<div style="background:#e8f0fe; padding:12px; border-radius:8px; margin-top:10px;">'
+                        + '\\u2139\\ufe0f Turnover ' + pct + '% (25% \\ubbf8\\ub9cc) \\u2014 <b>\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694</b></div>';
+                } else if (triggered) {
+                    statusHtml = '<div style="background:#fce8e6; border:2px solid #d93025; padding:12px; border-radius:8px; margin-top:10px;">'
+                        + '\\U0001f6a8 <b>Turnover ' + pct + '% / ' + consec + '\\uc77c \\uc5f0\\uc18d \\u2192 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\uad8c\\uace0</b></div>';
+                } else {
+                    statusHtml = '<div style="background:#fff3e0; border:1px solid #ff9800; padding:12px; border-radius:8px; margin-top:10px;">'
+                        + '\\u23f3 Turnover ' + pct + '% / ' + consec + '\\uc77c\\uc9f8 (3\\uc77c \\uc5f0\\uc18d \\uc2dc \\ud2b8\\ub9ac\\uac70, <b>' + needDays + '\\uc77c \\ub0a8\\uc74c</b>)</div>';
+                }
 
                 el.innerHTML = '<div style="margin-top: 10px;">'
                     + '<div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:8px;">'
@@ -781,7 +799,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     + '<div><b>Rec:</b> ' + REC_STOCK_TICKERS.join(', ') + ' (' + REC_STOCK_TICKERS.length + ')</div>'
                     + '</div>'
                     + '<div style="margin-bottom:8px;">Changes: ' + changesHtml + '</div>'
-                    + '<div style="' + bgStyle + '">' + msg + '</div>'
+                    + statusHtml
                     + '</div>';
             }
 
@@ -1210,7 +1228,7 @@ if __name__ == "__main__":
                 _json.dump(_hist, _f, indent=2)
 
             # Trigger: turnover >= 25% AND consec >= 3
-            should_rebal = stock_turnover >= 0.25 and consec >= 3
+            should_rebal = round(stock_turnover, 4) >= 0.25 and consec >= 3
 
             stock_trigger_info = {
                 "my_tickers": my_stock_tickers,
