@@ -35,7 +35,7 @@ SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 STRATEGY_VERSION = "V13"
 VERSION_HISTORY = [
     ("V13", "2026-03",
-     "Multi Bonus scoring, 1% Hysteresis signal flip, T25%+C3d stock rebalancing trigger",
+     "Multi Bonus scoring, 1% Hysteresis signal flip, monthly rebalancing",
      """<b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
 
 <b>\u25b6 주식 전략 (V11 기반)</b>
@@ -44,7 +44,7 @@ VERSION_HISTORY = [
 \u2022 <b>Signal Flip Guard (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>1% Hysteresis</span> \u2014 SMA200\xd71.01 \uc774\uc0c1\uc77c \ub54c Risk-On \uc9c4\uc785, SMA200\xd70.99 \uc774\ud558\uc77c \ub54c Risk-Off \uc9c4\uc785. \ud718\uc18c (\ube48\ubc88\ud55c \uc2e0\ud638 \uc804\ud658) 62% \uac10\uc18c
 \u2022 <b>\uacf5\uaca9 \ubaa8\ub4dc:</b> \uac00\uc911 \ubaa8\uba58\ud140(50/30/20% for 3M/6M/12M) Top 3 + Sharpe(126d) Top 3 \ud569\uc9d1\ud569 \u2192 \uade0\ub4f1\ubc30\ubd84
 \u2022 <b>\uc218\ube44 \ubaa8\ub4dc:</b> \uc218\ube44 5\uc885 \uc911 6\uac1c\uc6d4 \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
-\u2022 <b>\uc885\ubaa9 \ub9ac\ubc38\ub7f0\uc2f1 (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>T25%+C3d</span> \u2014 \ud134\uc624\ubc84 \u226525%\uac00 3\uc601\uc5c5\uc77c \uc5f0\uc18d \uc720\uc9c0\ub418\uba74 \ub9ac\ubc38\ub7f0\uc2f1 \uc2e0\ud638 \ubc1c\uc0dd
+\u2022 <b>\uc885\ubaa9 \ub9ac\ubc38\ub7f0\uc2f1:</b> \uc6d4\uac04 \uc815\uae30 \ub9ac\ubc38\ub7f0\uc2f1 (\uc6d4\ub9d0 \uad8c\uc7a5). \ubc31\ud14c\uc2a4\ud2b8 \uacb0\uacfc \uc6d4\ub9d0 \ub9ac\ubc38\ub7f0\uc2f1\uc774 Sharpe 1.001\ub85c \ucd5c\uc801
 
 <b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uae30\ubc18)</b>
 \u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 \uc2dc\uac00\ucd1d\uc561\uc21c \u2192 Upbit KRW \uc0c1\uc7a5 + 253\uc77c \ud788\uc2a4\ud1a0\ub9ac + 30\uc77c \ud3c9\uade0 \uac70\ub798\ub300\uae08 10\uc5b5\uc6d0\uc774\uc0c1 \ud544\ud130
@@ -56,7 +56,7 @@ VERSION_HISTORY = [
 
 <b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1 \uaddc\uce59</b>
 \u2022 \ucf54\uc778: \uc6d4\uac04 \uc2a4\ucf00\uc904 + \ud134\uc624\ubc84 30%\u2191 \ub610\ub294 Health \uc2e4\ud328 \uc2dc \uc989\uc2dc
-\u2022 \uc8fc\uc2dd: \uc6d4\uac04 \uc2a4\ucf00\uc904 + Signal Flip(1% Hysteresis) + T25%+C3d \uc885\ubaa9 \ub9ac\ubc38\ub7f0\uc2f1"""),
+\u2022 \uc8fc\uc2dd: \uc6d4\uac04 \uc815\uae30 \ub9ac\ubc38\ub7f0\uc2f1 (\uc6d4\ub9d0 \uad8c\uc7a5) + Signal Flip(1% Hysteresis)"""),
 
     ("V12", "2026-01",
      "Weighted momentum, Sharpe quality, inverse volatility weighting, health check",
@@ -653,46 +653,8 @@ def run_coin_strategy_v12(coin_universe, all_prices, target_date, log, is_today=
     
     return weights, "Full Invest", meta, log, healthy
 
-def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None, stock_trigger_info=None):
+def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None):
     filepath = "portfolio_result_gmoh.html"
-
-    # Generate stock trigger HTML
-    stock_trigger_html = ""
-    if stock_trigger_info:
-        ti = stock_trigger_info
-        my_tickers = ti.get('my_tickers', [])
-        rec_tickers = ti.get('rec_tickers', [])
-        turnover_pct = ti.get('turnover', 0)
-        consec_days = ti.get('consec_days', 0)
-        should_rebal = ti.get('should_rebal', False)
-
-        if my_tickers:
-            added = sorted(set(rec_tickers) - set(my_tickers))
-            removed = sorted(set(my_tickers) - set(rec_tickers))
-
-            changes_html = ""
-            if added:
-                changes_html += f"<span style='color:#d93025; font-weight:600;'>+ {', '.join(added)}</span> "
-            if removed:
-                changes_html += f"<span style='color:#1a73e8; font-weight:600;'>- {', '.join(removed)}</span>"
-            if not added and not removed:
-                changes_html = "<span style='color:#0d904f;'>변동 없음</span>"
-
-            alert_style = "background: #fce8e6; border: 2px solid #d93025; padding: 12px; border-radius: 8px; margin-top: 10px;" if should_rebal else "background: #e8f0fe; padding: 12px; border-radius: 8px; margin-top: 10px;"
-            alert_icon = "\U0001f6a8" if should_rebal else "\u2139\ufe0f"
-            alert_msg = f"<b>REBALANCE \uad8c\uace0</b> (Turnover {turnover_pct:.0%}, {consec_days}\uc77c \uc5f0\uc18d)" if should_rebal else f"Turnover {turnover_pct:.0%}, {consec_days}\uc77c \uc5f0\uc18d (3\uc77c \ubbf8\ub9cc \ub610\ub294 25% \ubbf8\ub9cc)"
-
-            stock_trigger_html = f"""
-                <div style="margin-top: 10px;">
-                    <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 8px;">
-                        <div><b>My:</b> {', '.join(my_tickers)} ({len(my_tickers)})</div>
-                        <div><b>Rec:</b> {', '.join(rec_tickers)} ({len(rec_tickers)})</div>
-                    </div>
-                    <div style="margin-bottom: 8px;">Changes: {changes_html}</div>
-                    <div style="{alert_style}">
-                        {alert_icon} {alert_msg}
-                    </div>
-                </div>"""
 
     items = []
     for t, w in final_port.items(): items.append({'종목': t, '자산군': "현금" if t == CASH_ASSET else ("코인" if t in c_port else "주식"), '비중': w})
@@ -733,18 +695,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     rec_stock_list = sorted([t for t in s_port.keys() if t != 'Cash'])
     rec_stock_json = json.dumps(rec_stock_list)
 
-    # Embed consec days for client-side display
-    _consec_days = 0
-    _stock_turnover_pct = 0
-    if stock_trigger_info:
-        _consec_days = stock_trigger_info.get('consec_days', 0)
-        _stock_turnover_pct = round(stock_trigger_info.get('turnover', 0) * 100)
-
     stock_holdings_js = """
             <script>
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
-            const CONSEC_DAYS = """ + str(_consec_days) + """;
-            const SERVER_TURNOVER = """ + str(_stock_turnover_pct) + """;
 
             function calcTrigger(myTickers, recTickers) {
                 if (!myTickers.length || !recTickers.length) return null;
@@ -773,24 +726,16 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 if (result.removed.length)
                     changesHtml += '<span style="color:#1a73e8; font-weight:600;">- ' + result.removed.join(', ') + '</span>';
                 if (!result.added.length && !result.removed.length)
-                    changesHtml = '<span style="color:#0d904f;">\\u2705 \\ubcc0\\ub3d9 \\uc5c6\\uc74c</span>';
+                    changesHtml = '<span style="color:#0d904f;">\\u2705 \\ub3d9\\uc77c \\uc885\\ubaa9</span>';
 
                 const pct = Math.round(result.turnover * 100);
-                const isHigh = pct >= 25;
-                const consec = CONSEC_DAYS;
-                const needDays = Math.max(0, 3 - consec);
-                const triggered = isHigh && consec >= 3;
-
                 let statusHtml = '';
-                if (!isHigh) {
-                    statusHtml = '<div style="background:#e8f0fe; padding:12px; border-radius:8px; margin-top:10px;">'
-                        + '\\u2139\\ufe0f Turnover ' + pct + '% (25% \\ubbf8\\ub9cc) \\u2014 <b>\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694</b></div>';
-                } else if (triggered) {
-                    statusHtml = '<div style="background:#fce8e6; border:2px solid #d93025; padding:12px; border-radius:8px; margin-top:10px;">'
-                        + '\\U0001f6a8 <b>Turnover ' + pct + '% / ' + consec + '\\uc77c \\uc5f0\\uc18d \\u2192 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\uad8c\\uace0</b></div>';
+                if (pct === 0) {
+                    statusHtml = '<div style="background:#e8f5e9; padding:12px; border-radius:8px; margin-top:10px;">'
+                        + '\\u2705 \\ud604\\uc7ac \\ubcf4\\uc720 = \\ucd94\\ucc9c \\uc885\\ubaa9 (\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694)</div>';
                 } else {
                     statusHtml = '<div style="background:#fff3e0; border:1px solid #ff9800; padding:12px; border-radius:8px; margin-top:10px;">'
-                        + '\\u23f3 Turnover ' + pct + '% / ' + consec + '\\uc77c\\uc9f8 (3\\uc77c \\uc5f0\\uc18d \\uc2dc \\ud2b8\\ub9ac\\uac70, <b>' + needDays + '\\uc77c \\ub0a8\\uc74c</b>)</div>';
+                        + '\\U0001f504 Turnover ' + pct + '% \\u2014 <b>\\uc6d4\\ub9d0 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\uc2dc \\ubc18\\uc601</b></div>';
                 }
 
                 el.innerHTML = '<div style="margin-top: 10px;">'
@@ -1181,75 +1126,4 @@ if __name__ == "__main__":
     krw_prices = {}
         
     # Pass my_holdings_krw, integrated_rows for unified display
-    # --- Stock Rebalancing Trigger (T25%+C3d) ---
-    import json as _json
-    STOCK_HOLDINGS_FILE = '/home/ubuntu/my_stock_holdings.json'
-    STOCK_TRIGGER_FILE = '/home/ubuntu/stock_trigger_history.json'
-
-    stock_trigger_info = None
-    try:
-        # Load my stock holdings
-        with open(STOCK_HOLDINGS_FILE, 'r') as _f:
-            _holdings = _json.load(_f)
-        my_stock_tickers = sorted([t.upper() for t in _holdings.get('tickers', [])])
-
-        # Get today's recommended stock tickers
-        rec_stock_tickers = sorted([t for t in s_port.keys() if t != CASH_ASSET])
-
-        if my_stock_tickers:
-            # Calculate turnover (equal weight based)
-            all_t = set(my_stock_tickers) | set(rec_stock_tickers)
-            my_w = {t: 1.0/len(my_stock_tickers) if t in my_stock_tickers else 0 for t in all_t}
-            rec_w = {t: 1.0/len(rec_stock_tickers) if t in rec_stock_tickers else 0 for t in all_t} if rec_stock_tickers else {t: 0 for t in all_t}
-            stock_turnover = sum(abs(rec_w[t] - my_w[t]) for t in all_t) / 2
-
-            # Load trigger history
-            try:
-                with open(STOCK_TRIGGER_FILE, 'r') as _f:
-                    _hist = _json.load(_f)
-            except:
-                _hist = {"consec_days": 0, "last_rec": [], "last_date": ""}
-
-            # Check consecutive days (only increment once per calendar day)
-            last_rec = sorted(_hist.get("last_rec", []))
-            last_date = _hist.get("last_date", "")
-            today_str = target_date.strftime('%Y-%m-%d')
-            
-            if today_str == last_date:
-                # Same day re-run: keep existing count, don't increment
-                consec = _hist.get("consec_days", 1)
-            elif rec_stock_tickers == last_rec:
-                consec = _hist.get("consec_days", 0) + 1
-            else:
-                consec = 1
-
-            # Save today's state
-            _hist = {
-                "consec_days": consec,
-                "last_rec": rec_stock_tickers,
-                "last_date": target_date.strftime('%Y-%m-%d'),
-                "turnover": stock_turnover
-            }
-            with open(STOCK_TRIGGER_FILE, 'w') as _f:
-                _json.dump(_hist, _f, indent=2)
-
-            # Trigger: turnover >= 25% AND consec >= 3
-            should_rebal = round(stock_turnover, 4) >= 0.25 and consec >= 3
-
-            stock_trigger_info = {
-                "my_tickers": my_stock_tickers,
-                "rec_tickers": rec_stock_tickers,
-                "turnover": stock_turnover,
-                "consec_days": consec,
-                "should_rebal": should_rebal
-            }
-
-            trigger_str = "REBALANCE" if should_rebal else "HOLD"
-            print(f"[Stock Trigger] My: {my_stock_tickers} -> Rec: {rec_stock_tickers}")
-            print(f"[Stock Trigger] Turnover: {stock_turnover:.1%}, Consec: {consec}d -> {trigger_str}")
-    except FileNotFoundError:
-        print("[Stock Trigger] No holdings file found - skipping trigger check")
-    except Exception as _e:
-        print(f"[Stock Trigger] Error: {_e}")
-
-    save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows, stock_trigger_info)
+    save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows)
