@@ -1210,9 +1210,15 @@ if __name__ == "__main__":
             except:
                 _hist = {"consec_days": 0, "last_rec": [], "last_date": ""}
 
-            # Check consecutive days
+            # Check consecutive days (only increment once per calendar day)
             last_rec = sorted(_hist.get("last_rec", []))
-            if rec_stock_tickers == last_rec:
+            last_date = _hist.get("last_date", "")
+            today_str = target_date.strftime('%Y-%m-%d')
+            
+            if today_str == last_date:
+                # Same day re-run: keep existing count, don't increment
+                consec = _hist.get("consec_days", 1)
+            elif rec_stock_tickers == last_rec:
                 consec = _hist.get("consec_days", 0) + 1
             else:
                 consec = 1
