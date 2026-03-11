@@ -1,8 +1,8 @@
 """
 Cap Defend V14 Recommendation Script (Standard Version)
 =======================================================
-Stock V14: R8 + EEM-only canary (SMA200, 0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3
-- Universe: SPY, QQQ, VGK, EWJ, EEM, VWO, GLD, PDBC (8 ETFs)
+Stock V14: R6 + EEM-only canary (SMA200, 0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3
+- Universe: SPY, QQQ, VEA, EEM, GLD, PDBC (6 ETFs — VGK→VEA for global coverage)
 - Canary: EEM > SMA200 (0.5% hysteresis)
 - Health: None (anchor-day robustness test로 제거 — Mom21은 Day1 편향)
 - Selection: Mom3+Sh3 union (12M momentum Top3 + Sharpe63 Top3), Equal Weight
@@ -36,8 +36,8 @@ CASH_ASSET = 'Cash'
 # No Cash Buffer for standard report
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock Configuration (V14: R8 Universe + EEM-only Canary)
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VGK', 'EWJ', 'EEM', 'VWO', 'GLD', 'PDBC']
+# Stock Configuration (V14: R6 Universe + EEM-only Canary)
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 200
@@ -294,8 +294,8 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     return worst <= threshold, worst
 
 def run_stock_strategy_v14(log, all_prices):
-    """V14 Stock Strategy: R8 + EEM-only canary (0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V14: R8+EEM+12M+EW)</h2>")
+    """V14 Stock Strategy: R6 + EEM-only canary (0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3"""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V14: R6+EEM+12M+EW)</h2>")
     eem = all_prices.get('EEM')
 
     if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:

@@ -1,7 +1,7 @@
 """
 Cap Defend V14 Recommendation Script (Personal Version)
 =====================================================
-Stock V14: R8 + EEM-only canary (SMA200, 0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3
+Stock V14: R6 + EEM-only canary (SMA200, 0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3
 Coin V14: K:SMA(60)+1%hyst + H:Mom21+Mom90+Vol5% + G5 + EW + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
@@ -57,7 +57,7 @@ VERSION_HISTORY = [
 • <b>Crash Breaker:</b> BTC 일일 -10% → 3일 현금
 
 <b>▶ 주식 전략 (V14 신규)</b>
-• <b>유니버스:</b> R8 (SPY, QQQ, VGK, EWJ, EEM, VWO, GLD, PDBC)
+• <b>유니버스:</b> R6 (SPY, QQQ, VEA, EEM, GLD, PDBC — VGK→VEA 글로벌 커버리지)
 • <b>Canary:</b> EEM > SMA200 (0.5% Hysteresis)
 • <b>Health:</b> 없음 (카나리아가 시장 방어 담당)
 • <b>공격:</b> 12M Mom Top3 + Sharpe63 Top3 union (3~6종), 균등배분
@@ -137,8 +137,8 @@ CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT = 0.02 # 2% Cash Buffer
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock Configuration (V14: R8 Universe + EEM-only Canary)
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VGK', 'EWJ', 'EEM', 'VWO', 'GLD', 'PDBC']
+# Stock Configuration (V14: R6 Universe + EEM-only Canary)
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 200
@@ -493,8 +493,8 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     return worst <= threshold, worst
 
 def run_stock_strategy_v14(log, all_prices, target_date):
-    """V14 Stock Strategy: R8 + EEM-only canary (0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V14: R8+EEM+12M+EW)</h2>")
+    """V14 Stock Strategy: R6 + EEM-only canary (0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3"""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V14: R6+EEM+12M+EW)</h2>")
     eem = all_prices.get('EEM')
     meta = {'signal_dist': {}, 'next_candidates': []}
 
