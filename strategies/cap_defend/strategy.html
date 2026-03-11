@@ -212,7 +212,7 @@
             <td><b>Stock Universe</b></td>
             <td>12 ETFs</td>
             <td>12 ETFs</td>
-            <td class="check"><b>R8 (8 ETFs)</b></td>
+            <td class="check"><b>R6 (6 ETFs, VGK&rarr;VEA)</b></td>
           </tr>
           <tr>
             <td><b>Stock Health</b></td>
@@ -302,20 +302,21 @@
             </div>
 
             <div class="backtest-box">
-              <span class="metric"><b>Sharpe</b> 0.991</span>
-              <span class="metric"><b>CAGR</b> +11.7%</span>
-              <span class="metric"><b>MDD</b> -15.7%</span>
-              <span class="metric"><b>&sigma;(Sharpe)</b> 0.043</span>
+              <span class="metric"><b>Sharpe</b> 1.022</span>
+              <span class="metric"><b>CAGR</b> +12.0%</span>
+              <span class="metric"><b>MDD</b> -15.2%</span>
+              <span class="metric"><b>&sigma;(Sharpe)</b> 0.057</span>
               <span class="metric">2017&ndash;2026, 11 anchor days avg</span>
             </div>
 
             <ul>
               <li>
-                <b class="new-tag">[V14] 공격 유니버스 (R8, 8종):</b>
-                SPY, QQQ, VGK, EWJ, EEM, VWO, GLD, PDBC
-                <br /><small
-                  >V13 대비: EFA, VT, VEA, QUAL, MTUM, IQLT, IMTM 제거 &mdash;
-                  팩터 ETF/중복 지역 정리</small
+                <b class="new-tag">[V14] 공격 유니버스 (R6, 6종):</b>
+                SPY, QQQ, <b>VEA</b>, EEM, GLD, PDBC <br /><small
+                  >VGK(유럽)&rarr;VEA(선진exUS: 유럽+일본+호주+캐나다) 교체로
+                  완전 글로벌 커버리지. EWJ/VWO 제거 (중복/단일국가). AI 3자
+                  합의: Sharpe -0.054는 &sigma; 범위 내 무의미, 장기 구조적
+                  우위</small
                 >
               </li>
               <li><b>수비 유니버스 (5종):</b> IEF, BIL, BNDX, GLD, PDBC</li>
@@ -349,8 +350,8 @@
                 12M Momentum Top 3 + Sharpe(63d) Top 3 합집합 (3~6종),
                 <b>균등배분</b>
                 <br /><small
-                  >Sharpe 기간 21~252d 스윕: 63d가 Sharpe 최고(0.991) + &sigma;
-                  최저(0.043). 12M 장기 모멘텀 + 63d 단기 퀄리티가
+                  >Sharpe 기간 21~252d 스윕: 63d가 Sharpe 최고(1.022) + &sigma;
+                  최저(0.057). 12M 장기 모멘텀 + 63d 단기 퀄리티가
                   상호보완</small
                 >
               </li>
