@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cap Defend Strategy Documentation</title>
+    <title>Cap Defend V14 Strategy Documentation</title>
     <style>
       * {
         margin: 0;
@@ -153,6 +153,22 @@
       .cross {
         color: #999;
       }
+      .backtest-box {
+        background: #f8f9ff;
+        border: 1px solid #d0d9ff;
+        border-radius: 8px;
+        padding: 14px 18px;
+        margin: 12px 0;
+        font-size: 0.88em;
+      }
+      .backtest-box .metric {
+        display: inline-block;
+        margin-right: 20px;
+        margin-bottom: 4px;
+      }
+      .backtest-box .metric b {
+        color: #1a73e8;
+      }
       @media (max-width: 600px) {
         .container {
           padding: 12px;
@@ -180,74 +196,302 @@
         <thead>
           <tr>
             <th>Feature</th>
-            <th>V11 (2025-12)</th>
             <th>V12 (2026-01)</th>
             <th>V13 (2026-03)</th>
+            <th>V14 (2026-03)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>Dual Canary (VT+EEM &gt; MA200)</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Stock Canary</b></td>
+            <td>VT+EEM &gt; SMA200</td>
+            <td>VT+EEM + 1% Hyst</td>
+            <td class="check"><b>EEM-only + 0.5% Hyst</b></td>
           </tr>
           <tr>
-            <td>1% Hysteresis Signal Flip Guard</td>
-            <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Stock Universe</b></td>
+            <td>12 ETFs</td>
+            <td>12 ETFs</td>
+            <td class="check"><b>R8 (8 ETFs)</b></td>
           </tr>
           <tr>
-            <td>Offensive Top3+Top3 Union</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Stock Health</b></td>
+            <td>&mdash;</td>
+            <td>&mdash;</td>
+            <td class="check"><b>None (tested, removed)</b></td>
           </tr>
           <tr>
-            <td>Weighted Momentum (50/30/20%)</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Stock Momentum</b></td>
+            <td>50/30/20%</td>
+            <td>50/30/20%</td>
+            <td class="check"><b>Pure 12M</b></td>
           </tr>
           <tr>
-            <td>Coin Health Filter (SMA30/Mom21/Vol90)</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Stock Defense</b></td>
+            <td>Top 1</td>
+            <td>Top 1</td>
+            <td class="check"><b>Top 3 EW</b></td>
           </tr>
           <tr>
-            <td>Inverse Volatility Weighting</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Coin Canary</b></td>
+            <td>BTC &gt; SMA50</td>
+            <td>BTC &gt; SMA50</td>
+            <td class="check"><b>BTC &gt; SMA60 + 1% Hyst</b></td>
           </tr>
           <tr>
-            <td>Multi Bonus Scoring (RSI/MACD/BB)</td>
-            <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Coin Health</b></td>
+            <td>SMA30+Mom21+Vol10%</td>
+            <td>SMA30+Mom21+Vol10%</td>
+            <td class="check"><b>Mom21+Mom90+Vol5%</b></td>
           </tr>
           <tr>
-            <td>Monthly Rebalancing (month-end)</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
-            <td class="check">&#10003;</td>
+            <td><b>Coin Selection</b></td>
+            <td>Sharpe Top 5</td>
+            <td>Multi Bonus Top 5</td>
+            <td class="check"><b>Market Cap Top 5</b></td>
           </tr>
           <tr>
-            <td>Stock Holdings UI</td>
+            <td><b>Coin Weighting</b></td>
+            <td>Inverse Vol</td>
+            <td>Inverse Vol</td>
+            <td class="check"><b>Equal Weight</b></td>
+          </tr>
+          <tr>
+            <td><b>DD Exit</b></td>
             <td class="cross">&mdash;</td>
             <td class="cross">&mdash;</td>
-            <td class="check">&#10003;</td>
+            <td class="check">&#10003; 60d -25%</td>
+          </tr>
+          <tr>
+            <td><b>Blacklist</b></td>
+            <td class="cross">&mdash;</td>
+            <td class="cross">&mdash;</td>
+            <td class="check">&#10003; -15% &rarr; 7d</td>
+          </tr>
+          <tr>
+            <td><b>Crash Breaker</b></td>
+            <td class="cross">&mdash;</td>
+            <td class="cross">&mdash;</td>
+            <td class="check">&#10003; BTC -10% &rarr; 3d</td>
+          </tr>
+          <tr>
+            <td><b>Canary Flip Rebal</b></td>
+            <td class="cross">&mdash;</td>
+            <td class="cross">&mdash;</td>
+            <td class="check">&#10003; Immediate</td>
           </tr>
         </tbody>
       </table>
 
-      <!-- V13 -->
+      <!-- V14 -->
       <div class="version-card current">
         <details open>
           <summary class="version-header">
-            <span class="badge badge-current">V13</span>
+            <span class="badge badge-current">V14</span>
+            <span class="version-date">2026-03</span>
+            <span class="version-summary"
+              >Full backtest-validated redesign: simplified stock + hardened
+              coin</span
+            >
+          </summary>
+          <div class="version-detail">
+            <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+
+            <div class="section-title">
+              &#9654; 주식 전략 (V14: 백테스트 검증 완료)
+            </div>
+
+            <div class="backtest-box">
+              <span class="metric"><b>Sharpe</b> 1.134</span>
+              <span class="metric"><b>CAGR</b> +14.1%</span>
+              <span class="metric"><b>MDD</b> -13.1%</span>
+              <span class="metric"><b>&sigma;(Sharpe)</b> 0.062</span>
+              <span class="metric">2017&ndash;2026, 11 anchor days avg</span>
+            </div>
+
+            <ul>
+              <li>
+                <b class="new-tag">[V14] 공격 유니버스 (R8, 8종):</b>
+                SPY, QQQ, VGK, EWJ, EEM, VWO, GLD, PDBC
+                <br /><small
+                  >V13 대비: EFA, VT, VEA, QUAL, MTUM, IQLT, IMTM 제거 &mdash;
+                  팩터 ETF/중복 지역 정리</small
+                >
+              </li>
+              <li><b>수비 유니버스 (5종):</b> IEF, BIL, BNDX, GLD, PDBC</li>
+              <li>
+                <b class="new-tag">[V14] Canary:</b>
+                <b>EEM-only</b> &gt; SMA200 (<span class="param"
+                  >0.5% hysteresis</span
+                >) <br /><small
+                  >V13 대비: VT 카나리아 제거. EEM 단독이 더 높은 Sharpe + 낮은
+                  &sigma;</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Health Filter: 없음</b>
+                <br /><small
+                  >Mom21 헬스필터는 Day 1&ndash;3에서만 효과, Day 5+ 에서
+                  역효과. 11개 anchor-day 평균: None 0.897(&sigma;=0.157) &gt;
+                  Mom21 0.875(&sigma;=0.213). Anchor-day 과적합으로 판단,
+                  제거</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Momentum:</b>
+                <b>Pure 12M return</b> (252 trading days) <br /><small
+                  >V13의 가중모멘텀(50/30/20%) 대비, 순수 12개월 모멘텀이
+                  Mom3+Sh3 union에서 최적 (lh = 20/30/50, 장기 편향)</small
+                >
+              </li>
+              <li>
+                <b>공격 모드 선정:</b>
+                12M Momentum Top 3 + Sharpe(126d) Top 3 합집합 (3~6종),
+                <b>균등배분</b>
+              </li>
+              <li>
+                <b class="new-tag">[V14] 수비 모드:</b>
+                수비 5종 중 <b>6M 수익률 Top 3</b> 균등배분 (양수만, 전부 음수면
+                현금) <br /><small
+                  >V13의 Top 1 대비 분산 효과. 백테스트: Defense Top3가 Top1보다
+                  MDD 개선</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Canary Flip Rebalancing:</b>
+                카나리아 신호 전환 시 <b>즉시 리밸런싱</b> (월말 대기 안함)
+                <br /><small
+                  >Sharpe +0.064, MDD -20.1% &rarr; -15.5%. Signal Flip 알림이
+                  뜨면 당일 실행</small
+                >
+              </li>
+            </ul>
+
+            <div class="section-title">
+              &#9654; 코인 전략 (V14: 8년 백테스트 검증)
+            </div>
+
+            <div class="backtest-box">
+              <span class="metric"><b>Sharpe</b> 1.671</span>
+              <span class="metric"><b>CAGR</b> +85.3%</span>
+              <span class="metric"><b>MDD</b> -34.3%</span>
+              <span class="metric"><b>Calmar</b> 2.49</span>
+              <span class="metric">10-anchor avg, TX 0.4%</span>
+            </div>
+
+            <ul>
+              <li>
+                <b>유니버스:</b> CoinGecko 시가총액 <b>Top 40</b> &rarr; Upbit
+                KRW 상장 + 253일 히스토리 + 30일 평균 거래대금 10억원 이상 필터
+                <br /><small
+                  >V13의 Top 50 &rarr; Top 40 축소. 백테스트: T40 &cong; T50
+                  성능, T70+ 급격 열화</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Canary:</b>
+                BTC &gt; <b>SMA(60)</b> +
+                <span class="param">1% hysteresis</span> <br /><small
+                  >V13의 SMA50 &rarr; SMA60. Broad plateau 50&ndash;110, SMA60이
+                  중앙. 1% hyst로 whipsaw 방지</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Health Filter:</b>
+                <b>Mom(21) &gt; 0</b> AND <b>Mom(90) &gt; 0</b> AND
+                <b>Vol(90) &le; 5%</b> <br /><small
+                  >V13의 SMA30+Mom21+Vol10% &rarr; Mom21+Mom90+Vol5%. SMA
+                  제거(Mom과 중복), Mom90 추가(장기 추세), Vol 5%로 강화. MDD
+                  -53.3% &rarr; -39.9%</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Selection:</b>
+                <b>시총순 Top 5</b> (유니버스 순서 = 시가총액 순) <br /><small
+                  >V13의 Multi Bonus Scoring(Sharpe+RSI+MACD+BB) 폐기. 시총순이
+                  2024&ndash;25년 압도적 우위, 품질 편향(Quality Bias)
+                  확인</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Weighting:</b>
+                <b>Equal Weight</b> (균등배분) <br /><small
+                  >V13의 역변동성(1/Vol) &rarr; EW. 차이 Sharpe +0.015뿐, EW가
+                  단순하고 안정적</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Crash Breaker (G5):</b>
+                BTC 일간 <b>-10%</b> &rarr;
+                <span class="param">3일간 현금 대기</span> <br /><small
+                  >최근 3일 중 하루라도 -10% 이하면 발동 (stateless lookback).
+                  Sharpe +0.064</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] DD Exit:</b>
+                <b>60일 고점</b> 대비 <b>-25%</b> &rarr; 해당 코인 매도, 현금
+                보유 (재분배 아님) <br /><small
+                  >매일 체크. Broad plateau 20&ndash;25% / 21&ndash;60d. 연 ~5회
+                  발동</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V14] Blacklist:</b>
+                일간 <b>-15%</b> 이하 &rarr;
+                <span class="param">7일간 유니버스 제외</span> <br /><small
+                  >최근 7일 일간 수익률 중 최악 기준 (stateless lookback)</small
+                >
+              </li>
+            </ul>
+
+            <div class="section-title">&#9654; 리밸런싱 규칙</div>
+            <ul>
+              <li>
+                <b>주식:</b> 월초(Day 1) 월간 리밸런싱 +
+                <b>카나리아 플립 시 즉시 리밸런싱</b>
+              </li>
+              <li>
+                <b>코인:</b> 월간 스케줄 + 턴오버 30%&uarr; + Health 실패 시
+                즉시 + DD Exit 매일 체크
+              </li>
+            </ul>
+
+            <div class="section-title">&#9654; 검증 이력</div>
+            <ul>
+              <li>
+                주식: Universe 6~18종, Canary SMA100~300/EMA/multi-step, Health
+                none~Mom126, Selection 15+종류, Mom style 9종류, Weighting
+                EW/InvVol/RankDecay, Defense top1~3, Tranche 2~3, Crash breaker,
+                DD exit &mdash; 총 수백 개 조합 테스트
+              </li>
+              <li>
+                코인: K(Canary) 단일SMA/교차/투표 100+개, H(Health) 76개,
+                K&times;H grid 225개, Layer stack 22개, DD entry/exit 75+개,
+                Universe T20~T100 &mdash; 총 1000+ 개 조합 테스트
+              </li>
+              <li>
+                Start-date sensitivity (2016~2020): &sigma;(Sharpe) = 0.062
+                &mdash; 안정적
+              </li>
+              <li>
+                비대칭 거래비용 (정기 0.4%, 긴급 0.4~2.0%): 모든 비용 수준에서
+                Calmar 1위
+              </li>
+              <li>
+                Top 20일 제거: 모든 전략 Sharpe 1.0+ 유지 (소수 행운일 의존
+                아님)
+              </li>
+            </ul>
+          </div>
+        </details>
+      </div>
+
+      <!-- V13 -->
+      <div class="version-card">
+        <details>
+          <summary class="version-header">
+            <span class="badge badge-old">V13</span>
             <span class="version-date">2026-03</span>
             <span class="version-summary"
               >Multi Bonus scoring, 1% Hysteresis signal flip, Monthly
@@ -269,11 +513,9 @@
                 아니면 Risk-Off
               </li>
               <li>
-                <b class="new-tag">[V13 신규] Signal Flip Guard:</b>
-                <b>1% Hysteresis</b> &mdash; SMA200&times;1.01 이상일 때 Risk-On
-                진입, SMA200&times;0.99 이하일 때 Risk-Off 진입. 휘소(빈번한
-                신호 전환) 62% 감소. 백테스트 기간: 2017~2025, 7개 리밸런싱
-                타이밍, Avg Sharpe 0.833 (No Guard 0.772 대비 +0.061)
+                <b>Signal Flip Guard:</b>
+                1% Hysteresis &mdash; SMA200&times;1.01 이상일 때 Risk-On 진입,
+                SMA200&times;0.99 이하일 때 Risk-Off 진입
               </li>
               <li>
                 <b>공격 모드 선정:</b> 가중 모멘텀(<span class="param"
@@ -284,45 +526,23 @@
                 <b>수비 모드 선정:</b> 수비 5종 중 6개월 수익률 최고 1개 (음수면
                 현금)
               </li>
-              <li>
-                <b>[V13] 리밸런싱:</b> 월말(month-end) 월간 리밸런싱. 백테스트
-                결과: 392개 조합 (8 트리거 &times; 7 타이밍 &times; 7 기간) 중
-                MonthEnd+NoTrigger가 Avg Sharpe 1.001로 최고 성과
-              </li>
             </ul>
 
             <div class="section-title">&#9654; 코인 전략 (V12 기반)</div>
             <ul>
-              <li>
-                <b>유니버스:</b> CoinGecko 시가총액 Top 50 &rarr; Upbit KRW 상장
-                + 253일 히스토리 + 30일 평균 거래대금 10억원 이상 필터
-              </li>
+              <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW</li>
               <li><b>Canary:</b> BTC &gt; SMA50 &rarr; 투자, 아니면 현금</li>
               <li>
                 <b>Health Filter:</b> Price &gt; SMA30 AND Mom21 &gt; 0 AND
                 Vol90 &le; 10%
               </li>
               <li>
-                <b class="new-tag">[V13 신규] Multi Bonus Scoring:</b>
-                <span class="param">Sharpe(126d) + Sharpe(252d)</span> + RSI
-                bonus(<span class="param">45~70 &rarr; +0.2</span>) + MACD
-                histogram bonus(<span class="param">&gt;0 &rarr; +0.2</span>) +
-                BB %B bonus(<span class="param">&gt;0.5 &rarr; +0.2</span>)
+                <b>Multi Bonus Scoring:</b>
+                <span class="param">Sharpe(126d) + Sharpe(252d)</span> +
+                RSI/MACD/BB bonuses
               </li>
               <li><b>선정:</b> Multi Bonus Score Top 5</li>
               <li><b>배분:</b> 90일 역변동성 가중 (1/Vol)</li>
-            </ul>
-
-            <div class="section-title">&#9654; 리밸런싱 규칙</div>
-            <ul>
-              <li>
-                <b>코인:</b> 월간 스케줄 + 턴오버 30%&uarr; 또는 Health 실패 시
-                즉시
-              </li>
-              <li>
-                <b>주식:</b> 월말(month-end) 월간 리밸런싱 + Signal Flip (1%
-                Hysteresis)
-              </li>
             </ul>
           </div>
         </details>
@@ -350,31 +570,19 @@
                 Sharpe(126d) Top 3 합집합, 균등배분
               </li>
               <li><b>수비:</b> 5종 중 6M 수익률 최고 1개 (음수면 현금)</li>
-              <li>Signal flip guard 없음 (SMA200 자체 단순 비교)</li>
             </ul>
 
             <div class="section-title">&#9654; 코인 전략 (V12 신규)</div>
             <ul>
-              <li>
-                <b>유니버스:</b> CoinGecko Top 50 + Upbit KRW 필터 (253일
-                히스토리, 10억원 거래대금)
-              </li>
+              <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW 필터</li>
               <li><b>Canary:</b> BTC &gt; SMA50</li>
               <li>
-                <b class="new-tag">[V12 신규] Health Filter:</b> Price &gt;
-                SMA30 AND Mom21 &gt; 0 AND Vol90 &le; 10%
+                <b>Health Filter:</b> Price &gt; SMA30 AND Mom21 &gt; 0 AND
+                Vol90 &le; 10%
               </li>
-              <li><b>Scoring:</b> Sharpe(126d) + Sharpe(252d) (보너스 없음)</li>
+              <li><b>Scoring:</b> Sharpe(126d) + Sharpe(252d)</li>
               <li><b>선정:</b> Top 5</li>
-              <li>
-                <b class="new-tag">[V12 신규] 배분:</b> 90일 역변동성 가중
-                (1/Vol)
-              </li>
-            </ul>
-
-            <div class="section-title">&#9654; 리밸런싱</div>
-            <ul>
-              <li>월간 + 턴오버 30%&uarr; 또는 Health 실패 시</li>
+              <li><b>배분:</b> 90일 역변동성 가중 (1/Vol)</li>
             </ul>
           </div>
         </details>
@@ -396,38 +604,25 @@
             <div class="section-title">&#9654; 주식 전략 (V11 신규)</div>
             <ul>
               <li>
-                <b class="new-tag">[V11 신규] Canary:</b> Dual Canary &mdash; VT
-                AND EEM 둘 다 SMA200 이상이어야 Risk-On
+                <b>Canary:</b> Dual Canary &mdash; VT AND EEM 둘 다 SMA200
+                이상이어야 Risk-On
               </li>
+              <li><b>공격 유니버스:</b> 12종</li>
               <li>
-                <b>공격 유니버스:</b> SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC,
-                QUAL, MTUM, IQLT, IMTM (12종)
+                <b>공격 선정:</b>
+                가중모멘텀(50/30/20%) Top 3 + Sharpe(126d) Top 3 &rarr; 합집합,
+                균등배분
               </li>
-              <li>
-                <b class="new-tag">[V11 신규] 공격 선정:</b>
-                가중모멘텀(50/30/20%) Top 3 + Sharpe(126d) Top 3 &rarr; 합집합
-                (3~6종), 균등배분
-              </li>
-              <li><b>수비 유니버스:</b> IEF, BIL, BNDX, GLD, PDBC (5종)</li>
-              <li>
-                <b class="new-tag">[V11 신규] 수비 선정:</b> 6개월 수익률 최고
-                1개 (음수면 현금)
-              </li>
+              <li><b>수비:</b> 6개월 수익률 최고 1개 (음수면 현금)</li>
             </ul>
 
             <div class="section-title">&#9654; 코인 전략</div>
             <ul>
               <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW</li>
               <li><b>Canary:</b> BTC &gt; SMA50</li>
-              <li>Health Filter: 없음 (V12에서 추가)</li>
               <li>
                 <b>Scoring:</b> Sharpe(126d) + Sharpe(252d), Top 5 균등배분
               </li>
-            </ul>
-
-            <div class="section-title">&#9654; 리밸런싱</div>
-            <ul>
-              <li>월간 스케줄 기반</li>
             </ul>
           </div>
         </details>
@@ -441,7 +636,7 @@
           font-size: 0.8em;
         "
       >
-        Cap Defend Strategy Documentation &mdash; Auto-generated
+        Cap Defend Strategy Documentation &mdash; Auto-generated 2026-03-11
       </div>
     </div>
   </body>
