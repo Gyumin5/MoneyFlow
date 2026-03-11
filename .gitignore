@@ -33,3 +33,9 @@ v12_chart_data.json
 
 # Generated reports
 portfolio_result*.html
+
+# Runtime state files
+strategies/cap_defend/signal_state.json
+
+# Intermediate experiment results
+strategies/cap_defend/results/
