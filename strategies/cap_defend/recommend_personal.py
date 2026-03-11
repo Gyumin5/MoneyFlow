@@ -60,7 +60,7 @@ VERSION_HISTORY = [
 • <b>유니버스:</b> R8 (SPY, QQQ, VGK, EWJ, EEM, VWO, GLD, PDBC)
 • <b>Canary:</b> EEM > SMA200 (0.5% Hysteresis)
 • <b>Health:</b> 없음 (카나리아가 시장 방어 담당)
-• <b>공격:</b> 12M Mom Top3 + Sharpe126 Top3 union (3~6종), 균등배분
+• <b>공격:</b> 12M Mom Top3 + Sharpe63 Top3 union (3~6종), 균등배분
 • <b>수비:</b> 5종 중 6M 수익률 Top 3 (음수면 현금), 균등배분
 
 <b>▶ 리밸런싱</b>
@@ -545,7 +545,7 @@ def run_stock_strategy_v14(log, all_prices, target_date):
         for t in OFFENSIVE_STOCK_UNIVERSE:
             p = all_prices.get(t)
             if p is None or len(p) < 253: continue
-            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe126': calc_sharpe(p, 126)})
+            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe63': calc_sharpe(p, 63)})
 
         if not scores:
             log.append("<p class='warning'>공격 ETF 데이터 부족 → 수비 전환</p>")
@@ -555,7 +555,7 @@ def run_stock_strategy_v14(log, all_prices, target_date):
             except: pass
 
             top_m = df.sort_values('Mom12M', ascending=False).head(3).index.tolist()
-            top_s = df.sort_values('Sharpe126', ascending=False).head(3).index.tolist()
+            top_s = df.sort_values('Sharpe63', ascending=False).head(3).index.tolist()
             picks = list(dict.fromkeys(top_m + top_s))  # deduplicated, order preserved
             meta['selection_reason'] = {'Mom_Picks': top_m, 'Sharpe_Picks': top_s}
 
