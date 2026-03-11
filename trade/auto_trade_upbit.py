@@ -1,11 +1,13 @@
 """
-V12 Upbit Auto Trader (CoinGecko Global Universe)
+V14 Upbit Auto Trader (CoinGecko Global Universe)
 ==================================================
-recommend_personal.py와 동일한 전략 사용
+V14 전략: BTC > SMA(60) + 1%hyst, Mom21+Mom90+Vol5%, 시총순 Top 5 EW
+- DD Exit: 60d peak -25% → cash
+- Blacklist: -15% daily → 7d exclude
+- Crash Breaker: BTC -10% daily → cash
 - 턴오버 계산: Yahoo USD 종가 × 환율
 - 헬스체크 실패 보유 코인 발견 시 강제 리밸런싱
 - 실제 매매 기능 구현 (pyupbit Market Order)
-- 매도/매수 주문 확실성 강화 (재시도 로직)
 """
 
 import time
@@ -28,9 +30,18 @@ from config import (
 
 # --- 상수 ---
 N_SELECTED_COINS = 5
-VOL_CAP_FILTER = 0.10
+VOL_CAP_FILTER = 0.05           # V14: 5% (was 10%)
 CASH_BUFFER_PERCENT = 0.02
 MIN_ORDER_KRW = 5000
+
+# V14 Canary / Protection
+CANARY_SMA_PERIOD = 60           # V14: SMA(60) (was 50)
+CANARY_HYST = 0.01               # 1% hysteresis band
+CRASH_THRESHOLD = -0.10          # BTC daily -10% → cash
+BL_THRESHOLD = -0.15             # -15% daily → 7d exclude
+BL_DAYS = 7
+DD_EXIT_LOOKBACK = 60            # 60-day peak
+DD_EXIT_THRESHOLD = -0.25        # -25% drawdown → sell
 
 # 유니버스 선정 기준
 MIN_TRADE_VALUE_KRW = 1_000_000_000
@@ -39,7 +50,7 @@ MIN_HISTORY_DAYS = 253
 
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-LOG_FILE = "auto_trade_v12_upbit.log"
+LOG_FILE = "auto_trade_v14_upbit.log"
 
 
 def log(message: str):
@@ -57,7 +68,7 @@ def send_telegram(message: str):
     except: pass
 
 
-class V12UpbitTrader:
+class V14UpbitTrader:
     def __init__(self, is_live_trade: bool = False, is_force: bool = False, target_amount: int = 0):
         self.is_live_trade = is_live_trade
         self.is_force = is_force
@@ -70,8 +81,8 @@ class V12UpbitTrader:
         mode = "🔴 LIVE TRADE" if is_live_trade else "🔍 ANALYSIS ONLY"
         if is_force: mode += " (FORCE MODE)"
         log("=" * 60)
-        log(f"V12 Upbit Trader [{mode}]")
-        log("전략: recommend_personal.py와 동일")
+        log(f"V14 Upbit Trader [{mode}]")
+        log("전략: SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총순 Top5 EW, DD/BL/Crash")
         log("=" * 60)
         
         try:
@@ -148,7 +159,7 @@ class V12UpbitTrader:
                 
                 universe.append(symbol)
             except: continue
-            if len(universe) >= 50: break
+            if len(universe) >= 40: break
         
         log(f"  🎯 유니버스: {len(universe)}개")
         return universe, cg_symbol_to_id
@@ -189,8 +200,7 @@ class V12UpbitTrader:
             resp = requests.get(url, params=params, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
             data = resp.json()
             
-            if 'chart' not in data or not data['chart']['result']: 
-                if search != ticker: return self.get_yahoo_ohlcv(ticker, days)
+            if 'chart' not in data or not data['chart']['result']:
                 return pd.Series(dtype=float)
             
             timestamp = data['chart']['result'][0]['timestamp']
@@ -220,78 +230,125 @@ class V12UpbitTrader:
 
     def get_target_portfolio(self, universe: List[str]) -> Tuple[Dict[str, float], bool, str, List[str]]:
         log("")
-        log("📊 V12 전략 분석 중...")
-        
+        log("📊 V14 전략 분석 중...")
+
         # 1. BTC Check
-        btc = self.get_yahoo_ohlcv('BTC', 100)
+        btc = self.get_yahoo_ohlcv('BTC', 365)
         self.all_prices['BTC'] = btc
-        if len(btc) < 50: return {}, True, "BTC 데이터 부족", []
-        
+        if len(btc) < CANARY_SMA_PERIOD: return {}, True, "BTC 데이터 부족", []
+
         # BTC 기준 Target Date
         tgt_dt = btc.index[-1].date() if hasattr(btc.index[-1], 'date') else btc.index[-1]
-        
-        if btc.iloc[-1] <= self.calc_sma(btc, 50):
-            return {}, True, f"🚨 Risk-Off: BTC <= SMA50", []
-        
-        # 2. Health Check
+
+        # --- Crash Breaker (G5): BTC daily -10% in last 3d → cash ---
+        CRASH_COOLDOWN = 3
+        if len(btc) >= CRASH_COOLDOWN + 1:
+            recent_rets = btc.iloc[-(CRASH_COOLDOWN + 1):].pct_change().dropna()
+            worst_crash = recent_rets.min()
+            if worst_crash <= CRASH_THRESHOLD:
+                log(f"🚨 CRASH BREAKER: BTC worst {worst_crash:+.1%} in {CRASH_COOLDOWN}d → 현금 대기")
+                return {}, True, f"🚨 CRASH: BTC {worst_crash:+.1%}", []
+
+        # --- Canary: BTC > SMA(60) with 1% Hysteresis ---
+        sma = self.calc_sma(btc, CANARY_SMA_PERIOD)
+        cur = btc.iloc[-1]
+        dist = cur / sma - 1
+        if dist > CANARY_HYST:
+            canary_on = True
+        elif dist < -CANARY_HYST:
+            canary_on = False
+        else:
+            canary_on = cur > sma  # dead zone
+        log(f"  BTC: ${cur:,.0f} vs SMA({CANARY_SMA_PERIOD}): ${sma:,.0f} (dist {dist:+.2%}, hyst ±{CANARY_HYST:.0%})")
+
+        if not canary_on:
+            return {}, True, f"🚨 Risk-Off: BTC <= SMA{CANARY_SMA_PERIOD} (dist {dist:+.2%})", []
+
+        # 2. Health Check: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
         healthy = []
+        blacklisted = []
         for t in universe:
             time.sleep(0.05)
             c = self.get_yahoo_ohlcv(t, 365)
-            if len(c) < 35: continue
-            
+            if len(c) < 91: continue
+
             # [Strict Date Check]
             last_dt = c.index[-1].date() if hasattr(c.index[-1], 'date') else c.index[-1]
             diff_days = (tgt_dt - last_dt).days
-            if diff_days != 0:
-                # log(f"  ❌ {t}: 데이터 불일치 ({last_dt} vs {tgt_dt}) -> 제외")
-                continue
+            if diff_days != 0: continue
 
-            # [Quality Check V12.2] Yahoo 종가(USD→KRW) vs 업비트 종가(KRW) 비교
-            # 임계값: 10% 이상 차이시 왜곡된 데이터로 판단하여 제외
+            # [Quality Check] Yahoo vs Upbit price validation
             try:
                 upbit_ohlcv = pyupbit.get_ohlcv(f"KRW-{t}", interval="day", count=1)
                 if upbit_ohlcv is not None and len(upbit_ohlcv) > 0:
                     upbit_close_krw = upbit_ohlcv['close'].iloc[-1]
-                    yahoo_last_usd = c.iloc[-1]
-                    yahoo_last_krw = yahoo_last_usd * self.usd_krw_rate # Yahoo USD 종가 * 환율
-                    
-                    # self.calc_sma 등에서 사용하기 전에 검증
+                    yahoo_last_krw = c.iloc[-1] * self.usd_krw_rate
                     if upbit_close_krw > 0 and yahoo_last_krw > 0:
                         diff_pct = abs(yahoo_last_krw - upbit_close_krw) / upbit_close_krw
-                        if diff_pct > 0.10: # 10%
-                            log(f"  ⚠️ {t}: 가격 불일치 (Yahoo {yahoo_last_krw:,.0f}원 vs Upbit {upbit_close_krw:,.0f}원, diff={diff_pct:.0%}) -> 제외")
+                        if diff_pct > 0.10:
+                            log(f"  ⚠️ {t}: 가격 불일치 ({diff_pct:.0%}) -> 제외")
                             continue
             except: pass
 
             self.all_prices[t] = c
-            
-            if (c.iloc[-1] > self.calc_sma(c, 30)) and (self.calc_ret(c,21) > 0) and (self.calc_volatility(c,90) <= VOL_CAP_FILTER):
-                healthy.append({'ticker': t, 'vol': self.calc_volatility(c,90)})
-        
+
+            # --- Blacklist: -15% daily drop in last 7d → exclude ---
+            if len(c) >= BL_DAYS + 1:
+                recent_rets = c.iloc[-(BL_DAYS + 1):].pct_change().dropna()
+                worst_ret = recent_rets.min()
+                if worst_ret <= BL_THRESHOLD:
+                    blacklisted.append(t)
+                    log(f"  🚫 {t}: Blacklist (worst {worst_ret:+.1%} in {BL_DAYS}d)")
+                    continue
+
+            # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+            mom21 = self.calc_ret(c, 21)
+            mom90 = self.calc_ret(c, 90)
+            vol90 = self.calc_volatility(c, 90)
+
+            if mom21 > 0 and mom90 > 0 and vol90 <= VOL_CAP_FILTER:
+                healthy.append({'ticker': t, 'vol': vol90})
+
         healthy_tickers = [h['ticker'] for h in healthy]
+        if blacklisted:
+            log(f"  🚫 Blacklisted: {blacklisted}")
         if not healthy: return {}, False, "건강한 코인 없음", []
-        
-        # 3. Top 5 & Weighting
-        for h in healthy:
-            c = self.all_prices[h['ticker']]
-            h['score'] = self.calc_sharpe(c, 126) + self.calc_sharpe(c, 252)
-        
-        healthy.sort(key=lambda x: x['score'], reverse=True)
+
+        # 3. Selection: 시총순 Top 5, Equal Weight (universe order = market cap)
         top5 = healthy[:N_SELECTED_COINS]
-        
-        inv_vols = {c['ticker']: 1/c['vol'] for c in top5 if c['vol'] > 0}
-        tot = sum(inv_vols.values())
-        if tot <= 0: return {}, False, "역변동성 계산 실패", healthy_tickers
-        
-        w = {t: v/tot for t, v in inv_vols.items()}
-        
-        # [수정] Cash Buffer 2% 반영
-        # 코인 비중 합 = 98% (Risk-On)
+        log(f"  🎯 Top {len(top5)}: {[h['ticker'] for h in top5]}")
+
+        # --- DD Exit: 60d peak -25% → sell ---
+        dd_exits = []
+        final_picks = []
+        for h in top5:
+            t = h['ticker']
+            c = self.all_prices[t]
+            if len(c) >= DD_EXIT_LOOKBACK:
+                peak = c.iloc[-DD_EXIT_LOOKBACK:].max()
+                dd = c.iloc[-1] / peak - 1 if peak > 0 else 0
+                if dd <= DD_EXIT_THRESHOLD:
+                    dd_exits.append(t)
+                    log(f"  📉 {t}: DD Exit ({dd:+.1%} from {DD_EXIT_LOOKBACK}d peak)")
+                    continue
+            final_picks.append(t)
+
+        if dd_exits:
+            log(f"  📉 DD Exits: {dd_exits}")
+
+        if not final_picks:
+            return {}, False, "모든 코인 DD Exit", healthy_tickers
+
+        # Equal Weight based on original top5 size (DD-exited weight → cash)
+        ew = 1.0 / len(top5)
+        w = {t: ew for t in final_picks}
+        cash_from_dd = ew * len(dd_exits)
+
+        # Cash Buffer 2% + DD exit cash
         buffered_w = {t: val * (1.0 - CASH_BUFFER_PERCENT) for t, val in w.items()}
-        buffered_w['Cash'] = CASH_BUFFER_PERCENT # 명시적 추가
-        
-        return buffered_w, False, f"✅ Risk-On (Selected {len(w)})", healthy_tickers
+        buffered_w['Cash'] = CASH_BUFFER_PERCENT + cash_from_dd
+
+        return buffered_w, False, f"✅ Risk-On ({len(final_picks)}종 EW)", healthy_tickers
 
     # --- 실제 매매 ---
     def order(self, ticker: str, side: str, amount: float) -> bool:
@@ -595,7 +652,7 @@ class V12UpbitTrader:
         
         # 🎯 텔레그램 알림 전송 (상세 내역 포함)
         if self.is_live_trade:
-             msg = f"🤖 V12 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
+             msg = f"🤖 V14 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
              if self.is_force: msg += " (FORCE)"
              if self.target_amount > 0: msg += f"\nTarget: {self.target_amount:,.0f} KRW"
              
@@ -613,4 +670,4 @@ if __name__ == "__main__":
     parser.add_argument('--amount', type=int, default=0, help="목표 운용 금액 (0=전체)")
     args = parser.parse_args()
     
-    V12UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()
+    V14UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()

@@ -1,12 +1,20 @@
 """
-Cap Defend V13 Recommendation Script (Standard Version - Clean)
-=============================================================
-V13: Multi Bonus Scoring - RSI(45-70→+0.2), MACD hist>0→+0.2, BB %B>0.5→+0.2
-- Pure Strategy Recommendation (No Personal Asset Data)
-- Dynamic Coin Universe (CoinGecko Top 50 + Upbit Filter)
-- No Manual Ticker Mapping (e.g. No POL->MATIC)
-- Generates 'portfolio_result.html' with only Strategy Weights
-- Cash Buffer: 0% (Standard)
+Cap Defend V14 Recommendation Script (Standard Version)
+=======================================================
+Stock V14: R8 + EEM-only canary (SMA200, 0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3
+- Universe: SPY, QQQ, VGK, EWJ, EEM, VWO, GLD, PDBC (8 ETFs)
+- Canary: EEM > SMA200 (0.5% hysteresis)
+- Health: None (anchor-day robustness test로 제거 — Mom21은 Day1 편향)
+- Selection: Mom3+Sh3 union (12M momentum Top3 + Sharpe126 Top3), Equal Weight
+- Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
+
+Coin V14: K:SMA(60) + H:Mom(21)+Mom(90)+Vol5% + G5 + EW + DD Exit + Blacklist
+- Canary: BTC > SMA(60) + 1% hysteresis
+- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
+- Selection: 시총순 Top 5, Equal Weight
+- DD Exit: 60d peak -25% → sell warning
+- Blacklist: -15% daily drop → 7d exclude
+- Crash Breaker: BTC daily -10% → cash warning
 """
 
 import os
@@ -28,20 +36,29 @@ CASH_ASSET = 'Cash'
 # No Cash Buffer for standard report
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock V10 Configuration
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'EFA', 'EEM', 'VT', 'VEA', 'GLD', 'PDBC', 'QUAL', 'MTUM', 'IQLT', 'IMTM']
+# Stock Configuration (V14: R8 Universe + EEM-only Canary)
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VGK', 'EWJ', 'EEM', 'VWO', 'GLD', 'PDBC']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
-CANARY_ASSETS = ['VT', 'EEM']
+CANARY_ASSETS = ['EEM']
+STOCK_CANARY_MA_PERIOD = 200
+STOCK_CANARY_HYST = 0.005  # 0.5% hysteresis
 
-# Coin V11 Configuration
+# Coin Configuration
 VOLATILITY_WINDOW = 90
-VOL_CAP_FILTER = 0.10
+VOL_CAP_FILTER = 0.05
 N_SELECTED_COINS = 5
+CANARY_SMA_PERIOD = 60
+BL_THRESHOLD = -0.15
+BL_DAYS = 7
+DD_EXIT_LOOKBACK = 60
+DD_EXIT_THRESHOLD = -0.25
+CRASH_THRESHOLD = -0.10
+COIN_CANARY_HYST = 0.01  # 1% hysteresis band
 
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
-    print("\n--- 🛰️ Step 1: Coin Universe Selection (V12) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V12: Live CoinGecko Top 50)</h2>")
+    print("\n--- 🛰️ Step 1: Coin Universe Selection (V14) ---")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V14: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -117,7 +134,7 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
             if ticker_usd not in final_universe: final_universe.append(ticker_usd)
         except: continue
         
-        if len(final_universe) >= 50: break
+        if len(final_universe) >= 40: break
     
     log.append(f"<p>선정된 유니버스 ({len(final_universe)}개)</p>")
     return final_universe, cg_symbol_to_id_map
@@ -253,171 +270,219 @@ def calc_sharpe(s, d):
     ret = s.pct_change().iloc[-d:]
     return (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() != 0 else 0
 def calc_weighted_mom(s):
+    """V14: Pure 12-month momentum."""
     if len(s) < 253: return -np.inf
-    r3, r6, r12 = calc_ret(s, 63), calc_ret(s, 126), calc_ret(s, 252)
-    return 0.5*r3 + 0.3*r6 + 0.2*r12
+    return calc_ret(s, 252)
 
-# --- Multi Bonus Indicators (V13) ---
-def calc_rsi(s, period=14):
-    if len(s) < period + 1: return np.nan
-    delta = s.diff().iloc[-period-1:]
-    gain = delta.clip(lower=0).rolling(period).mean().iloc[-1]
-    loss = (-delta.clip(upper=0)).rolling(period).mean().iloc[-1]
-    if loss == 0: return 100.0
-    return 100 - (100 / (1 + gain / loss))
 
-def calc_macd_hist(s):
-    if len(s) < 35: return np.nan
-    ema12 = s.ewm(span=12, adjust=False).mean()
-    ema26 = s.ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal = macd_line.ewm(span=9, adjust=False).mean()
-    return (macd_line - signal).iloc[-1]
+# --- V14 DD Exit / Blacklist ---
+def check_dd_exit(s, lookback=DD_EXIT_LOOKBACK, threshold=DD_EXIT_THRESHOLD):
+    """Check if coin should be exited: price / max(recent lookback days) - 1 < threshold."""
+    if len(s) < lookback: return False, 0.0
+    recent = s.iloc[-lookback:]
+    peak = recent.max()
+    if peak <= 0: return False, 0.0
+    dd = s.iloc[-1] / peak - 1
+    return dd <= threshold, dd
 
-def calc_bb_pctb(s, period=20):
-    if len(s) < period: return np.nan
-    sma = s.rolling(period).mean()
-    std = s.rolling(period).std()
-    upper = sma + 2 * std
-    lower = sma - 2 * std
-    band_width = upper.iloc[-1] - lower.iloc[-1]
-    if band_width == 0: return 0.5
-    return (s.iloc[-1] - lower.iloc[-1]) / band_width
+def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
+    """Check if coin had a daily drop worse than threshold in the last lookback_days."""
+    if len(s) < lookback_days + 1: return False, 0.0
+    recent = s.iloc[-(lookback_days + 1):]
+    daily_rets = recent.pct_change().dropna()
+    worst = daily_rets.min()
+    return worst <= threshold, worst
 
-def calc_multi_bonus_score(s):
-    base = calc_sharpe(s, 126) + calc_sharpe(s, 252)
-    rsi = calc_rsi(s)
-    macd_h = calc_macd_hist(s)
-    pctb = calc_bb_pctb(s)
-    if pd.notna(rsi) and 45 <= rsi <= 70: base += 0.2
-    if pd.notna(macd_h) and macd_h > 0: base += 0.2
-    if pd.notna(pctb) and pctb > 0.5: base += 0.2
-    return base, rsi, macd_h, pctb
+def run_stock_strategy_v14(log, all_prices):
+    """V14 Stock Strategy: R8 + EEM-only canary (0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3"""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V14: R8+EEM+12M+EW)</h2>")
+    eem = all_prices.get('EEM')
 
-def run_stock_strategy_v11(log, all_prices):
-    log.append("<h2>📈 주식 포트폴리오 분석 (V11)</h2>")
-    vt, eem = all_prices.get('VT'), all_prices.get('EEM')
-    
-    if len(vt) >= 200 and len(eem) >= 200:
-        vt_cur, eem_cur = vt.iloc[-1], eem.iloc[-1]
-        vt_sma, eem_sma = vt.rolling(200).mean().iloc[-1], eem.rolling(200).mean().iloc[-1]
-        risk_on = vt_cur > vt_sma and eem_cur > eem_sma
-        log.append(f"<p><b>[Canary]</b> VT: ${vt_cur:.2f} (MA {vt_sma:.2f}) | EEM: ${eem_cur:.2f} (MA {eem_sma:.2f})</p>")
-    else: 
+    if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:
+        eem_cur = eem.iloc[-1]
+        eem_sma = eem.rolling(STOCK_CANARY_MA_PERIOD).mean().iloc[-1]
+        dist = eem_cur / eem_sma - 1
+        # EEM-only canary with 0.5% hysteresis
+        if dist > STOCK_CANARY_HYST:
+            risk_on = True
+        elif dist < -STOCK_CANARY_HYST:
+            risk_on = False
+        else:
+            risk_on = eem_cur > eem_sma  # dead zone: simple comparison
+        log.append(f"<p><b>[Canary]</b> EEM: ${eem_cur:.2f} (MA{STOCK_CANARY_MA_PERIOD} ${eem_sma:.2f}, dist {dist:+.2%}, hyst ±{STOCK_CANARY_HYST:.1%})</p>")
+        if risk_on:
+            log.append("<p>✅ <b>Risk-On</b></p>")
+        else:
+            log.append("<p>🚨 <b>Risk-Off</b></p>")
+    else:
         risk_on = False
-        log.append("<p class='error'>Canary Data Missing</p>")
+        log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드</h4>")
+        log.append("<h4>🚀 공격 모드 (Mom3+Sh3 Union + EW)</h4>")
         scores = []
         for t in OFFENSIVE_STOCK_UNIVERSE:
             p = all_prices.get(t)
-            if len(p) >= 253: scores.append({'Ticker': t, 'Mom': calc_weighted_mom(p), 'Qual': calc_sharpe(p, 126)})
-        df = pd.DataFrame(scores).set_index('Ticker')
-        
-        try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table')}</div>")
-        except: pass
+            if p is None or len(p) < 253: continue
+            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe126': calc_sharpe(p, 126)})
 
-        top_m = df.sort_values('Mom', ascending=False).head(3).index.tolist()
-        top_q = df.sort_values('Qual', ascending=False).head(3).index.tolist()
-        picks = list(set(top_m + top_q))
-        
-        log.append(f"<p>Final Picks: <b>{picks}</b></p>")
-        return {t: 1.0/len(picks) for t in picks}, "공격 모드"
-    else:
-        log.append("<h4>🛡️ 수비 모드</h4>")
-        res = []
-        for t in DEFENSIVE_STOCK_UNIVERSE:
-            r = calc_ret(all_prices.get(t), 126)
-            if pd.notna(r): res.append({'Ticker': t, '6m Ret': r})
-        
-        try: log.append(f"<div class='table-wrap'>{pd.DataFrame(res).sort_values('6m Ret', ascending=False).to_html(classes='dataframe small-table')}</div>")
-        except: pass
-            
-        best = sorted(res, key=lambda x: x['6m Ret'], reverse=True)[0]
-        if best['6m Ret'] < 0: return {CASH_ASSET: 1.0}, "수비 (현금)"
-        return {best['Ticker']: 1.0}, f"수비 ({best['Ticker']})"
+        if not scores:
+            log.append("<p class='warning'>공격 ETF 데이터 부족 → 수비 전환</p>")
+            # Fall through to defense
+        else:
+            df = pd.DataFrame(scores).set_index('Ticker')
+            try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
+            except: pass
 
-def run_coin_strategy_v12(coin_universe, all_prices, target_date, log):
-    log.append("<h2>🪙 코인 포트폴리오 (V12)</h2>")
-    
+            top_m = df.sort_values('Mom12M', ascending=False).head(3).index.tolist()
+            top_s = df.sort_values('Sharpe126', ascending=False).head(3).index.tolist()
+            picks = list(dict.fromkeys(top_m + top_s))  # deduplicated, order preserved
+
+            log.append(f"<p>Mom3: {top_m} | Sh3: {top_s}</p>")
+            log.append(f"<p>Final Picks ({len(picks)}): <b>{picks}</b> (Equal Weight)</p>")
+            return {t: 1.0/len(picks) for t in picks}, "공격 모드"
+
+    # Defense mode: Top 3 by 6M return
+    log.append("<h4>🛡️ 수비 모드 (Top 3 by 6M Return)</h4>")
+    res = []
+    for t in DEFENSIVE_STOCK_UNIVERSE:
+        p = all_prices.get(t)
+        if p is None: continue
+        r = calc_ret(p, 126)
+        if pd.notna(r): res.append({'Ticker': t, '6m Ret': r})
+
+    try: log.append(f"<div class='table-wrap'>{pd.DataFrame(res).sort_values('6m Ret', ascending=False).to_html(classes='dataframe small-table')}</div>")
+    except: pass
+
+    if not res:
+        return {CASH_ASSET: 1.0}, "수비 (데이터 없음)"
+
+    res.sort(key=lambda x: x['6m Ret'], reverse=True)
+    top3 = [r for r in res[:3] if r['6m Ret'] > 0]
+    if not top3:
+        return {CASH_ASSET: 1.0}, "수비 (전부 음수)"
+    picks = [r['Ticker'] for r in top3]
+    log.append(f"<p>Defense Picks: <b>{picks}</b> (Equal Weight)</p>")
+    return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
+
+def run_coin_strategy_v14(coin_universe, all_prices, target_date, log):
+    log.append("<h2>🪙 코인 포트폴리오 (V14)</h2>")
+
     btc = all_prices.get('BTC-USD')
-    if len(btc) < 50: return {CASH_ASSET: 1.0}, "데이터 부족"
-    
-    # BTC 기준 Target Date와 비교
+    if len(btc) < CANARY_SMA_PERIOD: return {CASH_ASSET: 1.0}, "데이터 부족"
+
     tgt_dt = target_date.date() if hasattr(target_date, 'date') else target_date
-    
-    sma50 = btc.rolling(50).mean().iloc[-1]
+
+    # --- Crash Breaker (G5): BTC daily -10% in last 3d → cash ---
+    CRASH_COOLDOWN = 3
+    if len(btc) >= CRASH_COOLDOWN + 1:
+        crash_rets = btc.iloc[-(CRASH_COOLDOWN + 1):].pct_change().dropna()
+        worst_crash = crash_rets.min()
+        if worst_crash <= CRASH_THRESHOLD:
+            log.append(f"<p class='error'><b>[CRASH BREAKER]</b> BTC worst {worst_crash:+.1%} in {CRASH_COOLDOWN}d — 현금 대기</p>")
+            return {CASH_ASSET: 1.0}, "CRASH (BTC -10%)"
+
+    # --- Canary: BTC > SMA(60) with 1% Hysteresis ---
+    sma = btc.rolling(CANARY_SMA_PERIOD).mean().iloc[-1]
     cur = btc.iloc[-1]
-    log.append(f"<p>[BTC Canary] ${cur:,.0f} vs MA50 ${sma50:,.0f} (Date: {tgt_dt})</p>")
-    
-    rows = []
-    healthy = []
-    
+    # Stateless hysteresis: use distance from SMA as proxy
+    # ON if cur > sma * 1.01, OFF if cur < sma * 0.99, else maintain trend
+    dist = cur / sma - 1
+    if dist > COIN_CANARY_HYST:
+        canary_on = True
+    elif dist < -COIN_CANARY_HYST:
+        canary_on = False
+    else:
+        canary_on = cur > sma  # in dead zone, use simple comparison
+    risk_label = '<span style="color:green">Risk-On</span>' if canary_on else '<span style="color:red">Risk-Off</span>'
+    hyst_info = f" (Hyst ±{COIN_CANARY_HYST:.0%}, dist {dist:+.2%})"
+    log.append(f"<p><b>[Canary]</b> BTC ${cur:,.0f} vs SMA({CANARY_SMA_PERIOD}) ${sma:,.0f} → {risk_label}{hyst_info}</p>")
+
+    # --- Blacklist: -15% daily drop → exclude 7d ---
+    blacklisted = []
     for t in coin_universe:
         p = all_prices.get(t)
-        if len(p) < 35: continue
-        
-        # [Strict Date Check]
-        # 데이터의 마지막 날짜가 기준일(BTC 날짜)과 다르면 제외 (오래된 데이터 방지)
+        if p is None or len(p) < 2: continue
+        is_bl, daily_ret = check_blacklist(p)
+        if is_bl:
+            blacklisted.append((t, daily_ret))
+    if blacklisted:
+        bl_text = ', '.join([f"{t} ({r:+.1%})" for t, r in blacklisted])
+        log.append(f"<p class='warning'><b>[Blacklist]</b> {bl_text} — 7일 제외</p>")
+    bl_set = {t for t, _ in blacklisted}
+    filtered_universe = [t for t in coin_universe if t not in bl_set]
+
+    # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+    rows = []
+    healthy = []
+    for t in filtered_universe:
+        p = all_prices.get(t)
+        if p is None or len(p) < 91: continue
+
         last_dt = p.index[-1].date() if hasattr(p.index[-1], 'date') else p.index[-1]
-        diff_days = (tgt_dt - last_dt).days
-        if diff_days != 0: # 날짜가 하루라도 다르면 데이터 믹스 위험 -> 제외
-            # log.append(f"<p class='error'>Drop {t}: Date Mismatch (BTC:{tgt_dt} vs {last_dt})</p>")
-            continue
-        
-        sma30 = p.rolling(30).mean().iloc[-1]
-        mom21 = calc_ret(p, 21)
+        if (tgt_dt - last_dt).days != 0: continue
+
         cur_p = p.iloc[-1]
+        mom21 = calc_ret(p, 21)
+        mom90 = calc_ret(p, 90)
         vol90 = p.pct_change().iloc[-90:].std()
-        
-        is_ok = (cur_p > sma30) and (mom21 > 0) and (vol90 <= VOL_CAP_FILTER)
-        
-        rows.append({'Coin': t, 'Price': f"${cur_p:.4f}", 'SMA30': f"${sma30:.4f}", 'Mom21': f"{mom21:.2%}", 'Vol90': f"{vol90:.4f}", 'Status': "🟢" if is_ok else "🔴"})
-        if is_ok: healthy.append(t)
-            
+
+        is_ok = (pd.notna(mom21) and mom21 > 0 and
+                 pd.notna(mom90) and mom90 > 0 and
+                 vol90 <= VOL_CAP_FILTER)
+
+        rows.append({'Coin': t, 'Price': f"${cur_p:.4f}",
+                     'Mom21': f"{mom21:.2%}" if pd.notna(mom21) else "-",
+                     'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
+                     'Vol90': f"{vol90:.4f}",
+                     'Status': "🟢" if is_ok else "🔴"})
+        if is_ok:
+            healthy.append(t)
+
     try: log.append(f"<div class='table-wrap'>{pd.DataFrame(rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except: pass
 
-    if cur <= sma50: return {CASH_ASSET: 1.0}, "Risk-Off"
-    
-    if not healthy: return {CASH_ASSET: 1.0}, "No Healthy"
-    
-    # V13: Multi Bonus Scoring (Sharpe + RSI/MACD/BB bonuses)
-    scores = []
-    for t in healthy:
-        score, rsi, macd_h, pctb = calc_multi_bonus_score(all_prices[t])
-        bonus_flags = []
-        if pd.notna(rsi) and 45 <= rsi <= 70: bonus_flags.append('RSI')
-        if pd.notna(macd_h) and macd_h > 0: bonus_flags.append('MACD')
-        if pd.notna(pctb) and pctb > 0.5: bonus_flags.append('BB')
-        scores.append({
-            'Coin': t, 'Score': score,
-            'RSI': f"{rsi:.1f}" if pd.notna(rsi) else "-",
-            'MACD_H': f"{macd_h:.4f}" if pd.notna(macd_h) else "-",
-            'BB%B': f"{pctb:.2f}" if pd.notna(pctb) else "-",
-            'Bonus': '+'.join(bonus_flags) if bonus_flags else '-'
-        })
-    score_df = pd.DataFrame(scores).sort_values('Score', ascending=False)
+    log.append(f"<p>🔍 Healthy Coins: <b>{len(healthy)}</b> {healthy}</p>")
 
-    try:
-        log.append(f"<p><b>[V13 Multi Bonus]</b> RSI(45-70→+0.2) | MACD hist>0→+0.2 | BB %B>0.5→+0.2</p>")
-        log.append(f"<div class='table-wrap'>{score_df.head(10).to_html(classes='dataframe small-table')}</div>")
+    if not canary_on:
+        log.append(f"<p><b>→ 카나리아 OFF: 전량 현금 대기</b></p>")
+        return {CASH_ASSET: 1.0}, "Risk-Off"
+
+    if not healthy:
+        return {CASH_ASSET: 1.0}, "No Healthy"
+
+    # --- Selection: 시총순 Top 5 (universe order = market cap) ---
+    top5 = healthy[:N_SELECTED_COINS]
+    log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
+
+    # --- Weighting: Equal Weight ---
+    weights = {t: 1.0 / len(top5) for t in top5}
+    w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]
+    try: log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except: pass
-    
-    top5 = score_df.head(5)['Coin'].tolist()
-    
-    vols = {t: all_prices[t].pct_change().iloc[-90:].std() for t in top5}
-    inv_vols = {t: 1/v for t, v in vols.items() if v > 0}
-    tot = sum(inv_vols.values())
-    weights = {t: v/tot for t, v in inv_vols.items()} if tot > 0 else {t: 1/len(top5) for t in top5}
-    
-    # [Added] Weight/Vol/InvVol Table (Match Personal Version)
-    w_rows = [{'Coin': t, 'Weight': f"{w:.2%}", 'Vol': f"{vols[t]:.4f}", 'InvVol': f"{inv_vols[t]:.2f}"} for t, w in weights.items()]
-    try:
-        log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
-    except: pass
-    
+
+    # --- DD Exit Warning: 60d peak -25% ---
+    dd_warnings = []
+    for t in top5:
+        p = all_prices.get(t)
+        if p is None: continue
+        is_exit, dd = check_dd_exit(p)
+        if is_exit:
+            dd_warnings.append((t, dd))
+    if dd_warnings:
+        dd_text = ', '.join([f"<b>{t}</b> ({dd:+.1%})" for t, dd in dd_warnings])
+        log.append(f"<p class='error'><b>[DD EXIT]</b> {dd_text} — 매도 필요 (60d 고점 대비 -25% 초과)</p>")
+        # Remove DD-exited coins: their weight goes to CASH (not redistributed)
+        cash_weight = 0.0
+        for t, _ in dd_warnings:
+            if t in weights:
+                cash_weight += weights[t]
+                del weights[t]
+        if cash_weight > 0:
+            weights[CASH_ASSET] = weights.get(CASH_ASSET, 0.0) + cash_weight
+        if not weights:
+            weights = {CASH_ASSET: 1.0}
+
     return weights, "Full Invest"
 
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today):
@@ -441,7 +506,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend V13 Recommendation</title>
+        <title>Cap Defend V14 Recommendation</title>
          <style>
             body {{ font-family: -apple-system, sans-serif; background: #f0f2f5; padding: 10px; color: #333; }}
             .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; }}
@@ -458,7 +523,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V13</h1>
+            <h1>🚀 Cap Defend V14</h1>
             <p>기준일: {date_today.strftime('%Y-%m-%d')}</p>
             
             <div class="status-bar">
@@ -490,13 +555,13 @@ if __name__ == "__main__":
     all_tickers = set(OFFENSIVE_STOCK_UNIVERSE + DEFENSIVE_STOCK_UNIVERSE + CANARY_ASSETS + c_univ + ['BTC-USD'])
     download_required_data(list(all_tickers), log, ids)
     prices = {t: load_price(t) for t in all_tickers}
-    
+
     if prices['BTC-USD'].empty: sys.exit(1)
     target_date = prices['BTC-USD'].index[-1]
-    
+
     # 3. Strategy
-    s_port, s_stat = run_stock_strategy_v11(log, prices)
-    c_port, c_stat = run_coin_strategy_v12(c_univ, prices, target_date, log)
+    s_port, s_stat = run_stock_strategy_v14(log, prices)
+    c_port, c_stat = run_coin_strategy_v14(c_univ, prices, target_date, log)
     
     # 4. Final Port
     final_port = {CASH_ASSET: 0}
