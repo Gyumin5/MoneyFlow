@@ -302,10 +302,10 @@
             </div>
 
             <div class="backtest-box">
-              <span class="metric"><b>Sharpe</b> 1.134</span>
-              <span class="metric"><b>CAGR</b> +14.1%</span>
-              <span class="metric"><b>MDD</b> -13.1%</span>
-              <span class="metric"><b>&sigma;(Sharpe)</b> 0.062</span>
+              <span class="metric"><b>Sharpe</b> 0.991</span>
+              <span class="metric"><b>CAGR</b> +11.7%</span>
+              <span class="metric"><b>MDD</b> -15.7%</span>
+              <span class="metric"><b>&sigma;(Sharpe)</b> 0.043</span>
               <span class="metric">2017&ndash;2026, 11 anchor days avg</span>
             </div>
 
@@ -346,8 +346,13 @@
               </li>
               <li>
                 <b>공격 모드 선정:</b>
-                12M Momentum Top 3 + Sharpe(126d) Top 3 합집합 (3~6종),
+                12M Momentum Top 3 + Sharpe(63d) Top 3 합집합 (3~6종),
                 <b>균등배분</b>
+                <br /><small
+                  >Sharpe 기간 21~252d 스윕: 63d가 Sharpe 최고(0.991) + &sigma;
+                  최저(0.043). 12M 장기 모멘텀 + 63d 단기 퀄리티가
+                  상호보완</small
+                >
               </li>
               <li>
                 <b class="new-tag">[V14] 수비 모드:</b>
