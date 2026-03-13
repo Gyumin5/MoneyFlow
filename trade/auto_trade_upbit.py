@@ -1,7 +1,7 @@
 """
-V14 Upbit Auto Trader (CoinGecko Global Universe)
+V15 Upbit Auto Trader (CoinGecko Global Universe)
 ==================================================
-V14 전략: BTC > SMA(60) + 1%hyst, Mom21+Mom90+Vol5%, 시총순 Top 5 EW
+V15 코인 전략: BTC > SMA(60) + 1%hyst, Mom21+Mom90+Vol5%, 시총순 Top 5 EW
 - DD Exit: 60d peak -25% → cash
 - Blacklist: -15% daily → 7d exclude
 - Crash Breaker: BTC -10% daily → cash
@@ -30,12 +30,12 @@ from config import (
 
 # --- 상수 ---
 N_SELECTED_COINS = 5
-VOL_CAP_FILTER = 0.05           # V14: 5% (was 10%)
+VOL_CAP_FILTER = 0.05           # V15: 5% (was 10%)
 CASH_BUFFER_PERCENT = 0.02
 MIN_ORDER_KRW = 5000
 
-# V14 Canary / Protection
-CANARY_SMA_PERIOD = 60           # V14: SMA(60) (was 50)
+# V15 Canary / Protection
+CANARY_SMA_PERIOD = 60           # V15: SMA(60) (was 50)
 CANARY_HYST = 0.01               # 1% hysteresis band
 CRASH_THRESHOLD = -0.10          # BTC daily -10% → cash
 BL_THRESHOLD = -0.15             # -15% daily → 7d exclude
@@ -50,7 +50,7 @@ MIN_HISTORY_DAYS = 253
 
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-LOG_FILE = "auto_trade_v14_upbit.log"
+LOG_FILE = "auto_trade_v15_upbit.log"
 
 
 def log(message: str):
@@ -68,7 +68,7 @@ def send_telegram(message: str):
     except: pass
 
 
-class V14UpbitTrader:
+class V15UpbitTrader:
     def __init__(self, is_live_trade: bool = False, is_force: bool = False, target_amount: int = 0):
         self.is_live_trade = is_live_trade
         self.is_force = is_force
@@ -81,7 +81,7 @@ class V14UpbitTrader:
         mode = "🔴 LIVE TRADE" if is_live_trade else "🔍 ANALYSIS ONLY"
         if is_force: mode += " (FORCE MODE)"
         log("=" * 60)
-        log(f"V14 Upbit Trader [{mode}]")
+        log(f"V15 Upbit Trader [{mode}]")
         log("전략: SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총순 Top5 EW, DD/BL/Crash")
         log("=" * 60)
         
@@ -230,7 +230,7 @@ class V14UpbitTrader:
 
     def get_target_portfolio(self, universe: List[str]) -> Tuple[Dict[str, float], bool, str, List[str]]:
         log("")
-        log("📊 V14 전략 분석 중...")
+        log("📊 V15 전략 분석 중...")
 
         # 1. BTC Check
         btc = self.get_yahoo_ohlcv('BTC', 365)
@@ -652,7 +652,7 @@ class V14UpbitTrader:
         
         # 🎯 텔레그램 알림 전송 (상세 내역 포함)
         if self.is_live_trade:
-             msg = f"🤖 V14 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
+             msg = f"🤖 V15 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
              if self.is_force: msg += " (FORCE)"
              if self.target_amount > 0: msg += f"\nTarget: {self.target_amount:,.0f} KRW"
              
@@ -670,4 +670,4 @@ if __name__ == "__main__":
     parser.add_argument('--amount', type=int, default=0, help="목표 운용 금액 (0=전체)")
     args = parser.parse_args()
     
-    V14UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()
+    V15UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()

@@ -1,14 +1,14 @@
 """
-Cap Defend V14 Recommendation Script (Standard Version)
+Cap Defend V15 Recommendation Script (Standard Version)
 =======================================================
-Stock V14: R6 + EEM-only canary (SMA200, 0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3
-- Universe: SPY, QQQ, VEA, EEM, GLD, PDBC (6 ETFs — VGK→VEA for global coverage)
+Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + Defense Top3
+- Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs — R6+VNQ for REIT diversification)
 - Canary: EEM > SMA200 (0.5% hysteresis)
 - Health: None (anchor-day robustness test로 제거 — Mom21은 Day1 편향)
-- Selection: Mom3+Sh3 union (12M momentum Top3 + Sharpe63 Top3), Equal Weight
+- Selection: Z-score Top 4 (zscore(12M_mom) + zscore(Sharpe63)), Equal Weight
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 
-Coin V14: K:SMA(60) + H:Mom(21)+Mom(90)+Vol5% + G5 + EW + DD Exit + Blacklist
+Coin V15: K:SMA(60) + H:Mom(21)+Mom(90)+Vol5% + G5 + EW + DD Exit + Blacklist
 - Canary: BTC > SMA(60) + 1% hysteresis
 - Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
 - Selection: 시총순 Top 5, Equal Weight
@@ -36,8 +36,8 @@ CASH_ASSET = 'Cash'
 # No Cash Buffer for standard report
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock Configuration (V14: R6 Universe + EEM-only Canary)
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC']
+# Stock Configuration (V15: R7 Universe + EEM-only Canary)
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 200
@@ -57,8 +57,8 @@ COIN_CANARY_HYST = 0.01  # 1% hysteresis band
 
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
-    print("\n--- 🛰️ Step 1: Coin Universe Selection (V14) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V14: Live CoinGecko Top 40)</h2>")
+    print("\n--- 🛰️ Step 1: Coin Universe Selection (V15) ---")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V15: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -270,12 +270,12 @@ def calc_sharpe(s, d):
     ret = s.pct_change().iloc[-d:]
     return (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() != 0 else 0
 def calc_weighted_mom(s):
-    """V14: Pure 12-month momentum."""
+    """V15: Pure 12-month momentum."""
     if len(s) < 253: return -np.inf
     return calc_ret(s, 252)
 
 
-# --- V14 DD Exit / Blacklist ---
+# --- V15 DD Exit / Blacklist ---
 def check_dd_exit(s, lookback=DD_EXIT_LOOKBACK, threshold=DD_EXIT_THRESHOLD):
     """Check if coin should be exited: price / max(recent lookback days) - 1 < threshold."""
     if len(s) < lookback: return False, 0.0
@@ -293,9 +293,9 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     worst = daily_rets.min()
     return worst <= threshold, worst
 
-def run_stock_strategy_v14(log, all_prices):
-    """V14 Stock Strategy: R6 + EEM-only canary (0.5% hyst) + No health + 12M Mom3+Sh3 EW + Defense Top3"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V14: R6+EEM+12M+EW)</h2>")
+def run_stock_strategy_v15(log, all_prices):
+    """V15 Stock Strategy: R7 + EEM-only canary (0.5% hyst) + No health + Z-score4 EW + Defense Top3"""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V15: R7+EEM+Zscore4+EW)</h2>")
     eem = all_prices.get('EEM')
 
     if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:
@@ -319,7 +319,7 @@ def run_stock_strategy_v14(log, all_prices):
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드 (Mom3+Sh3 Union + EW)</h4>")
+        log.append("<h4>🚀 공격 모드 (Z-score Top 4 + EW)</h4>")
         scores = []
         for t in OFFENSIVE_STOCK_UNIVERSE:
             p = all_prices.get(t)
@@ -331,15 +331,20 @@ def run_stock_strategy_v14(log, all_prices):
             # Fall through to defense
         else:
             df = pd.DataFrame(scores).set_index('Ticker')
+
+            # Z-score composite: zscore(12M_mom) + zscore(Sharpe63)
+            m_std = df['Mom12M'].std()
+            s_std = df['Sharpe63'].std()
+            df['Z_Mom'] = (df['Mom12M'] - df['Mom12M'].mean()) / m_std if m_std > 0 else 0
+            df['Z_Sh'] = (df['Sharpe63'] - df['Sharpe63'].mean()) / s_std if s_std > 0 else 0
+            df['ZScore'] = df['Z_Mom'] + df['Z_Sh']
+
             try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
             except: pass
 
-            top_m = df.sort_values('Mom12M', ascending=False).head(3).index.tolist()
-            top_s = df.sort_values('Sharpe63', ascending=False).head(3).index.tolist()
-            picks = list(dict.fromkeys(top_m + top_s))  # deduplicated, order preserved
+            picks = df.nlargest(4, 'ZScore').index.tolist()
 
-            log.append(f"<p>Mom3: {top_m} | Sh3: {top_s}</p>")
-            log.append(f"<p>Final Picks ({len(picks)}): <b>{picks}</b> (Equal Weight)</p>")
+            log.append(f"<p>Z-score Top 4: <b>{picks}</b> (Equal Weight)</p>")
             return {t: 1.0/len(picks) for t in picks}, "공격 모드"
 
     # Defense mode: Top 3 by 6M return
@@ -365,8 +370,8 @@ def run_stock_strategy_v14(log, all_prices):
     log.append(f"<p>Defense Picks: <b>{picks}</b> (Equal Weight)</p>")
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
 
-def run_coin_strategy_v14(coin_universe, all_prices, target_date, log):
-    log.append("<h2>🪙 코인 포트폴리오 (V14)</h2>")
+def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
+    log.append("<h2>🪙 코인 포트폴리오 (V15)</h2>")
 
     btc = all_prices.get('BTC-USD')
     if len(btc) < CANARY_SMA_PERIOD: return {CASH_ASSET: 1.0}, "데이터 부족"
@@ -506,7 +511,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend V14 Recommendation</title>
+        <title>Cap Defend V15 Recommendation</title>
          <style>
             body {{ font-family: -apple-system, sans-serif; background: #f0f2f5; padding: 10px; color: #333; }}
             .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; }}
@@ -523,8 +528,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V14</h1>
-            <p>기준일: {date_today.strftime('%Y-%m-%d')}</p>
+            <h1>🚀 Cap Defend V15</h1>
+            <p>리포트 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 종가 기준일: {date_today.strftime('%Y-%m-%d')}</p>
             
             <div class="status-bar">
                 <div>📉 주식: {s_stat}</div>
@@ -560,8 +565,8 @@ if __name__ == "__main__":
     target_date = prices['BTC-USD'].index[-1]
 
     # 3. Strategy
-    s_port, s_stat = run_stock_strategy_v14(log, prices)
-    c_port, c_stat = run_coin_strategy_v14(c_univ, prices, target_date, log)
+    s_port, s_stat = run_stock_strategy_v15(log, prices)
+    c_port, c_stat = run_coin_strategy_v15(c_univ, prices, target_date, log)
     
     # 4. Final Port
     final_port = {CASH_ASSET: 0}
