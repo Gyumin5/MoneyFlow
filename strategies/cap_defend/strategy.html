@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cap Defend V14 Strategy Documentation</title>
+    <title>Cap Defend V15 Strategy Documentation</title>
     <style>
       * {
         margin: 0;
@@ -196,186 +196,142 @@
         <thead>
           <tr>
             <th>Feature</th>
-            <th>V12 (2026-01)</th>
             <th>V13 (2026-03)</th>
             <th>V14 (2026-03)</th>
+            <th>V15 (2026-03)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td><b>Stock Canary</b></td>
-            <td>VT+EEM &gt; SMA200</td>
             <td>VT+EEM + 1% Hyst</td>
+            <td>EEM-only + 0.5% Hyst</td>
             <td class="check"><b>EEM-only + 0.5% Hyst</b></td>
           </tr>
           <tr>
             <td><b>Stock Universe</b></td>
             <td>12 ETFs</td>
-            <td>12 ETFs</td>
-            <td class="check"><b>R6 (6 ETFs, VGK&rarr;VEA)</b></td>
+            <td>R6 (6 ETFs)</td>
+            <td class="check"><b>R7 (7 ETFs, +VNQ)</b></td>
           </tr>
           <tr>
-            <td><b>Stock Health</b></td>
-            <td>&mdash;</td>
-            <td>&mdash;</td>
-            <td class="check"><b>None (tested, removed)</b></td>
+            <td><b>Stock Selection</b></td>
+            <td>WMom Top3+Sh126 Top3</td>
+            <td>Mom3+Sh3 union (3~6)</td>
+            <td class="check"><b>Z-score Top 4 (fixed)</b></td>
           </tr>
           <tr>
             <td><b>Stock Momentum</b></td>
             <td>50/30/20%</td>
-            <td>50/30/20%</td>
+            <td>Pure 12M</td>
             <td class="check"><b>Pure 12M</b></td>
           </tr>
           <tr>
             <td><b>Stock Defense</b></td>
             <td>Top 1</td>
-            <td>Top 1</td>
+            <td>Top 3 EW</td>
             <td class="check"><b>Top 3 EW</b></td>
           </tr>
           <tr>
             <td><b>Coin Canary</b></td>
             <td>BTC &gt; SMA50</td>
-            <td>BTC &gt; SMA50</td>
+            <td>BTC &gt; SMA60 + 1% Hyst</td>
             <td class="check"><b>BTC &gt; SMA60 + 1% Hyst</b></td>
           </tr>
           <tr>
             <td><b>Coin Health</b></td>
             <td>SMA30+Mom21+Vol10%</td>
-            <td>SMA30+Mom21+Vol10%</td>
+            <td>Mom21+Mom90+Vol5%</td>
             <td class="check"><b>Mom21+Mom90+Vol5%</b></td>
           </tr>
           <tr>
             <td><b>Coin Selection</b></td>
-            <td>Sharpe Top 5</td>
             <td>Multi Bonus Top 5</td>
+            <td>Market Cap Top 5</td>
             <td class="check"><b>Market Cap Top 5</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Weighting</b></td>
-            <td>Inverse Vol</td>
-            <td>Inverse Vol</td>
-            <td class="check"><b>Equal Weight</b></td>
           </tr>
           <tr>
             <td><b>DD Exit</b></td>
             <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
+            <td class="check">&#10003; 60d -25%</td>
             <td class="check">&#10003; 60d -25%</td>
           </tr>
           <tr>
             <td><b>Blacklist</b></td>
             <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
+            <td class="check">&#10003; -15% &rarr; 7d</td>
             <td class="check">&#10003; -15% &rarr; 7d</td>
           </tr>
           <tr>
             <td><b>Crash Breaker</b></td>
             <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
             <td class="check">&#10003; BTC -10% &rarr; 3d</td>
-          </tr>
-          <tr>
-            <td><b>Canary Flip Rebal</b></td>
-            <td class="cross">&mdash;</td>
-            <td class="cross">&mdash;</td>
-            <td class="check">&#10003; Immediate</td>
+            <td class="check">&#10003; BTC -10% &rarr; 3d</td>
           </tr>
         </tbody>
       </table>
 
-      <!-- V14 -->
+      <!-- V15 -->
       <div class="version-card current">
         <details open>
           <summary class="version-header">
-            <span class="badge badge-current">V14</span>
+            <span class="badge badge-current">V15</span>
             <span class="version-date">2026-03</span>
             <span class="version-summary"
-              >Full backtest-validated redesign: simplified stock + hardened
-              coin</span
+              >R7 universe (+VNQ), Z-score Top 4 selection, unified
+              versioning</span
             >
           </summary>
           <div class="version-detail">
             <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
 
             <div class="section-title">
-              &#9654; 주식 전략 (V14: 백테스트 검증 완료)
+              &#9654; 주식 전략 (V15: Z-score 선정 + REIT 분산)
             </div>
 
             <div class="backtest-box">
-              <span class="metric"><b>Sharpe</b> 1.022</span>
-              <span class="metric"><b>CAGR</b> +12.0%</span>
-              <span class="metric"><b>MDD</b> -15.2%</span>
-              <span class="metric"><b>&sigma;(Sharpe)</b> 0.057</span>
+              <span class="metric"><b>Sharpe</b> 1.065</span>
+              <span class="metric"><b>CAGR</b> +12.6%</span>
+              <span class="metric"><b>MDD</b> -14.7%</span>
+              <span class="metric"><b>&sigma;(Sharpe)</b> 0.047</span>
               <span class="metric">2017&ndash;2026, 11 anchor days avg</span>
             </div>
 
             <ul>
               <li>
-                <b class="new-tag">[V14] 공격 유니버스 (R6, 6종):</b>
-                SPY, QQQ, <b>VEA</b>, EEM, GLD, PDBC <br /><small
-                  >VGK(유럽)&rarr;VEA(선진exUS: 유럽+일본+호주+캐나다) 교체로
-                  완전 글로벌 커버리지. EWJ/VWO 제거 (중복/단일국가). AI 3자
-                  합의: Sharpe -0.054는 &sigma; 범위 내 무의미, 장기 구조적
-                  우위</small
+                <b class="new-tag">[V15] 공격 유니버스 (R7, 7종):</b>
+                SPY, QQQ, VEA, EEM, GLD, PDBC, <b>VNQ</b> <br /><small
+                  >V14 R6에 VNQ(Vanguard Real Estate) 추가. REIT은 주식/채권과
+                  다른 사이클로 분산 효과. 하락장(2018, 2022) 방어력 개선</small
                 >
               </li>
               <li><b>수비 유니버스 (5종):</b> IEF, BIL, BNDX, GLD, PDBC</li>
               <li>
-                <b class="new-tag">[V14] Canary:</b>
-                <b>EEM-only</b> &gt; SMA200 (<span class="param"
+                <b>Canary:</b> EEM-only &gt; SMA200 (<span class="param"
                   >0.5% hysteresis</span
-                >) <br /><small
-                  >V13 대비: VT 카나리아 제거. EEM 단독이 더 높은 Sharpe + 낮은
-                  &sigma;</small
-                >
+                >) (V14 동일)
               </li>
+              <li><b>Health Filter:</b> 없음 (V14 동일)</li>
               <li>
-                <b class="new-tag">[V14] Health Filter: 없음</b>
-                <br /><small
-                  >Mom21 헬스필터는 Day 1&ndash;3에서만 효과, Day 5+ 에서
-                  역효과. 11개 anchor-day 평균: None 0.897(&sigma;=0.157) &gt;
-                  Mom21 0.875(&sigma;=0.213). Anchor-day 과적합으로 판단,
-                  제거</small
-                >
-              </li>
-              <li>
-                <b class="new-tag">[V14] Momentum:</b>
-                <b>Pure 12M return</b> (252 trading days) <br /><small
-                  >V13의 가중모멘텀(50/30/20%) 대비, 순수 12개월 모멘텀이
-                  Mom3+Sh3 union에서 최적 (lh = 20/30/50, 장기 편향)</small
-                >
-              </li>
-              <li>
-                <b>공격 모드 선정:</b>
-                12M Momentum Top 3 + Sharpe(63d) Top 3 합집합 (3~6종),
+                <b class="new-tag">[V15] 공격 모드 선정:</b>
+                <b>Z-score Top 4</b> = zscore(12M Mom) + zscore(Sharpe63d),
                 <b>균등배분</b>
                 <br /><small
-                  >Sharpe 기간 21~252d 스윕: 63d가 Sharpe 최고(1.022) + &sigma;
-                  최저(0.057). 12M 장기 모멘텀 + 63d 단기 퀄리티가
-                  상호보완</small
+                  >V14의 Mom3+Sh3 union(3~6종 가변) 대비: (1) 연속값으로 동률
+                  문제 해결, (2) 고정 4종으로 안정성 향상. 8개 모멘텀 스타일
+                  &times; 3개 Sharpe 기간 &times; 7개 TopN &times; 3개 가중치 =
+                  500+ 조합 그리드 테스트에서 12M&times;sh63&times;Top4&times;EW
+                  최적 확인</small
                 >
               </li>
+              <li><b>수비 모드:</b> Top 3 by 6M Return, 균등배분 (V14 동일)</li>
               <li>
-                <b class="new-tag">[V14] 수비 모드:</b>
-                수비 5종 중 <b>6M 수익률 Top 3</b> 균등배분 (양수만, 전부 음수면
-                현금) <br /><small
-                  >V13의 Top 1 대비 분산 효과. 백테스트: Defense Top3가 Top1보다
-                  MDD 개선</small
-                >
-              </li>
-              <li>
-                <b class="new-tag">[V14] Canary Flip Rebalancing:</b>
-                카나리아 신호 전환 시 <b>즉시 리밸런싱</b> (월말 대기 안함)
-                <br /><small
-                  >Sharpe +0.064, MDD -20.1% &rarr; -15.5%. Signal Flip 알림이
-                  뜨면 당일 실행</small
-                >
+                <b>Canary Flip Rebalancing:</b> 카나리아 플립 시 즉시 리밸런싱
+                (V14 동일)
               </li>
             </ul>
 
-            <div class="section-title">
-              &#9654; 코인 전략 (V14: 8년 백테스트 검증)
-            </div>
+            <div class="section-title">&#9654; 코인 전략 (V14 동일)</div>
 
             <div class="backtest-box">
               <span class="metric"><b>Sharpe</b> 1.671</span>
@@ -489,6 +445,28 @@
                 아님)
               </li>
             </ul>
+          </div>
+        </details>
+      </div>
+
+      <!-- V14 -->
+      <div class="version-card">
+        <details>
+          <summary class="version-header">
+            <span class="badge badge-old">V14</span>
+            <span class="version-date">2026-03</span>
+            <span class="version-summary"
+              >R6 universe, Mom3+Sh3 union, full backtest-validated coin
+              strategy</span
+            >
+          </summary>
+          <div class="version-detail">
+            <b>주식:</b> R6 (SPY,QQQ,VEA,EEM,GLD,PDBC), EEM-only canary + 0.5%
+            hyst, Mom3+Sh3 union EW, Defense Top3<br />
+            <b>코인:</b> V15와 동일 (SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총순
+            Top5 EW, DD/BL/Crash)<br />
+            <b>백테스트:</b> 주식 Sharpe 1.022 (σ=0.057), CAGR +12.0%, MDD
+            -15.2%
           </div>
         </details>
       </div>
@@ -642,7 +620,7 @@
           font-size: 0.8em;
         "
       >
-        Cap Defend Strategy Documentation &mdash; Auto-generated 2026-03-11
+        Cap Defend Strategy Documentation &mdash; Auto-generated 2026-03-13
       </div>
     </div>
   </body>

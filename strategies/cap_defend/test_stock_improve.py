@@ -85,7 +85,8 @@ ALL_TICKERS = sorted(set(
     DEF_CURRENT + DEF_EXPANDED + DEF_BOND_HEAVY + DEF_GLOBAL + DEF_GLOB_WIDE +
     CANARY_DEFAULT + ('HYG','IEF','LQD','TLT','SHY','AGG','TIP','VIX','BND',
                        'VGK','VNQ','VNQI','BWX','EMB','INDA',
-                       'FXI','EPI','EWS','EWU','EWG')
+                       'FXI','EPI','EWS','EWU','EWG',
+                       'IWM','RWX','IYR','GSG','DBC')
 ))
 
 
@@ -485,6 +486,15 @@ def select_offensive(params, ind, date, candidates):
         df['r_sort'] = df['sort'].rank(ascending=False)
         df['score'] = df['r_m'] + df['r_s'] + df['r_sort']
         picks = df.nsmallest(n, 'score').index.tolist()
+    elif sel.startswith('zscore'):
+        n = int(sel[6:])
+        # Z-score normalization: continuous values, no ties
+        m_std = df['wmom'].std()
+        s_std = df['sh'].std()
+        df['z_m'] = (df['wmom'] - df['wmom'].mean()) / m_std if m_std > 0 else 0
+        df['z_s'] = (df['sh'] - df['sh'].mean()) / s_std if s_std > 0 else 0
+        df['zscore'] = df['z_m'] + df['z_s']
+        picks = df.nlargest(n, 'zscore').index.tolist()
     elif sel.startswith('comp'):
         n = int(sel[4:])
         df['r_m'] = df['wmom'].rank(ascending=False)
