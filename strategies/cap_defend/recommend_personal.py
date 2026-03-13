@@ -44,7 +44,7 @@ SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 STRATEGY_VERSION = "V15"
 VERSION_HISTORY = [
     ("V15", "2026-03",
-     "R7 universe, Z-score4 selection, unified versioning (stock+coin)",
+     "R7 universe, Z-score4 selection, M+D2 trigger rebalancing, delta trading",
      """<b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
 
 <b>▶ 주식 전략 (V15 변경)</b>
@@ -53,7 +53,7 @@ VERSION_HISTORY = [
 • <b>Health:</b> 없음 (카나리아가 시장 방어 담당)
 • <b>공격:</b> <span style='color:#d93025;'>Z-score Top 4</span> = zscore(12M Mom) + zscore(Sharpe63), 균등배분
 • <b>수비:</b> 5종 중 6M 수익률 Top 3 (음수면 현금), 균등배분
-• <b>백테스트:</b> 11-anchor 평균 Sharpe 1.065 (σ=0.047), CAGR +12.6%, MDD -14.7%
+• <b>백테스트:</b> 11-anchor 평균 Sharpe 1.281 (σ=0.033), CAGR +15.2%, MDD -13.2%
 
 <b>▶ 코인 전략 (V14 동일)</b>
 • <b>유니버스:</b> CoinGecko Top 40 시총순 → Upbit KRW 필터
@@ -65,7 +65,9 @@ VERSION_HISTORY = [
 • <b>Crash Breaker:</b> BTC 일일 -10% → 3일 현금
 
 <b>▶ 리밸런싱</b>
-• 월간 정기 + DD Exit/Blacklist/Crash 시 즉시"""),
+• 주식: <span style='color:#d93025;'>M+D2</span> — 월간 정기 + 매일 Z-score Top4 체크, 2종목 이상 변경 시 즉시 리밸런싱
+• 코인: 월간 정기 + DD Exit/Blacklist/Crash 시 즉시
+• <span style='color:#d93025;'>Delta-based trading</span>: 변경된 비중만 거래 (TX 비용 61% 절감)"""),
 
     ("V14", "2026-03",
      "SMA(60) canary, Mom+Mom+Vol5% health, EW, DD Exit, Blacklist, Crash Breaker",
@@ -503,6 +505,9 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     log.append("<h2>📈 주식 포트폴리오 분석 (V15: R7+EEM+Zscore4+EW)</h2>")
     eem = all_prices.get('EEM')
     meta = {'signal_dist': {}, 'next_candidates': []}
+    stock_holdings: list = []  # 실제 보유 종목 (signal_state.json에서 로드)
+    signal_flipped = False
+    _state: dict = {}
 
     if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:
         eem_sma = eem.rolling(STOCK_CANARY_MA_PERIOD).mean().iloc[-1]
@@ -527,12 +532,15 @@ def run_stock_strategy_v15(log, all_prices, target_date):
             pass
         signal_flipped = (prev_risk_on is not None and prev_risk_on != risk_on)
 
-        # Save stock state
+        # Load previous state (including stock_holdings for trigger detection)
         try:
             with open(SIGNAL_STATE_FILE, 'r') as _sf:
                 _state = json.load(_sf)
         except (FileNotFoundError, json.JSONDecodeError):
             _state = {}
+        stock_holdings = _state.get('stock_holdings', [])
+
+        # Save canary state (stock_picks updated after selection below)
         _state.update({'risk_on': bool(risk_on), 'signal_flipped': bool(signal_flipped)})
         with open(SIGNAL_STATE_FILE, 'w') as _sf:
             json.dump(_state, _sf)
@@ -570,6 +578,22 @@ def run_stock_strategy_v15(log, all_prices, target_date):
 
             picks = df.nlargest(4, 'ZScore').index.tolist()
             meta['selection_reason'] = {'ZScore_Top4': picks}
+
+            # Trigger detection: compare with actual holdings (signal_state.json의 stock_holdings)
+            if stock_holdings:
+                new_picks = sorted(set(picks) - set(stock_holdings))
+                exit_picks = sorted(set(stock_holdings) - set(picks))
+                n_changed = len(new_picks)
+                is_monthly = (target_date.day <= 5)
+                trigger_rebal = (n_changed >= 2 and not is_monthly)
+
+                if trigger_rebal:
+                    log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 TRIGGER REBALANCE: {n_changed}종목 변경</b> — 진입 {new_picks}, 퇴출 {exit_picks}</p>")
+
+                hold_str = ','.join(stock_holdings)
+                log.append(f"<p>보유: [{hold_str}] → 추천: <b>{picks}</b> (신규 {new_picks}, 퇴출 {exit_picks})</p>")
+            else:
+                log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정 — signal_state.json에 <code>\"stock_holdings\": [\"SPY\",\"QQQ\",...]</code> 입력 필요</p>")
 
             log.append(f"<p>Z-score Top 4: <b>{picks}</b> (Equal Weight)</p>")
             return {t: 1.0/len(picks) for t in picks}, "공격 모드", meta

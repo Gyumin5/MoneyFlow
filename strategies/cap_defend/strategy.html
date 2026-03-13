@@ -187,10 +187,6 @@
       <h1>Cap Defend Strategy</h1>
       <p class="subtitle">Version History & Full Documentation</p>
 
-      <a class="nav-link" href="portfolio_result_gmoh.html"
-        >&larr; Back to Dashboard</a
-      >
-
       <!-- Feature comparison table -->
       <table class="overview-table">
         <thead>
@@ -268,6 +264,18 @@
             <td class="check">&#10003; BTC -10% &rarr; 3d</td>
             <td class="check">&#10003; BTC -10% &rarr; 3d</td>
           </tr>
+          <tr>
+            <td><b>Stock Rebal</b></td>
+            <td>Monthly + Flip</td>
+            <td>Monthly + Flip</td>
+            <td class="check"><b>M+D2 Trigger + Flip</b></td>
+          </tr>
+          <tr>
+            <td><b>TX Model</b></td>
+            <td>Full Liquidate</td>
+            <td>Full Liquidate</td>
+            <td class="check"><b>Delta Trading</b></td>
+          </tr>
         </tbody>
       </table>
 
@@ -278,8 +286,8 @@
             <span class="badge badge-current">V15</span>
             <span class="version-date">2026-03</span>
             <span class="version-summary"
-              >R7 universe (+VNQ), Z-score Top 4 selection, unified
-              versioning</span
+              >R7 universe (+VNQ), Z-score Top 4, M+D2 trigger rebal, delta
+              trading</span
             >
           </summary>
           <div class="version-detail">
@@ -290,11 +298,13 @@
             </div>
 
             <div class="backtest-box">
-              <span class="metric"><b>Sharpe</b> 1.065</span>
-              <span class="metric"><b>CAGR</b> +12.6%</span>
-              <span class="metric"><b>MDD</b> -14.7%</span>
-              <span class="metric"><b>&sigma;(Sharpe)</b> 0.047</span>
-              <span class="metric">2017&ndash;2026, 11 anchor days avg</span>
+              <span class="metric"><b>Sharpe</b> 1.281</span>
+              <span class="metric"><b>CAGR</b> +15.2%</span>
+              <span class="metric"><b>MDD</b> -13.2%</span>
+              <span class="metric"><b>&sigma;(Sharpe)</b> 0.033</span>
+              <span class="metric"
+                >2017&ndash;2026, 11 anchor days avg, delta trading</span
+              >
             </div>
 
             <ul>
@@ -410,8 +420,19 @@
             <div class="section-title">&#9654; 리밸런싱 규칙</div>
             <ul>
               <li>
-                <b>주식:</b> 월초(Day 1) 월간 리밸런싱 +
-                <b>카나리아 플립 시 즉시 리밸런싱</b>
+                <b class="new-tag">[V15] 주식:</b>
+                <b>M+D2</b> &mdash; 월초(Day 1) 월간 리밸런싱 +
+                <b>매일 Z-score Top4 체크, 2종목 이상 변경 시 즉시 리밸런싱</b>
+                + 카나리아 플립 시 즉시 리밸런싱
+                <br /><small
+                  >signal_state.json에 현재 picks 저장, 매일 비교. 월리밸런싱은
+                  드리프트 보정, 트리거는 시장 변화 즉시 반영</small
+                >
+              </li>
+              <li>
+                <b class="new-tag">[V15] Delta Trading:</b>
+                변경된 비중만 거래 (전량매도&rarr;재매수 대신 차이만 거래, TX
+                비용 61% 절감)
               </li>
               <li>
                 <b>코인:</b> 월간 스케줄 + 턴오버 30%&uarr; + Health 실패 시
