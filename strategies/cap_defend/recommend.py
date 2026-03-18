@@ -516,6 +516,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
     invested_pct = sum(v for k, v in weights.items() if k != CASH_ASSET)
     cash_pct = 1.0 - invested_pct
     if cash_pct > 0.01:
+        weights[CASH_ASSET] = weights.get(CASH_ASSET, 0) + cash_pct  # Cash 명시
         stat = f"투자 {invested_pct:.0%} / 현금 {cash_pct:.0%}"
     else:
         stat = "Full Invest"
