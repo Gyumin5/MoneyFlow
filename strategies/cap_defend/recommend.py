@@ -8,7 +8,7 @@ Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + 
 - Selection: Z-score Top 4 (zscore(12M_mom) + zscore(Sharpe63)), Equal Weight
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 
-Coin V16: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+25%Cap + DD Exit + Blacklist
+Coin V16: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Canary: BTC > SMA(60) + 1% hysteresis
 - Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
 - Selection: 시총순 Top 5, Equal Weight
@@ -483,8 +483,8 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
     top5 = healthy[:N_SELECTED_COINS]
     log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
 
-    # --- Weighting: Equal Weight with 25% Cap ---
-    COIN_WEIGHT_CAP = 0.25
+    # --- Weighting: Equal Weight with 20% Cap ---
+    COIN_WEIGHT_CAP = 0.20
     w = min(1.0 / len(top5), COIN_WEIGHT_CAP)
     weights = {t: w for t in top5}
     w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]

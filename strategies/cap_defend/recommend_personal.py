@@ -2,7 +2,7 @@
 Cap Defend V16 Recommendation Script (Personal Version)
 =====================================================
 Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + Defense Top3
-Coin V16: K:SMA(60)+1%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+25%Cap + DD Exit + Blacklist
+Coin V16: K:SMA(60)+1%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
 
@@ -47,7 +47,7 @@ VERSION_HISTORY = [
      "코인: Mom30+25%Cap, 주식: V15 동일, hysteresis 수정",
      """<b>▶ 코인 변경 (V16)</b>
 • <b>Health:</b> <span style='color:#d93025;'>Mom(30)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom21→30으로 변경)
-• <b>비중 캡:</b> <span style='color:#d93025;'>25% Cap</span> — 1종목 최대 25%, 나머지 현금 (붕괴 리스크 방어)
+• <b>비중 캡:</b> <span style='color:#d93025;'>20% Cap</span> — 1종목 최대 20%, 나머지 현금 (붕괴 리스크 방어)
 • <b>백테스트:</b> 10-anchor 3트랜치 평균 Sharpe 1.451, CAGR +64.5%, MDD -33.2%, Calmar 1.94
 • <b>카나리아:</b> Hysteresis dead zone에서 signal_state.json 이전 상태 참조 (stateless 수정)
 
@@ -762,8 +762,8 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     meta['next_candidates'] = healthy[N_SELECTED_COINS:N_SELECTED_COINS+5]
     log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
 
-    # --- Weighting: Equal Weight with 25% Cap ---
-    COIN_WEIGHT_CAP = 0.25
+    # --- Weighting: Equal Weight with 20% Cap ---
+    COIN_WEIGHT_CAP = 0.20
     w = min(1.0 / len(top5), COIN_WEIGHT_CAP)
     weights = {t: w for t in top5}
     w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]

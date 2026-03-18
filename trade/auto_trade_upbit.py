@@ -1,7 +1,7 @@
 """
 V16 Upbit Auto Trader (CoinGecko Global Universe)
 ==================================================
-V16 코인 전략: BTC > SMA(60) + 1%hyst, Mom30+Mom90+Vol5%, 시총순 Top 5 EW + 25% Cap
+V16 코인 전략: BTC > SMA(60) + 1%hyst, Mom30+Mom90+Vol5%, 시총순 Top 5 EW + 20% Cap
 - DD Exit: 60d peak -25% → cash
 - Blacklist: -15% daily → 7d exclude
 - Crash Breaker: BTC -10% daily → cash
@@ -14,7 +14,7 @@ import time
 import argparse
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Tuple
 
 import pyupbit
@@ -81,8 +81,8 @@ class V16UpbitTrader:
         mode = "🔴 LIVE TRADE" if is_live_trade else "🔍 ANALYSIS ONLY"
         if is_force: mode += " (FORCE MODE)"
         log("=" * 60)
-        log(f"V15 Upbit Trader [{mode}]")
-        log("전략: SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총순 Top5 EW, DD/BL/Crash")
+        log(f"V16 Upbit Trader [{mode}]")
+        log("전략: SMA60+1%hyst, Mom30+Mom90+Vol5%, 시총순 Top5 EW+20%Cap, DD/BL/Crash")
         log("=" * 60)
         
         try:
@@ -134,8 +134,8 @@ class V16UpbitTrader:
                 except: pass
 
         if not cg_data:
-            log("  ❌ CoinGecko Error => Fully Failed. Using Hardcoded Fallback")
-            return ['BTC', 'ETH', 'XRP', 'SOL', 'KRW-SHIB'], {}
+            log("  ❌ CoinGecko 완전 실패 — 매매 중단 (포지션 유지)")
+            return None, {}
 
         cg_symbol_to_id = {item['symbol'].upper(): item['id'] for item in cg_data}
         
@@ -235,7 +235,9 @@ class V16UpbitTrader:
         # 1. BTC Check
         btc = self.get_yahoo_ohlcv('BTC', 365)
         self.all_prices['BTC'] = btc
-        if len(btc) < CANARY_SMA_PERIOD: return {}, True, "BTC 데이터 부족", []
+        if len(btc) < CANARY_SMA_PERIOD:
+            log("🚨 BTC 데이터 부족 — API 장애 의심, 매매 중단 (포지션 유지)")
+            return None, False, "⚠️ DATA ERROR: 매매 중단", []  # None = abort signal
 
         # BTC 기준 Target Date
         tgt_dt = btc.index[-1].date() if hasattr(btc.index[-1], 'date') else btc.index[-1]
@@ -253,12 +255,27 @@ class V16UpbitTrader:
         sma = self.calc_sma(btc, CANARY_SMA_PERIOD)
         cur = btc.iloc[-1]
         dist = cur / sma - 1
+
+        # Load previous canary state for hysteresis dead zone
+        prev_coin_risk_on = None
+        try:
+            with open('trade_state.json', 'r') as _sf:
+                prev_coin_risk_on = json.load(_sf).get('coin_risk_on')
+        except Exception:
+            try:
+                with open('signal_state.json', 'r') as _sf:
+                    prev_coin_risk_on = json.load(_sf).get('coin_risk_on')
+            except Exception:
+                pass
+
         if dist > CANARY_HYST:
             canary_on = True
         elif dist < -CANARY_HYST:
             canary_on = False
+        elif prev_coin_risk_on is not None:
+            canary_on = prev_coin_risk_on  # dead zone: maintain previous state
         else:
-            canary_on = cur > sma  # dead zone
+            canary_on = cur > sma  # no state: fallback
         log(f"  BTC: ${cur:,.0f} vs SMA({CANARY_SMA_PERIOD}): ${sma:,.0f} (dist {dist:+.2%}, hyst ±{CANARY_HYST:.0%})")
 
         if not canary_on:
@@ -339,8 +356,8 @@ class V16UpbitTrader:
         if not final_picks:
             return {}, False, "모든 코인 DD Exit", healthy_tickers
 
-        # Equal Weight with 25% Cap (DD-exited weight → cash)
-        COIN_WEIGHT_CAP = 0.25
+        # Equal Weight with 20% Cap (DD-exited weight → cash)
+        COIN_WEIGHT_CAP = 0.20
         ew = min(1.0 / len(top5), COIN_WEIGHT_CAP)
         w = {t: ew for t in final_picks}
         cash_from_dd = ew * len(dd_exits)
@@ -487,6 +504,16 @@ class V16UpbitTrader:
             except Exception as e:
                 log(f"  ❌ 재매수 중 에러: {e}")
 
+    def _save_trade_state(self, state, filepath):
+        """원자적 state 저장 (tmp + replace)."""
+        try:
+            tmp = filepath + '.tmp'
+            with open(tmp, 'w') as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp, filepath)
+        except Exception as e:
+            log(f"⚠️ State 저장 실패: {e}")
+
     def cancel_all_orders(self, ticker):
         """미체결 주문 취소 (잔고 확보용)"""
         try:
@@ -520,8 +547,18 @@ class V16UpbitTrader:
             except: pass
 
         universe, _ = self.get_coingecko_top100()
+        if universe is None:
+            log("🚨 CoinGecko 완전 실패 — 포지션 유지, 매매 없음")
+            send_telegram("⚠️ V16: CoinGecko API 실패, 매매 중단")
+            return
         target_w, is_risk_off, status, healthy_list = self.get_target_portfolio(universe)
-        
+
+        # API 장애 시 매매 중단 (포지션 유지)
+        if target_w is None:
+            log(f"\n🚨 {status} — 포지션 유지, 매매 없음")
+            send_telegram(f"⚠️ V16 매매 중단: {status}")
+            return
+
         log(f"\n🎯 상태: {status}")
         
         MAX_LOOPS = 3 if self.is_live_trade else 1
@@ -591,20 +628,211 @@ class V16UpbitTrader:
             if t not in healthy_set and t not in target_w:
                 bad_coins.append(t)
         
-        do_rebalance = False
-        if is_risk_off:
-            log(f"🚨 Risk-Off -> 전량 매도")
-            do_rebalance = True
-        elif bad_coins:
-            log(f"🚨 헬스체크 실패 코인 발견 ({', '.join(bad_coins)}) -> 강제 리밸런싱")
-            do_rebalance = True
-        elif turnover >= TURNOVER_THRESHOLD or self.is_force:
-            log(f"⚡ 턴오버 초과 또는 강제 실행 -> 리밸런싱")
-            do_rebalance = True
-        else:
-            log(f"✅ HOLD (턴오버 미달)")
-            
-        if not do_rebalance: return turnover
+        # ═══ V16 3트랜치 리밸런싱 ═══
+        ANCHOR_DAYS = [1, 11, 21]  # 3트랜치 (10일 간격 균등)
+        TRADE_STATE_FILE = 'trade_state.json'
+        KST = timezone(timedelta(hours=9))
+        now_kst = datetime.now(KST)
+        today = now_kst.day
+        current_month = now_kst.strftime('%Y-%m')
+
+        # Load trade state
+        trade_state = {}
+        try:
+            with open(TRADE_STATE_FILE, 'r') as _sf:
+                trade_state = json.load(_sf)
+        except Exception:
+            pass
+
+        prev_risk_on = trade_state.get('coin_risk_on', None)
+        is_risk_on_now = not is_risk_off
+        signal_flipped = (prev_risk_on is not None and prev_risk_on != is_risk_on_now)
+        flip_on = signal_flipped and is_risk_on_now
+
+        # Compute current signal (picks + weights) for rebalancing
+        current_signal_w = target_w  # from get_target_portfolio()
+
+        # Initialize tranches if missing — 전 트랜치를 현재 신호로 초기화
+        is_first_run = 'tranches' not in trade_state
+        if is_first_run:
+            log("🆕 trade_state 초기화: 전 트랜치를 현재 신호로 설정")
+            trade_state['tranches'] = {}
+            for a in ANCHOR_DAYS:
+                if is_risk_on_now:
+                    init_picks = [t for t in current_signal_w if t != 'Cash']
+                    init_weights = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
+                else:
+                    init_picks = []
+                    init_weights = {}
+                trade_state['tranches'][str(a)] = {
+                    'last_anchor_month': current_month, 'picks': init_picks, 'weights': init_weights
+                }
+
+        # ── 1. Crash: 전 트랜치 현금화 ──
+        # (이미 get_target_portfolio에서 crash 시 빈 target_w 반환)
+
+        # ── 2. 카나리아 플립 → 전 트랜치 갱신 ──
+        if signal_flipped:
+            log(f"🔄 카나리아 플립 ({'ON' if is_risk_on_now else 'OFF'}) → 전 트랜치 갱신")
+            for a_str in trade_state['tranches']:
+                tr = trade_state['tranches'][a_str]
+                if is_risk_on_now:
+                    # Remove Cash key for storage
+                    tr['picks'] = [t for t in current_signal_w if t != 'Cash']
+                    tr['weights'] = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
+                else:
+                    tr['picks'] = []
+                    tr['weights'] = {}
+            if flip_on:
+                trade_state['last_flip_date'] = datetime.now().strftime('%Y-%m-%d')
+                trade_state['pfd_done'] = False
+
+        # ── 3. DD Exit → 전 트랜치에서 해당 코인 제거 ──
+        dd_removed = set()
+        if is_risk_on_now:
+            all_tranche_coins = set()
+            for tr in trade_state['tranches'].values():
+                all_tranche_coins.update(tr.get('picks', []))
+            for t in all_tranche_coins:
+                if t in self.all_prices and len(self.all_prices[t]) >= DD_EXIT_LOOKBACK:
+                    c = self.all_prices[t]
+                    peak = c.iloc[-DD_EXIT_LOOKBACK:].max()
+                    if peak > 0 and (c.iloc[-1] / peak - 1) <= DD_EXIT_THRESHOLD:
+                        log(f"📉 DD Exit: {t} ({c.iloc[-1]/peak-1:+.1%} from {DD_EXIT_LOOKBACK}d peak) → 전 트랜치 제거")
+                        dd_removed.add(t)
+            # Also remove health-failed coins from tranches
+            for t in bad_coins:
+                if t in all_tranche_coins:
+                    log(f"🚨 헬스 실패: {t} → 전 트랜치 제거")
+                    dd_removed.add(t)
+
+            if dd_removed:
+                for a_str in trade_state['tranches']:
+                    tr = trade_state['tranches'][a_str]
+                    for t in dd_removed:
+                        if t in tr.get('weights', {}):
+                            del tr['weights'][t]
+                        if t in tr.get('picks', []):
+                            tr['picks'].remove(t)
+
+        # ── 4. PFD5: 플립 후 5일 ──
+        if (is_risk_on_now and not trade_state.get('pfd_done', True)
+                and trade_state.get('last_flip_date')):
+            from datetime import datetime as dt2
+            try:
+                flip_dt = dt2.strptime(trade_state['last_flip_date'], '%Y-%m-%d')
+                if (datetime.now() - flip_dt).days >= 5:
+                    log(f"🔄 PFD5: 플립 후 5일 → 전 트랜치 갱신")
+                    for a_str in trade_state['tranches']:
+                        tr = trade_state['tranches'][a_str]
+                        tr['picks'] = [t for t in current_signal_w if t != 'Cash']
+                        tr['weights'] = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
+                    trade_state['pfd_done'] = True
+                    trade_state['_pfd_triggered'] = True  # 트리거 플래그
+            except Exception:
+                pass
+
+        # ── 5. 앵커일: 해당 트랜치만 갱신 ──
+        anchors_triggered = []
+        if is_risk_on_now and not signal_flipped:
+            for a in ANCHOR_DAYS:
+                a_str = str(a)
+                tr = trade_state['tranches'].get(a_str, {})
+                if today >= a and tr.get('last_anchor_month', '') < current_month:
+                    log(f"📅 앵커일 Day {a} → 트랜치 갱신")
+                    tr['picks'] = [t for t in current_signal_w if t != 'Cash']
+                    tr['weights'] = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
+                    tr['last_anchor_month'] = current_month
+                    trade_state['tranches'][a_str] = tr
+                    anchors_triggered.append(a)
+        elif is_risk_off and not signal_flipped:
+            # Risk-Off 상태에서도 앵커일 마킹 (현금 유지)
+            for a in ANCHOR_DAYS:
+                a_str = str(a)
+                tr = trade_state['tranches'].get(a_str, {})
+                if today >= a and tr.get('last_anchor_month', '') < current_month:
+                    tr['picks'] = []
+                    tr['weights'] = {}
+                    tr['last_anchor_month'] = current_month
+                    trade_state['tranches'][a_str] = tr
+
+        # ── 6. Force 실행 (앵커월 소모하지 않음) ──
+        if self.is_force and not signal_flipped and not anchors_triggered:
+            log(f"⚡ 강제 실행 → 전 트랜치 갱신 (앵커 미소모)")
+            for a_str in trade_state['tranches']:
+                tr = trade_state['tranches'][a_str]
+                if is_risk_on_now:
+                    tr['picks'] = [t for t in current_signal_w if t != 'Cash']
+                    tr['weights'] = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
+                else:
+                    tr['picks'] = []
+                    tr['weights'] = {}
+                # last_anchor_month는 변경하지 않음 — force가 앵커를 소모하면 안 됨
+
+        # ── 합산 타겟 계산 ──
+        combined_target = {}
+        n_tranches = len(ANCHOR_DAYS)
+        for a_str, tr in trade_state['tranches'].items():
+            for t, w in tr.get('weights', {}).items():
+                combined_target[t] = combined_target.get(t, 0) + w / n_tranches
+
+        # Cash buffer
+        invested = sum(combined_target.values())
+        cash_pct = max(1.0 - invested, 0)
+        combined_target['Cash'] = CASH_BUFFER_PERCENT + (cash_pct - CASH_BUFFER_PERCENT if cash_pct > CASH_BUFFER_PERCENT else 0)
+
+        log(f"\n📊 3트랜치 합산 타겟:")
+        for a_str in sorted(trade_state['tranches'].keys()):
+            tr = trade_state['tranches'][a_str]
+            p = tr.get('picks', [])
+            log(f"  트랜치 Day{a_str}: {p if p else '현금'} (last: {tr.get('last_anchor_month','-')})")
+        log(f"  합산: {', '.join(f'{t}:{w:.1%}' for t, w in sorted(combined_target.items(), key=lambda x:-x[1]) if t != 'Cash')}")
+        log(f"  현금: {combined_target.get('Cash', 0):.1%}")
+
+        # Override target_w with combined
+        target_w = combined_target
+
+        # ── 트리거 기반 매매 판단 ──
+        # 트리거가 발생한 경우만 매매, 가격 변동만으로는 매매 안 함
+        trade_reasons = []
+        if signal_flipped:
+            trade_reasons.append(f"카나리아 플립 ({'ON' if is_risk_on_now else 'OFF'})")
+        if anchors_triggered:
+            trade_reasons.append(f"앵커일 Day {anchors_triggered}")
+        if dd_removed:
+            trade_reasons.append(f"DD Exit {list(dd_removed)}")
+        bad_coins = [c for c in bad_coins if c != 'Cash']  # Cash 제외
+        if bad_coins:
+            trade_reasons.append(f"헬스 실패 {bad_coins}")
+        if trade_state.get('_pfd_triggered'):
+            trade_reasons.append("PFD5")
+            del trade_state['_pfd_triggered']
+        if is_first_run:
+            trade_reasons.append("초기 진입")
+        if self.is_force:
+            trade_reasons.append("강제 실행")
+
+        # Recalculate turnover for logging
+        turnover = sum(abs(curr_w.get(k,0) - target_w.get(k,0))
+                       for k in set(curr_w)|set(target_w)) / 2
+        log(f"🔄 합산 턴오버: {turnover:.1%}")
+
+        if not trade_reasons:
+            log(f"✅ HOLD — 트리거 없음 (턴오버: {turnover:.1%})")
+            # HOLD: 카나리아 상태만 저장, 트랜치는 변경하지 않음
+            hold_state = {'coin_risk_on': is_risk_on_now,
+                          'updated': datetime.now().strftime('%Y-%m-%d %H:%M')}
+            # 기존 state에서 트랜치/flip 정보 유지
+            try:
+                with open(TRADE_STATE_FILE, 'r') as _sf:
+                    existing = json.load(_sf)
+                existing.update(hold_state)
+                self._save_trade_state(existing, TRADE_STATE_FILE)
+            except Exception:
+                pass
+            return turnover
+
+        log(f"⚡ 매매 트리거: {', '.join(trade_reasons)}")
         
     # 리밸런싱 실행
         # [수정] Target Amount 적용 (입력된 금액만큼만 운용, 나머지는 현금)
@@ -651,12 +879,19 @@ class V16UpbitTrader:
             if tgt_amt > cur_amt:
                 self.ensure_buy(t, tgt_amt)
         
+        # ── State 저장 (매매 실행 후) ──
+        trade_state['coin_risk_on'] = is_risk_on_now
+        trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+        trade_state['last_trade_reasons'] = trade_reasons
+        self._save_trade_state(trade_state, TRADE_STATE_FILE)
+        log(f"💾 trade_state 저장 완료")
+
         # 🎯 텔레그램 알림 전송 (상세 내역 포함)
         if self.is_live_trade:
-             msg = f"🤖 V16 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
+             msg = f"🤖 V16 Upbit 리밸런싱 완료\n트리거: {', '.join(trade_reasons)}\n턴오버: {turnover:.1%}"
              if self.is_force: msg += " (FORCE)"
              if self.target_amount > 0: msg += f"\nTarget: {self.target_amount:,.0f} KRW"
-             
+
              if self.trade_history:
                  msg += "\n\n[체결 내역]\n" + "\n".join(self.trade_history)
              else:
