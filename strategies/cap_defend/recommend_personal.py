@@ -1,8 +1,8 @@
 """
-Cap Defend V15 Recommendation Script (Personal Version)
+Cap Defend V16 Recommendation Script (Personal Version)
 =====================================================
 Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + Defense Top3
-Coin V15: K:SMA(60)+1%hyst + H:Mom21+Mom90+Vol5% + G5 + EW + DD Exit + Blacklist
+Coin V16: K:SMA(60)+1%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+25%Cap + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
 
@@ -41,8 +41,18 @@ except Exception:
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
-STRATEGY_VERSION = "V15"
+STRATEGY_VERSION = "V16"
 VERSION_HISTORY = [
+    ("V16", "2026-03",
+     "코인: Mom30+25%Cap, 주식: V15 동일, hysteresis 수정",
+     """<b>▶ 코인 변경 (V16)</b>
+• <b>Health:</b> <span style='color:#d93025;'>Mom(30)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom21→30으로 변경)
+• <b>비중 캡:</b> <span style='color:#d93025;'>25% Cap</span> — 1종목 최대 25%, 나머지 현금 (붕괴 리스크 방어)
+• <b>백테스트:</b> 10-anchor 3트랜치 평균 Sharpe 1.451, CAGR +64.5%, MDD -33.2%, Calmar 1.94
+• <b>카나리아:</b> Hysteresis dead zone에서 signal_state.json 이전 상태 참조 (stateless 수정)
+
+<b>▶ 주식: V15 동일</b>"""),
+
     ("V15", "2026-03",
      "R7 universe, Z-score4 selection, M+D2 trigger rebalancing, delta trading",
      """<b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
@@ -168,7 +178,7 @@ CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V15: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V16: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -502,7 +512,7 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
 
 def run_stock_strategy_v15(log, all_prices, target_date):
     """V15 Stock Strategy: R7 + EEM-only canary (0.5% hyst) + No health + Z-score4 EW + Defense Top3"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V15: R7+EEM+Zscore4+EW)</h2>")
+    log.append("<h2>📈 주식 포트폴리오 분석 (V16: R7+EEM+Zscore4+EW)</h2>")
     eem = all_prices.get('EEM')
     meta = {'signal_dist': {}, 'next_candidates': []}
     stock_holdings: list = []  # 실제 보유 종목 (signal_state.json에서 로드)
@@ -623,7 +633,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=True):
     date_str = target_date.date()
-    log.append(f"<h3>🪙 코인 포트폴리오 (V15) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V16) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     btc = all_prices.get('BTC-USD')
@@ -702,7 +712,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     bl_set = {t for t, _ in blacklisted}
     filtered_universe = [t for t in coin_universe if t not in bl_set]
 
-    # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+    # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
     healthy = []
     rows = []
 
@@ -719,17 +729,17 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
         if (tgt_dt - last_dt).days != 0: continue
 
         cur_p = p.iloc[-1]
-        mom21 = calc_ret(p, 21)
+        mom30 = calc_ret(p, 30)
         mom90 = calc_ret(p, 90)
         vol90 = p.pct_change().iloc[-90:].std()
 
-        is_ok = (pd.notna(mom21) and mom21 > 0 and
+        is_ok = (pd.notna(mom30) and mom30 > 0 and
                  pd.notna(mom90) and mom90 > 0 and
                  vol90 <= VOL_CAP_FILTER)
         status = "🟢" if is_ok else "🔴"
 
         rows.append({'Coin': t, 'Price': fmt_price(cur_p),
-                     'Mom21': f"{mom21:.2%}" if pd.notna(mom21) else "-",
+                     'Mom30': f"{mom30:.2%}" if pd.notna(mom30) else "-",
                      'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
                      'Vol90': f"{vol90:.4f}", 'Status': status})
         if is_ok:
@@ -752,8 +762,10 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     meta['next_candidates'] = healthy[N_SELECTED_COINS:N_SELECTED_COINS+5]
     log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
 
-    # --- Weighting: Equal Weight ---
-    weights = {t: 1.0 / len(top5) for t in top5}
+    # --- Weighting: Equal Weight with 25% Cap ---
+    COIN_WEIGHT_CAP = 0.25
+    w = min(1.0 / len(top5), COIN_WEIGHT_CAP)
+    weights = {t: w for t in top5}
     w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]
     try: log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except: pass
@@ -873,9 +885,12 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 } else if (pct === 0) {
                     statusHtml = '<div style="background:#e8f5e9; padding:12px; border-radius:8px; margin-top:10px;">'
                         + '\u2705 ' + regime + ' | \ud604\uc7ac \ubcf4\uc720 = \ucd94\ucc9c \uc885\ubaa9 (\ub9ac\ubc38\ub7f0\uc2f1 \ubd88\ud544\uc694)</div>';
+                } else if (result.added.length >= 2) {
+                    statusHtml = '<div style="background:#fce8e6; border:2px solid #d93025; padding:12px; border-radius:8px; margin-top:10px;">'
+                        + '&#x1F6A8; ' + regime + ' | <b>' + result.added.length + '\uc885\ubaa9 \ubcc0\uacbd \u2014 \ud2b8\ub9ac\uac70 \ub9ac\ubc38\ub7f0\uc2f1</b></div>';
                 } else {
                     statusHtml = '<div style="background:#fff3e0; border:1px solid #ff9800; padding:12px; border-radius:8px; margin-top:10px;">'
-                        + '&#x1F504; ' + regime + ' | Turnover ' + pct + '% \u2014 <b>\uc6d4\ub9d0 \ub9ac\ubc38\ub7f0\uc2f1 \uc2dc \ubc18\uc601</b></div>';
+                        + '&#x1F504; ' + regime + ' | ' + result.added.length + '\uc885\ubaa9 \ubcc0\uacbd \u2014 <b>\uc6d4\ucd08 \ub9ac\ubc38\ub7f0\uc2f1 \uc2dc \ubc18\uc601</b></div>';
                 }
 
                 el.innerHTML = '<div style="margin-top: 10px;">'

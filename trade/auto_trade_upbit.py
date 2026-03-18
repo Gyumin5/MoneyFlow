@@ -1,7 +1,7 @@
 """
-V15 Upbit Auto Trader (CoinGecko Global Universe)
+V16 Upbit Auto Trader (CoinGecko Global Universe)
 ==================================================
-V15 코인 전략: BTC > SMA(60) + 1%hyst, Mom21+Mom90+Vol5%, 시총순 Top 5 EW
+V16 코인 전략: BTC > SMA(60) + 1%hyst, Mom30+Mom90+Vol5%, 시총순 Top 5 EW + 25% Cap
 - DD Exit: 60d peak -25% → cash
 - Blacklist: -15% daily → 7d exclude
 - Crash Breaker: BTC -10% daily → cash
@@ -50,7 +50,7 @@ MIN_HISTORY_DAYS = 253
 
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-LOG_FILE = "auto_trade_v15_upbit.log"
+LOG_FILE = "auto_trade_v16_upbit.log"
 
 
 def log(message: str):
@@ -68,7 +68,7 @@ def send_telegram(message: str):
     except: pass
 
 
-class V15UpbitTrader:
+class V16UpbitTrader:
     def __init__(self, is_live_trade: bool = False, is_force: bool = False, target_amount: int = 0):
         self.is_live_trade = is_live_trade
         self.is_force = is_force
@@ -230,7 +230,7 @@ class V15UpbitTrader:
 
     def get_target_portfolio(self, universe: List[str]) -> Tuple[Dict[str, float], bool, str, List[str]]:
         log("")
-        log("📊 V15 전략 분석 중...")
+        log("📊 V16 전략 분석 중...")
 
         # 1. BTC Check
         btc = self.get_yahoo_ohlcv('BTC', 365)
@@ -301,12 +301,12 @@ class V15UpbitTrader:
                     log(f"  🚫 {t}: Blacklist (worst {worst_ret:+.1%} in {BL_DAYS}d)")
                     continue
 
-            # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
-            mom21 = self.calc_ret(c, 21)
+            # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+            mom30 = self.calc_ret(c, 30)
             mom90 = self.calc_ret(c, 90)
             vol90 = self.calc_volatility(c, 90)
 
-            if mom21 > 0 and mom90 > 0 and vol90 <= VOL_CAP_FILTER:
+            if mom30 > 0 and mom90 > 0 and vol90 <= VOL_CAP_FILTER:
                 healthy.append({'ticker': t, 'vol': vol90})
 
         healthy_tickers = [h['ticker'] for h in healthy]
@@ -339,8 +339,9 @@ class V15UpbitTrader:
         if not final_picks:
             return {}, False, "모든 코인 DD Exit", healthy_tickers
 
-        # Equal Weight based on original top5 size (DD-exited weight → cash)
-        ew = 1.0 / len(top5)
+        # Equal Weight with 25% Cap (DD-exited weight → cash)
+        COIN_WEIGHT_CAP = 0.25
+        ew = min(1.0 / len(top5), COIN_WEIGHT_CAP)
         w = {t: ew for t in final_picks}
         cash_from_dd = ew * len(dd_exits)
 
@@ -652,7 +653,7 @@ class V15UpbitTrader:
         
         # 🎯 텔레그램 알림 전송 (상세 내역 포함)
         if self.is_live_trade:
-             msg = f"🤖 V15 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
+             msg = f"🤖 V16 Upbit 리밸런싱 완료\n턴오버: {turnover:.1%}"
              if self.is_force: msg += " (FORCE)"
              if self.target_amount > 0: msg += f"\nTarget: {self.target_amount:,.0f} KRW"
              
@@ -670,4 +671,4 @@ if __name__ == "__main__":
     parser.add_argument('--amount', type=int, default=0, help="목표 운용 금액 (0=전체)")
     args = parser.parse_args()
     
-    V15UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()
+    V16UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()
