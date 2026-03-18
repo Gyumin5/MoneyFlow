@@ -822,7 +822,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     integrated_html = ""
     if diff_table_rows:
         integrated_html = f"<h3>Turnover: {turnover:.2%} ({action_guide})</h3>"
-        integrated_html += "<table class='mobile-card-table'><thead><tr><th>Asset</th><th>Value (KRW)</th><th>My</th><th>Target</th><th>Diff</th><th>Action</th></tr></thead><tbody>"
+        integrated_html += "<table class='mobile-card-table'><thead><tr><th>Asset</th><th>My</th><th>Target</th><th>Diff</th><th>Action</th></tr></thead><tbody>"
         
         total_value_sum = sum(item['Value'] for item in diff_table_rows)
         
@@ -833,9 +833,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             
             val_fmt = f"{int(row['Value']):,}" if row['Value'] > 0 else "0"
             
-            integrated_html += f"<tr><td data-label='Asset'>{row['Asset']}</td><td data-label='Value (KRW)'>{val_fmt}</td><td data-label='My'>{row['My']:.1%}</td><td data-label='Target'>{row['Target']:.1%}</td><td data-label='Diff'>{row['Diff']:+.1%}</td><td data-label='Action' style='{color}'>{row['Action']}</td></tr>"
+            integrated_html += f"<tr><td data-label='Asset'>{row['Asset']}</td><td data-label='My'>{row['My']:.1%}</td><td data-label='Target'>{row['Target']:.1%}</td><td data-label='Diff'>{row['Diff']:+.1%}</td><td data-label='Action' style='{color}'>{row['Action']}</td></tr>"
         
-        integrated_html += f"<tr><td data-label='Total' style='font-weight:bold;'>Total</td><td data-label='Value (KRW)' style='font-weight:bold;'>{int(total_value_sum):,}</td><td data-label='My'></td><td data-label='Target'></td><td data-label='Diff'></td><td data-label='Action'></td></tr>"
+        integrated_html += f"<tr><td data-label='Total' style='font-weight:bold;'>Total</td><td data-label='My'></td><td data-label='Target'></td><td data-label='Diff'></td><td data-label='Action'></td></tr>"
         integrated_html += "</tbody></table>"
 
     # Strategy documentation link
