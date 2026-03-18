@@ -152,7 +152,15 @@ VERSION_HISTORY = [
 
 STOCK_RATIO, COIN_RATIO = 0.60, 0.40
 CASH_ASSET = 'Cash'
-CASH_BUFFER_PERCENT = 0.02 # 2% Cash Buffer
+CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
+
+def get_cash_buffer():
+    """trade_state.json에서 cash_buffer 읽기. 없으면 기본값."""
+    try:
+        with open('trade_state.json', 'r') as f:
+            return json.load(f).get('cash_buffer', CASH_BUFFER_PERCENT_DEFAULT)
+    except Exception:
+        return CASH_BUFFER_PERCENT_DEFAULT
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
 # Stock Configuration (V15: R7 Universe + EEM-only Canary)
@@ -1258,13 +1266,14 @@ if __name__ == "__main__":
     # Apply Cash Buffer to Target Portfolio (Coin Part)
     # c_port sum is 1.0. We need to scale it down to (1.0 - BUFFER) and assign BUFFER to CASH.
     # But only if it's "Full Invest" mode. If it's Risk-Off (CASH=1.0), BUFFER logic is redundant but safe.
+    cash_buf = get_cash_buffer()
     c_port_buffered = {}
     if CASH_ASSET in c_port and c_port[CASH_ASSET] == 1.0:
         c_port_buffered = {CASH_ASSET: 1.0}
     else:
         for t, w in c_port.items():
-            c_port_buffered[t] = w * (1.0 - CASH_BUFFER_PERCENT)
-        c_port_buffered[CASH_ASSET] = c_port_buffered.get(CASH_ASSET, 0.0) + CASH_BUFFER_PERCENT
+            c_port_buffered[t] = w * (1.0 - cash_buf)
+        c_port_buffered[CASH_ASSET] = c_port_buffered.get(CASH_ASSET, 0.0) + cash_buf
 
     integrated_rows = []
     
