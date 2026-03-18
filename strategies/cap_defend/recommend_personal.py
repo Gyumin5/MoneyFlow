@@ -1070,7 +1070,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             async function updateBuffer() {{
                 const val = document.getElementById('bufferSelect').value;
                 const status = document.getElementById('bufferStatus');
-                const pwd = prompt('비밀번호를 입력하세요:');
+                const pwd = prompt('PIN 4자리를 입력하세요:');
                 if (!pwd) return;
                 try {{
                     const resp = await fetch('http://' + window.location.hostname + ':5000/api/cash_buffer', {{
@@ -1100,7 +1100,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const exchangeName = 'Upbit';
 
                 // 암호 입력 → 서버에서 검증
-                const inputPwd = prompt('거래 암호를 입력하세요:');
+                const inputPwd = prompt('PIN 4자리를 입력하세요:');
                 if (!inputPwd) return;
 
                 // 금액 입력 (0 또는 빈값: 전체 자산 운용)

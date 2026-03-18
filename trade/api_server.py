@@ -12,9 +12,8 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Trade API password (환경변수 또는 하드코딩)
-# 비밀번호: 환경변수 또는 기본값 (서버에서 변경 가능)
-# 기본값: 'REDACTED' — 프로젝트명+버전+특수문자
-TRADE_PASSWORD = os.environ.get('TRADE_PASSWORD', 'REDACTED')
+# 4자리 PIN (환경변수 또는 기본값)
+TRADE_PIN = os.environ.get('TRADE_PIN', '')
 
 @app.after_request
 def after_request(response):
@@ -46,7 +45,7 @@ def run_trade_async(exchange: str, force: bool = False, trade: bool = True, targ
 def trade_upbit():
     # 암호 검증
     data = request.get_json(silent=True) or {}
-    if data.get('password') != TRADE_PASSWORD:
+    if str(data.get('password', '')) != TRADE_PIN:
         return jsonify({"error": "잘못된 비밀번호"}), 403
 
     # 중복 실행 방지 (flock 기반)
@@ -101,7 +100,7 @@ TRADE_STATE_FILE = '/home/ubuntu/trade_state.json'
 @app.route('/api/cash_buffer', methods=['POST'])
 def update_cash_buffer():
     data = request.get_json() or {}
-    if data.get('password') != TRADE_PASSWORD:
+    if str(data.get('password', '')) != TRADE_PIN:
         return jsonify({"error": "잘못된 비밀번호"}), 403
     new_buffer = data.get('cash_buffer')
     if new_buffer is None or not isinstance(new_buffer, (int, float)):
