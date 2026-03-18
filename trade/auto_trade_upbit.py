@@ -996,6 +996,11 @@ class V16UpbitTrader:
         if self.is_force:
             trade_reasons.append("강제 실행")
 
+        # pending이 남아있으면 트리거로 판단
+        existing_pending = trade_state.get('pending_trades', {})
+        if existing_pending and not trade_reasons:
+            trade_reasons.append(f"pending 복구 ({list(existing_pending.keys())})")
+
         # Recalculate turnover for logging
         turnover = sum(abs(curr_w.get(k,0) - target_w.get(k,0))
                        for k in set(curr_w)|set(target_w)) / 2
