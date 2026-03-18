@@ -11,6 +11,9 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# Trade API password (환경변수 또는 하드코딩)
+TRADE_PASSWORD = os.environ.get('TRADE_PASSWORD', 'REDACTED')
+
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
@@ -39,10 +42,25 @@ def run_trade_async(exchange: str, force: bool = False, trade: bool = True, targ
 
 @app.route('/api/trade/upbit', methods=['POST'])
 def trade_upbit():
+    # 암호 검증
+    data = request.get_json(silent=True) or {}
+    if data.get('password') != TRADE_PASSWORD:
+        return jsonify({"error": "잘못된 비밀번호"}), 403
+
+    # 중복 실행 방지 (flock 기반)
+    lock_file = '/tmp/auto_trade_upbit.lock'
+    try:
+        import fcntl
+        lock_fd = open(lock_file, 'w')
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        return jsonify({"error": "이미 매매 실행 중 (cron 또는 다른 요청)"}), 409
+
     for tid, task in running_tasks.items():
         if "upbit" in tid and task.get("status") == "running":
+            lock_fd.close()
             return jsonify({"error": "Upbit trade is already running", "task_id": tid}), 409
-    data = request.get_json(silent=True) or {}
+
     target_amount = int(data.get('target_amount', 0))
     thread = threading.Thread(target=run_trade_async, args=("upbit", True, True, target_amount))
     thread.start()
