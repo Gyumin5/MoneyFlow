@@ -1070,11 +1070,13 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             async function updateBuffer() {{
                 const val = document.getElementById('bufferSelect').value;
                 const status = document.getElementById('bufferStatus');
+                const pwd = prompt('비밀번호를 입력하세요:');
+                if (!pwd) return;
                 try {{
                     const resp = await fetch('http://' + window.location.hostname + ':5000/api/cash_buffer', {{
                         method: 'POST',
                         headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ cash_buffer: parseFloat(val) }})
+                        body: JSON.stringify({{ cash_buffer: parseFloat(val), password: pwd }})
                     }});
                     const data = await resp.json();
                     if (resp.ok) {{

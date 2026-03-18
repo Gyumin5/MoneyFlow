@@ -12,6 +12,8 @@ from datetime import datetime
 app = Flask(__name__)
 
 # Trade API password (환경변수 또는 하드코딩)
+# 비밀번호: 환경변수 또는 기본값 (서버에서 변경 가능)
+# 기본값: 'REDACTED' — 프로젝트명+버전+특수문자
 TRADE_PASSWORD = os.environ.get('TRADE_PASSWORD', 'REDACTED')
 
 @app.after_request
@@ -99,6 +101,8 @@ TRADE_STATE_FILE = '/home/ubuntu/trade_state.json'
 @app.route('/api/cash_buffer', methods=['POST'])
 def update_cash_buffer():
     data = request.get_json() or {}
+    if data.get('password') != TRADE_PASSWORD:
+        return jsonify({"error": "잘못된 비밀번호"}), 403
     new_buffer = data.get('cash_buffer')
     if new_buffer is None or not isinstance(new_buffer, (int, float)):
         return jsonify({"error": "cash_buffer 값 필요 (0.02~0.80)"}), 400
