@@ -1,5 +1,5 @@
 """
-Cap Defend V15 Recommendation Script (Standard Version)
+Cap Defend V16 Recommendation Script (Standard Version)
 =======================================================
 Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + Defense Top3
 - Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs — R6+VNQ for REIT diversification)
@@ -8,7 +8,7 @@ Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + 
 - Selection: Z-score Top 4 (zscore(12M_mom) + zscore(Sharpe63)), Equal Weight
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 
-Coin V15: K:SMA(60) + H:Mom(21)+Mom(90)+Vol5% + G5 + EW + DD Exit + Blacklist
+Coin V16: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+25%Cap + DD Exit + Blacklist
 - Canary: BTC > SMA(60) + 1% hysteresis
 - Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
 - Selection: 시총순 Top 5, Equal Weight
@@ -58,7 +58,7 @@ COIN_CANARY_HYST = 0.01  # 1% hysteresis band
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V15: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V16: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -295,7 +295,7 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
 
 def run_stock_strategy_v15(log, all_prices):
     """V15 Stock Strategy: R7 + EEM-only canary (0.5% hyst) + No health + Z-score4 EW + Defense Top3"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V15: R7+EEM+Zscore4+EW)</h2>")
+    log.append("<h2>📈 주식 포트폴리오 분석 (V16: R7+EEM+Zscore4+EW)</h2>")
     eem = all_prices.get('EEM')
 
     if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:
@@ -303,12 +303,24 @@ def run_stock_strategy_v15(log, all_prices):
         eem_sma = eem.rolling(STOCK_CANARY_MA_PERIOD).mean().iloc[-1]
         dist = eem_cur / eem_sma - 1
         # EEM-only canary with 0.5% hysteresis
+        # Load previous stock canary state
+        prev_stock_risk_on = None
+        try:
+            import json as _json
+            _state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_state.json')
+            with open(_state_path, 'r') as _sf:
+                prev_stock_risk_on = _json.load(_sf).get('risk_on')
+        except Exception:
+            pass
+
         if dist > STOCK_CANARY_HYST:
             risk_on = True
         elif dist < -STOCK_CANARY_HYST:
             risk_on = False
+        elif prev_stock_risk_on is not None:
+            risk_on = prev_stock_risk_on  # dead zone: maintain previous state
         else:
-            risk_on = eem_cur > eem_sma  # dead zone: simple comparison
+            risk_on = eem_cur > eem_sma  # no state: fallback
         log.append(f"<p><b>[Canary]</b> EEM: ${eem_cur:.2f} (MA{STOCK_CANARY_MA_PERIOD} ${eem_sma:.2f}, dist {dist:+.2%}, hyst ±{STOCK_CANARY_HYST:.1%})</p>")
         if risk_on:
             log.append("<p>✅ <b>Risk-On</b></p>")
@@ -371,7 +383,7 @@ def run_stock_strategy_v15(log, all_prices):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
-    log.append("<h2>🪙 코인 포트폴리오 (V15)</h2>")
+    log.append("<h2>🪙 코인 포트폴리오 (V16)</h2>")
 
     btc = all_prices.get('BTC-USD')
     if len(btc) < CANARY_SMA_PERIOD: return {CASH_ASSET: 1.0}, "데이터 부족"
@@ -390,15 +402,26 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
     # --- Canary: BTC > SMA(60) with 1% Hysteresis ---
     sma = btc.rolling(CANARY_SMA_PERIOD).mean().iloc[-1]
     cur = btc.iloc[-1]
-    # Stateless hysteresis: use distance from SMA as proxy
-    # ON if cur > sma * 1.01, OFF if cur < sma * 0.99, else maintain trend
     dist = cur / sma - 1
+
+    # Load previous canary state from signal_state.json
+    prev_coin_risk_on = None
+    try:
+        import json as _json
+        _state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_state.json')
+        with open(_state_path, 'r') as _sf:
+            prev_coin_risk_on = _json.load(_sf).get('coin_risk_on')
+    except Exception:
+        pass
+
     if dist > COIN_CANARY_HYST:
         canary_on = True
     elif dist < -COIN_CANARY_HYST:
         canary_on = False
+    elif prev_coin_risk_on is not None:
+        canary_on = prev_coin_risk_on  # dead zone: maintain previous state
     else:
-        canary_on = cur > sma  # in dead zone, use simple comparison
+        canary_on = cur > sma  # no state: fallback to simple comparison
     risk_label = '<span style="color:green">Risk-On</span>' if canary_on else '<span style="color:red">Risk-Off</span>'
     hyst_info = f" (Hyst ±{COIN_CANARY_HYST:.0%}, dist {dist:+.2%})"
     log.append(f"<p><b>[Canary]</b> BTC ${cur:,.0f} vs SMA({CANARY_SMA_PERIOD}) ${sma:,.0f} → {risk_label}{hyst_info}</p>")
@@ -417,7 +440,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
     bl_set = {t for t, _ in blacklisted}
     filtered_universe = [t for t in coin_universe if t not in bl_set]
 
-    # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+    # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
     rows = []
     healthy = []
     for t in filtered_universe:
@@ -428,16 +451,16 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
         if (tgt_dt - last_dt).days != 0: continue
 
         cur_p = p.iloc[-1]
-        mom21 = calc_ret(p, 21)
+        mom30 = calc_ret(p, 30)
         mom90 = calc_ret(p, 90)
         vol90 = p.pct_change().iloc[-90:].std()
 
-        is_ok = (pd.notna(mom21) and mom21 > 0 and
+        is_ok = (pd.notna(mom30) and mom30 > 0 and
                  pd.notna(mom90) and mom90 > 0 and
                  vol90 <= VOL_CAP_FILTER)
 
         rows.append({'Coin': t, 'Price': f"${cur_p:.4f}",
-                     'Mom21': f"{mom21:.2%}" if pd.notna(mom21) else "-",
+                     'Mom30': f"{mom30:.2%}" if pd.notna(mom30) else "-",
                      'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
                      'Vol90': f"{vol90:.4f}",
                      'Status': "🟢" if is_ok else "🔴"})
@@ -460,8 +483,10 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
     top5 = healthy[:N_SELECTED_COINS]
     log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
 
-    # --- Weighting: Equal Weight ---
-    weights = {t: 1.0 / len(top5) for t in top5}
+    # --- Weighting: Equal Weight with 25% Cap ---
+    COIN_WEIGHT_CAP = 0.25
+    w = min(1.0 / len(top5), COIN_WEIGHT_CAP)
+    weights = {t: w for t in top5}
     w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]
     try: log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except: pass
@@ -488,7 +513,13 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
         if not weights:
             weights = {CASH_ASSET: 1.0}
 
-    return weights, "Full Invest"
+    invested_pct = sum(v for k, v in weights.items() if k != CASH_ASSET)
+    cash_pct = 1.0 - invested_pct
+    if cash_pct > 0.01:
+        stat = f"투자 {invested_pct:.0%} / 현금 {cash_pct:.0%}"
+    else:
+        stat = "Full Invest"
+    return weights, stat
 
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today):
     filepath = "portfolio_result.html"
@@ -511,7 +542,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend V15 Recommendation</title>
+        <title>Cap Defend V16 Recommendation</title>
          <style>
             body {{ font-family: -apple-system, sans-serif; background: #f0f2f5; padding: 10px; color: #333; }}
             .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; }}
@@ -528,7 +559,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V15</h1>
+            <h1>🚀 Cap Defend V16</h1>
             <p>리포트 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 종가 기준일: {date_today.strftime('%Y-%m-%d')}</p>
             
             <div class="status-bar">
