@@ -11,9 +11,8 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Trade API password (환경변수 또는 하드코딩)
-# 4자리 PIN (환경변수 또는 기본값)
-TRADE_PIN = os.environ.get('TRADE_PIN', 'REDACTED')
+# 4자리 PIN (서버 환경변수 TRADE_PIN 필수 설정)
+TRADE_PIN = os.environ.get('TRADE_PIN', '')
 
 @app.after_request
 def after_request(response):
