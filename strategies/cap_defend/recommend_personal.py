@@ -792,7 +792,14 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
         if not weights:
             weights = {CASH_ASSET: 1.0}
 
-    return weights, "Full Invest", meta, log, healthy
+    invested_pct = sum(v for k, v in weights.items() if k != CASH_ASSET)
+    cash_pct = 1.0 - invested_pct
+    if cash_pct > 0.01:
+        weights[CASH_ASSET] = weights.get(CASH_ASSET, 0) + cash_pct
+        stat = f"투자 {invested_pct:.0%} / 현금 {cash_pct:.0%}"
+    else:
+        stat = "Full Invest"
+    return weights, stat, meta, log, healthy
 
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None):
     filepath = "portfolio_result_gmoh.html"
