@@ -1001,6 +1001,11 @@ class V16UpbitTrader:
         if existing_pending and not trade_reasons:
             trade_reasons.append(f"pending 복구 ({list(existing_pending.keys())})")
 
+        # cash_buffer 변경 시 트리거
+        if trade_state.get('buffer_changed') and not trade_reasons:
+            trade_reasons.append("buffer 변경")
+            del trade_state['buffer_changed']
+
         # Recalculate turnover for logging
         turnover = sum(abs(curr_w.get(k,0) - target_w.get(k,0))
                        for k in set(curr_w)|set(target_w)) / 2
