@@ -514,6 +514,179 @@ class V16UpbitTrader:
             except Exception as e:
                 log(f"  ❌ 재매수 중 에러: {e}")
 
+    # ═══ 분할 매매 엔진 ═══
+
+    def calc_safe_amount(self, ticker, side='buy', max_slip=0.001):
+        """슬리피지 0.1% 이내로 매매 가능한 최대 금액 (호가 기반)."""
+        try:
+            ob = pyupbit.get_orderbook(f"KRW-{ticker}")
+            if not ob:
+                return MIN_ORDER_KRW
+            units = ob["orderbook_units"]
+            if side == 'buy':
+                best = units[0]["ask_price"]
+                limit_price = best * (1 + max_slip)
+                safe = sum(u["ask_size"] * u["ask_price"]
+                           for u in units if u["ask_price"] <= limit_price)
+            else:
+                best = units[0]["bid_price"]
+                limit_price = best * (1 - max_slip)
+                safe = sum(u["bid_size"] * u["bid_price"]
+                           for u in units if u["bid_price"] >= limit_price)
+            return max(safe, MIN_ORDER_KRW)
+        except Exception:
+            return 0  # 호가 조회 실패 → 0 반환 → 주문 스킵
+
+    def split_buy(self, ticker, target_krw, timeout_sec=180):
+        """분할 매수: 슬리피지 0.1% 이내씩, 7초 간격, 타임아웃."""
+        # 시작 전 잔고 확인
+        init_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+        init_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+        init_val = init_bal * init_price
+        est_filled = 0  # dry-run용 추정 체결액
+
+        start = time.time()
+        attempt = 0
+        while True:
+            if time.time() - start > timeout_sec:
+                log(f"  ⏰ {ticker} 분할매수 타임아웃 ({timeout_sec}초)")
+                break
+            # 실체결 금액 확인 (실거래) 또는 추정 (dry-run)
+            if self.is_live_trade:
+                cur_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+                cur_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+                filled = cur_bal * cur_price - init_val
+            else:
+                filled = est_filled
+            remaining = target_krw - filled
+            if remaining < 50000:
+                break
+            krw_bal = self.upbit.get_balance("KRW") or 0
+            safe = self.calc_safe_amount(ticker, 'buy')
+            chunk = min(remaining, safe, krw_bal * 0.99)
+            if chunk < MIN_ORDER_KRW:
+                log(f"  💤 {ticker} 매수 스킵: chunk {chunk:,.0f} < 최소주문")
+                break
+            attempt += 1
+            log(f"  📈 [{attempt}] {ticker} 분할매수 {chunk:,.0f}원 (잔여 {remaining:,.0f})")
+            success = self.order(ticker, 'buy', chunk)
+            if not success:
+                for retry in range(3):
+                    log(f"  🔄 재시도 {retry+1}/3 (30초 대기)")
+                    time.sleep(30)
+                    success = self.order(ticker, 'buy', chunk)
+                    if success:
+                        break
+                if not success:
+                    log(f"  ❌ {ticker} 매수 실패")
+                    break
+            if not self.is_live_trade:
+                est_filled += chunk  # dry-run: 추정 누적
+            time.sleep(7)
+
+        # 최종 체결액
+        if self.is_live_trade:
+            final_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+            final_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+            total_filled = final_bal * final_price - init_val
+        else:
+            total_filled = est_filled
+        log(f"  💰 {ticker} 분할매수 완료: {total_filled:,.0f} / {target_krw:,.0f}")
+        return max(total_filled, 0)
+
+    def split_sell(self, ticker, target_krw, timeout_sec=180):
+        """분할 매도: 슬리피지 0.1% 이내씩, 7초 간격."""
+        # 시작 전 잔고 확인
+        init_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+        init_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+        init_val = init_bal * init_price
+        est_sold = 0  # dry-run용
+
+        start = time.time()
+        attempt = 0
+        while True:
+            if time.time() - start > timeout_sec:
+                log(f"  ⏰ {ticker} 분할매도 타임아웃 ({timeout_sec}초)")
+                break
+            # 실체결 확인
+            if self.is_live_trade:
+                cur_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+                cur_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+                sold = init_val - cur_bal * cur_price
+            else:
+                sold = est_sold
+            remaining = target_krw - sold
+            if remaining < 50000:
+                break
+            safe = self.calc_safe_amount(ticker, 'sell')
+            chunk_krw = min(remaining, safe)
+            if cur_price <= 0 or chunk_krw < MIN_ORDER_KRW:
+                break
+            chunk_qty = chunk_krw / cur_price
+            chunk_qty = min(chunk_qty, cur_bal)
+            if chunk_qty * cur_price < MIN_ORDER_KRW:
+                break
+            attempt += 1
+            log(f"  📉 [{attempt}] {ticker} 분할매도 {chunk_qty:.4f}개 (~{chunk_qty*cur_price:,.0f}원)")
+            if not self.order(ticker, 'sell', chunk_qty):
+                for retry in range(3):
+                    log(f"  🔄 재시도 {retry+1}/3 (30초 대기)")
+                    time.sleep(30)
+                    if self.order(ticker, 'sell', chunk_qty):
+                        break
+                else:
+                    log(f"  ❌ {ticker} 매도 실패")
+                    break
+            if not self.is_live_trade:
+                est_sold += chunk_qty * cur_price  # dry-run: 추정 누적
+            time.sleep(7)
+
+        # 최종 체결액
+        if self.is_live_trade:
+            final_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+            final_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+            total_sold = init_val - final_bal * final_price
+        else:
+            total_sold = est_sold
+        log(f"  💰 {ticker} 분할매도 완료: {total_sold:,.0f} / {target_krw:,.0f}")
+        return max(total_sold, 0)
+
+    def emergency_sell_all(self, tickers):
+        """긴급 전량 매도: 코인별 빠른 분할 (1~2초 간격, 2~3회)."""
+        log("🚨 긴급 전량 매도 시작")
+        # 미체결 주문 먼저 취소
+        for t in tickers:
+            self.cancel_all_orders(t)
+        time.sleep(1)
+
+        for t in tickers:
+            bal = self.upbit.get_balance(f"KRW-{t}") or 0
+            price = pyupbit.get_current_price(f"KRW-{t}") or 0
+            if bal * price < MIN_ORDER_KRW:
+                continue
+            log(f"  🚨 {t} 긴급매도 ({bal:.4f}개, ~{bal*price:,.0f}원)")
+            # 빠른 분할: 호가 기반, 1초 간격
+            for i in range(5):  # 최대 5회
+                cur_bal = self.upbit.get_balance(f"KRW-{t}") or 0
+                cur_price = pyupbit.get_current_price(f"KRW-{t}") or 0
+                if cur_bal * cur_price < MIN_ORDER_KRW:
+                    break
+                safe_krw = self.calc_safe_amount(t, 'sell')
+                if safe_krw <= 0:
+                    safe_krw = cur_bal * cur_price  # fallback: 전량
+                sell_qty = min(cur_bal, safe_krw / cur_price if cur_price > 0 else cur_bal)
+                if self.order(t, 'sell', sell_qty):
+                    log(f"    ✅ {t} 긴급매도 {i+1}회 성공")
+                else:
+                    log(f"    ⚠️ {t} 긴급매도 {i+1}회 실패")
+                time.sleep(1)
+            # 잔량 확인 + 정리
+            final_bal = self.upbit.get_balance(f"KRW-{t}") or 0
+            final_price = pyupbit.get_current_price(f"KRW-{t}") or 0
+            if final_bal * final_price >= MIN_ORDER_KRW:
+                self.order(t, 'sell', final_bal)
+        log("🚨 긴급 매도 완료")
+
     def _save_trade_state(self, state, filepath):
         """원자적 state 저장 (tmp + replace)."""
         try:
@@ -852,44 +1025,99 @@ class V16UpbitTrader:
             investable_total = min(self.target_amount, total_val)
             log(f"🎯 Target Amount 적용: {self.target_amount:,.0f}원 (실 운용액: {investable_total:,.0f}원)")
         
-        # 1. 매도 (확실하게 청산)
+        # ── pending 초기화 ──
+        pending = {}
+
+        # ── 1. 매도 (시총 낮은 것 먼저) ──
+        sell_list = []
         for t in curr_w.keys():
+            if t == 'Cash':
+                continue
             tgt = target_w.get(t, 0)
             target_amt_val = investable_total * tgt
             current_amt_val = cur_assets_val.get(t, 0)
-            
-            # 목표보다 많이 보유 중이면 매도
-            if target_amt_val < current_amt_val: 
-                sell_amt_krw = current_amt_val - target_amt_val
-                
-                # 수량으로 변환
-                qty = holdings_qty[t]
-                sell_ratio = sell_amt_krw / current_amt_val
-                sell_qty = qty * sell_ratio
-                
-                if tgt == 0: sell_qty = qty # 전량
-                
-                self.ensure_sell(t, sell_qty, is_clearance=(tgt == 0))
-        
+            if target_amt_val < current_amt_val:
+                sell_amt = current_amt_val - target_amt_val
+                is_full = (tgt == 0)
+                sell_list.append((t, sell_amt, is_full))
+
+        # 시총 낮은 것 먼저 (유니버스 역순)
+        sell_list.sort(key=lambda x: x[0], reverse=True)
+
+        for t, sell_amt, is_full in sell_list:
+            if is_full:
+                log(f"📉 {t} 전량 매도")
+                qty = holdings_qty.get(t, 0)
+                self.ensure_sell(t, qty, is_clearance=True)
+            else:
+                log(f"📉 {t} 부분 매도 (-{sell_amt:,.0f}원)")
+                sold = self.split_sell(t, sell_amt, timeout_sec=180)
+                if sell_amt - sold > 50000:
+                    pending[t] = {'side': 'sell', 'target_krw': sell_amt, 'filled_krw': sold,
+                                  'created': datetime.now().strftime('%Y-%m-%d %H:%M')}
+
         time.sleep(2)
-        
-        # 2. 매수 (확실하게 확보)
+
+        # ── 2. 매수 (시총 높은 것 먼저) ──
+        buy_list = []
+        for t, w in target_w.items():
+            if t == 'Cash':
+                continue
+            tgt_amt = investable_total * w
+            cur_amt = cur_assets_val.get(t, 0)
+            needed = tgt_amt - cur_amt
+            if needed > MIN_ORDER_KRW:
+                buy_list.append((t, needed))
+
+        # 시총 높은 것 먼저 (유니버스 순서)
+        # buy_list는 이미 target_w 순서 (시총순)
+
         krw_bal = self.upbit.get_balance("KRW") or 0
         log(f"\n💵 매수 시작 (보유 현금: {krw_bal:,.0f}원)")
+
+        for t, needed in buy_list:
+            krw_bal = self.upbit.get_balance("KRW") or 0
+            buy_amt = min(needed, krw_bal * 0.99)
+            if buy_amt < MIN_ORDER_KRW:
+                log(f"  💤 {t} 매수 스킵: 현금 부족 ({krw_bal:,.0f}원)")
+                pending[t] = {'side': 'buy', 'target_krw': needed, 'filled_krw': 0,
+                              'created': datetime.now().strftime('%Y-%m-%d %H:%M')}
+                continue
+            log(f"  👉 {t} 분할매수 계획: +{buy_amt:,.0f}원")
+            filled = self.split_buy(t, buy_amt, timeout_sec=180)
+            if needed - filled > 50000:
+                pending[t] = {'side': 'buy', 'target_krw': needed, 'filled_krw': filled,
+                              'created': datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+        # pending 저장
+        trade_state['pending_trades'] = pending
+        if pending:
+            log(f"📋 Pending: {list(pending.keys())}")
         
-        for t, w in target_w.items():
-            if t == 'Cash': continue # Skip Cash
-            tgt_amt = investable_total * w
-            
-            # 매수 계획 로그 (항상 출력)
-            cur_amt = cur_assets_val.get(t, 0) 
-            needed = tgt_amt - cur_amt
-            if needed > 5000:
-                log(f"  👉 {t} 매수 계획: +{needed:,.0f}원 (목표 비중: {w:.1%})")
-            
-            if tgt_amt > cur_amt:
-                self.ensure_buy(t, tgt_amt)
-        
+        # ── 캐싱: monitor용 데이터 저장 (KRW 기준!) ──
+        try:
+            # BTC KRW 현재가 + SMA60 (KRW)
+            btc_krw = pyupbit.get_current_price("KRW-BTC") or 0
+            if btc_krw > 0:
+                trade_state['btc_prev_close'] = btc_krw
+            # SMA60을 KRW로: Yahoo USD SMA × 환율
+            btc_data = self.all_prices.get('BTC', pd.Series())
+            if len(btc_data) >= CANARY_SMA_PERIOD:
+                sma_usd = float(btc_data.rolling(CANARY_SMA_PERIOD).mean().iloc[-1])
+                trade_state['btc_sma60'] = sma_usd * self.usd_krw_rate
+
+            # coin_peaks: 보유 코인의 KRW 고점 (Upbit 기준)
+            peaks = trade_state.get('coin_peaks', {})
+            for a_str, tr in trade_state.get('tranches', {}).items():
+                for coin in tr.get('picks', []):
+                    cur_krw = pyupbit.get_current_price(f"KRW-{coin}") or 0
+                    if cur_krw > 0:
+                        old_peak = peaks.get(coin, 0)
+                        peaks[coin] = max(old_peak, cur_krw)
+            trade_state['coin_peaks'] = peaks
+        except Exception as e:
+            log(f"⚠️ 캐싱 저장 오류: {e}")
+
         # ── State 저장 (매매 실행 후) ──
         trade_state['coin_risk_on'] = is_risk_on_now
         trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
@@ -910,11 +1138,168 @@ class V16UpbitTrader:
              send_telegram(msg)
         return turnover
 
+    def run_monitor(self):
+        """--monitor 모드: 긴급 탈출 + pending 복구 (30분마다 실행)."""
+        import fcntl
+        lock_fd = open('/tmp/auto_trade_upbit.lock', 'w')
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (IOError, OSError):
+            return  # 다른 인스턴스 실행 중 → 조용히 종료
+
+        try:
+            TRADE_STATE_FILE = 'trade_state.json'
+            trade_state = {}
+            try:
+                with open(TRADE_STATE_FILE, 'r') as f:
+                    trade_state = json.load(f)
+            except Exception:
+                return  # state 없으면 아무것도 안 함
+
+            # ── 1. 긴급 탈출 체크 (pyupbit만) ──
+            emergency = False
+            emergency_reason = ''
+
+            try:
+                btc_price = pyupbit.get_current_price("KRW-BTC") or 0
+
+                # Crash: BTC 전일 대비 -10%
+                btc_prev = trade_state.get('btc_prev_close', 0)
+                if btc_prev > 0 and btc_price > 0:
+                    btc_ret = btc_price / btc_prev - 1
+                    if btc_ret <= CRASH_THRESHOLD:
+                        emergency = True
+                        emergency_reason = f"CRASH BTC {btc_ret:+.1%}"
+
+                # 카나리아 OFF: BTC < SMA60 * 0.99
+                btc_sma60 = trade_state.get('btc_sma60', 0)
+                if not emergency and btc_sma60 > 0 and btc_price > 0:
+                    if trade_state.get('coin_risk_on', False):
+                        if btc_price < btc_sma60 * (1 - CANARY_HYST):
+                            emergency = True
+                            emergency_reason = f"카나리아 OFF (BTC {btc_price:,.0f} < SMA60*0.99 {btc_sma60*0.99:,.0f})"
+
+                # DD Exit: 보유코인 60일고점 대비 -25%
+                if not emergency:
+                    coin_peaks = trade_state.get('coin_peaks', {})
+                    for coin, peak in coin_peaks.items():
+                        if peak <= 0:
+                            continue
+                        cp = pyupbit.get_current_price(f"KRW-{coin}") or 0
+                        if cp > 0:
+                            # peak 갱신 (신고가)
+                            if cp > peak:
+                                trade_state['coin_peaks'][coin] = cp
+                            dd = cp / peak - 1
+                            if dd <= DD_EXIT_THRESHOLD:
+                                emergency = True
+                                emergency_reason = f"DD Exit {coin} ({dd:+.1%})"
+                                break
+            except Exception as e:
+                log(f"⚠️ Monitor 가격 조회 실패: {e}")
+                return
+
+            # ── 긴급 발동 시 ──
+            if emergency:
+                log(f"🚨 MONITOR 긴급: {emergency_reason}")
+                send_telegram(f"🚨 V16 긴급 탈출: {emergency_reason}")
+
+                # 미체결 취소 + 전량 매도
+                held_coins = []
+                try:
+                    balances = self.upbit.get_balances()
+                    for b in balances:
+                        if b['currency'] == 'KRW':
+                            continue
+                        bal = float(b['balance']) + float(b.get('locked', 0))
+                        price = pyupbit.get_current_price(f"KRW-{b['currency']}") or 0
+                        if bal * price >= MIN_ORDER_KRW:
+                            held_coins.append(b['currency'])
+                except Exception:
+                    pass
+
+                if held_coins:
+                    self.emergency_sell_all(held_coins)
+
+                # pending 삭제 + 트랜치 초기화
+                trade_state['pending_trades'] = {}
+                for a_str in trade_state.get('tranches', {}):
+                    trade_state['tranches'][a_str]['picks'] = []
+                    trade_state['tranches'][a_str]['weights'] = {}
+                trade_state['coin_risk_on'] = False
+                trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                trade_state['last_emergency'] = emergency_reason
+                self._save_trade_state(trade_state, TRADE_STATE_FILE)
+                lock_fd.close()
+                return
+
+            # ── 2. Pending 복구 ──
+            pending = trade_state.get('pending_trades', {})
+            if not pending:
+                # peak만 갱신하고 종료
+                self._save_trade_state(trade_state, TRADE_STATE_FILE)
+                lock_fd.close()
+                return
+
+            log(f"📋 Monitor: pending {len(pending)}건 복구 시도")
+
+            for ticker, p in list(pending.items()):
+                side = p.get('side', '')
+                if side == 'buy':
+                    target = p.get('target_krw', 0)
+                    filled = p.get('filled_krw', 0)
+                    remaining = target - filled
+                    if remaining < 50000:
+                        del pending[ticker]
+                        continue
+                    added = self.split_buy(ticker, remaining, timeout_sec=180)
+                    p['filled_krw'] = filled + added
+                    if target - p['filled_krw'] < 50000:
+                        del pending[ticker]
+                        log(f"  ✅ {ticker} pending 매수 완료")
+
+                elif side == 'sell':
+                    target = p.get('target_krw', 0)
+                    filled = p.get('filled_krw', 0)
+                    remaining = target - filled
+                    if remaining < 50000:
+                        del pending[ticker]
+                        continue
+                    sold = self.split_sell(ticker, remaining, timeout_sec=180)
+                    p['filled_krw'] = filled + sold
+                    if target - p['filled_krw'] < 50000:
+                        del pending[ticker]
+                        log(f"  ✅ {ticker} pending 매도 완료")
+
+                elif side == 'sell_all':
+                    bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
+                    price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
+                    if bal * price < MIN_ORDER_KRW:
+                        del pending[ticker]
+                        log(f"  ✅ {ticker} pending 전량매도 완료")
+                    else:
+                        self.ensure_sell(ticker, bal, is_clearance=True)
+
+            trade_state['pending_trades'] = pending
+            trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+            self._save_trade_state(trade_state, TRADE_STATE_FILE)
+            log(f"💾 Monitor 완료 (pending {len(pending)}건 남음)")
+
+        finally:
+            lock_fd.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--trade', action='store_true', help="실제 매매 수행")
     parser.add_argument('--force', action='store_true', help="턴오버 무시하고 강제 매매")
+    parser.add_argument('--monitor', action='store_true', help="모니터링 모드 (긴급탈출+pending)")
     parser.add_argument('--amount', type=int, default=0, help="목표 운용 금액 (0=전체)")
     args = parser.parse_args()
     
-    V16UpbitTrader(is_live_trade=args.trade, is_force=args.force, target_amount=args.amount).run()
+    trader = V16UpbitTrader(is_live_trade=args.trade or args.monitor,
+                            is_force=args.force, target_amount=args.amount)
+    if args.monitor:
+        trader.run_monitor()
+    else:
+        trader.run()
