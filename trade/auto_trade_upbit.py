@@ -31,7 +31,16 @@ from config import (
 # --- 상수 ---
 N_SELECTED_COINS = 5
 VOL_CAP_FILTER = 0.05           # V15: 5% (was 10%)
-CASH_BUFFER_PERCENT = 0.02
+CASH_BUFFER_PERCENT_DEFAULT = 0.02  # 최종 목표
+
+def get_cash_buffer():
+    """trade_state.json에서 cash_buffer 읽기. 없으면 기본값."""
+    try:
+        with open('trade_state.json', 'r') as f:
+            import json
+            return json.load(f).get('cash_buffer', CASH_BUFFER_PERCENT_DEFAULT)
+    except Exception:
+        return CASH_BUFFER_PERCENT_DEFAULT
 MIN_ORDER_KRW = 5000
 
 # V15 Canary / Protection
@@ -363,8 +372,9 @@ class V16UpbitTrader:
         cash_from_dd = ew * len(dd_exits)
 
         # Cash Buffer 2% + DD exit cash
-        buffered_w = {t: val * (1.0 - CASH_BUFFER_PERCENT) for t, val in w.items()}
-        buffered_w['Cash'] = CASH_BUFFER_PERCENT + cash_from_dd
+        cash_buf = get_cash_buffer()
+        buffered_w = {t: val * (1.0 - cash_buf) for t, val in w.items()}
+        buffered_w['Cash'] = cash_buf + cash_from_dd
 
         return buffered_w, False, f"✅ Risk-On ({len(final_picks)}종 EW)", healthy_tickers
 
@@ -779,7 +789,8 @@ class V16UpbitTrader:
         # Cash buffer
         invested = sum(combined_target.values())
         cash_pct = max(1.0 - invested, 0)
-        combined_target['Cash'] = CASH_BUFFER_PERCENT + (cash_pct - CASH_BUFFER_PERCENT if cash_pct > CASH_BUFFER_PERCENT else 0)
+        cash_buf = get_cash_buffer()
+        combined_target['Cash'] = cash_buf + (cash_pct - cash_buf if cash_pct > cash_buf else 0)
 
         log(f"\n📊 3트랜치 합산 타겟:")
         for a_str in sorted(trade_state['tranches'].keys()):

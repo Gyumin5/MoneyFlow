@@ -804,6 +804,14 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None):
     filepath = "portfolio_result_gmoh.html"
 
+    # Read cash_buffer from trade_state.json
+    cash_buffer_pct = 0.02
+    try:
+        with open('trade_state.json', 'r') as _bf:
+            cash_buffer_pct = json.load(_bf).get('cash_buffer', 0.02)
+    except Exception:
+        pass
+
     items = []
     for t, w in final_port.items(): items.append({'종목': t, '자산군': "현금" if t == CASH_ASSET else ("코인" if t in c_port else "주식"), '비중': w})
     items.sort(key=lambda x: (x['자산군']!='현금', x['비중']), reverse=True)
@@ -1016,27 +1024,66 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 <div>🪙 코인: {c_stat}</div>
             </div>
             
-            <!-- Force Trade Buttons -->
-            <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                <button id="forceTradeUpbitBtn" onclick="forceTrade('upbit')" style="
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    border-radius: 8px;
-                    font-size: 1em;
-                    font-weight: 600;
-                    cursor: pointer;
-                    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-                    transition: all 0.3s ease;
-                ">
-                    ⚡ Force Trade (Upbit)
-                </button>
-
-                <span id="tradeStatus" style="margin-left: 10px; font-weight: 500;"></span>
+            <!-- Cash Buffer Control + Force Trade -->
+            <div style="margin-bottom: 20px;">
+                <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;">
+                    <span style="font-weight: 600; color: #555;">💰 Cash Buffer:</span>
+                    <span id="bufferDisplay" style="font-size: 1.2em; font-weight: 700; color: #1a73e8;">{cash_buffer_pct:.0%}</span>
+                    <select id="bufferSelect" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95em;">
+                        <option value="0.80" {'selected' if cash_buffer_pct >= 0.75 else ''}>80% (투자 20%)</option>
+                        <option value="0.60" {'selected' if 0.55 <= cash_buffer_pct < 0.75 else ''}>60% (투자 40%)</option>
+                        <option value="0.40" {'selected' if 0.35 <= cash_buffer_pct < 0.55 else ''}>40% (투자 60%)</option>
+                        <option value="0.20" {'selected' if 0.15 <= cash_buffer_pct < 0.35 else ''}>20% (투자 80%)</option>
+                        <option value="0.02" {'selected' if cash_buffer_pct < 0.15 else ''}>2% (정상 운영)</option>
+                    </select>
+                    <button onclick="updateBuffer()" style="background: #1a73e8; color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer;">변경</button>
+                    <span id="bufferStatus" style="font-size: 0.9em;"></span>
+                </div>
+                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                    <button id="forceTradeUpbitBtn" onclick="forceTrade('upbit')" style="
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        font-size: 1em;
+                        font-weight: 600;
+                        cursor: pointer;
+                        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+                        transition: all 0.3s ease;
+                    ">
+                        ⚡ Force Trade (Upbit)
+                    </button>
+                    <span id="tradeStatus" style="margin-left: 10px; font-weight: 500;"></span>
+                </div>
             </div>
             
             <script>
+            async function updateBuffer() {{
+                const val = document.getElementById('bufferSelect').value;
+                const status = document.getElementById('bufferStatus');
+                try {{
+                    const resp = await fetch('http://' + window.location.hostname + ':5000/api/cash_buffer', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ cash_buffer: parseFloat(val) }})
+                    }});
+                    const data = await resp.json();
+                    if (resp.ok) {{
+                        document.getElementById('bufferDisplay').textContent = Math.round((1-parseFloat(val))*100) + '% 투자';
+                        status.innerHTML = '✅ 변경 완료 (다음 Force Trade에 반영)';
+                        status.style.color = '#0d904f';
+                    }} else {{
+                        status.innerHTML = '⚠️ ' + (data.error || 'Error');
+                        status.style.color = '#d93025';
+                    }}
+                }} catch(e) {{
+                    status.innerHTML = '❌ API 연결 실패';
+                    status.style.color = '#d93025';
+                }}
+                setTimeout(() => {{ status.innerHTML = ''; }}, 5000);
+            }}
+
             async function forceTrade(exchange) {{
                 const btn = document.getElementById('forceTrade' + exchange.charAt(0).toUpperCase() + exchange.slice(1) + 'Btn');
                 const status = document.getElementById('tradeStatus');

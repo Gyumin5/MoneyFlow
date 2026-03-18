@@ -76,6 +76,46 @@ def set_holdings():
 def get_status():
     return jsonify(running_tasks)
 
+TRADE_STATE_FILE = '/home/ubuntu/trade_state.json'
+
+@app.route('/api/cash_buffer', methods=['POST'])
+def update_cash_buffer():
+    data = request.get_json() or {}
+    new_buffer = data.get('cash_buffer')
+    if new_buffer is None or not isinstance(new_buffer, (int, float)):
+        return jsonify({"error": "cash_buffer 값 필요 (0.02~0.80)"}), 400
+    if not (0.01 <= new_buffer <= 0.95):
+        return jsonify({"error": "범위: 0.01~0.95"}), 400
+
+    # Read existing state, update buffer
+    state = {}
+    try:
+        with open(TRADE_STATE_FILE, 'r') as f:
+            state = json.load(f)
+    except Exception:
+        pass
+    state['cash_buffer'] = round(new_buffer, 2)
+    state['buffer_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    try:
+        tmp = TRADE_STATE_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, TRADE_STATE_FILE)
+    except Exception as e:
+        return jsonify({"error": f"저장 실패: {e}"}), 500
+
+    invest_pct = round((1 - new_buffer) * 100)
+    return jsonify({"message": f"Cash buffer {new_buffer:.0%} (투자 {invest_pct}%) 설정 완료"})
+
+@app.route('/api/cash_buffer', methods=['GET'])
+def get_cash_buffer():
+    try:
+        with open(TRADE_STATE_FILE, 'r') as f:
+            state = json.load(f)
+        return jsonify({"cash_buffer": state.get('cash_buffer', 0.02)})
+    except Exception:
+        return jsonify({"cash_buffer": 0.02})
+
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"})
