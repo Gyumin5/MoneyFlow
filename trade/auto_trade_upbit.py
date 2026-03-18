@@ -516,7 +516,7 @@ class V16UpbitTrader:
 
     # ═══ 분할 매매 엔진 ═══
 
-    def calc_safe_amount(self, ticker, side='buy', max_slip=0.001):
+    def calc_safe_amount(self, ticker, side='buy', max_slip=0.003):
         """슬리피지 0.1% 이내로 매매 가능한 최대 금액 (호가 기반)."""
         try:
             ob = pyupbit.get_orderbook(f"KRW-{ticker}")
