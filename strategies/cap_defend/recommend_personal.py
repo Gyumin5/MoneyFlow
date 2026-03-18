@@ -696,6 +696,22 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     with open(SIGNAL_STATE_FILE, 'w') as _sf:
         json.dump(_state, _sf)
 
+    # Sync coin_risk_on to trade_state.json (auto_trade가 읽는 파일)
+    try:
+        _ts = {}
+        try:
+            with open('trade_state.json', 'r') as _tf:
+                _ts = json.load(_tf)
+        except Exception:
+            pass
+        _ts['coin_risk_on'] = bool(coin_risk_on)
+        _tmp = 'trade_state.json.tmp'
+        with open(_tmp, 'w') as _tf:
+            json.dump(_ts, _tf, indent=2)
+        os.replace(_tmp, 'trade_state.json')
+    except Exception:
+        pass
+
     # Logging
     hyst_info = f"(Hyst {COIN_CANARY_HYST:.0%}: enter >{upper:.2f}x, exit <{lower:.2f}x)"
     flip_info = ""
