@@ -538,7 +538,10 @@ class V16UpbitTrader:
             return 0  # 호가 조회 실패 → 0 반환 → 주문 스킵
 
     def split_buy(self, ticker, target_krw, timeout_sec=180):
-        """분할 매수: 슬리피지 0.1% 이내씩, 7초 간격, 타임아웃."""
+        """분할 매수: 슬리피지 0.3% 이내씩, 7초 간격, 타임아웃."""
+        # 시작 전 미체결 주문 정리
+        self.cancel_all_orders(ticker)
+        time.sleep(1)
         # 시작 전 잔고 확인
         init_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
         init_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
@@ -595,7 +598,10 @@ class V16UpbitTrader:
         return max(total_filled, 0)
 
     def split_sell(self, ticker, target_krw, timeout_sec=180):
-        """분할 매도: 슬리피지 0.1% 이내씩, 7초 간격."""
+        """분할 매도: 슬리피지 0.3% 이내씩, 7초 간격."""
+        # 시작 전 미체결 주문 정리
+        self.cancel_all_orders(ticker)
+        time.sleep(1)
         # 시작 전 잔고 확인
         init_bal = self.upbit.get_balance(f"KRW-{ticker}") or 0
         init_price = pyupbit.get_current_price(f"KRW-{ticker}") or 0
