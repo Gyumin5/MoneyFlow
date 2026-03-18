@@ -116,6 +116,7 @@ def update_cash_buffer():
         pass
     state['cash_buffer'] = round(new_buffer, 2)
     state['buffer_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    state['buffer_changed'] = True  # 다음 trade에서 트리거로 인식
     try:
         tmp = TRADE_STATE_FILE + '.tmp'
         with open(tmp, 'w') as f:
