@@ -1155,14 +1155,8 @@ class V16UpbitTrader:
         return turnover
 
     def run_monitor(self):
-        """--monitor 모드: 긴급 탈출 + pending 복구 (30분마다 실행)."""
-        import fcntl
-        lock_fd = open('/tmp/auto_trade_upbit.lock', 'w')
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (IOError, OSError):
-            return  # 다른 인스턴스 실행 중 → 조용히 종료
-
+        """--monitor 모드: 긴급 탈출 + pending 복구 (30분마다 실행).
+        NOTE: 중복 실행 방지는 run_trade.sh의 flock이 담당. 여기선 락 불필요."""
         try:
             TRADE_STATE_FILE = 'trade_state.json'
             trade_state = {}
@@ -1188,9 +1182,11 @@ class V16UpbitTrader:
                         emergency_reason = f"CRASH BTC {btc_ret:+.1%}"
 
                 # 카나리아 OFF: BTC < SMA60 * 0.99
+                # 포지션 보유 중이면 coin_risk_on 상태와 무관하게 체크 (force 매매 대응)
                 btc_sma60 = trade_state.get('btc_sma60', 0)
+                has_positions = any(t.get('picks') for t in trade_state.get('tranches', {}).values())
                 if not emergency and btc_sma60 > 0 and btc_price > 0:
-                    if trade_state.get('coin_risk_on', False):
+                    if trade_state.get('coin_risk_on', False) or has_positions:
                         if btc_price < btc_sma60 * (1 - CANARY_HYST):
                             emergency = True
                             emergency_reason = f"카나리아 OFF (BTC {btc_price:,.0f} < SMA60*0.99 {btc_sma60*0.99:,.0f})"
@@ -1246,7 +1242,6 @@ class V16UpbitTrader:
                 trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
                 trade_state['last_emergency'] = emergency_reason
                 self._save_trade_state(trade_state, TRADE_STATE_FILE)
-                lock_fd.close()
                 return
 
             # ── 2. Pending 복구 ──
@@ -1254,7 +1249,6 @@ class V16UpbitTrader:
             if not pending:
                 # peak만 갱신하고 종료
                 self._save_trade_state(trade_state, TRADE_STATE_FILE)
-                lock_fd.close()
                 return
 
             log(f"📋 Monitor: pending {len(pending)}건 복구 시도")
@@ -1302,7 +1296,7 @@ class V16UpbitTrader:
             log(f"💾 Monitor 완료 (pending {len(pending)}건 남음)")
 
         finally:
-            lock_fd.close()
+            pass
 
 
 if __name__ == "__main__":
