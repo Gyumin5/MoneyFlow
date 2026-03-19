@@ -703,6 +703,42 @@ class V16UpbitTrader:
         except Exception as e:
             log(f"⚠️ State 저장 실패: {e}")
 
+    def _refresh_monitor_cache(self, trade_state):
+        """Monitor용 캐시 갱신: USD 기준 BTC 데이터 + coin_peaks 정리.
+        HOLD와 매매 완료 양쪽에서 호출."""
+        # 레거시 KRW 캐시 키 정리
+        trade_state.pop('btc_sma60', None)
+        trade_state.pop('btc_prev_close', None)
+        try:
+            # BTC SMA60 (USD) — Yahoo 데이터 기준
+            btc_data = self.all_prices.get('BTC', pd.Series())
+            if len(btc_data) >= CANARY_SMA_PERIOD + 1:
+                sma_usd = float(btc_data.rolling(CANARY_SMA_PERIOD).mean().iloc[-1])
+                trade_state['btc_sma60_usd'] = sma_usd
+                # BTC 전일 종가 (USD) — 완료된 봉 기준 (iloc[-2])
+                # iloc[-1]은 당일 진행 봉일 수 있으므로 iloc[-2] 사용
+                trade_state['btc_prev_close_usd'] = float(btc_data.iloc[-2])
+
+            # coin_peaks: 활성 코인만 유지 (picks + pending + 실잔고)
+            active_coins = set()
+            for tr in trade_state.get('tranches', {}).values():
+                active_coins.update(tr.get('picks', []))
+            for tk in trade_state.get('pending_trades', {}).keys():
+                active_coins.add(tk)
+
+            old_peaks = trade_state.get('coin_peaks', {})
+            new_peaks = {}
+            for coin in active_coins:
+                cur_krw = pyupbit.get_current_price(f"KRW-{coin}") or 0
+                if cur_krw > 0:
+                    new_peaks[coin] = max(old_peaks.get(coin, 0), cur_krw)
+                elif coin in old_peaks:
+                    new_peaks[coin] = old_peaks[coin]  # 조회 실패 시 기존 peak 유지
+            trade_state['coin_peaks'] = new_peaks
+
+        except Exception as e:
+            log(f"⚠️ 캐싱 갱신 오류: {e}")
+
     def cancel_all_orders(self, ticker):
         """미체결 주문 취소 (잔고 확보용)"""
         try:
@@ -1019,14 +1055,13 @@ class V16UpbitTrader:
 
         if not trade_reasons:
             log(f"✅ HOLD — 트리거 없음 (턴오버: {turnover:.1%})")
-            # HOLD: 카나리아 상태만 저장, 트랜치는 변경하지 않음
-            hold_state = {'coin_risk_on': is_risk_on_now,
-                          'updated': datetime.now().strftime('%Y-%m-%d %H:%M')}
-            # 기존 state에서 트랜치/flip 정보 유지
+            # HOLD에서도 monitor 캐시 갱신 (stale 방지)
             try:
                 with open(TRADE_STATE_FILE, 'r') as _sf:
                     existing = json.load(_sf)
-                existing.update(hold_state)
+                existing['coin_risk_on'] = is_risk_on_now
+                existing['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                self._refresh_monitor_cache(existing)
                 self._save_trade_state(existing, TRADE_STATE_FILE)
             except Exception:
                 pass
@@ -1110,29 +1145,7 @@ class V16UpbitTrader:
         if pending:
             log(f"📋 Pending: {list(pending.keys())}")
         
-        # ── 캐싱: monitor용 데이터 저장 (KRW 기준!) ──
-        try:
-            # BTC KRW 현재가 + SMA60 (KRW)
-            btc_krw = pyupbit.get_current_price("KRW-BTC") or 0
-            if btc_krw > 0:
-                trade_state['btc_prev_close'] = btc_krw
-            # SMA60을 KRW로: Yahoo USD SMA × 환율
-            btc_data = self.all_prices.get('BTC', pd.Series())
-            if len(btc_data) >= CANARY_SMA_PERIOD:
-                sma_usd = float(btc_data.rolling(CANARY_SMA_PERIOD).mean().iloc[-1])
-                trade_state['btc_sma60'] = sma_usd * self.usd_krw_rate
-
-            # coin_peaks: 보유 코인의 KRW 고점 (Upbit 기준)
-            peaks = trade_state.get('coin_peaks', {})
-            for a_str, tr in trade_state.get('tranches', {}).items():
-                for coin in tr.get('picks', []):
-                    cur_krw = pyupbit.get_current_price(f"KRW-{coin}") or 0
-                    if cur_krw > 0:
-                        old_peak = peaks.get(coin, 0)
-                        peaks[coin] = max(old_peak, cur_krw)
-            trade_state['coin_peaks'] = peaks
-        except Exception as e:
-            log(f"⚠️ 캐싱 저장 오류: {e}")
+        self._refresh_monitor_cache(trade_state)
 
         # ── State 저장 (매매 실행 후) ──
         trade_state['coin_risk_on'] = is_risk_on_now
@@ -1170,36 +1183,62 @@ class V16UpbitTrader:
             emergency = False
             emergency_reason = ''
 
+            # ── BTC USD 가격 조회 (카나리/Crash용) ──
+            btc_usd = 0
             try:
-                btc_price = pyupbit.get_current_price("KRW-BTC") or 0
+                btc_krw = pyupbit.get_current_price("KRW-BTC") or 0
+                usdt_krw = pyupbit.get_current_price("KRW-USDT") or 0
+                if usdt_krw > 0 and btc_krw > 0:
+                    btc_usd = btc_krw / usdt_krw
+                else:
+                    log(f"⚠️ USDT 비정상 ({usdt_krw}), Binance fallback 시도")
+                    try:
+                        resp = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=5)
+                        btc_usd = float(resp.json()['price'])
+                    except Exception:
+                        log(f"⚠️ Binance도 실패, USD 신호 스킵")
+            except Exception as e:
+                log(f"⚠️ Monitor BTC 가격 조회 실패: {e}")
 
-                # Crash: BTC 전일 대비 -10%
-                btc_prev = trade_state.get('btc_prev_close', 0)
-                if btc_prev > 0 and btc_price > 0:
-                    btc_ret = btc_price / btc_prev - 1
+            # ── Crash: BTC USD 전일 대비 -10% ──
+            if btc_usd > 0:
+                log(f"📡 BTC USD: ${btc_usd:,.0f}")
+                # 하위호환: USD 키 없으면 KRW 키로 fallback
+                btc_prev_usd = trade_state.get('btc_prev_close_usd', 0)
+                if btc_prev_usd == 0:
+                    btc_prev_krw = trade_state.get('btc_prev_close', 0)
+                    if btc_prev_krw > 0 and usdt_krw > 0:
+                        btc_prev_usd = btc_prev_krw / usdt_krw
+                if btc_prev_usd > 0:
+                    btc_ret = btc_usd / btc_prev_usd - 1
                     if btc_ret <= CRASH_THRESHOLD:
                         emergency = True
-                        emergency_reason = f"CRASH BTC {btc_ret:+.1%}"
+                        emergency_reason = f"CRASH BTC {btc_ret:+.1%} (${btc_usd:,.0f} vs prev ${btc_prev_usd:,.0f})"
 
-                # 카나리아 OFF: BTC < SMA60 * 0.99
-                # 포지션 보유 중이면 coin_risk_on 상태와 무관하게 체크 (force 매매 대응)
-                btc_sma60 = trade_state.get('btc_sma60', 0)
-                has_positions = any(t.get('picks') for t in trade_state.get('tranches', {}).values())
-                if not emergency and btc_sma60 > 0 and btc_price > 0:
+            # ── 카나리아 OFF: BTC USD < SMA60 USD * 0.99 ──
+            has_positions = any(t.get('picks') for t in trade_state.get('tranches', {}).values())
+            if not emergency and btc_usd > 0:
+                # 하위호환: USD 키 없으면 KRW 키로 fallback
+                btc_sma60_usd = trade_state.get('btc_sma60_usd', 0)
+                if btc_sma60_usd == 0:
+                    btc_sma60_krw = trade_state.get('btc_sma60', 0)
+                    if btc_sma60_krw > 0 and usdt_krw > 0:
+                        btc_sma60_usd = btc_sma60_krw / usdt_krw
+                if btc_sma60_usd > 0:
                     if trade_state.get('coin_risk_on', False) or has_positions:
-                        if btc_price < btc_sma60 * (1 - CANARY_HYST):
+                        if btc_usd < btc_sma60_usd * (1 - CANARY_HYST):
                             emergency = True
-                            emergency_reason = f"카나리아 OFF (BTC {btc_price:,.0f} < SMA60*0.99 {btc_sma60*0.99:,.0f})"
+                            emergency_reason = f"카나리아 OFF (BTC ${btc_usd:,.0f} < SMA60*0.99 ${btc_sma60_usd*0.99:,.0f})"
 
-                # DD Exit: 보유코인 60일고점 대비 -25%
-                if not emergency:
+            # ── DD Exit: 보유코인 KRW 고점 대비 -25% (KRW 유지) ──
+            if not emergency:
+                try:
                     coin_peaks = trade_state.get('coin_peaks', {})
                     for coin, peak in coin_peaks.items():
                         if peak <= 0:
                             continue
                         cp = pyupbit.get_current_price(f"KRW-{coin}") or 0
                         if cp > 0:
-                            # peak 갱신 (신고가)
                             if cp > peak:
                                 trade_state['coin_peaks'][coin] = cp
                             dd = cp / peak - 1
@@ -1207,9 +1246,8 @@ class V16UpbitTrader:
                                 emergency = True
                                 emergency_reason = f"DD Exit {coin} ({dd:+.1%})"
                                 break
-            except Exception as e:
-                log(f"⚠️ Monitor 가격 조회 실패: {e}")
-                return
+                except Exception as e:
+                    log(f"⚠️ DD Exit 가격 조회 실패: {e}")
 
             # ── 긴급 발동 시 ──
             if emergency:
@@ -1233,11 +1271,12 @@ class V16UpbitTrader:
                 if held_coins:
                     self.emergency_sell_all(held_coins)
 
-                # pending 삭제 + 트랜치 초기화
+                # pending 삭제 + 트랜치 초기화 + coin_peaks 초기화
                 trade_state['pending_trades'] = {}
                 for a_str in trade_state.get('tranches', {}):
                     trade_state['tranches'][a_str]['picks'] = []
                     trade_state['tranches'][a_str]['weights'] = {}
+                trade_state['coin_peaks'] = {}  # 긴급 청산 후 stale peaks 방지
                 trade_state['coin_risk_on'] = False
                 trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
                 trade_state['last_emergency'] = emergency_reason
