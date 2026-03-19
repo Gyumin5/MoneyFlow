@@ -719,22 +719,8 @@ class V16UpbitTrader:
                 # iloc[-1]은 당일 진행 봉일 수 있으므로 iloc[-2] 사용
                 trade_state['btc_prev_close_usd'] = float(btc_data.iloc[-2])
 
-            # coin_peaks: 활성 코인만 유지 (picks + pending + 실잔고)
-            active_coins = set()
-            for tr in trade_state.get('tranches', {}).values():
-                active_coins.update(tr.get('picks', []))
-            for tk in trade_state.get('pending_trades', {}).keys():
-                active_coins.add(tk)
-
-            old_peaks = trade_state.get('coin_peaks', {})
-            new_peaks = {}
-            for coin in active_coins:
-                cur_krw = pyupbit.get_current_price(f"KRW-{coin}") or 0
-                if cur_krw > 0:
-                    new_peaks[coin] = max(old_peaks.get(coin, 0), cur_krw)
-                elif coin in old_peaks:
-                    new_peaks[coin] = old_peaks[coin]  # 조회 실패 시 기존 peak 유지
-            trade_state['coin_peaks'] = new_peaks
+            # coin_peaks 제거 — DD exit이 CSV 60일 rolling peak를 직접 조회
+            trade_state.pop('coin_peaks', None)
 
         except Exception as e:
             log(f"⚠️ 캐싱 갱신 오류: {e}")
@@ -1230,24 +1216,29 @@ class V16UpbitTrader:
                             emergency = True
                             emergency_reason = f"카나리아 OFF (BTC ${btc_usd:,.0f} < SMA60*0.99 ${btc_sma60_usd*0.99:,.0f})"
 
-            # ── DD Exit: 보유코인 KRW 고점 대비 -25% (KRW 유지) ──
+            # ── DD Exit: 보유코인 USD 60일 고점 대비 -25% (CSV 직접 조회) ──
             if not emergency:
                 try:
-                    coin_peaks = trade_state.get('coin_peaks', {})
-                    for coin, peak in coin_peaks.items():
-                        if peak <= 0:
+                    active_coins = set()
+                    for tr in trade_state.get('tranches', {}).values():
+                        active_coins.update(tr.get('picks', []))
+                    for coin in active_coins:
+                        csv_path = f"data/{coin}-USD.csv"
+                        if not os.path.exists(csv_path):
                             continue
-                        cp = pyupbit.get_current_price(f"KRW-{coin}") or 0
-                        if cp > 0:
-                            if cp > peak:
-                                trade_state['coin_peaks'][coin] = cp
-                            dd = cp / peak - 1
+                        df = pd.read_csv(csv_path)
+                        if len(df) < DD_EXIT_LOOKBACK:
+                            continue
+                        peak_60d = df['Adj_Close'].iloc[-DD_EXIT_LOOKBACK:].max()
+                        cur_usd = df['Adj_Close'].iloc[-1]
+                        if peak_60d > 0 and cur_usd > 0:
+                            dd = cur_usd / peak_60d - 1
                             if dd <= DD_EXIT_THRESHOLD:
                                 emergency = True
-                                emergency_reason = f"DD Exit {coin} ({dd:+.1%})"
+                                emergency_reason = f"DD Exit {coin} ({dd:+.1%}, ${cur_usd:,.1f} vs 60d peak ${peak_60d:,.1f})"
                                 break
                 except Exception as e:
-                    log(f"⚠️ DD Exit 가격 조회 실패: {e}")
+                    log(f"⚠️ DD Exit CSV 조회 실패: {e}")
 
             # ── 긴급 발동 시 ──
             if emergency:
