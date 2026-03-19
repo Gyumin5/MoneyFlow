@@ -28,7 +28,8 @@ def run_trade_async(exchange: str, force: bool = False, trade: bool = True, targ
     task_id = f"{exchange}_{int(os.times().elapsed)}"
     running_tasks[task_id] = {"status": "running", "output": ""}
     try:
-        cmd = ["python3", f"/home/ubuntu/auto_trade_{exchange}.py"]
+        # run_trade.sh 경유: flock 보호 일관 적용
+        cmd = [f"/home/ubuntu/run_trade.sh", exchange]
         if trade: cmd.append("--trade")
         if force: cmd.append("--force")
         if target_amount > 0: cmd.extend(["--amount", str(target_amount)])
@@ -47,18 +48,10 @@ def trade_upbit():
     if str(data.get('password', '')) != TRADE_PIN:
         return jsonify({"error": "잘못된 비밀번호"}), 403
 
-    # 중복 실행 방지 (flock 기반)
-    lock_file = '/tmp/auto_trade_upbit.lock'
-    try:
-        import fcntl
-        lock_fd = open(lock_file, 'w')
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (IOError, OSError):
-        return jsonify({"error": "이미 매매 실행 중 (cron 또는 다른 요청)"}), 409
-
+    # 중복 실행 방지: run_trade.sh의 flock이 담당
+    # API 측에서는 running_tasks로 중복 요청만 차단
     for tid, task in running_tasks.items():
         if "upbit" in tid and task.get("status") == "running":
-            lock_fd.close()
             return jsonify({"error": "Upbit trade is already running", "task_id": tid}), 409
 
     target_amount = int(data.get('target_amount', 0))
