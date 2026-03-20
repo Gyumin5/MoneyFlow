@@ -1,14 +1,14 @@
 """
-Cap Defend V16 Recommendation Script (Standard Version)
+Cap Defend V17 Recommendation Script (Standard Version)
 =======================================================
-Stock V15: R7 + EEM-only canary (SMA200, 0.5% hyst) + No health + Z-score4 EW + Defense Top3
-- Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs — R6+VNQ for REIT diversification)
+Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
+- Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs)
 - Canary: EEM > SMA200 (0.5% hysteresis)
-- Health: None (anchor-day robustness test로 제거 — Mom21은 Day1 편향)
-- Selection: Z-score Top 4 (zscore(12M_mom) + zscore(Sharpe63)), Equal Weight
+- Selection: Z-score Top 3 (zscore(12M_mom) + zscore(Sharpe252d)), Equal Weight
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
+- Crash Breaker: VT daily -3% → 3 days cash
 
-Coin V16: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+Coin V17: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Canary: BTC > SMA(60) + 1% hysteresis
 - Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
 - Selection: 시총순 Top 5, Equal Weight
@@ -42,6 +42,9 @@ DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 200
 STOCK_CANARY_HYST = 0.005  # 0.5% hysteresis
+STOCK_CRASH_TICKER = 'VT'
+STOCK_CRASH_THRESHOLD = -0.03  # VT daily -3%
+STOCK_CRASH_COOL_DAYS = 3
 
 # Coin Configuration
 VOLATILITY_WINDOW = 90
@@ -294,8 +297,33 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     return worst <= threshold, worst
 
 def run_stock_strategy_v15(log, all_prices):
-    """V15 Stock Strategy: R7 + EEM-only canary (0.5% hyst) + No health + Z-score4 EW + Defense Top3"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V16: R7+EEM+Zscore4+EW)</h2>")
+    """V17 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash"""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V17: R7+EEM+Zscore3+Sh252+VT Crash)</h2>")
+
+    # --- VT Crash Breaker ---
+    vt = all_prices.get(STOCK_CRASH_TICKER)
+    stock_crash = False
+    if vt is not None and len(vt) >= 2:
+        vt_ret = vt.iloc[-1] / vt.iloc[-2] - 1
+        log.append(f"<p><b>[Crash Check]</b> {STOCK_CRASH_TICKER}: 일간 수익률 {vt_ret:+.2%} (임계 {STOCK_CRASH_THRESHOLD:.0%})</p>")
+        if vt_ret <= STOCK_CRASH_THRESHOLD:
+            stock_crash = True
+            log.append(f"<p class='error'>🚨 <b>CRASH BREAKER 발동!</b> {STOCK_CRASH_TICKER} {vt_ret:+.2%} → 공격자산 전량 매도, {STOCK_CRASH_COOL_DAYS}일 대기</p>")
+        # 최근 N일 내 crash 여부도 체크 (쿨다운 중인지)
+        if not stock_crash and len(vt) >= STOCK_CRASH_COOL_DAYS + 1:
+            recent_rets = vt.iloc[-(STOCK_CRASH_COOL_DAYS + 1):].pct_change().dropna()
+            for i, r in enumerate(recent_rets):
+                if r <= STOCK_CRASH_THRESHOLD:
+                    days_ago = len(recent_rets) - 1 - i
+                    if days_ago <= STOCK_CRASH_COOL_DAYS:
+                        stock_crash = True
+                        log.append(f"<p class='warning'>⏸️ Crash 쿨다운 중 ({days_ago}일 전 {STOCK_CRASH_TICKER} {r:+.2%})</p>")
+                        break
+
+    if stock_crash:
+        log.append("<h4>🚨 Crash 모드 — 전량 현금 대기</h4>")
+        return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)"
+
     eem = all_prices.get('EEM')
 
     if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:
@@ -331,12 +359,12 @@ def run_stock_strategy_v15(log, all_prices):
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드 (Z-score Top 4 + EW)</h4>")
+        log.append("<h4>🚀 공격 모드 (Z-score Top 3 + Sharpe252d + EW)</h4>")
         scores = []
         for t in OFFENSIVE_STOCK_UNIVERSE:
             p = all_prices.get(t)
             if p is None or len(p) < 253: continue
-            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe63': calc_sharpe(p, 63)})
+            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe252': calc_sharpe(p, 252)})
 
         if not scores:
             log.append("<p class='warning'>공격 ETF 데이터 부족 → 수비 전환</p>")
@@ -344,19 +372,19 @@ def run_stock_strategy_v15(log, all_prices):
         else:
             df = pd.DataFrame(scores).set_index('Ticker')
 
-            # Z-score composite: zscore(12M_mom) + zscore(Sharpe63)
+            # Z-score composite: zscore(12M_mom) + zscore(Sharpe252d)
             m_std = df['Mom12M'].std()
-            s_std = df['Sharpe63'].std()
+            s_std = df['Sharpe252'].std()
             df['Z_Mom'] = (df['Mom12M'] - df['Mom12M'].mean()) / m_std if m_std > 0 else 0
-            df['Z_Sh'] = (df['Sharpe63'] - df['Sharpe63'].mean()) / s_std if s_std > 0 else 0
+            df['Z_Sh'] = (df['Sharpe252'] - df['Sharpe252'].mean()) / s_std if s_std > 0 else 0
             df['ZScore'] = df['Z_Mom'] + df['Z_Sh']
 
             try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
             except: pass
 
-            picks = df.nlargest(4, 'ZScore').index.tolist()
+            picks = df.nlargest(3, 'ZScore').index.tolist()
 
-            log.append(f"<p>Z-score Top 4: <b>{picks}</b> (Equal Weight)</p>")
+            log.append(f"<p>Z-score Top 3: <b>{picks}</b> (Equal Weight)</p>")
             return {t: 1.0/len(picks) for t in picks}, "공격 모드"
 
     # Defense mode: Top 3 by 6M return
@@ -589,7 +617,7 @@ if __name__ == "__main__":
     if 'BTC-USD' not in ids: ids['BTC-USD'] = 'bitcoin'
     
     # 2. Download Data (Pure Ticker)
-    all_tickers = set(OFFENSIVE_STOCK_UNIVERSE + DEFENSIVE_STOCK_UNIVERSE + CANARY_ASSETS + c_univ + ['BTC-USD'])
+    all_tickers = set(OFFENSIVE_STOCK_UNIVERSE + DEFENSIVE_STOCK_UNIVERSE + CANARY_ASSETS + [STOCK_CRASH_TICKER] + c_univ + ['BTC-USD'])
     download_required_data(list(all_tickers), log, ids)
     prices = {t: load_price(t) for t in all_tickers}
 
