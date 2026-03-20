@@ -41,8 +41,20 @@ except Exception:
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
-STRATEGY_VERSION = "V16"
+STRATEGY_VERSION = "V17"
 VERSION_HISTORY = [
+    ("V17", "2026-03",
+     "주식: Zscore3+Sh252+VT Crash, 코인: 모니터 USD 전환",
+     """<b>▶ 주식 변경 (V17)</b>
+• <b>선정:</b> Z-score <span style='color:#d93025;'>Top 3</span> (Sharpe <span style='color:#d93025;'>252d</span>)
+• <b>Crash:</b> <span style='color:#d93025;'>VT -3%</span> daily → 3일 현금
+• <b>백테스트:</b> 11-anchor 평균 Sharpe 1.037, CAGR +12.1%, MDD -13.2%, Calmar 0.94
+
+<b>▶ 코인 모니터 수정 (V17)</b>
+• 카나리/Crash를 <span style='color:#d93025;'>USD 기준</span>으로 비교 (환율 왜곡 방지)
+• DD Exit: CSV 60일 rolling peak 직접 조회
+• HOLD 시에도 캐시 갱신, cron :05/:35"""),
+
     ("V16", "2026-03",
      "코인: Mom30+25%Cap, 주식: V15 동일, hysteresis 수정",
      """<b>▶ 코인 변경 (V16)</b>
@@ -189,7 +201,7 @@ CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V16: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V17: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -668,7 +680,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=True):
     date_str = target_date.date()
-    log.append(f"<h3>🪙 코인 포트폴리오 (V16) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V17) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     btc = all_prices.get('BTC-USD')

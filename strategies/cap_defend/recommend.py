@@ -61,7 +61,7 @@ COIN_CANARY_HYST = 0.01  # 1% hysteresis band
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V16: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V17: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -411,7 +411,7 @@ def run_stock_strategy_v15(log, all_prices):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
-    log.append("<h2>🪙 코인 포트폴리오 (V16)</h2>")
+    log.append("<h2>🪙 코인 포트폴리오 (V17)</h2>")
 
     btc = all_prices.get('BTC-USD')
     if len(btc) < CANARY_SMA_PERIOD: return {CASH_ASSET: 1.0}, "데이터 부족"
