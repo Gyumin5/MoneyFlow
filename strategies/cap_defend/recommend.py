@@ -310,8 +310,8 @@ def run_stock_strategy_v15(log, all_prices):
             stock_crash = True
             log.append(f"<p class='error'>🚨 <b>CRASH BREAKER 발동!</b> {STOCK_CRASH_TICKER} {vt_ret:+.2%} → 공격자산 전량 매도, {STOCK_CRASH_COOL_DAYS}일 대기</p>")
         # 최근 N일 내 crash 여부도 체크 (쿨다운 중인지)
-        if not stock_crash and len(vt) >= STOCK_CRASH_COOL_DAYS + 1:
-            recent_rets = vt.iloc[-(STOCK_CRASH_COOL_DAYS + 1):].pct_change().dropna()
+        if not stock_crash and len(vt) >= STOCK_CRASH_COOL_DAYS + 2:
+            recent_rets = vt.iloc[-(STOCK_CRASH_COOL_DAYS + 2):].pct_change().dropna()
             for i, r in enumerate(recent_rets):
                 if r <= STOCK_CRASH_THRESHOLD:
                     days_ago = len(recent_rets) - 1 - i
