@@ -19,23 +19,23 @@ from multiprocessing import Pool, cpu_count
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # === Coin imports ===
-from strategy_engine import (
+from coin_engine import (
     load_universe, load_all_prices, filter_universe, calc_metrics,
     resolve_canary, get_price, _port_val, execute_rebalance,
 )
-from test_matrix import (
+from coin_helpers import (
     B, merge_snapshots, calc_current_weights, calc_half_turnover,
     compute_signal_weights_filtered, check_blacklist, update_blacklist,
 )
-from test_t40_dd import check_coin_drawdown, _empty_ext
+from coin_dd_exit import check_coin_drawdown, _empty_ext
 
 # === Stock imports ===
-from test_stock_improve import (
+from stock_engine import (
     SP, load_prices as load_stock_prices,
     precompute as stock_precompute,
     _init as stock_init, _run_one, get_val, ALL_TICKERS,
 )
-import test_stock_improve as tsi
+import stock_engine as tsi
 
 
 # ═══════════════════════════════════════════════════════════════════
