@@ -1,12 +1,13 @@
 """
 Trade API Server - Flask based
-Provides web API to trigger auto_trade scripts + stock holdings management
+Provides web API to trigger auto_trade scripts + stock holdings management + asset dashboard
 """
 from flask import Flask, jsonify, request
 import subprocess
 import threading
 import os
 import json
+import sqlite3
 from datetime import datetime
 
 app = Flask(__name__)
@@ -133,6 +134,144 @@ def get_cash_buffer():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok"})
+
+# ─── Asset Dashboard ────────────────────────────────────────────
+ASSETS_DB = '/home/ubuntu/assets.db'
+
+def init_assets_db():
+    """SQLite 초기화."""
+    conn = sqlite3.connect(ASSETS_DB)
+    conn.execute("""CREATE TABLE IF NOT EXISTS snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        month TEXT NOT NULL UNIQUE,
+        stock_krw REAL DEFAULT 0,
+        coin_krw REAL DEFAULT 0,
+        cash_krw REAL DEFAULT 0,
+        total_krw REAL DEFAULT 0,
+        income_krw REAL DEFAULT 0,
+        expense_krw REAL DEFAULT 0,
+        memo TEXT DEFAULT '',
+        accounts_json TEXT DEFAULT '{}',
+        created_at TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
+init_assets_db()
+
+@app.route('/api/assets/snapshots', methods=['GET'])
+def get_snapshots():
+    """전체 히스토리 조회."""
+    conn = sqlite3.connect(ASSETS_DB)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT * FROM snapshots ORDER BY month").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+@app.route('/api/assets/snapshots', methods=['POST'])
+def save_snapshot():
+    """월별 스냅샷 저장 (upsert)."""
+    data = request.get_json() or {}
+    month = data.get('month')  # '2026-03'
+    if not month:
+        return jsonify({"error": "month 필요 (예: 2026-03)"}), 400
+
+    stock = float(data.get('stock_krw', 0))
+    coin = float(data.get('coin_krw', 0))
+    cash = float(data.get('cash_krw', 0))
+    total = stock + coin + cash
+    income = float(data.get('income_krw', 0))
+    expense = float(data.get('expense_krw', 0))
+    memo = data.get('memo', '')
+    accounts = json.dumps(data.get('accounts', {}), ensure_ascii=False)
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+    conn = sqlite3.connect(ASSETS_DB)
+    conn.execute("""INSERT INTO snapshots (month, stock_krw, coin_krw, cash_krw, total_krw,
+                    income_krw, expense_krw, memo, accounts_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(month) DO UPDATE SET
+                    stock_krw=?, coin_krw=?, cash_krw=?, total_krw=?,
+                    income_krw=?, expense_krw=?, memo=?, accounts_json=?, created_at=?""",
+                 (month, stock, coin, cash, total, income, expense, memo, accounts, now,
+                  stock, coin, cash, total, income, expense, memo, accounts, now))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": f"{month} 저장 완료", "total_krw": total})
+
+@app.route('/api/assets/coin_balance', methods=['GET'])
+def get_coin_balance():
+    """업비트 코인 잔고 자동 조회."""
+    try:
+        import pyupbit
+        from config import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY
+        upbit = pyupbit.Upbit(UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY)
+        balances = upbit.get_balances()
+        total_krw = 0
+        krw_balance = 0
+        holdings = []
+        for b in balances:
+            if not isinstance(b, dict): continue
+            currency = b.get('currency', '')
+            bal = float(b.get('balance', 0)) + float(b.get('locked', 0))
+            if currency == 'KRW':
+                krw_balance = bal
+                continue
+            if bal <= 0: continue
+            price = pyupbit.get_current_price(f"KRW-{currency}") or 0
+            val = bal * price
+            if val >= 1000:
+                holdings.append({'ticker': currency, 'qty': bal, 'price': price, 'value': val})
+                total_krw += val
+        total_krw += krw_balance
+        return jsonify({
+            "total_krw": total_krw,
+            "krw_balance": krw_balance,
+            "holdings": holdings,
+            "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/assets/rebalance', methods=['POST'])
+def calc_rebalance():
+    """리밸런싱 배분 계산."""
+    data = request.get_json() or {}
+    stock = float(data.get('stock_krw', 0))
+    coin = float(data.get('coin_krw', 0))
+    cash = float(data.get('cash_krw', 0))
+    additional = float(data.get('additional_krw', 0))
+
+    total = stock + coin + cash + additional
+    if total <= 0:
+        return jsonify({"error": "총자산이 0"}), 400
+
+    # 목표 비중: 주식 58.8%, 코인 39.2%, 현금 2%
+    target_stock = total * 0.588
+    target_coin = total * 0.392
+    target_cash = total * 0.02
+
+    diff_stock = target_stock - stock
+    diff_coin = target_coin - coin
+    diff_cash = target_cash - cash
+
+    return jsonify({
+        "total": total,
+        "current": {"stock": stock, "coin": coin, "cash": cash},
+        "current_pct": {
+            "stock": stock / total * 100,
+            "coin": coin / total * 100,
+            "cash": cash / total * 100
+        },
+        "target": {"stock": target_stock, "coin": target_coin, "cash": target_cash},
+        "target_pct": {"stock": 58.8, "coin": 39.2, "cash": 2.0},
+        "diff": {"stock": diff_stock, "coin": diff_coin, "cash": diff_cash},
+        "action": {
+            "stock": f"+{diff_stock:,.0f}원 매수" if diff_stock > 0 else f"{diff_stock:,.0f}원 매도/출금",
+            "coin": f"+{diff_coin:,.0f}원 입금" if diff_coin > 0 else f"{diff_coin:,.0f}원 출금",
+            "cash": f"+{diff_cash:,.0f}원 확보" if diff_cash > 0 else f"{diff_cash:,.0f}원 투자로",
+        }
+    })
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
