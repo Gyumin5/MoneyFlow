@@ -218,7 +218,10 @@ def get_coin_balance():
                 krw_balance = bal
                 continue
             if bal <= 0: continue
-            price = pyupbit.get_current_price(f"KRW-{currency}") or 0
+            try:
+                price = pyupbit.get_current_price(f"KRW-{currency}") or 0
+            except Exception:
+                price = 0
             val = bal * price
             if val >= 1000:
                 holdings.append({'ticker': currency, 'qty': bal, 'price': price, 'value': val})

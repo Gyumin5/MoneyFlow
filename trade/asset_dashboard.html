@@ -239,9 +239,30 @@
         <h2>📝 자산 입력</h2>
         <div class="row" style="margin-bottom: 12px">
           <div class="col">
-            <label>기준 월</label>
-            <input type="text" id="inputMonth" placeholder="2026-03" />
+            <label>기준일</label>
+            <input type="text" id="inputMonth" placeholder="2026-03-21" />
           </div>
+          <div class="col">
+            <label>환율 (원/달러)</label>
+            <input type="number" id="inputFx" placeholder="1450" />
+          </div>
+        </div>
+        <div class="row" style="margin-bottom: 12px">
+          <div class="col">
+            <label>주식 ETF 평가금 (원)</label>
+            <input type="number" id="inputStockEtf" placeholder="0" />
+          </div>
+          <div class="col">
+            <label>증권 예수금 (띄어쓰기로 여러 개)</label>
+            <input
+              type="text"
+              id="inputStockCash"
+              placeholder="8611469 150300"
+              oninput="updateSummary()"
+            />
+          </div>
+        </div>
+        <div class="row" style="margin-bottom: 12px">
           <div class="col">
             <label>코인 (업비트)</label>
             <div style="display: flex; gap: 8px">
@@ -251,43 +272,24 @@
               </button>
             </div>
           </div>
-        </div>
-        <div class="row" style="margin-bottom: 12px">
           <div class="col">
-            <label>주식 ETF 평가금 (원)</label>
-            <input type="number" id="inputStockEtf" placeholder="0" />
-          </div>
-          <div class="col">
-            <label>증권 예수금 (원)</label>
-            <input type="number" id="inputStockCash" placeholder="0" />
-          </div>
-        </div>
-        <div class="row" style="margin-bottom: 12px">
-          <div class="col">
-            <label>은행 현금 합계 (원)</label>
-            <input type="number" id="inputBankCash" placeholder="0" />
-          </div>
-          <div class="col">
-            <label>추가 입금 (이번 달)</label>
-            <input type="number" id="inputAdditional" placeholder="0" />
+            <label>은행 현금 (띄어쓰기로 여러 개)</label>
+            <input
+              type="text"
+              id="inputBankCash"
+              placeholder="4186390 150300 0"
+              oninput="updateSummary()"
+            />
           </div>
         </div>
         <div class="row" style="margin-bottom: 12px">
-          <div class="col">
-            <label>수입</label>
-            <input type="number" id="inputIncome" placeholder="0" />
-          </div>
-          <div class="col">
-            <label>지출</label>
-            <input type="number" id="inputExpense" placeholder="0" />
-          </div>
           <div class="col">
             <label>메모</label>
             <input
               type="text"
               id="inputMemo"
               class="memo-input"
-              placeholder="V17 첫 리밸"
+              placeholder="V17 리밸"
             />
           </div>
         </div>
@@ -313,11 +315,6 @@
         <div class="chart-container"><canvas id="chartTotal"></canvas></div>
       </div>
 
-      <div class="card">
-        <h2>📊 비중 추이</h2>
-        <div class="chart-container"><canvas id="chartRatio"></canvas></div>
-      </div>
-
       <!-- 히스토리 테이블 -->
       <div class="card">
         <h2>📋 월별 기록</h2>
@@ -330,7 +327,6 @@
                 <th>코인</th>
                 <th>현금</th>
                 <th>총자산</th>
-                <th>월수익률</th>
                 <th>메모</th>
               </tr>
             </thead>
@@ -341,7 +337,8 @@
     </div>
 
     <script>
-      const API = window.location.origin;
+      const API =
+        window.location.protocol + "//" + window.location.hostname + ":5000";
       const fmt = (n) =>
         n >= 1e8
           ? (n / 1e8).toFixed(1) + "억"
@@ -353,7 +350,11 @@
       // Init month
       const now = new Date();
       document.getElementById("inputMonth").value =
-        now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+        now.getFullYear() +
+        "-" +
+        String(now.getMonth() + 1).padStart(2, "0") +
+        "-" +
+        String(now.getDate()).padStart(2, "0");
 
       // Fetch coin balance
       async function fetchCoin() {
@@ -371,21 +372,34 @@
         }
       }
 
+      // Load saved FX rate
+      const savedFx = localStorage.getItem("asset_fx_rate");
+      if (savedFx) document.getElementById("inputFx").value = savedFx;
+      document
+        .getElementById("inputFx")
+        .addEventListener("change", function () {
+          localStorage.setItem("asset_fx_rate", this.value);
+        });
+
+      // 띄어쓰기로 구분된 숫자들 합산
+      function sumText(id) {
+        const val = document.getElementById(id).value.trim();
+        if (!val) return 0;
+        return val.split(/\s+/).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+      }
+
       // Get current input values
       function getInputs() {
         const stockEtf =
           parseFloat(document.getElementById("inputStockEtf").value) || 0;
-        const stockCash =
-          parseFloat(document.getElementById("inputStockCash").value) || 0;
+        const stockCash = sumText("inputStockCash");
         const coin =
           parseFloat(document.getElementById("inputCoin").value) || 0;
-        const bankCash =
-          parseFloat(document.getElementById("inputBankCash").value) || 0;
-        const additional =
-          parseFloat(document.getElementById("inputAdditional").value) || 0;
+        const bankCash = sumText("inputBankCash");
+        const fx = parseFloat(document.getElementById("inputFx").value) || 1450;
         const stock = stockEtf + stockCash;
         const cash = bankCash;
-        return { stock, stockEtf, stockCash, coin, cash, bankCash, additional };
+        return { stock, stockEtf, stockCash, coin, cash, bankCash, fx };
       }
 
       // Update summary display
@@ -426,7 +440,6 @@
               stock_krw: v.stock,
               coin_krw: v.coin,
               cash_krw: v.cash,
-              additional_krw: v.additional,
             }),
           });
           const d = await r.json();
@@ -438,12 +451,7 @@
           const card = document.getElementById("rebalCard");
           card.style.display = "block";
 
-          let html =
-            `<p style="font-size:1.1em;margin-bottom:12px">총자산: <b>${fmtFull(d.total)}원</b>` +
-            (v.additional > 0
-              ? ` (추가입금 ${fmtFull(v.additional)}원 포함)`
-              : "") +
-            "</p>";
+          let html = `<p style="font-size:1.1em;margin-bottom:12px">총자산: <b>${fmtFull(d.total)}원</b></p>`;
 
           for (const [key, label] of [
             ["stock", "주식"],
@@ -485,15 +493,12 @@
           stock_krw: v.stock,
           coin_krw: v.coin,
           cash_krw: v.cash,
-          income_krw:
-            parseFloat(document.getElementById("inputIncome").value) || 0,
-          expense_krw:
-            parseFloat(document.getElementById("inputExpense").value) || 0,
           memo: document.getElementById("inputMemo").value,
           accounts: {
             stock_etf: v.stockEtf,
             stock_cash: v.stockCash,
             bank_cash: v.bankCash,
+            fx_rate: v.fx,
           },
         };
 
@@ -512,8 +517,7 @@
       }
 
       // Load history
-      let chartTotal = null,
-        chartRatio = null;
+      let chartTotal = null;
 
       async function loadHistory() {
         try {
@@ -526,15 +530,9 @@
           tbody.innerHTML = "";
           for (let i = 0; i < rows.length; i++) {
             const s = rows[i];
-            const prevTotal = i > 0 ? rows[i - 1].total_krw : s.total_krw;
-            const ret =
-              prevTotal > 0
-                ? ((s.total_krw / prevTotal - 1) * 100).toFixed(1) + "%"
-                : "-";
             tbody.innerHTML +=
               `<tr><td>${s.month}</td><td>${fmt(s.stock_krw)}</td><td>${fmt(s.coin_krw)}</td>` +
               `<td>${fmt(s.cash_krw)}</td><td>${fmt(s.total_krw)}</td>` +
-              `<td style="color:${parseFloat(ret) >= 0 ? "#34a853" : "#d93025"}">${ret}</td>` +
               `<td>${s.memo || ""}</td></tr>`;
           }
 
@@ -556,23 +554,8 @@
                   data: totals,
                   borderColor: "#7627bb",
                   borderWidth: 2,
-                  fill: false,
-                  tension: 0.3,
-                },
-                {
-                  label: "주식",
-                  data: stocks,
-                  borderColor: "#4285f4",
-                  borderWidth: 1,
-                  fill: false,
-                  tension: 0.3,
-                },
-                {
-                  label: "코인",
-                  data: coins,
-                  borderColor: "#fbbc04",
-                  borderWidth: 1,
-                  fill: false,
+                  fill: true,
+                  backgroundColor: "rgba(118,39,187,0.1)",
                   tension: 0.3,
                 },
               ],
@@ -581,35 +564,6 @@
               responsive: true,
               maintainAspectRatio: false,
               plugins: { legend: { position: "top" } },
-            },
-          });
-
-          // Ratio chart
-          const stockPct = rows.map((r) =>
-            r.total_krw > 0 ? (r.stock_krw / r.total_krw) * 100 : 0,
-          );
-          const coinPct = rows.map((r) =>
-            r.total_krw > 0 ? (r.coin_krw / r.total_krw) * 100 : 0,
-          );
-          const cashPct = rows.map((r) =>
-            r.total_krw > 0 ? (r.cash_krw / r.total_krw) * 100 : 0,
-          );
-
-          if (chartRatio) chartRatio.destroy();
-          chartRatio = new Chart(document.getElementById("chartRatio"), {
-            type: "bar",
-            data: {
-              labels,
-              datasets: [
-                { label: "주식%", data: stockPct, backgroundColor: "#4285f4" },
-                { label: "코인%", data: coinPct, backgroundColor: "#fbbc04" },
-                { label: "현금%", data: cashPct, backgroundColor: "#34a853" },
-              ],
-            },
-            options: {
-              responsive: true,
-              maintainAspectRatio: false,
-              scales: { x: { stacked: true }, y: { stacked: true, max: 100 } },
             },
           });
         } catch (e) {

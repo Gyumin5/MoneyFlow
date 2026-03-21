@@ -4,7 +4,7 @@ Output: CSV with date, total value, canary status, holdings detail."""
 
 import os, sys, csv
 sys.path.insert(0, os.path.dirname(__file__))
-from strategy_engine import (
+from coin_engine import (
     Params, load_data, get_universe_for_date, resolve_canary,
     get_healthy_coins, select_coins, compute_weights, apply_risk,
     should_rebalance, execute_rebalance, _port_val, get_price,
@@ -52,7 +52,7 @@ def run_with_history(prices, universe_map, params):
     }
 
     history = []
-    from strategy_engine import _close_to
+    from coin_engine import _close_to
 
     for i, date in enumerate(all_dates):
         cur_month = date.strftime('%Y-%m')
