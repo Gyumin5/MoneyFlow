@@ -540,12 +540,17 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     # --- VT Crash Breaker ---
     vt = all_prices.get(STOCK_CRASH_TICKER)
     stock_crash = False
+    crash_days_remaining = 0
     if vt is not None and len(vt) >= 2:
         vt_ret = vt.iloc[-1] / vt.iloc[-2] - 1
         log.append(f"<p><b>[Crash Check]</b> {STOCK_CRASH_TICKER}: 일간 수익률 {vt_ret:+.2%} (임계 {STOCK_CRASH_THRESHOLD:.0%})</p>")
         if vt_ret <= STOCK_CRASH_THRESHOLD:
             stock_crash = True
-            log.append(f"<p class='error'>🚨 <b>CRASH BREAKER 발동!</b> {STOCK_CRASH_TICKER} {vt_ret:+.2%} → 공격자산 전량 매도, {STOCK_CRASH_COOL_DAYS}일 대기</p>")
+            crash_days_remaining = STOCK_CRASH_COOL_DAYS
+            log.append(f"<div style='background:#fce8e6;border:2px solid #d93025;padding:16px;border-radius:8px;margin:12px 0'>"
+                       f"<h3 style='color:#d93025;margin:0'>🚨 VT CRASH 발동! ({STOCK_CRASH_TICKER} {vt_ret:+.2%})</h3>"
+                       f"<p style='font-size:1.2em;margin:8px 0'><b>즉시 행동:</b> 주식 전량 매도 (공격+방어 모두)</p>"
+                       f"<p><b>{STOCK_CRASH_COOL_DAYS}영업일 후 재진입</b> — 그때 이 페이지를 다시 확인하세요</p></div>")
         if not stock_crash and len(vt) >= STOCK_CRASH_COOL_DAYS + 2:
             recent_rets = vt.iloc[-(STOCK_CRASH_COOL_DAYS + 2):].pct_change().dropna()
             for i, r in enumerate(recent_rets):
@@ -553,11 +558,17 @@ def run_stock_strategy_v15(log, all_prices, target_date):
                     days_ago = len(recent_rets) - 1 - i
                     if days_ago <= STOCK_CRASH_COOL_DAYS:
                         stock_crash = True
-                        log.append(f"<p class='warning'>⏸️ Crash 쿨다운 중 ({days_ago}일 전 {STOCK_CRASH_TICKER} {r:+.2%})</p>")
+                        crash_days_remaining = STOCK_CRASH_COOL_DAYS - days_ago
+                        if crash_days_remaining > 0:
+                            log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
+                                       f"<h3 style='color:#e37400;margin:0'>⏸️ Crash 쿨다운 중</h3>"
+                                       f"<p>{days_ago}일 전 {STOCK_CRASH_TICKER} {r:+.2%} 발동</p>"
+                                       f"<p style='font-size:1.2em'><b>잔여 {crash_days_remaining}영업일 대기</b> — 현금 유지</p></div>")
+                        else:
+                            stock_crash = False
                         break
 
     if stock_crash:
-        log.append("<h4>🚨 Crash 모드 — 전량 현금 대기</h4>")
         return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)", {'signal_dist': {}, 'next_candidates': []}
 
     eem = all_prices.get('EEM')
