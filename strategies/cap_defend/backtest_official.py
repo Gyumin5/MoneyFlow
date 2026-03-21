@@ -191,24 +191,41 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
 # ═══════════════════════════════════════════════════════════════════
 
 COIN_VERSIONS = {
+    # V12: SMA50, SMA30+Mom21+Vol10%, Sharpe Top5, InvVol, Top50, 방어 없음
     'V12': dict(
         params=dict(canary='K1', vote_smas=(), vote_threshold=1,
                     health='H1', health_sma=30, health_mom_short=21, vol_cap=0.10,
                     selection='sharpe', n_picks=5, weighting='inv_vol', top_n=50),
         dd_lookback=0, dd_threshold=0, bl_drop=0, bl_days=0,
         drift_threshold=0, post_flip_delay=0),
+    # V13: SMA50, SMA30+Mom21+Vol10%, MultiBonus Top5, InvVol, Top50
+    'V13': dict(
+        params=dict(canary='K1', vote_smas=(), vote_threshold=1,
+                    health='H1', health_sma=30, health_mom_short=21, vol_cap=0.10,
+                    selection='sharpe', n_picks=5, weighting='inv_vol', top_n=50),
+        dd_lookback=0, dd_threshold=0, bl_drop=0, bl_days=0,
+        drift_threshold=0, post_flip_delay=0),
+    # V14: SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총 Top5 EW, DD+BL+Drift+PFD5
     'V14': dict(
         params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
+    # V15: = V14 (구 엔진에서는 동일)
     'V15': dict(
         params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40,
                     health_mom_short=21),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
+    # V16: Mom30 (V15에서 변경, 결과적으로 악화)
+    'V16': dict(
+        params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40,
+                    health_mom_short=30),
+        dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
+        drift_threshold=0.10, post_flip_delay=5),
+    # V17: Mom21 복귀 (= V14/V15와 동일)
     'V17': dict(
         params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40,
-                    health_mom_short=21),  # Mom30→21 복귀
+                    health_mom_short=21),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
 }
@@ -225,16 +242,29 @@ def check_crash_vt(params, ind, date):
     return False
 
 STOCK_VERSIONS = {
+    # V12: 12종, VT&EEM 카나리 (hyst 없음), Mom3+Sh3 union, Top1 방어
     'V12': SP(offensive=OFF_12, defensive=DEF, canary_assets=('VT', 'EEM'),
               canary_sma=200, canary_hyst=0.0, select='mom3_sh3', weight='ew',
               defense='top1', def_mom_period=126, health='none', tx_cost=0.001),
+    # V13: 12종, VT&EEM 카나리 + 1% hyst, Mom3+Sh3
+    'V13': SP(offensive=OFF_12, defensive=DEF, canary_assets=('VT', 'EEM'),
+              canary_sma=200, canary_hyst=0.01, select='mom3_sh3', weight='ew',
+              defense='top1', def_mom_period=126, health='none', tx_cost=0.001),
+    # V14: R6, EEM only + 0.5% hyst, Mom3+Sh3, Top3 방어
     'V14': SP(offensive=OFF_R6, defensive=DEF, canary_assets=('EEM',),
               canary_sma=200, canary_hyst=0.005, select='mom3_sh3', weight='ew',
               defense='top3', def_mom_period=126, health='none', tx_cost=0.001),
+    # V15: R7(+VNQ), Zscore4 Sh63
     'V15': SP(offensive=OFF_R7, defensive=DEF, canary_assets=('EEM',),
               canary_sma=200, canary_hyst=0.005, select='zscore4', weight='ew',
               defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
               sharpe_lookback=63),
+    # V16: = V15 (주식 변경 없음)
+    'V16': SP(offensive=OFF_R7, defensive=DEF, canary_assets=('EEM',),
+              canary_sma=200, canary_hyst=0.005, select='zscore4', weight='ew',
+              defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
+              sharpe_lookback=63),
+    # V17: Zscore3 Sh252d + VT Crash -3%/3d
     'V17': SP(offensive=OFF_R7, defensive=DEF, canary_assets=('EEM',),
               canary_sma=200, canary_hyst=0.005, select='zscore3', weight='ew',
               defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
@@ -253,7 +283,7 @@ def main():
     parser.add_argument('--stock-only', action='store_true')
     args = parser.parse_args()
 
-    versions = args.version.upper().split(',') if args.version != 'all' else ['V12', 'V14', 'V15', 'V17']
+    versions = args.version.upper().split(',') if args.version != 'all' else ['V12', 'V13', 'V14', 'V15', 'V16', 'V17']
 
     t0 = time.time()
     print("데이터 로딩...")
