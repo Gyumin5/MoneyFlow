@@ -653,6 +653,16 @@ def run_stock_strategy_v15(log, all_prices, target_date):
                 log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정 — signal_state.json에 <code>\"stock_holdings\": [\"SPY\",\"QQQ\",...]</code> 입력 필요</p>")
 
             log.append(f"<p>Z-score Top 3: <b>{picks}</b> (Equal Weight)</p>")
+            # signal_state.json에 추천 종목 저장
+            try:
+                with open(SIGNAL_STATE_FILE, 'r') as _sf:
+                    _st = json.load(_sf)
+                _st['stock_holdings'] = picks
+                _st['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                with open(SIGNAL_STATE_FILE, 'w') as _sf:
+                    json.dump(_st, _sf)
+            except Exception:
+                pass
             return {t: 1.0/len(picks) for t in picks}, "공격 모드", meta
 
     # Defense mode: Top 3 by 6M return
@@ -676,6 +686,16 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         return {CASH_ASSET: 1.0}, "수비 (전부 음수)", meta
     picks = [r['Ticker'] for r in top3]
     log.append(f"<p>Defense Picks: <b>{picks}</b> (Equal Weight)</p>")
+    # signal_state.json에 방어 종목 저장
+    try:
+        with open(SIGNAL_STATE_FILE, 'r') as _sf:
+            _st = json.load(_sf)
+        _st['stock_holdings'] = picks
+        _st['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+        with open(SIGNAL_STATE_FILE, 'w') as _sf:
+            json.dump(_st, _sf)
+    except Exception:
+        pass
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})", meta
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=True):
@@ -911,19 +931,23 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # Read signal state for UI
     signal_flipped = False
     current_risk_on = True
+    saved_stock_holdings = []
     try:
         with open(SIGNAL_STATE_FILE, 'r') as _sf:
             _state = json.load(_sf)
             signal_flipped = _state.get('signal_flipped', False)
             current_risk_on = _state.get('risk_on', True)
+            saved_stock_holdings = _state.get('stock_holdings', [])
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
+    saved_holdings_json = json.dumps(saved_stock_holdings)
     stock_holdings_js = """
             <script>
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
+            const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
 
             function calcTrigger(myTickers, recTickers) {
                 if (!myTickers.length || !recTickers.length) return null;
@@ -981,7 +1005,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     + '</div>';
             }
 
-            // Load on page init from localStorage
+            // Load on page init: localStorage 우선, 없으면 signal_state.json fallback
             (function() {
                 try {
                     const saved = localStorage.getItem('cap_defend_stock_holdings');
@@ -992,7 +1016,15 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             document.getElementById('holdingsStatus').innerHTML =
                                 '\u2705 \uc800\uc7a5\ub428: ' + data.tickers.join(', ') + ' (' + data.updated + ')';
                             renderTrigger(data.tickers);
+                            return;
                         }
+                    }
+                    // Fallback: signal_state.json에서 가져온 값
+                    if (SAVED_STOCK_HOLDINGS && SAVED_STOCK_HOLDINGS.length > 0) {
+                        document.getElementById('stockInput').value = SAVED_STOCK_HOLDINGS.join(' ');
+                        document.getElementById('holdingsStatus').innerHTML =
+                            '\u2705 \uc11c\ubc84 \uc800\uc7a5\uac12: ' + SAVED_STOCK_HOLDINGS.join(', ');
+                        renderTrigger(SAVED_STOCK_HOLDINGS);
                     }
                 } catch(e) {}
             })();
