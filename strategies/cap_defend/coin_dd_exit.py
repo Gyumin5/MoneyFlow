@@ -8,13 +8,13 @@ import pandas as pd
 from multiprocessing import Pool, cpu_count
 
 sys.path.insert(0, os.path.dirname(__file__))
-from strategy_engine import (
+from coin_engine import (
     load_all_prices, filter_universe, load_universe,
     resolve_canary,
     execute_rebalance, _port_val, get_price, _close_to,
     calc_metrics,
 )
-from test_matrix import (
+from coin_helpers import (
     B, merge_snapshots, calc_current_weights, calc_half_turnover,
     compute_signal_weights_filtered,
     check_blacklist, update_blacklist, ANCHOR_DAYS, _empty,

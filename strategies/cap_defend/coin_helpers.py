@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(__file__))
-from strategy_engine import (
+from coin_engine import (
     Params, load_data, filter_universe, load_universe,
     get_universe_for_date, resolve_canary, get_healthy_coins,
     select_coins, compute_weights,
@@ -407,7 +407,7 @@ def main():
             all_tickers.update(ts)
     all_tickers.update(['BTC-USD', 'ETH-USD'])
 
-    from strategy_engine import load_all_prices
+    from coin_engine import load_all_prices
     prices = load_all_prices(all_tickers)
     print(f"  {len(prices)} tickers loaded")
 
