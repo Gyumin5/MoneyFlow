@@ -837,16 +837,17 @@ def run_bt(prices_dict, ind, params):
             if not np.isnan(p):
                 pv += shares * p
 
-        # Daily: crash breaker
+        # Daily: crash breaker (시그널: 전일 기준, 체결: 당일)
         crash_just_ended = False
+        crash_sig_date = prev_trading_date if prev_trading_date is not None else date
         if crash_cooldown > 0:
             crash_cooldown -= 1
             if crash_cooldown == 0:
-                if check_crash(params, ind, date):
+                if check_crash(params, ind, crash_sig_date):
                     crash_cooldown = params.crash_cool
                 else:
                     crash_just_ended = True
-        elif check_crash(params, ind, date):
+        elif not is_first and check_crash(params, ind, crash_sig_date):
             sold_any = False
             for t in list(holdings.keys()):
                 if t in ('IEF','BIL','BNDX','GLD','PDBC','TLT','SHY','AGG','TIP','LQD'):
@@ -865,9 +866,10 @@ def run_bt(prices_dict, ind, params):
                     pv += shares * p
 
         # Daily: DD exit
+        # Daily: DD exit (시그널: 전일 기준, 체결: 당일)
         dd_triggered = False
         if crash_cooldown <= 0:
-            dd_exits = check_dd_exit(params, ind, date, holdings)
+            dd_exits = check_dd_exit(params, ind, crash_sig_date, holdings)
             if dd_exits:
                 dd_triggered = True
             for t in dd_exits:
@@ -876,22 +878,22 @@ def run_bt(prices_dict, ind, params):
                 if shares > 0 and not np.isnan(p):
                     cash += shares * p * (1 - params.tx_cost)
 
-        # Daily: health exit (sell individual ETFs that fail health check)
+        # Daily: health exit (시그널: 전일 기준)
         if params.health_daily_exit and crash_cooldown <= 0 and holdings:
             for t in list(holdings.keys()):
                 if t in params.defensive or t in ('Cash','IEF','BIL','BNDX','GLD','PDBC','TLT','SHY','AGG','TIP','LQD'):
-                    continue  # skip defensive assets
+                    continue
                 sell_it = False
                 if params.health_exit_type == 'mom21':
-                    m = get_val(ind, t, date, 'mom21')
+                    m = get_val(ind, t, crash_sig_date, 'mom21')
                     sell_it = not np.isnan(m) and m < 0
                 elif params.health_exit_type == 'sma200':
-                    p_val = get_val(ind, t, date, 'price')
-                    sma = get_val(ind, t, date, 'sma200')
+                    p_val = get_val(ind, t, crash_sig_date, 'price')
+                    sma = get_val(ind, t, crash_sig_date, 'sma200')
                     sell_it = not (np.isnan(p_val) or np.isnan(sma)) and p_val < sma
                 elif params.health_exit_type == 'sma100':
-                    p_val = get_val(ind, t, date, 'price')
-                    sma = get_val(ind, t, date, 'sma100')
+                    p_val = get_val(ind, t, crash_sig_date, 'price')
+                    sma = get_val(ind, t, crash_sig_date, 'sma100')
                     sell_it = not (np.isnan(p_val) or np.isnan(sma)) and p_val < sma
                 if sell_it:
                     p = get_price(ind, t, date)
@@ -900,9 +902,9 @@ def run_bt(prices_dict, ind, params):
                         cash += shares * p * (1 - params.tx_cost)
                         dd_triggered = True  # force rebal to redistribute
 
-        # Daily: check canary flip for PFD trigger
+        # Daily: check canary flip for PFD trigger (시그널: 전일 기준)
         if params.flip_rebal and not is_first and crash_cooldown <= 0:
-            daily_risk_on = resolve_canary(params, ind, date, prev_risk_on)
+            daily_risk_on = resolve_canary(params, ind, crash_sig_date, prev_risk_on)
             if prev_risk_on is not None and daily_risk_on != prev_risk_on:
                 if params.flip_delay <= 0:
                     flip_pending_days = 0  # immediate
