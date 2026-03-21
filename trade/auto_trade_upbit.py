@@ -1,7 +1,7 @@
 """
 V16 Upbit Auto Trader (CoinGecko Global Universe)
 ==================================================
-V16 코인 전략: BTC > SMA(60) + 1%hyst, Mom30+Mom90+Vol5%, 시총순 Top 5 EW + 20% Cap
+V16 코인 전략: BTC > SMA(60) + 1%hyst, Mom21+Mom90+Vol5%, 시총순 Top 5 EW + 20% Cap
 - DD Exit: 60d peak -25% → cash
 - Blacklist: -15% daily → 7d exclude
 - Crash Breaker: BTC -10% daily → cash
@@ -91,7 +91,7 @@ class V16UpbitTrader:
         if is_force: mode += " (FORCE MODE)"
         log("=" * 60)
         log(f"V16 Upbit Trader [{mode}]")
-        log("전략: SMA60+1%hyst, Mom30+Mom90+Vol5%, 시총순 Top5 EW+20%Cap, DD/BL/Crash")
+        log("전략: SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총순 Top5 EW+20%Cap, DD/BL/Crash")
         log("=" * 60)
         
         try:
@@ -327,12 +327,12 @@ class V16UpbitTrader:
                     log(f"  🚫 {t}: Blacklist (worst {worst_ret:+.1%} in {BL_DAYS}d)")
                     continue
 
-            # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
-            mom30 = self.calc_ret(c, 30)
+            # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+            mom21 = self.calc_ret(c, 21)
             mom90 = self.calc_ret(c, 90)
             vol90 = self.calc_volatility(c, 90)
 
-            if mom30 > 0 and mom90 > 0 and vol90 <= VOL_CAP_FILTER:
+            if mom21 > 0 and mom90 > 0 and vol90 <= VOL_CAP_FILTER:
                 healthy.append({'ticker': t, 'vol': vol90})
 
         healthy_tickers = [h['ticker'] for h in healthy]

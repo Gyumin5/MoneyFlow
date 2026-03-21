@@ -2,7 +2,7 @@
 Cap Defend V17 Recommendation Script (Personal Version)
 =====================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
-Coin V17: K:SMA(60)+1%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+Coin V17: K:SMA(60)+1%hyst + H:Mom21+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
 
@@ -56,9 +56,9 @@ VERSION_HISTORY = [
 • HOLD 시에도 캐시 갱신, cron :05/:35"""),
 
     ("V16", "2026-03",
-     "코인: Mom30+25%Cap, 주식: V15 동일, hysteresis 수정",
+     "코인: Mom21+25%Cap, 주식: V15 동일, hysteresis 수정",
      """<b>▶ 코인 변경 (V16)</b>
-• <b>Health:</b> <span style='color:#d93025;'>Mom(30)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom21→30으로 변경)
+• <b>Health:</b> <span style='color:#d93025;'>Mom(21)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom21→30으로 변경)
 • <b>비중 캡:</b> <span style='color:#d93025;'>20% Cap</span> — 1종목 최대 20%, 나머지 현금 (붕괴 리스크 방어)
 • <b>백테스트:</b> 10-anchor 3트랜치 평균 Sharpe 1.451, CAGR +64.5%, MDD -33.2%, Calmar 1.94
 • <b>카나리아:</b> Hysteresis dead zone에서 signal_state.json 이전 상태 참조 (stateless 수정)
@@ -806,7 +806,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     bl_set = {t for t, _ in blacklisted}
     filtered_universe = [t for t in coin_universe if t not in bl_set]
 
-    # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+    # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
     healthy = []
     rows = []
 
@@ -823,17 +823,17 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
         if (tgt_dt - last_dt).days != 0: continue
 
         cur_p = p.iloc[-1]
-        mom30 = calc_ret(p, 30)
+        mom21 = calc_ret(p, 21)
         mom90 = calc_ret(p, 90)
         vol90 = p.pct_change().iloc[-90:].std()
 
-        is_ok = (pd.notna(mom30) and mom30 > 0 and
+        is_ok = (pd.notna(mom21) and mom21 > 0 and
                  pd.notna(mom90) and mom90 > 0 and
                  vol90 <= VOL_CAP_FILTER)
         status = "🟢" if is_ok else "🔴"
 
         rows.append({'Coin': t, 'Price': fmt_price(cur_p),
-                     'Mom30': f"{mom30:.2%}" if pd.notna(mom30) else "-",
+                     'Mom21': f"{mom21:.2%}" if pd.notna(mom21) else "-",
                      'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
                      'Vol90': f"{vol90:.4f}", 'Status': status})
         if is_ok:
