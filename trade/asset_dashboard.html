@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cap Defend 자산 관리</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, sans-serif;
+        background: #f0f2f5;
+        color: #333;
+      }
+      .container {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 16px;
+      }
+      h1 {
+        text-align: center;
+        margin: 16px 0;
+        color: #1a73e8;
+      }
+      .card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      }
+      .card h2 {
+        font-size: 1.1em;
+        color: #555;
+        margin-bottom: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .col {
+        flex: 1;
+        min-width: 200px;
+      }
+      label {
+        display: block;
+        font-size: 0.85em;
+        color: #888;
+        margin-bottom: 4px;
+      }
+      input[type="text"],
+      input[type="number"] {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        font-size: 1em;
+      }
+      input:focus {
+        border-color: #1a73e8;
+        outline: none;
+      }
+      button {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 8px;
+        font-size: 1em;
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .btn-primary {
+        background: #1a73e8;
+        color: #fff;
+      }
+      .btn-success {
+        background: #34a853;
+        color: #fff;
+      }
+      .btn-warning {
+        background: #f9ab00;
+        color: #fff;
+      }
+      .btn-sm {
+        padding: 6px 12px;
+        font-size: 0.85em;
+      }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      .summary-item {
+        text-align: center;
+        padding: 16px;
+        border-radius: 8px;
+      }
+      .summary-item .value {
+        font-size: 1.5em;
+        font-weight: 700;
+      }
+      .summary-item .label {
+        font-size: 0.8em;
+        color: #888;
+        margin-top: 4px;
+      }
+      .s-stock {
+        background: #e8f0fe;
+        color: #1967d2;
+      }
+      .s-coin {
+        background: #fef7e0;
+        color: #e37400;
+      }
+      .s-cash {
+        background: #e6f4ea;
+        color: #137333;
+      }
+      .s-total {
+        background: #f3e8fd;
+        color: #7627bb;
+      }
+      .bar {
+        height: 24px;
+        border-radius: 4px;
+        display: flex;
+        overflow: hidden;
+        margin: 8px 0;
+      }
+      .bar-stock {
+        background: #4285f4;
+      }
+      .bar-coin {
+        background: #fbbc04;
+      }
+      .bar-cash {
+        background: #34a853;
+      }
+      .action-box {
+        padding: 12px;
+        border-radius: 8px;
+        margin: 8px 0;
+        font-size: 0.95em;
+      }
+      .action-plus {
+        background: #e6f4ea;
+        color: #137333;
+      }
+      .action-minus {
+        background: #fce8e6;
+        color: #d93025;
+      }
+      .action-ok {
+        background: #f1f3f4;
+        color: #555;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9em;
+      }
+      th,
+      td {
+        padding: 8px;
+        border-bottom: 1px solid #f1f3f4;
+        text-align: right;
+      }
+      th {
+        background: #fafafa;
+        color: #555;
+        font-weight: 600;
+        text-align: left;
+      }
+      td:first-child,
+      th:first-child {
+        text-align: left;
+      }
+      .chart-container {
+        height: 300px;
+        margin: 12px 0;
+      }
+      #historyTable tr:hover {
+        background: #f8f9fa;
+      }
+      .memo-input {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+      }
+      @media (max-width: 600px) {
+        .summary-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+        .row {
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Cap Defend V17 자산 관리</h1>
+
+      <!-- 요약 -->
+      <div class="card">
+        <div class="summary-grid" id="summaryGrid">
+          <div class="summary-item s-stock">
+            <div class="value" id="sumStock">-</div>
+            <div class="label">주식 (목표 58.8%)</div>
+          </div>
+          <div class="summary-item s-coin">
+            <div class="value" id="sumCoin">-</div>
+            <div class="label">코인 (목표 39.2%)</div>
+          </div>
+          <div class="summary-item s-cash">
+            <div class="value" id="sumCash">-</div>
+            <div class="label">현금 (목표 2.0%)</div>
+          </div>
+          <div class="summary-item s-total">
+            <div class="value" id="sumTotal">-</div>
+            <div class="label">총 자산</div>
+          </div>
+        </div>
+        <div class="bar" id="ratioBar"></div>
+        <div
+          id="ratioText"
+          style="text-align: center; font-size: 0.85em; color: #888"
+        ></div>
+      </div>
+
+      <!-- 입력 -->
+      <div class="card">
+        <h2>📝 자산 입력</h2>
+        <div class="row" style="margin-bottom: 12px">
+          <div class="col">
+            <label>기준 월</label>
+            <input type="text" id="inputMonth" placeholder="2026-03" />
+          </div>
+          <div class="col">
+            <label>코인 (업비트)</label>
+            <div style="display: flex; gap: 8px">
+              <input type="number" id="inputCoin" placeholder="0" />
+              <button class="btn-warning btn-sm" onclick="fetchCoin()">
+                자동조회
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="margin-bottom: 12px">
+          <div class="col">
+            <label>주식 ETF 평가금 (원)</label>
+            <input type="number" id="inputStockEtf" placeholder="0" />
+          </div>
+          <div class="col">
+            <label>증권 예수금 (원)</label>
+            <input type="number" id="inputStockCash" placeholder="0" />
+          </div>
+        </div>
+        <div class="row" style="margin-bottom: 12px">
+          <div class="col">
+            <label>은행 현금 합계 (원)</label>
+            <input type="number" id="inputBankCash" placeholder="0" />
+          </div>
+          <div class="col">
+            <label>추가 입금 (이번 달)</label>
+            <input type="number" id="inputAdditional" placeholder="0" />
+          </div>
+        </div>
+        <div class="row" style="margin-bottom: 12px">
+          <div class="col">
+            <label>수입</label>
+            <input type="number" id="inputIncome" placeholder="0" />
+          </div>
+          <div class="col">
+            <label>지출</label>
+            <input type="number" id="inputExpense" placeholder="0" />
+          </div>
+          <div class="col">
+            <label>메모</label>
+            <input
+              type="text"
+              id="inputMemo"
+              class="memo-input"
+              placeholder="V17 첫 리밸"
+            />
+          </div>
+        </div>
+        <div style="display: flex; gap: 12px">
+          <button class="btn-primary" onclick="calcRebalance()">
+            📊 리밸런싱 계산
+          </button>
+          <button class="btn-success" onclick="saveSnapshot()">
+            💾 스냅샷 저장
+          </button>
+        </div>
+      </div>
+
+      <!-- 리밸런싱 결과 -->
+      <div class="card" id="rebalCard" style="display: none">
+        <h2>📊 리밸런싱 가이드</h2>
+        <div id="rebalResult"></div>
+      </div>
+
+      <!-- 히스토리 차트 -->
+      <div class="card">
+        <h2>📈 자산 추이</h2>
+        <div class="chart-container"><canvas id="chartTotal"></canvas></div>
+      </div>
+
+      <div class="card">
+        <h2>📊 비중 추이</h2>
+        <div class="chart-container"><canvas id="chartRatio"></canvas></div>
+      </div>
+
+      <!-- 히스토리 테이블 -->
+      <div class="card">
+        <h2>📋 월별 기록</h2>
+        <div style="overflow-x: auto">
+          <table id="historyTable">
+            <thead>
+              <tr>
+                <th>월</th>
+                <th>주식</th>
+                <th>코인</th>
+                <th>현금</th>
+                <th>총자산</th>
+                <th>월수익률</th>
+                <th>메모</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API = window.location.origin;
+      const fmt = (n) =>
+        n >= 1e8
+          ? (n / 1e8).toFixed(1) + "억"
+          : n >= 1e4
+            ? Math.round(n / 1e4).toLocaleString() + "만"
+            : Math.round(n).toLocaleString();
+      const fmtFull = (n) => Math.round(n).toLocaleString();
+
+      // Init month
+      const now = new Date();
+      document.getElementById("inputMonth").value =
+        now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+
+      // Fetch coin balance
+      async function fetchCoin() {
+        try {
+          const r = await fetch(API + "/api/assets/coin_balance");
+          const d = await r.json();
+          if (d.error) {
+            alert("에러: " + d.error);
+            return;
+          }
+          document.getElementById("inputCoin").value = Math.round(d.total_krw);
+          updateSummary();
+        } catch (e) {
+          alert("조회 실패: " + e);
+        }
+      }
+
+      // Get current input values
+      function getInputs() {
+        const stockEtf =
+          parseFloat(document.getElementById("inputStockEtf").value) || 0;
+        const stockCash =
+          parseFloat(document.getElementById("inputStockCash").value) || 0;
+        const coin =
+          parseFloat(document.getElementById("inputCoin").value) || 0;
+        const bankCash =
+          parseFloat(document.getElementById("inputBankCash").value) || 0;
+        const additional =
+          parseFloat(document.getElementById("inputAdditional").value) || 0;
+        const stock = stockEtf + stockCash;
+        const cash = bankCash;
+        return { stock, stockEtf, stockCash, coin, cash, bankCash, additional };
+      }
+
+      // Update summary display
+      function updateSummary() {
+        const v = getInputs();
+        const total = v.stock + v.coin + v.cash;
+        document.getElementById("sumStock").textContent = fmt(v.stock);
+        document.getElementById("sumCoin").textContent = fmt(v.coin);
+        document.getElementById("sumCash").textContent = fmt(v.cash);
+        document.getElementById("sumTotal").textContent = fmt(total);
+
+        if (total > 0) {
+          const ps = (v.stock / total) * 100,
+            pc = (v.coin / total) * 100,
+            pca = (v.cash / total) * 100;
+          document.getElementById("ratioBar").innerHTML =
+            `<div class="bar-stock" style="width:${ps}%"></div>` +
+            `<div class="bar-coin" style="width:${pc}%"></div>` +
+            `<div class="bar-cash" style="width:${pca}%"></div>`;
+          document.getElementById("ratioText").textContent =
+            `주식 ${ps.toFixed(1)}% / 코인 ${pc.toFixed(1)}% / 현금 ${pca.toFixed(1)}%`;
+        }
+      }
+
+      // Input change listeners
+      document
+        .querySelectorAll("input[type=number]")
+        .forEach((el) => el.addEventListener("input", updateSummary));
+
+      // Rebalance calculation
+      async function calcRebalance() {
+        const v = getInputs();
+        try {
+          const r = await fetch(API + "/api/assets/rebalance", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              stock_krw: v.stock,
+              coin_krw: v.coin,
+              cash_krw: v.cash,
+              additional_krw: v.additional,
+            }),
+          });
+          const d = await r.json();
+          if (d.error) {
+            alert(d.error);
+            return;
+          }
+
+          const card = document.getElementById("rebalCard");
+          card.style.display = "block";
+
+          let html =
+            `<p style="font-size:1.1em;margin-bottom:12px">총자산: <b>${fmtFull(d.total)}원</b>` +
+            (v.additional > 0
+              ? ` (추가입금 ${fmtFull(v.additional)}원 포함)`
+              : "") +
+            "</p>";
+
+          for (const [key, label] of [
+            ["stock", "주식"],
+            ["coin", "코인"],
+            ["cash", "현금"],
+          ]) {
+            const diff = d.diff[key];
+            const cls =
+              Math.abs(diff) < 100000
+                ? "action-ok"
+                : diff > 0
+                  ? "action-plus"
+                  : "action-minus";
+            const pct = d.current_pct[key].toFixed(1);
+            const tpct = d.target_pct[key].toFixed(1);
+            html +=
+              `<div class="action-box ${cls}">` +
+              `<b>${label}</b>: ${fmtFull(Math.round(d.current[key]))}원 (${pct}%) → ` +
+              `목표 ${fmtFull(Math.round(d.target[key]))}원 (${tpct}%) ` +
+              `<b>${d.action[key]}</b></div>`;
+          }
+          document.getElementById("rebalResult").innerHTML = html;
+        } catch (e) {
+          alert("계산 실패: " + e);
+        }
+      }
+
+      // Save snapshot
+      async function saveSnapshot() {
+        const v = getInputs();
+        const month = document.getElementById("inputMonth").value;
+        if (!month) {
+          alert("기준 월을 입력하세요");
+          return;
+        }
+
+        const data = {
+          month,
+          stock_krw: v.stock,
+          coin_krw: v.coin,
+          cash_krw: v.cash,
+          income_krw:
+            parseFloat(document.getElementById("inputIncome").value) || 0,
+          expense_krw:
+            parseFloat(document.getElementById("inputExpense").value) || 0,
+          memo: document.getElementById("inputMemo").value,
+          accounts: {
+            stock_etf: v.stockEtf,
+            stock_cash: v.stockCash,
+            bank_cash: v.bankCash,
+          },
+        };
+
+        try {
+          const r = await fetch(API + "/api/assets/snapshots", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          const d = await r.json();
+          alert(d.message || d.error);
+          loadHistory();
+        } catch (e) {
+          alert("저장 실패: " + e);
+        }
+      }
+
+      // Load history
+      let chartTotal = null,
+        chartRatio = null;
+
+      async function loadHistory() {
+        try {
+          const r = await fetch(API + "/api/assets/snapshots");
+          const rows = await r.json();
+          if (!rows.length) return;
+
+          // Table
+          const tbody = document.querySelector("#historyTable tbody");
+          tbody.innerHTML = "";
+          for (let i = 0; i < rows.length; i++) {
+            const s = rows[i];
+            const prevTotal = i > 0 ? rows[i - 1].total_krw : s.total_krw;
+            const ret =
+              prevTotal > 0
+                ? ((s.total_krw / prevTotal - 1) * 100).toFixed(1) + "%"
+                : "-";
+            tbody.innerHTML +=
+              `<tr><td>${s.month}</td><td>${fmt(s.stock_krw)}</td><td>${fmt(s.coin_krw)}</td>` +
+              `<td>${fmt(s.cash_krw)}</td><td>${fmt(s.total_krw)}</td>` +
+              `<td style="color:${parseFloat(ret) >= 0 ? "#34a853" : "#d93025"}">${ret}</td>` +
+              `<td>${s.memo || ""}</td></tr>`;
+          }
+
+          // Charts
+          const labels = rows.map((r) => r.month);
+          const totals = rows.map((r) => r.total_krw / 1e8);
+          const stocks = rows.map((r) => r.stock_krw / 1e8);
+          const coins = rows.map((r) => r.coin_krw / 1e8);
+          const cashes = rows.map((r) => r.cash_krw / 1e8);
+
+          if (chartTotal) chartTotal.destroy();
+          chartTotal = new Chart(document.getElementById("chartTotal"), {
+            type: "line",
+            data: {
+              labels,
+              datasets: [
+                {
+                  label: "총자산(억)",
+                  data: totals,
+                  borderColor: "#7627bb",
+                  borderWidth: 2,
+                  fill: false,
+                  tension: 0.3,
+                },
+                {
+                  label: "주식",
+                  data: stocks,
+                  borderColor: "#4285f4",
+                  borderWidth: 1,
+                  fill: false,
+                  tension: 0.3,
+                },
+                {
+                  label: "코인",
+                  data: coins,
+                  borderColor: "#fbbc04",
+                  borderWidth: 1,
+                  fill: false,
+                  tension: 0.3,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { position: "top" } },
+            },
+          });
+
+          // Ratio chart
+          const stockPct = rows.map((r) =>
+            r.total_krw > 0 ? (r.stock_krw / r.total_krw) * 100 : 0,
+          );
+          const coinPct = rows.map((r) =>
+            r.total_krw > 0 ? (r.coin_krw / r.total_krw) * 100 : 0,
+          );
+          const cashPct = rows.map((r) =>
+            r.total_krw > 0 ? (r.cash_krw / r.total_krw) * 100 : 0,
+          );
+
+          if (chartRatio) chartRatio.destroy();
+          chartRatio = new Chart(document.getElementById("chartRatio"), {
+            type: "bar",
+            data: {
+              labels,
+              datasets: [
+                { label: "주식%", data: stockPct, backgroundColor: "#4285f4" },
+                { label: "코인%", data: coinPct, backgroundColor: "#fbbc04" },
+                { label: "현금%", data: cashPct, backgroundColor: "#34a853" },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: { x: { stacked: true }, y: { stacked: true, max: 100 } },
+            },
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      // Init
+      loadHistory();
+    </script>
+  </body>
+</html>
