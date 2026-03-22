@@ -451,7 +451,29 @@
           const card = document.getElementById("rebalCard");
           card.style.display = "block";
 
-          let html = `<p style="font-size:1.1em;margin-bottom:12px">총자산: <b>${fmtFull(d.total)}원</b></p>`;
+          const drift = Math.abs(d.current_pct.stock - d.target_pct.stock);
+          const BAND = 5.0;
+
+          // 가이드 메시지
+          let guide = "";
+          if (drift < BAND) {
+            guide = `<div style="background:#e6f4ea;border:2px solid #34a853;padding:16px;border-radius:8px;margin:12px 0">
+              <h3 style="margin:0;color:#137333">✅ 리밸런싱 불필요</h3>
+              <p style="margin:8px 0">드리프트 ${drift.toFixed(1)}%p (±${BAND}%p 이내)</p>
+              <p style="font-size:1.1em"><b>추가금은 주식 계좌에 넣고 종목 매수하세요</b></p>
+            </div>`;
+          } else {
+            const moveAmt = Math.abs(d.diff.stock);
+            const direction = d.diff.stock > 0 ? "코인→주식" : "주식→코인";
+            guide = `<div style="background:#fce8e6;border:2px solid #d93025;padding:16px;border-radius:8px;margin:12px 0">
+              <h3 style="margin:0;color:#d93025">🔴 리밸런싱 필요!</h3>
+              <p style="margin:8px 0">드리프트 ${drift.toFixed(1)}%p (±${BAND}%p 초과)</p>
+              <p style="font-size:1.1em"><b>${direction} ${fmtFull(Math.round(moveAmt))}원 이동</b></p>
+            </div>`;
+          }
+
+          let html = guide;
+          html += `<p style="font-size:1.1em;margin-bottom:12px">총자산: <b>${fmtFull(d.total)}원</b></p>`;
 
           for (const [key, label] of [
             ["stock", "주식"],
@@ -571,8 +593,37 @@
         }
       }
 
+      // 마지막 스냅샷 값으로 입력 필드 채움
+      async function loadLastSnapshot() {
+        try {
+          const r = await fetch(API + "/api/assets/snapshots");
+          const rows = await r.json();
+          if (!rows.length) return;
+          const last = rows[rows.length - 1];
+          const acct = JSON.parse(last.accounts_json || "{}");
+          if (acct.stock_etf)
+            document.getElementById("inputStockEtf").value = Math.round(
+              acct.stock_etf,
+            );
+          if (acct.stock_cash)
+            document.getElementById("inputStockCash").value = Math.round(
+              acct.stock_cash,
+            );
+          if (acct.bank_cash)
+            document.getElementById("inputBankCash").value = Math.round(
+              acct.bank_cash,
+            );
+          if (last.coin_krw)
+            document.getElementById("inputCoin").value = Math.round(
+              last.coin_krw,
+            );
+          updateSummary();
+        } catch (e) {}
+      }
+
       // Init
       loadHistory();
+      loadLastSnapshot();
     </script>
   </body>
 </html>
