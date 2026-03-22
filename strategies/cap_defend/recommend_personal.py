@@ -2,7 +2,7 @@
 Cap Defend V17 Recommendation Script (Personal Version)
 =====================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
-Coin V17: K:SMA(60)+1%hyst + H:Mom21+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+Coin V17: K:SMA(60)+1%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
 
@@ -56,9 +56,9 @@ VERSION_HISTORY = [
 • HOLD 시에도 캐시 갱신, cron :05/:35"""),
 
     ("V16", "2026-03",
-     "코인: Mom21+25%Cap, 주식: V15 동일, hysteresis 수정",
+     "코인: Mom30+25%Cap, 주식: V15 동일, hysteresis 수정",
      """<b>▶ 코인 변경 (V16)</b>
-• <b>Health:</b> <span style='color:#d93025;'>Mom(21)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom21→30으로 변경)
+• <b>Health:</b> <span style='color:#d93025;'>Mom(30)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom30→30으로 변경)
 • <b>비중 캡:</b> <span style='color:#d93025;'>20% Cap</span> — 1종목 최대 20%, 나머지 현금 (붕괴 리스크 방어)
 • <b>백테스트:</b> 10-anchor 3트랜치 평균 Sharpe 1.451, CAGR +64.5%, MDD -33.2%, Calmar 1.94
 • <b>카나리아:</b> Hysteresis dead zone에서 signal_state.json 이전 상태 참조 (stateless 수정)
@@ -80,7 +80,7 @@ VERSION_HISTORY = [
 <b>▶ 코인 전략 (V14 동일)</b>
 • <b>유니버스:</b> CoinGecko Top 40 시총순 → Upbit KRW 필터
 • <b>Canary:</b> BTC > SMA(60) → 투자, 아니면 현금 (1% Hysteresis)
-• <b>Health Filter:</b> Mom(21)>0 AND Mom(90)>0 AND Vol(90)≤5%
+• <b>Health Filter:</b> Mom(30)>0 AND Mom(90)>0 AND Vol(90)≤5%
 • <b>선정:</b> 시총순 Top 5, 균등배분 (EW)
 • <b>DD Exit:</b> 60일 고점 대비 -25% 하락 → 매도 (매일 체크)
 • <b>Blacklist:</b> 일일 -15% 하락 → 7일 제외
@@ -93,7 +93,7 @@ VERSION_HISTORY = [
 
     ("V14", "2026-03",
      "SMA(60) canary, Mom+Mom+Vol5% health, EW, DD Exit, Blacklist, Crash Breaker",
-     """<b>▶ 코인:</b> K:SMA(60)+1%hyst, H:Mom21+Mom90+Vol5%, 시총순 Top 5 EW, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
+     """<b>▶ 코인:</b> K:SMA(60)+1%hyst, H:Mom30+Mom90+Vol5%, 시총순 Top 5 EW, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
 <b>▶ 주식:</b> R6 (SPY,QQQ,VEA,EEM,GLD,PDBC), EEM>SMA200, Mom3+Sh3 union EW, Defense Top3"""),
 
     ("V13", "2026-03",
@@ -111,7 +111,7 @@ VERSION_HISTORY = [
 <b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uae30\ubc18)</b>
 \u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 \uc2dc\uac00\ucd1d\uc561\uc21c \u2192 Upbit KRW \uc0c1\uc7a5 + 253\uc77c \ud788\uc2a4\ud1a0\ub9ac + 30\uc77c \ud3c9\uade0 \uac70\ub798\ub300\uae08 10\uc5b5\uc6d0\uc774\uc0c1 \ud544\ud130
 \u2022 <b>Canary:</b> BTC \u003e SMA50 \u2192 \ud22c\uc790, \uc544\ub2c8\uba74 \ud604\uae08
-\u2022 <b>Health Filter:</b> Price \u003e SMA30 AND Mom21 \u003e 0 AND Vol90 \u2264 10%
+\u2022 <b>Health Filter:</b> Price \u003e SMA30 AND Mom30 \u003e 0 AND Vol90 \u2264 10%
 \u2022 <b>Scoring (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>Multi Bonus</span> = Sharpe(126d)+Sharpe(252d) + RSI(45~70 \u2192 +0.2) + MACD hist\u003e0 \u2192 +0.2 + BB %B\u003e0.5 \u2192 +0.2
 \u2022 <b>\uc120\uc815:</b> Multi Bonus Score Top 5
 \u2022 <b>\ubc30\ubd84:</b> 90\uc77c \uc5ed\ubcc0\ub3d9\uc131 \uac00\uc911 (1/Vol)
@@ -133,7 +133,7 @@ VERSION_HISTORY = [
 <b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uc2e0\uaddc)</b>
 \u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 + Upbit KRW \ud544\ud130 (253\uc77c \ud788\uc2a4\ud1a0\ub9ac, 10\uc5b5\uc6d0 \uac70\ub798\ub300\uae08)
 \u2022 <b>Canary:</b> BTC \u003e SMA50
-\u2022 <b>Health Filter (V12 \uc2e0\uaddc):</b> Price \u003e SMA30 AND Mom21 \u003e 0 AND Vol90 \u2264 10%
+\u2022 <b>Health Filter (V12 \uc2e0\uaddc):</b> Price \u003e SMA30 AND Mom30 \u003e 0 AND Vol90 \u2264 10%
 \u2022 <b>Scoring:</b> Sharpe(126d) + Sharpe(252d) (\ubcf4\ub108\uc2a4 \uc5c6\uc74c)
 \u2022 <b>\uc120\uc815:</b> Top 5
 \u2022 <b>\ubc30\ubd84 (V12 \uc2e0\uaddc):</b> 90\uc77c \uc5ed\ubcc0\ub3d9\uc131 \uac00\uc911 (1/Vol)
@@ -806,7 +806,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     bl_set = {t for t, _ in blacklisted}
     filtered_universe = [t for t in coin_universe if t not in bl_set]
 
-    # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+    # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
     healthy = []
     rows = []
 
@@ -823,17 +823,17 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
         if (tgt_dt - last_dt).days != 0: continue
 
         cur_p = p.iloc[-1]
-        mom21 = calc_ret(p, 21)
+        mom30 = calc_ret(p, 30)
         mom90 = calc_ret(p, 90)
         vol90 = p.pct_change().iloc[-90:].std()
 
-        is_ok = (pd.notna(mom21) and mom21 > 0 and
+        is_ok = (pd.notna(mom30) and mom30 > 0 and
                  pd.notna(mom90) and mom90 > 0 and
                  vol90 <= VOL_CAP_FILTER)
         status = "🟢" if is_ok else "🔴"
 
         rows.append({'Coin': t, 'Price': fmt_price(cur_p),
-                     'Mom21': f"{mom21:.2%}" if pd.notna(mom21) else "-",
+                     'Mom30': f"{mom30:.2%}" if pd.notna(mom30) else "-",
                      'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
                      'Vol90': f"{vol90:.4f}", 'Status': status})
         if is_ok:
