@@ -8,9 +8,9 @@ Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 - Crash Breaker: VT daily -3% → 3 days cash
 
-Coin V17: K:SMA(60) + H:Mom(21)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+Coin V17: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Canary: BTC > SMA(60) + 1% hysteresis
-- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5%
+- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5%
 - Selection: 시총순 Top 5, Equal Weight
 - DD Exit: 60d peak -25% → sell warning
 - Blacklist: -15% daily drop → 7d exclude
@@ -479,7 +479,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
     bl_set = {t for t, _ in blacklisted}
     filtered_universe = [t for t in coin_universe if t not in bl_set]
 
-    # --- Health: Mom(21)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
+    # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
     rows = []
     healthy = []
     for t in filtered_universe:
@@ -490,16 +490,16 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
         if (tgt_dt - last_dt).days != 0: continue
 
         cur_p = p.iloc[-1]
-        mom21 = calc_ret(p, 21)
+        mom30 = calc_ret(p, 30)
         mom90 = calc_ret(p, 90)
         vol90 = p.pct_change().iloc[-90:].std()
 
-        is_ok = (pd.notna(mom21) and mom21 > 0 and
+        is_ok = (pd.notna(mom30) and mom30 > 0 and
                  pd.notna(mom90) and mom90 > 0 and
                  vol90 <= VOL_CAP_FILTER)
 
         rows.append({'Coin': t, 'Price': f"${cur_p:.4f}",
-                     'Mom21': f"{mom21:.2%}" if pd.notna(mom21) else "-",
+                     'Mom30': f"{mom30:.2%}" if pd.notna(mom30) else "-",
                      'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
                      'Vol90': f"{vol90:.4f}",
                      'Status': "🟢" if is_ok else "🔴"})

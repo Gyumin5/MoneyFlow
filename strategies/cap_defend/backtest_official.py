@@ -191,41 +191,49 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
 # ═══════════════════════════════════════════════════════════════════
 
 COIN_VERSIONS = {
-    # V12: SMA50, SMA30+Mom21+Vol10%, Sharpe Top5, InvVol, Top50, 방어 없음
+    # V12: SMA50, H1(SMA30+Mom21+Vol10%), Sharpe(S6) Top5, InvVol(W2), Top50
     'V12': dict(
         params=dict(canary='K1', vote_smas=(), vote_threshold=1,
                     health='H1', health_sma=30, health_mom_short=21, vol_cap=0.10,
-                    selection='sharpe', n_picks=5, weighting='inv_vol', top_n=50),
+                    selection='S6', n_picks=5, weighting='W2', top_n=50),
         dd_lookback=0, dd_threshold=0, bl_drop=0, bl_days=0,
         drift_threshold=0, post_flip_delay=0),
-    # V13: SMA50, SMA30+Mom21+Vol10%, MultiBonus Top5, InvVol, Top50
+    # V13: ≈ V12 (MultiBonus → S6로 근사, 엔진에 정확한 키 없음)
     'V13': dict(
         params=dict(canary='K1', vote_smas=(), vote_threshold=1,
                     health='H1', health_sma=30, health_mom_short=21, vol_cap=0.10,
-                    selection='sharpe', n_picks=5, weighting='inv_vol', top_n=50),
+                    selection='S6', n_picks=5, weighting='W2', top_n=50),
         dd_lookback=0, dd_threshold=0, bl_drop=0, bl_days=0,
         drift_threshold=0, post_flip_delay=0),
-    # V14: SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총 Top5 EW, DD+BL+Drift+PFD5
+    # V14: K8(SMA60+1%hyst), HK(Mom21+Mom90+Vol5%), 시총Top5(baseline), WC(EW+20%Cap), G5(Crash), T40
     'V14': dict(
-        params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40),
+        params=dict(canary_band=1.0, health_sma=0,
+                    selection='baseline', n_picks=5, weighting='WC', top_n=40,
+                    risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
-    # V15: = V14 (구 엔진에서는 동일)
+    # V15: = V14 (Mom21 동일)
     'V15': dict(
-        params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40,
-                    health_mom_short=21),
+        params=dict(canary_band=1.0, health_sma=0,
+                    health_mom_short=21,
+                    selection='baseline', n_picks=5, weighting='WC', top_n=40,
+                    risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
-    # V16: Mom30 (V15에서 변경, 결과적으로 악화)
+    # V16: Mom30 (악화)
     'V16': dict(
-        params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40,
-                    health_mom_short=30),
+        params=dict(canary_band=1.0, health_sma=0,
+                    health_mom_short=30,
+                    selection='baseline', n_picks=5, weighting='WC', top_n=40,
+                    risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
-    # V17: Mom21 복귀 (= V14/V15와 동일)
+    # V17: Mom30 (V16과 동일, 정확한 키 기준 최적)
     'V17': dict(
-        params=dict(selection='mcap', n_picks=5, weighting='ew', top_n=40,
-                    health_mom_short=21),
+        params=dict(canary_band=1.0, health_sma=0,
+                    health_mom_short=30,
+                    selection='baseline', n_picks=5, weighting='WC', top_n=40,
+                    risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
 }
