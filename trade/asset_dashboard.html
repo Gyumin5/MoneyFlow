@@ -593,37 +593,8 @@
         }
       }
 
-      // 마지막 스냅샷 값으로 입력 필드 채움
-      async function loadLastSnapshot() {
-        try {
-          const r = await fetch(API + "/api/assets/snapshots");
-          const rows = await r.json();
-          if (!rows.length) return;
-          const last = rows[rows.length - 1];
-          const acct = JSON.parse(last.accounts_json || "{}");
-          if (acct.stock_etf)
-            document.getElementById("inputStockEtf").value = Math.round(
-              acct.stock_etf,
-            );
-          if (acct.stock_cash)
-            document.getElementById("inputStockCash").value = Math.round(
-              acct.stock_cash,
-            );
-          if (acct.bank_cash)
-            document.getElementById("inputBankCash").value = Math.round(
-              acct.bank_cash,
-            );
-          if (last.coin_krw)
-            document.getElementById("inputCoin").value = Math.round(
-              last.coin_krw,
-            );
-          updateSummary();
-        } catch (e) {}
-      }
-
       // Init
       loadHistory();
-      loadLastSnapshot();
     </script>
   </body>
 </html>
