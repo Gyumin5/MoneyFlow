@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # === Coin imports ===
 from coin_engine import (
     load_universe, load_all_prices, filter_universe, calc_metrics,
-    resolve_canary, get_price, _port_val, execute_rebalance,
+    resolve_canary, get_price, _port_val, execute_rebalance, _close_to,
 )
 from coin_helpers import (
     B, merge_snapshots, calc_current_weights, calc_half_turnover,
@@ -96,6 +96,36 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
             state['catastrophic_triggered'] = False
 
         sig_date = prev_date if prev_date is not None else date
+
+        # ── Crash Breaker (G5): BTC daily -10% → 전량 현금, 3일 쿨다운 ──
+        crash_cooldown = state.get('crash_cooldown', 0)
+        crash_just_ended = False
+        if crash_cooldown > 0:
+            crash_cooldown -= 1
+            # 쿨다운 중에도 추가 crash 체크 → 연장
+            if i > 0 and params_base.risk == 'G5':
+                btc_close = _close_to('BTC-USD', prices, sig_date)
+                if btc_close is not None and len(btc_close) >= 2:
+                    btc_ret = btc_close.iloc[-1] / btc_close.iloc[-2] - 1
+                    if btc_ret <= -0.10:
+                        crash_cooldown = 3  # 리셋
+            if crash_cooldown == 0:
+                crash_just_ended = True
+            state['crash_cooldown'] = crash_cooldown
+        elif i > 0 and params_base.risk == 'G5':
+            btc_close = _close_to('BTC-USD', prices, sig_date)
+            if btc_close is not None and len(btc_close) >= 2:
+                btc_ret = btc_close.iloc[-1] / btc_close.iloc[-2] - 1
+                if btc_ret <= -0.10:
+                    for t in list(holdings.keys()):
+                        p = get_price(t, prices, date)
+                        cash += holdings[t] * p * (1 - params_base.tx_cost)
+                    holdings = {}
+                    for si in range(n_snap):
+                        snapshots[si] = {'CASH': 1.0}
+                    state['crash_cooldown'] = 3
+                    rebal_count += 1
+
         canary_on = resolve_canary(prices, sig_date, params_base, state)
         canary_flipped = (canary_on != state['prev_canary'])
         if canary_on and canary_flipped:
@@ -171,6 +201,16 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
             if calc_half_turnover(calc_current_weights(holdings, cash, prices, date), combined) >= drift_threshold:
                 need_rebal = True
 
+        if state.get('crash_cooldown', 0) > 0:
+            need_rebal = False
+
+        # Crash 쿨다운 종료 → 강제 재진입
+        if crash_just_ended and not holdings:
+            for si in range(n_snap):
+                snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist) if canary_on else {'CASH': 1.0}
+            combined = merge_snapshots(snapshots)
+            need_rebal = True
+
         if need_rebal:
             holdings, cash = execute_rebalance(holdings, cash, combined, prices, date, params_base.tx_cost)
             rebal_count += 1
@@ -193,36 +233,36 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
 COIN_VERSIONS = {
     # V12: SMA50, H1(SMA30+Mom21+Vol10%), Sharpe(S6) Top5, InvVol(W2), Top50
     'V12': dict(
-        params=dict(canary='K1', vote_smas=(), vote_threshold=1,
+        params=dict(canary='K1', sma_period=50, vote_smas=(), vote_threshold=1,
                     health='H1', health_sma=30, health_mom_short=21, vol_cap=0.10,
                     selection='S6', n_picks=5, weighting='W2', top_n=50),
         dd_lookback=0, dd_threshold=0, bl_drop=0, bl_days=0,
         drift_threshold=0, post_flip_delay=0),
     # V13: ≈ V12 (MultiBonus → S6로 근사, 엔진에 정확한 키 없음)
     'V13': dict(
-        params=dict(canary='K1', vote_smas=(), vote_threshold=1,
+        params=dict(canary='K1', sma_period=50, vote_smas=(), vote_threshold=1,
                     health='H1', health_sma=30, health_mom_short=21, vol_cap=0.10,
                     selection='S6', n_picks=5, weighting='W2', top_n=50),
         dd_lookback=0, dd_threshold=0, bl_drop=0, bl_days=0,
         drift_threshold=0, post_flip_delay=0),
     # V14: K8(SMA60+1%hyst), HK(Mom21+Mom90+Vol5%), 시총Top5(baseline), WC(EW+20%Cap), G5(Crash), T40
     'V14': dict(
-        params=dict(canary_band=1.0, health_sma=0,
+        params=dict(sma_period=60, canary_band=1.0, health_sma=0,
                     selection='baseline', n_picks=5, weighting='WC', top_n=40,
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
     # V15: = V14 (Mom21 동일)
     'V15': dict(
-        params=dict(canary_band=1.0, health_sma=0,
+        params=dict(sma_period=60, canary_band=1.0, health_sma=0,
                     health_mom_short=21,
                     selection='baseline', n_picks=5, weighting='WC', top_n=40,
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
-    # V16: Mom30 (악화)
+    # V16: Mom30
     'V16': dict(
-        params=dict(canary_band=1.0, health_sma=0,
+        params=dict(sma_period=60, canary_band=1.0, health_sma=0,
                     health_mom_short=30,
                     selection='baseline', n_picks=5, weighting='WC', top_n=40,
                     risk='G5'),
@@ -230,7 +270,7 @@ COIN_VERSIONS = {
         drift_threshold=0.10, post_flip_delay=5),
     # V17: Mom30 (V16과 동일, 정확한 키 기준 최적)
     'V17': dict(
-        params=dict(canary_band=1.0, health_sma=0,
+        params=dict(sma_period=60, canary_band=1.0, health_sma=0,
                     health_mom_short=30,
                     selection='baseline', n_picks=5, weighting='WC', top_n=40,
                     risk='G5'),
