@@ -18,6 +18,21 @@ import requests
 from datetime import datetime, timezone, timedelta
 import pyupbit
 
+# ─── Telegram ─────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = "REDACTED_TOKEN"
+TELEGRAM_CHAT_ID = "REDACTED_CHAT_ID"
+
+def send_telegram(msg):
+    """텔레그램 알림 전송. 실패해도 프로그램은 계속 진행."""
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
+            timeout=10
+        )
+    except Exception:
+        pass
+
 # --- Configuration for Auto Turnover ---
 # Try local config.py first (remote server), then ../../config/upbit.py (local dev)
 ACCESS_KEY = ""
@@ -895,7 +910,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
         stat = "Full Invest"
     return weights, stat, meta, log, healthy
 
-def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None):
+def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None, coin_total_krw=0):
     filepath = "portfolio_result_gmoh.html"
 
     # Read cash_buffer from trade_state.json
@@ -935,9 +950,17 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # Strategy documentation link
     version_html = ""
 
-    # Embed recommended stock tickers for client-side calculation
+    # Embed recommended stock tickers + prices for client-side calculation
     rec_stock_list = sorted([t for t in s_port.keys() if t != 'Cash'])
     rec_stock_json = json.dumps(rec_stock_list)
+
+    # ETF 종가(USD) 임베딩 — 주수 계산용
+    stock_prices_for_js = {}
+    for t in rec_stock_list:
+        p = prices.get(t)
+        if p is not None and not p.empty:
+            stock_prices_for_js[t] = round(float(p.iloc[-1]), 2)
+    stock_prices_json = json.dumps(stock_prices_for_js)
 
     # Read signal state for UI
     signal_flipped = False
@@ -953,9 +976,15 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         pass
 
     saved_holdings_json = json.dumps(saved_stock_holdings)
+    coin_total_krw_val = int(coin_total_krw)
     stock_holdings_js = """
             <script>
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
+            const STOCK_PRICES_USD = """ + stock_prices_json + """;
+            const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
+            const TARGET_STOCK_RATIO = 0.588;
+            const TARGET_COIN_RATIO = 0.392;
+            const REBAL_BAND = 0.05;  // ±5%p
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1061,8 +1090,162 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     status.style.color = '#d93025';
                 }
             }
+
+            // === 통합 리밸런싱 계산기 ===
+            let liveCoinKRW = COIN_TOTAL_KRW;  // 초기값: HTML 생성 시점
+            let coinFetchTime = '리포트 생성 시점';
+
+            async function fetchCoinBalance() {
+                const statusEl = document.getElementById('coinFetchStatus');
+                try {
+                    statusEl.innerHTML = '\\u23f3 \\ucf54\\uc778 \\uc794\\uace0 \\uc870\\ud68c \\uc911...';
+                    statusEl.style.color = '#1967d2';
+                    const resp = await fetch('http://' + window.location.hostname + ':5000/api/assets/coin_balance');
+                    if (!resp.ok) throw new Error('API error');
+                    const data = await resp.json();
+                    liveCoinKRW = data.total_krw;
+                    coinFetchTime = data.updated;
+                    statusEl.innerHTML = '\\u2705 \\uc2e4\\uc2dc\\uac04 \\uc870\\ud68c \\uc644\\ub8cc (' + data.updated + ')';
+                    statusEl.style.color = '#0d904f';
+                    return true;
+                } catch(e) {
+                    statusEl.innerHTML = '\\u26a0\\ufe0f \\uc870\\ud68c \\uc2e4\\ud328 \\u2014 \\ub9ac\\ud3ec\\ud2b8 \\uc2dc\\uc810 \\uac12 \\uc0ac\\uc6a9';
+                    statusEl.style.color = '#e37400';
+                    return false;
+                }
+            }
+
+            async function calcRebalance() {
+                // 먼저 실시간 코인 잔고 조회
+                await fetchCoinBalance();
+
+                const stockInput = document.getElementById('stockAccountKRW').value.trim().replace(/,/g, '');
+                const resultEl = document.getElementById('rebalResult');
+
+                const stockKRW = parseFloat(stockInput);
+                const coinKRW = parseFloat(document.getElementById('snapCoin').value) || liveCoinKRW;
+                const extraCash = sumText('snapBankCash');
+                const rate = parseFloat(document.getElementById('exchangeRate').value) || 0;
+                // 코인 입력 필드에 조회값 반영
+                if (!document.getElementById('snapCoin').value) document.getElementById('snapCoin').value = Math.round(coinKRW);
+
+                if (!stockKRW && stockKRW !== 0) { resultEl.innerHTML = '\\u274c \\uc8fc\\uc2dd \\ucd1d\\uc561\\uc744 \\uc785\\ub825\\ud574\\uc8fc\\uc138\\uc694'; return; }
+
+                // 1. 현재 비중 계산
+                const totalAsset = stockKRW + coinKRW + extraCash;
+                if (totalAsset <= 0) { resultEl.innerHTML = '\\u274c \\uc790\\uc0b0\\uc774 0\\uc785\\ub2c8\\ub2e4'; return; }
+
+                const curStockPct = stockKRW / totalAsset;
+                const curCoinPct = coinKRW / totalAsset;
+                const curCashPct = extraCash / totalAsset;
+                const drift = Math.abs(curStockPct - TARGET_STOCK_RATIO);
+                const needRebal = drift >= REBAL_BAND;
+
+                // 2. 목표 금액 계산 (현금 2%는 코인 쪽 자연 잔여로 처리)
+                const targetStockKRW = totalAsset * TARGET_STOCK_RATIO;
+                const targetCoinKRW = totalAsset * TARGET_COIN_RATIO;
+                const moveAmount = targetStockKRW - stockKRW;  // +면 코인→주식, -면 주식→코인
+
+                // 3. 비중 상태 표시
+                let html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">';
+                html += '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
+                    + '<div style="font-size:0.85em; color:#666;">\\uc8fc\\uc2dd \\uacc4\\uc88c</div>'
+                    + '<div style="font-size:1.4em; font-weight:700;">' + Math.round(stockKRW).toLocaleString() + '\\uc6d0</div>'
+                    + '<div style="color:' + (curStockPct > TARGET_STOCK_RATIO + REBAL_BAND ? '#d93025' : curStockPct < TARGET_STOCK_RATIO - REBAL_BAND ? '#d93025' : '#0d904f') + '; font-weight:600;">'
+                    + (curStockPct * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (TARGET_STOCK_RATIO * 100).toFixed(1) + '%)</div></div>';
+                html += '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
+                    + '<div style="font-size:0.85em; color:#666;">\\ucf54\\uc778 (\\uc790\\ub3d9\\uc870\\ud68c)</div>'
+                    + '<div style="font-size:1.4em; font-weight:700;">' + Math.round(coinKRW).toLocaleString() + '\\uc6d0</div>'
+                    + '<div style="color:' + (curCoinPct > TARGET_COIN_RATIO + REBAL_BAND ? '#d93025' : curCoinPct < TARGET_COIN_RATIO - REBAL_BAND ? '#d93025' : '#0d904f') + '; font-weight:600;">'
+                    + (curCoinPct * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (TARGET_COIN_RATIO * 100).toFixed(1) + '%)</div></div>';
+                html += '</div>';
+
+                if (extraCash > 0) {
+                    html += '<div style="padding:8px 14px; background:#fff8e1; border-radius:8px; margin-bottom:12px; font-size:0.9em;">'
+                        + '\\uae30\\ud0c0 \\ud604\\uae08: ' + Math.round(extraCash).toLocaleString() + '\\uc6d0 (' + (curCashPct * 100).toFixed(1) + '%)</div>';
+                }
+                html += '<div style="padding:8px 14px; background:#e8eaf6; border-radius:8px; margin-bottom:12px;">'
+                    + '<b>\\ucd1d \\uc790\\uc0b0:</b> ' + Math.round(totalAsset).toLocaleString() + '\\uc6d0</div>';
+
+                // 4. 리밸런싱 판단
+                if (needRebal) {
+                    const direction = moveAmount > 0 ? '\\ucf54\\uc778 \\u2192 \\uc8fc\\uc2dd' : '\\uc8fc\\uc2dd \\u2192 \\ucf54\\uc778';
+                    const absMove = Math.abs(moveAmount);
+                    html += '<div style="padding:14px; background:#fce8e6; border:2px solid #d93025; border-radius:10px; margin-bottom:16px;">'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 (\\ud3b8\\ucc28 ' + (drift * 100).toFixed(1) + '%p > \\u00b1' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
+                        + '<div style="font-size:1.2em;"><b>' + direction + '</b> <span style="font-size:1.3em; color:#d93025; font-weight:700;">' + Math.round(absMove).toLocaleString() + '\\uc6d0</span></div>'
+                        + '</div>';
+                } else {
+                    html += '<div style="padding:14px; background:#e8f5e9; border:1px solid #0d904f; border-radius:10px; margin-bottom:16px;">'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (\\ud3b8\\ucc28 ' + (drift * 100).toFixed(1) + '%p < \\u00b1' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
+                        + '</div>';
+                }
+
+                // 5. ETF 주수 계산 (환율 입력 시만)
+                const finalStockKRW = needRebal ? targetStockKRW : stockKRW;
+                const tickers = REC_STOCK_TICKERS.filter(t => t in STOCK_PRICES_USD);
+                if (tickers.length > 0 && rate > 0) {
+                    const perETF = finalStockKRW / tickers.length;
+                    let rows = '';
+                    let totalUsed = 0;
+
+                    tickers.forEach(t => {
+                        const priceUSD = STOCK_PRICES_USD[t];
+                        const priceKRW = priceUSD * rate;
+                        const shares = Math.floor(perETF / priceKRW);
+                        const usedKRW = shares * priceKRW;
+                        totalUsed += usedKRW;
+                        rows += '<tr>'
+                            + '<td data-label="ETF" style="font-weight:600;">' + t + '</td>'
+                            + '<td data-label="\\uac00\\uaca9">$' + priceUSD.toFixed(2) + ' (' + Math.round(priceKRW).toLocaleString() + '\\uc6d0)</td>'
+                            + '<td data-label="\\ubc30\\uc815">' + Math.round(perETF).toLocaleString() + '\\uc6d0</td>'
+                            + '<td data-label="\\uc8fc\\uc218" style="font-size:1.3em;font-weight:700;color:#1a73e8;">' + shares + '\\uc8fc</td>'
+                            + '<td data-label="\\ub9e4\\uc218\\uc561">' + Math.round(usedKRW).toLocaleString() + '\\uc6d0</td>'
+                            + '</tr>';
+                    });
+
+                    const remainder = finalStockKRW - totalUsed;
+                    html += '<h3 style="margin:16px 0 8px 0;">\\uc8fc\\uc2dd ETF \\ub9e4\\uc218 \\uac00\\uc774\\ub4dc' + (needRebal ? ' (\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud6c4)' : '') + '</h3>';
+                    html += '<table class="mobile-card-table">'
+                        + '<thead><tr><th>ETF</th><th>\\uac00\\uaca9</th><th>\\ubc30\\uc815</th><th>\\uc8fc\\uc218</th><th>\\ub9e4\\uc218\\uc561</th></tr></thead>'
+                        + '<tbody>' + rows + '</tbody></table>';
+                    html += '<div style="margin-top:10px;padding:10px;background:#f0f4ff;border-radius:8px;">'
+                        + '<b>\\uc8fc\\uc2dd \\ud22c\\uc790:</b> ' + Math.round(finalStockKRW).toLocaleString() + '\\uc6d0'
+                        + ' | <b>\\uc2e4\\uc81c \\ub9e4\\uc218:</b> ' + Math.round(totalUsed).toLocaleString() + '\\uc6d0'
+                        + ' | <b>\\uc794\\uc5ec:</b> ' + Math.round(remainder).toLocaleString() + '\\uc6d0'
+                        + '</div>';
+                }
+
+                if (tickers.length > 0 && rate <= 0) {
+                    html += '<p style="color:#888; font-size:0.9em;">\\ud658\\uc728\\uc744 \\uc785\\ub825\\ud558\\uba74 ETF \\uc8fc\\uc218\\ub3c4 \\uacc4\\uc0b0\\ud569\\ub2c8\\ub2e4.</p>';
+                }
+
+                resultEl.innerHTML = html;
+
+                // localStorage
+                if (rate > 0) try { localStorage.setItem('cap_defend_exchange_rate', String(rate)); } catch(e) {}
+            }
+
+            // \\ud658\\uc728 localStorage \\ubcf5\\uc6d0
+            (function() {
+                try {
+                    const savedRate = localStorage.getItem('cap_defend_exchange_rate');
+                    if (savedRate) document.addEventListener('DOMContentLoaded', function() {
+                        const el = document.getElementById('exchangeRate');
+                        if (el && !el.value) el.value = savedRate;
+                    });
+                } catch(e) {}
+            })();
             </script>
     """
+
+    # 긴급 여부 판단
+    is_alert = ('CRASH' in s_stat or 'CRASH' in c_stat or 'Risk-Off' in s_stat
+                or 'FLIP' in s_stat.upper() or signal_flipped)
+    alert_bg = '#fce8e6' if is_alert else '#e8f5e9'
+    alert_border = '#d93025' if is_alert else '#34a853'
+    alert_icon = '\U0001f6a8' if is_alert else '\u2705'
+    alert_msg = f'{s_stat} / {c_stat}'
 
     html = f"""
     <!DOCTYPE html>
@@ -1070,212 +1253,353 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cap Defend {STRATEGY_VERSION} Recommendation (Personal)</title>
-         <style>
+        <title>Cap Defend {STRATEGY_VERSION} (Personal)</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
             body {{ font-family: -apple-system, sans-serif; background: #f0f2f5; padding: 10px; color: #333; }}
             .container {{ max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 16px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; }}
             th, td {{ padding: 10px; border-bottom: 1px solid #f1f3f4; text-align: left; font-size: 0.95em; }}
             th {{ background-color: #fafafa; font-weight: 600; color: #555; }}
             .card {{ background: #fff; padding: 15px; border-radius: 12px; border: 1px solid #e0e0e0; margin-bottom: 10px; }}
-            .status-bar {{ display: flex; gap: 10px; background: #e8f0fe; padding: 15px; border-radius: 12px; margin-bottom: 20px; color: #1967d2; font-weight: 500; flex-wrap: wrap; }}
             .dataframe {{ width: 100%; border: 1px solid #ddd; border-collapse: collapse; margin: 10px 0; }}
             .dataframe th, .dataframe td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
             .dataframe tr:nth-child(even) {{ background-color: #f2f2f2; }}
             .small-table {{ font-size: 0.9em; }}
             .table-wrap {{ overflow-x: auto; }}
-            
-            /* Mobile Responsive Table */
-            @media screen and (max-width: 600px) {{
-                .mobile-card-table thead {{ display: none; }}
-                .mobile-card-table tr {{ 
-                    display: block; 
-                    margin-bottom: 15px; 
-                    border: 1px solid #ddd; 
-                    border-radius: 8px; 
-                    background: #fff;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-                }}
-                .mobile-card-table td {{ 
-                    display: flex; 
-                    justify-content: space-between; 
-                    padding: 12px; 
-                    border-bottom: 1px solid #eee; 
-                    text-align: right;
-                }}
-                .mobile-card-table td:last-child {{ border-bottom: none; }}
-                .mobile-card-table td::before {{ 
-                    content: attr(data-label); 
-                    font-weight: 600; 
-                    color: #555; 
-                    text-align: left;
-                }}
-                /* Asset Name styling in card mode */
-                .mobile-card-table td:first-child {{
-                    background: #f8f9fa;
-                    font-weight: bold;
-                    color: #1a73e8;
-                    border-radius: 8px 8px 0 0;
-                }}
+
+            /* Collapsible sections */
+            .section-header {{
+                display: flex; justify-content: space-between; align-items: center;
+                cursor: pointer; padding: 14px 16px; margin: 8px 0 0 0;
+                background: #f8f9fa; border-radius: 10px; user-select: none;
             }}
+            .section-header:hover {{ background: #eef1f5; }}
+            .section-header h2 {{ margin: 0; font-size: 1.1em; }}
+            .section-header .badge {{ font-size: 0.8em; color: #666; font-weight: 400; }}
+            .section-header .arrow {{ transition: transform 0.2s; font-size: 0.8em; color: #999; }}
+            .section-body {{ padding: 0 4px; }}
+            .section-body.collapsed {{ display: none; }}
+
+            /* Mobile */
+            @media screen and (max-width: 600px) {{
+                body {{ padding: 4px; }}
+                .container {{ padding: 12px; border-radius: 10px; }}
+                .mobile-card-table thead {{ display: none; }}
+                .mobile-card-table tr {{ display: block; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
+                .mobile-card-table td {{ display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #eee; text-align: right; }}
+                .mobile-card-table td:last-child {{ border-bottom: none; }}
+                .mobile-card-table td::before {{ content: attr(data-label); font-weight: 600; color: #555; text-align: left; }}
+                .mobile-card-table td:first-child {{ background: #f8f9fa; font-weight: bold; color: #1a73e8; border-radius: 8px 8px 0 0; }}
+                .chart-container {{ height: 180px !important; }}
+                /* 2열 그리드 → 1열 */
+                div[style*="grid-template-columns:1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
+                div[style*="grid-template-columns: 1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
+                .section-header h2 {{ font-size: 1em; }}
+            }}
+            .chart-container {{ height: 250px; position: relative; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend {STRATEGY_VERSION} (Personal)</h1>
-            <p>리포트 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 종가 기준일: {date_today.strftime('%Y-%m-%d')}</p>
-            
-            <div class="status-bar">
-                <div>📉 주식: {s_stat}</div>
-                <div>🪙 코인: {c_stat}</div>
+            <h1>\U0001f680 Cap Defend {STRATEGY_VERSION}</h1>
+            <p style="color:#666; font-size:0.9em;">{datetime.now().strftime('%Y-%m-%d %H:%M')} | \uc885\uac00 {date_today.strftime('%Y-%m-%d')}</p>
+
+            <!-- ===== 오늘 요약 (항상 보임) ===== -->
+            <div style="background:{alert_bg}; border:2px solid {alert_border}; padding:16px; border-radius:12px; margin:12px 0;">
+                <div style="font-size:1.2em; font-weight:700;">{alert_icon} {alert_msg}</div>
             </div>
-            
-            <!-- Cash Buffer Control + Force Trade -->
-            <div style="margin-bottom: 20px;">
-                <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;">
-                    <span style="font-weight: 600; color: #555;">💰 Cash Buffer:</span>
-                    <span id="bufferDisplay" style="font-size: 1.2em; font-weight: 700; color: #1a73e8;">{cash_buffer_pct:.0%}</span>
-                    <select id="bufferSelect" style="padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95em;">
-                        <option value="0.80" {'selected' if cash_buffer_pct >= 0.75 else ''}>80% (투자 20%)</option>
-                        <option value="0.60" {'selected' if 0.55 <= cash_buffer_pct < 0.75 else ''}>60% (투자 40%)</option>
-                        <option value="0.40" {'selected' if 0.35 <= cash_buffer_pct < 0.55 else ''}>40% (투자 60%)</option>
-                        <option value="0.20" {'selected' if 0.15 <= cash_buffer_pct < 0.35 else ''}>20% (투자 80%)</option>
-                        <option value="0.02" {'selected' if cash_buffer_pct < 0.15 else ''}>2% (정상 운영)</option>
-                    </select>
-                    <button onclick="updateBuffer()" style="background: #1a73e8; color: white; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer;">변경</button>
-                    <span id="bufferStatus" style="font-size: 0.9em;"></span>
-                </div>
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-                    <button id="forceTradeUpbitBtn" onclick="forceTrade('upbit')" style="
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        color: white;
-                        border: none;
-                        padding: 12px 24px;
-                        border-radius: 8px;
-                        font-size: 1em;
-                        font-weight: 600;
-                        cursor: pointer;
-                        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-                        transition: all 0.3s ease;
-                    ">
-                        ⚡ Force Trade (Upbit)
-                    </button>
-                    <span id="tradeStatus" style="margin-left: 10px; font-weight: 500;"></span>
-                </div>
+
+            <!-- ===== 매일 확인 (기본 펼침) ===== -->
+            <div class="section-header" onclick="toggleSection('secDaily')">
+                <h2>\U0001f4cb \ub9e4\uc77c \ud655\uc778</h2>
+                <span class="arrow" id="secDaily_arrow">\u25bc</span>
             </div>
-            
-            <script>
-            async function updateBuffer() {{
-                const val = document.getElementById('bufferSelect').value;
-                const status = document.getElementById('bufferStatus');
-                const pwd = prompt('PIN 4자리를 입력하세요:');
-                if (!pwd) return;
-                try {{
-                    const resp = await fetch('http://' + window.location.hostname + ':5000/api/cash_buffer', {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ cash_buffer: parseFloat(val), password: pwd }})
-                    }});
-                    const data = await resp.json();
-                    if (resp.ok) {{
-                        document.getElementById('bufferDisplay').textContent = Math.round((1-parseFloat(val))*100) + '% 투자';
-                        status.innerHTML = '✅ 변경 완료 (다음 Force Trade에 반영)';
-                        status.style.color = '#0d904f';
-                    }} else {{
-                        status.innerHTML = '⚠️ ' + (data.error || 'Error');
-                        status.style.color = '#d93025';
-                    }}
-                }} catch(e) {{
-                    status.innerHTML = '❌ API 연결 실패';
-                    status.style.color = '#d93025';
-                }}
-                setTimeout(() => {{ status.innerHTML = ''; }}, 5000);
-            }}
-
-            async function forceTrade(exchange) {{
-                const btn = document.getElementById('forceTrade' + exchange.charAt(0).toUpperCase() + exchange.slice(1) + 'Btn');
-                const status = document.getElementById('tradeStatus');
-                const exchangeName = 'Upbit';
-
-                // 암호 입력 → 서버에서 검증
-                const inputPwd = prompt('PIN 4자리를 입력하세요:');
-                if (!inputPwd) return;
-
-                // 금액 입력 (0 또는 빈값: 전체 자산 운용)
-                const amountInput = prompt('운용 금액을 입력하세요 (원):\\n(0 또는 빈값 입력 시 전체 자산 운용)', '0');
-                if (amountInput === null) return;
-                const amount = parseInt(amountInput.replace(/,/g, '')) || 0;
-
-                const amountText = amount > 0 ? amount.toLocaleString() + '원' : '전체 자산';
-                if (!confirm(exchangeName + ' Force Trade를 실행하시겠습니까?\\n운용 금액: ' + amountText + '\\n(실거래가 발생합니다!)')) {{
-                    return;
-                }}
-
-                btn.disabled = true;
-                btn.style.opacity = '0.6';
-                status.innerHTML = '⏳ ' + exchangeName + ' 실행 중... (' + amountText + ')';
-                status.style.color = '#1967d2';
-
-                try {{
-                    const response = await fetch('http://' + window.location.hostname + ':5000/api/trade/' + exchange, {{
-                        method: 'POST',
-                        headers: {{ 'Content-Type': 'application/json' }},
-                        body: JSON.stringify({{ target_amount: amount, password: inputPwd }})
-                    }});
-
-                    const data = await response.json();
-
-                    if (response.ok) {{
-                        status.innerHTML = '✅ ' + data.message;
-                        status.style.color = '#0d904f';
-                    }} else {{
-                        status.innerHTML = '⚠️ ' + (data.error || 'Error');
-                        status.style.color = '#d93025';
-                    }}
-                }} catch (error) {{
-                    status.innerHTML = '❌ API 연결 실패 (서버 확인 필요)';
-                    status.style.color = '#d93025';
-                }}
-
-                setTimeout(() => {{
-                    btn.disabled = false;
-                    btn.style.opacity = '1';
-                }}, 5000);
-            }}
-            </script>
-            
-
-            <!-- Stock Holdings & Rebalancing Trigger -->
-            <h2>📈 주식 ETF 리밸런싱</h2>
-            <div class="card">
-                <div style="margin-bottom: 15px;">
-                    <label style="font-weight: 600; color: #555;">현재 보유 주식 (띄어쓰기로 구분):</label>
-                    <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
-                        <input id="stockInput" type="text" placeholder="예: SPY QQQ MTUM GLD EFA QUAL"
-                            style="flex: 1; min-width: 200px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 1em; font-family: monospace;" />
-                        <button onclick="saveHoldings()" style="
-                            background: #1a73e8; color: white; border: none; padding: 10px 20px;
-                            border-radius: 8px; font-weight: 600; cursor: pointer;">저장</button>
+            <div class="section-body" id="secDaily">
+                <div class="card">
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+                        <div>\U0001f4c9 \uc8fc\uc2dd: <b>{s_stat}</b></div>
+                        <div>\U0001fa99 \ucf54\uc778: <b>{c_stat}</b></div>
                     </div>
-                    <div id="holdingsStatus" style="margin-top: 8px; font-size: 0.9em; color: #666;"></div>
                 </div>
-                <div id="triggerResult"></div>
+
+                <!-- 주식 보유/추천 비교 -->
+                <div class="card">
+                    <label style="font-weight:600; color:#555;">\ud604\uc7ac \ubcf4\uc720 \uc8fc\uc2dd (\ub744\uc5b4\uc4f0\uae30\ub85c \uad6c\ubd84):</label>
+                    <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                        <input id="stockInput" type="text" placeholder="\uc608: SPY QQQ VEA"
+                            style="flex:1; min-width:200px; padding:10px; border:1px solid #ddd; border-radius:8px; font-size:1em; font-family:monospace;" />
+                        <button onclick="saveHoldings()" style="background:#1a73e8; color:white; border:none; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer;">\uc800\uc7a5</button>
+                    </div>
+                    <div id="holdingsStatus" style="margin-top:8px; font-size:0.9em; color:#666;"></div>
+                    <div id="triggerResult"></div>
+                </div>
+
+                <!-- 코인 포트폴리오 -->
+                <div class="card">
+                    {integrated_html}
+                </div>
+            </div>
+
+            <!-- ===== 자산 관리 + 리밸런싱 (기본 접힘) ===== -->
+            <div class="section-header" onclick="toggleSection('secAsset')">
+                <h2>\U0001f9ee \uc790\uc0b0 \uad00\ub9ac / \ub9ac\ubc38\ub7f0\uc2f1</h2>
+                <span class="badge" id="secAsset_badge"></span>
+                <span class="arrow" id="secAsset_arrow">\u25b6</span>
+            </div>
+            <div class="section-body collapsed" id="secAsset">
+                <div class="card">
+                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px;">
+                        <div>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uc8fc\uc2dd \ucd1d\uc561 (\uc6d0)</label>
+                            <input id="stockAccountKRW" type="text" placeholder="350,000,000"
+                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
+                        </div>
+                        <div>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ucf54\uc778 (\uc6d0)</label>
+                            <div style="display:flex; gap:6px; margin-top:4px;">
+                                <input id="snapCoin" type="number" placeholder="0"
+                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;" />
+                                <button onclick="fetchCoinForSnap()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ud604\uae08 (\uc6d0)</label>
+                            <input id="snapBankCash" type="text" placeholder="0"
+                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+                        <div>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ud658\uc728 (\uc6d0/\ub2ec\ub7ec, ETF \uc8fc\uc218 \uacc4\uc0b0\uc6a9)</label>
+                            <input id="exchangeRate" type="number" placeholder="1380"
+                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
+                        </div>
+                        <div>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uba54\ubaa8 (\uc120\ud0dd)</label>
+                            <input id="snapMemo" type="text" placeholder=""
+                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <button onclick="calcRebalance()" style="
+                            flex:1; background:linear-gradient(135deg,#0d904f 0%,#1a73e8 100%);
+                            color:white; border:none; padding:12px 24px; border-radius:8px;
+                            font-weight:600; font-size:1em; cursor:pointer;">\uacc4\uc0b0</button>
+                        <button onclick="saveSnapshot()" style="
+                            flex:1; background:linear-gradient(135deg,#7627bb 0%,#1a73e8 100%);
+                            color:white; border:none; padding:12px 24px; border-radius:8px;
+                            font-weight:600; font-size:1em; cursor:pointer;">\U0001f4be \uc2a4\ub0c5\uc0f7 \uc800\uc7a5</button>
+                    </div>
+                    <div id="coinFetchStatus" style="font-size:0.85em; margin-top:8px; color:#666;"></div>
+                    <div id="rebalResult" style="margin-top:12px;"></div>
+                    <div id="snapStatus" style="margin-top:8px; font-size:0.9em;"></div>
+                </div>
+
+                <!-- 코인 Force Trade / Buffer -->
+                <div class="card">
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                        <span style="font-weight:600; color:#555;">\U0001f4b0 Cash Buffer:</span>
+                        <span id="bufferDisplay" style="font-size:1.1em; font-weight:700; color:#1a73e8;">{cash_buffer_pct:.0%}</span>
+                        <select id="bufferSelect" style="padding:6px 10px; border:1px solid #ddd; border-radius:8px; font-size:0.9em;">
+                            <option value="0.80" {'selected' if cash_buffer_pct >= 0.75 else ''}>80%</option>
+                            <option value="0.60" {'selected' if 0.55 <= cash_buffer_pct < 0.75 else ''}>60%</option>
+                            <option value="0.40" {'selected' if 0.35 <= cash_buffer_pct < 0.55 else ''}>40%</option>
+                            <option value="0.20" {'selected' if 0.15 <= cash_buffer_pct < 0.35 else ''}>20%</option>
+                            <option value="0.02" {'selected' if cash_buffer_pct < 0.15 else ''}>2%</option>
+                        </select>
+                        <button onclick="updateBuffer()" style="background:#1a73e8; color:white; border:none; padding:6px 14px; border-radius:8px; font-weight:600; cursor:pointer; font-size:0.9em;">\ubcc0\uacbd</button>
+                        <span id="bufferStatus" style="font-size:0.85em;"></span>
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                        <button id="forceTradeUpbitBtn" onclick="forceTrade('upbit')" style="
+                            background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+                            color:white; border:none; padding:10px 20px; border-radius:8px;
+                            font-size:0.95em; font-weight:600; cursor:pointer;">
+                            \u26a1 Force Trade (Upbit)
+                        </button>
+                        <span id="tradeStatus" style="font-size:0.9em; font-weight:500;"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== 히스토리 (기본 접힘) ===== -->
+            <div class="section-header" onclick="toggleSection('secHistory')">
+                <h2>\U0001f4c8 \uc6d4\ubcc4 \uae30\ub85d</h2>
+                <span class="badge" id="secHistory_badge"></span>
+                <span class="arrow" id="secHistory_arrow">\u25b6</span>
+            </div>
+            <div class="section-body collapsed" id="secHistory">
+                <div class="card">
+                    <div class="chart-container"><canvas id="chartTotal"></canvas></div>
+                </div>
+                <div class="card" style="overflow-x:auto;">
+                    <table id="historyTable">
+                        <thead><tr><th>\uc6d4</th><th>\uc8fc\uc2dd</th><th>\ucf54\uc778</th><th>\ud604\uae08</th><th>\ucd1d\uc790\uc0b0</th><th>\uba54\ubaa8</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- ===== 추천 비중 (기본 접힘) ===== -->
+            <div class="section-header" onclick="toggleSection('secPortfolio')">
+                <h2>\U0001f4ca \ucd94\ucc9c \ube44\uc911 (Stock + Coin)</h2>
+                <span class="arrow" id="secPortfolio_arrow">\u25b6</span>
+            </div>
+            <div class="section-body collapsed" id="secPortfolio">
+                <table><thead><tr><th>\uc885\ubaa9</th><th>\uc790\uc0b0\uad70</th><th>\ube44\uc911</th></tr></thead><tbody>{tbody}</tbody></table>
+            </div>
+
+            <!-- ===== 상세 로그 (기본 접힘) ===== -->
+            <div class="section-header" onclick="toggleSection('secLog')">
+                <h2>\U0001f4dc \uc0c1\uc138 \ub85c\uadf8</h2>
+                <span class="arrow" id="secLog_arrow">\u25b6</span>
+            </div>
+            <div class="section-body collapsed" id="secLog">
+                {''.join(log_global)}
             </div>
 
             {stock_holdings_js}
 
-            <h2>🪙 통합 포트폴리오 현황</h2>
-            <div class="card">
-                {integrated_html}
-            </div>
+            <script>
+            const API = 'http://' + window.location.hostname + ':5000';
+            const fmt = n => n >= 1e8 ? (n/1e8).toFixed(1)+'\uc5b5' : n >= 1e4 ? Math.round(n/1e4).toLocaleString()+'\ub9cc' : Math.round(n).toLocaleString();
 
-            <h2>📊 최종 추천 비중 (Stock + Coin)</h2>
-            <table><thead><tr><th>종목</th><th>자산군</th><th>비중</th></tr></thead><tbody>{tbody}</tbody></table>
-            
-            {version_html}
+            // === Section toggle ===
+            function toggleSection(id) {{
+                const body = document.getElementById(id);
+                const arrow = document.getElementById(id + '_arrow');
+                body.classList.toggle('collapsed');
+                arrow.textContent = body.classList.contains('collapsed') ? '\u25b6' : '\u25bc';
+            }}
 
-            <h2>📜 상세 로그</h2>
-            {''.join(log_global)}
+            // === Buffer / Force Trade ===
+            async function updateBuffer() {{
+                const val = document.getElementById('bufferSelect').value;
+                const status = document.getElementById('bufferStatus');
+                const pwd = prompt('PIN 4\uc790\ub9ac:');
+                if (!pwd) return;
+                try {{
+                    const resp = await fetch(API + '/api/cash_buffer', {{
+                        method: 'POST', headers: {{'Content-Type':'application/json'}},
+                        body: JSON.stringify({{cash_buffer: parseFloat(val), password: pwd}})
+                    }});
+                    const d = await resp.json();
+                    if (resp.ok) {{ document.getElementById('bufferDisplay').textContent = Math.round((1-parseFloat(val))*100)+'%'; status.innerHTML='\u2705 \ubcc0\uacbd \uc644\ub8cc'; status.style.color='#0d904f'; }}
+                    else {{ status.innerHTML='\u26a0\ufe0f '+(d.error||'Error'); status.style.color='#d93025'; }}
+                }} catch(e) {{ status.innerHTML='\u274c API \uc2e4\ud328'; status.style.color='#d93025'; }}
+                setTimeout(()=>{{status.innerHTML='';}}, 5000);
+            }}
+
+            async function forceTrade(exchange) {{
+                const btn = document.getElementById('forceTradeUpbitBtn');
+                const status = document.getElementById('tradeStatus');
+                const pwd = prompt('PIN 4\uc790\ub9ac:');
+                if (!pwd) return;
+                const amtIn = prompt('\uc6b4\uc6a9 \uae08\uc561 (\uc6d0, 0=\uc804\uccb4):', '0');
+                if (amtIn === null) return;
+                const amt = parseInt(amtIn.replace(/,/g,'')) || 0;
+                const amtText = amt > 0 ? amt.toLocaleString()+'\uc6d0' : '\uc804\uccb4';
+                if (!confirm('Force Trade \uc2e4\ud589? ('+amtText+')')) return;
+                btn.disabled=true; btn.style.opacity='0.6';
+                status.innerHTML='\u23f3 \uc2e4\ud589 \uc911...'; status.style.color='#1967d2';
+                try {{
+                    const r = await fetch(API+'/api/trade/'+exchange, {{
+                        method:'POST', headers:{{'Content-Type':'application/json'}},
+                        body: JSON.stringify({{target_amount:amt, password:pwd}})
+                    }});
+                    const d = await r.json();
+                    status.innerHTML = r.ok ? '\u2705 '+d.message : '\u26a0\ufe0f '+(d.error||'Error');
+                    status.style.color = r.ok ? '#0d904f' : '#d93025';
+                }} catch(e) {{ status.innerHTML='\u274c API \uc2e4\ud328'; status.style.color='#d93025'; }}
+                setTimeout(()=>{{btn.disabled=false; btn.style.opacity='1';}}, 5000);
+            }}
+
+            // === Snapshot ===
+            function sumText(id) {{
+                const v = document.getElementById(id).value.trim();
+                if (!v) return 0;
+                return v.split(/\\s+/).reduce((s,x) => s+(parseFloat(x)||0), 0);
+            }}
+
+            async function fetchCoinForSnap() {{
+                try {{
+                    const r = await fetch(API + '/api/assets/coin_balance');
+                    const d = await r.json();
+                    if (d.total_krw) document.getElementById('snapCoin').value = Math.round(d.total_krw);
+                }} catch(e) {{ alert('\ucf54\uc778 \uc870\ud68c \uc2e4\ud328'); }}
+            }}
+
+            async function saveSnapshot() {{
+                const now = new Date();
+                const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+                const stock = parseFloat(document.getElementById('stockAccountKRW').value.replace(/,/g,'')) || 0;
+                const coin = parseFloat(document.getElementById('snapCoin').value) || 0;
+                const bankCash = sumText('snapBankCash');
+                const cash = bankCash;
+                const rate = parseFloat(document.getElementById('exchangeRate').value) || 0;
+                const data = {{
+                    month: month,
+                    stock_krw: stock, coin_krw: coin, cash_krw: cash,
+                    memo: document.getElementById('snapMemo').value,
+                    accounts: {{
+                        fx_rate: rate, bank_cash: bankCash,
+                        fx_rate: rate
+                    }}
+                }};
+                try {{
+                    const r = await fetch(API + '/api/assets/snapshots', {{
+                        method: 'POST', headers: {{'Content-Type':'application/json'}},
+                        body: JSON.stringify(data)
+                    }});
+                    const d = await r.json();
+                    document.getElementById('snapStatus').innerHTML = '\u2705 ' + (d.message || d.error);
+                    document.getElementById('snapStatus').style.color = r.ok ? '#0d904f' : '#d93025';
+                    loadHistory();
+                }} catch(e) {{ document.getElementById('snapStatus').innerHTML = '\u274c \uc800\uc7a5 \uc2e4\ud328'; }}
+            }}
+
+            // === History ===
+            let chartTotal = null;
+            async function loadHistory() {{
+                try {{
+                    const r = await fetch(API + '/api/assets/snapshots');
+                    const rows = await r.json();
+                    if (!rows.length) return;
+
+                    // Badge
+                    const last = rows[rows.length - 1];
+                    const badge1 = document.getElementById('secAsset_badge');
+                    const badge2 = document.getElementById('secHistory_badge');
+                    if (badge1) badge1.textContent = '\ucd5c\uadfc: ' + last.month + ' / ' + fmt(last.total_krw);
+                    if (badge2) badge2.textContent = rows.length + '\uac74';
+
+                    // Table (역순)
+                    const tbody = document.querySelector('#historyTable tbody');
+                    tbody.innerHTML = '';
+                    for (let i = rows.length - 1; i >= 0; i--) {{
+                        const s = rows[i];
+                        tbody.innerHTML += '<tr><td>'+s.month+'</td><td>'+fmt(s.stock_krw)+'</td><td>'+fmt(s.coin_krw)+'</td><td>'+fmt(s.cash_krw)+'</td><td>'+fmt(s.total_krw)+'</td><td>'+(s.memo||'')+'</td></tr>';
+                    }}
+
+                    // Chart
+                    const labels = rows.map(r => r.month);
+                    const totals = rows.map(r => r.total_krw / 1e8);
+                    if (chartTotal) chartTotal.destroy();
+                    chartTotal = new Chart(document.getElementById('chartTotal'), {{
+                        type: 'line',
+                        data: {{ labels, datasets: [{{ label: '\ucd1d\uc790\uc0b0(\uc5b5)', data: totals, borderColor: '#7627bb', borderWidth: 2, fill: true, backgroundColor: 'rgba(118,39,187,0.1)', tension: 0.3 }}] }},
+                        options: {{ responsive: true, maintainAspectRatio: false, plugins: {{ legend: {{ position: 'top' }} }} }}
+                    }});
+                }} catch(e) {{}}
+            }}
+
+            // Init
+            document.addEventListener('DOMContentLoaded', function() {{
+                loadHistory();
+                try {{ const sr = localStorage.getItem('cap_defend_exchange_rate'); if (sr) document.getElementById('exchangeRate').value = sr; }} catch(e) {{}}
+            }});
+            </script>
         </div>
     </body>
     </html>
@@ -1446,4 +1770,25 @@ if __name__ == "__main__":
     krw_prices = {}
         
     # Pass my_holdings_krw, integrated_rows for unified display
-    save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows)
+    coin_total_krw = sum(my_holdings_krw.values()) + my_cash
+    save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows, coin_total_krw=coin_total_krw)
+
+    # ─── Telegram 알림 ─────────────────────────────────────
+    alerts = []
+
+    # 1. VT Crash
+    if 'CRASH' in s_stat:
+        alerts.append(f"🚨 <b>VT CRASH 발동!</b>\n주식 전량 매도 필요\n→ 페이지 확인: http://152.69.225.8:8080/portfolio_result_gmoh.html")
+
+    # 2. 카나리 플립
+    try:
+        with open('signal_state.json', 'r') as _sf:
+            _sig = json.load(_sf)
+            if _sig.get('signal_flipped'):
+                mode = "Risk-On 🟢" if _sig.get('risk_on') else "Risk-Off 🔴"
+                alerts.append(f"🚨 <b>카나리 플립! ({mode})</b>\n주식 종목 전환 필요\n→ 페이지 확인: http://152.69.225.8:8080/portfolio_result_gmoh.html")
+    except Exception:
+        pass
+
+    for msg in alerts:
+        send_telegram(msg)

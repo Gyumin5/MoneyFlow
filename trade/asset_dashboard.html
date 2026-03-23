@@ -547,10 +547,10 @@
           const rows = await r.json();
           if (!rows.length) return;
 
-          // Table
+          // Table (역순: 최신이 위)
           const tbody = document.querySelector("#historyTable tbody");
           tbody.innerHTML = "";
-          for (let i = 0; i < rows.length; i++) {
+          for (let i = rows.length - 1; i >= 0; i--) {
             const s = rows[i];
             tbody.innerHTML +=
               `<tr><td>${s.month}</td><td>${fmt(s.stock_krw)}</td><td>${fmt(s.coin_krw)}</td>` +
