@@ -583,6 +583,17 @@ def run_stock_strategy_v15(log, all_prices, target_date):
                             stock_crash = False
                         break
 
+    # Crash 상태를 signal_state.json에 저장 (자동매매용)
+    try:
+        with open(SIGNAL_STATE_FILE, 'r') as _sf:
+            _crash_state = json.load(_sf)
+    except (FileNotFoundError, json.JSONDecodeError):
+        _crash_state = {}
+    _crash_state['stock_crash'] = stock_crash
+    _crash_state['stock_crash_cooldown'] = crash_days_remaining
+    with open(SIGNAL_STATE_FILE, 'w') as _sf:
+        json.dump(_crash_state, _sf)
+
     if stock_crash:
         return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)", {'signal_dist': {}, 'next_candidates': []}
 
