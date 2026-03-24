@@ -358,7 +358,7 @@ Day 22: 트랜치4 (25%) — 그날의 Z-score로 독립적으로 종목 선정
 
       <h2>5. 자동매매 시스템</h2>
 
-      <h3>5.1 서버 구성</h3>
+      <h3>5.1 서버 및 스케줄링</h3>
       <table>
         <tr>
           <th>항목</th>
@@ -374,42 +374,197 @@ Day 22: 트랜치4 (25%) — 그날의 Z-score로 독립적으로 종목 선정
         </tr>
         <tr>
           <td>주식</td>
-          <td>한국투자증권 Open API <span class="tag tag-auto">자동</span></td>
+          <td>
+            한국투자증권 Open API (KIS) <span class="tag tag-auto">자동</span>
+          </td>
         </tr>
         <tr>
           <td>알림</td>
           <td>텔레그램 [REDACTED_BOT]</td>
         </tr>
+        <tr>
+          <td>중복방지</td>
+          <td>run_trade.sh flock 래퍼 (코인+주식 모두)</td>
+        </tr>
+      </table>
+      <pre>
+코인:
+  09:15  recommend_personal.py (신호 계산 + HTML + 텔레그램)
+  09:20  run_trade.sh upbit --trade (매매)
+  :05,:35 run_trade.sh upbit --monitor (긴급 매도 + 리밸런싱 복구)
+
+주식:
+  09:15  recommend_personal.py (signal_state.json 갱신)
+  23:35  run_trade.sh kis --trade (4트랜치 매매, 장 개시 5분 후)
+  00:05~ run_trade.sh kis --monitor (리밸런싱 복구, 장중 매시)
+</pre
+      >
+
+      <h3>5.2 주문 실행 패턴 (주식+코인 공통)</h3>
+      <div class="highlight">
+        <b
+          >핵심: 주문 &rarr; 대기 &rarr; 미체결 취소 &rarr; 재시도 (최대 5회)</b
+        >
+      </div>
+      <pre>
+for attempt in 1..5:
+  1. 현재가 조회
+  2. 주문 (주식: 지정가 매수+2%/매도-0.5%, 코인: 시장가 분할)
+  3. 5초 대기
+  4. 미체결 전량 취소
+  5. 잔고 조회 &rarr; 체결량 확인
+  6. 목표 달성? &rarr; 종료
+  7. 미달 &rarr; 다음 시도 (새 현재가로)
+</pre
+      >
+      <table>
+        <tr>
+          <th></th>
+          <th>주식 (KIS)</th>
+          <th>코인 (업비트)</th>
+        </tr>
+        <tr>
+          <td>주문 방식</td>
+          <td>지정가 (매수 +2%, 매도 -0.5%)</td>
+          <td>시장가 분할매매</td>
+        </tr>
+        <tr>
+          <td>재시도</td>
+          <td>최대 5회, 5초 간격</td>
+          <td>분할 루프 내부</td>
+        </tr>
+        <tr>
+          <td>수량 추적</td>
+          <td>before &plusmn; delta (과매도/과매수 방지)</td>
+          <td>금액 기반 잔여량</td>
+        </tr>
+        <tr>
+          <td>장 시간</td>
+          <td>23:30~06:00 (정규장만)</td>
+          <td>24시간</td>
+        </tr>
       </table>
 
-      <h3>5.2 코인 자동매매 (auto_trade_upbit.py)</h3>
-      <pre>
-09:15  recommend_personal.py (신호 계산 + HTML + 텔레그램)
-09:20  auto_trade_upbit.py --trade (매매)
-:05,:35 auto_trade_upbit.py --monitor (긴급 매도 + pending 복구)
-</pre
-      >
+      <h3>5.3 Monitor 역할</h3>
+      <div class="warn">
+        <b>Monitor는 단순 미체결 확인이 아닙니다.</b><br />
+        <code>rebalancing_needed=true</code>면 능동적으로 매매합니다: 미체결
+        전량 취소 &rarr; 목표 재계산 &rarr; 새 주문 &rarr; 완료 체크
+      </div>
+      <table>
+        <tr>
+          <th></th>
+          <th>rebalancing_needed=true</th>
+          <th>rebalancing_needed=false</th>
+        </tr>
+        <tr>
+          <td>--trade</td>
+          <td>앵커 갱신 + 매매</td>
+          <td>앵커 체크만 (매매 없음)</td>
+        </tr>
+        <tr>
+          <td>--monitor</td>
+          <td>미체결 취소 + 재계산 + 매매</td>
+          <td>미체결 확인만</td>
+        </tr>
+      </table>
+      <p>
+        <b>코인 monitor 추가 역할:</b> Crash(BTC -10%), 카나리 OFF, DD
+        Exit(-25%) 긴급 매도. DD Exit은 해당 코인만 개별 매도 (전량청산 아님).
+      </p>
 
-      <h3>5.3 주식 자동매매 (auto_trade_kis.py)</h3>
-      <pre>
-09:15  recommend_personal.py (신호 계산 + signal_state.json)
-23:35  auto_trade_kis.py --trade (4트랜치 매매)
-00:05~ auto_trade_kis.py --monitor (미체결 재주문)
-</pre
-      >
+      <h3>5.4 데이터 연동 (시세, 잔고, 환율)</h3>
+      <table>
+        <tr>
+          <th>항목</th>
+          <th>데이터 소스</th>
+          <th>비고</th>
+        </tr>
+        <tr>
+          <td>코인 잔고</td>
+          <td>업비트 API</td>
+          <td>24시간</td>
+        </tr>
+        <tr>
+          <td>주식 잔고</td>
+          <td>KIS inquire-balance</td>
+          <td>24시간 (장외=전일종가)</td>
+        </tr>
+        <tr>
+          <td>주식 시세</td>
+          <td>KIS overseas-<b>price</b>/quotations</td>
+          <td>장중만 (overseas-stock 아님!)</td>
+        </tr>
+        <tr>
+          <td>시세 Fallback</td>
+          <td>KIS실시간 &rarr; 잔고종가 &rarr; KIS일봉 &rarr; Yahoo</td>
+          <td>4단계</td>
+        </tr>
+        <tr>
+          <td>매수가능</td>
+          <td>
+            psamount(장중) &rarr; foreign-margin(장외) &rarr; present-balance
+          </td>
+          <td>통합증거금 포함</td>
+        </tr>
+        <tr>
+          <td>환율</td>
+          <td>KIS foreign-margin bass_exrt</td>
+          <td>한투 기준환율</td>
+        </tr>
+        <tr>
+          <td>거래소 코드</td>
+          <td>미국 ETF 전부 <code>NASD</code></td>
+          <td>실전계좌=미국전체</td>
+        </tr>
+      </table>
 
-      <h3>5.4 리밸런싱 플래그 패턴</h3>
+      <h3>5.5 안전장치 및 상태 관리</h3>
+      <table>
+        <tr>
+          <th>장치</th>
+          <th>설명</th>
+        </tr>
+        <tr>
+          <td>원자적 저장</td>
+          <td>signal_state.json: tmp + os.replace (부분쓰기 방지)</td>
+        </tr>
+        <tr>
+          <td>flock</td>
+          <td>run_trade.sh 래퍼로 --trade와 --monitor 동시실행 방지</td>
+        </tr>
+        <tr>
+          <td>완료 판단</td>
+          <td>금액 &plusmn;5% 이내 OR 주수 일치 (소액에서 1주 차이 허용)</td>
+        </tr>
+        <tr>
+          <td>매도 실패 복구</td>
+          <td>
+            Crash/Canary-off 후 잔고 확인, 잔량 있으면 rebalancing_needed=true
+            유지
+          </td>
+        </tr>
+        <tr>
+          <td>수량 추적</td>
+          <td>before &plusmn; delta 기준 (절대 보유수량 아님, 과매도 방지)</td>
+        </tr>
+      </table>
+
+      <h3>5.6 리밸런싱 플래그 사이클</h3>
       <pre>
 앵커일 도달 &rarr; 해당 트랜치 목표 갱신 &rarr; rebalancing_needed: true
-매매 시도 &rarr; 목표 &asymp; 현재 (&plusmn;5%) &rarr; rebalancing_needed: false
-false면 다음 앵커까지 가격 변동 무시
-Crash &rarr; 전량 매도 + rebalancing_needed: false + 쿨다운 3일 (매매 차단)
-플립 &rarr; 전 트랜치 즉시 전환 + rebalancing_needed: true
+  &rarr; --trade 매매 시도 (주문 &rarr; 5초 &rarr; 취소 &rarr; 재시도 x5)
+  &rarr; 목표 &asymp; 현재 (&plusmn;5% or 주수 일치) &rarr; rebalancing_needed: false
+  &rarr; 미완료 &rarr; --monitor가 장중 매시 재시도
+  &rarr; false면 다음 앵커까지 가격 변동 무시
+
+Crash &rarr; 전량 매도 &rarr; 잔량 있으면 true 유지 &rarr; 쿨다운 3일 (매매 차단)
+플립 &rarr; 전 트랜치 즉시 전환 &rarr; rebalancing_needed: true
 쿨다운 중 &rarr; 앵커일이 와도 리밸런싱 차단
 </pre
       >
 
-      <h3>5.5 텔레그램 알림</h3>
+      <h3>5.7 텔레그램 알림</h3>
       <table>
         <tr>
           <th>이벤트</th>
@@ -527,8 +682,8 @@ Crash &rarr; 전량 매도 + rebalancing_needed: false + 쿨다운 3일 (매매 
         </tr>
         <tr>
           <td>5</td>
-          <td>KIS 시세 API 문제 해결 (한투 고객센터 확인)</td>
-          <td><span class="tag tag-pending">진행 중</span></td>
+          <td>KIS 시세 API 경로 수정 (overseas-price)</td>
+          <td><span class="tag tag-auto">완료</span></td>
         </tr>
         <tr>
           <td>6</td>
