@@ -236,6 +236,48 @@ def get_coin_balance():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/assets/stock_balance', methods=['GET'])
+def get_stock_balance():
+    """한투 해외주식 잔고 자동 조회."""
+    try:
+        from auto_trade_kis import get_balance, get_buying_power_usd, _get, KIS_ACCOUNT, KIS_ACCOUNT_PROD
+
+        # 보유 종목
+        holdings_raw, _ = get_balance()
+        stock_eval = sum(h['eval_amt'] for h in holdings_raw)
+
+        # 매수가능 (통합증거금)
+        buying_power = get_buying_power_usd()
+
+        # 환율
+        rate = 1500.0
+        try:
+            data = _get("/uapi/overseas-stock/v1/trading/foreign-margin", "TTTC2101R", {
+                "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+            }, retries=1)
+            for item in data.get('output', []):
+                if isinstance(item, dict) and item.get('natn_name') == '미국' and item.get('crcy_cd') == 'USD':
+                    rate = float(item.get('bass_exrt', 1500))
+                    break
+        except Exception:
+            pass
+
+        total_usd = stock_eval + buying_power
+        total_krw = total_usd * rate
+
+        return jsonify({
+            "total_krw": total_krw,
+            "total_usd": total_usd,
+            "stock_eval_usd": stock_eval,
+            "buying_power_usd": buying_power,
+            "exchange_rate": rate,
+            "holdings": holdings_raw,
+            "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/assets/rebalance', methods=['POST'])
 def calc_rebalance():
     """리밸런싱 배분 계산."""
