@@ -439,14 +439,16 @@ def run_trade():
     holdings, _ = get_balance()
     current_map = {h['ticker']: h for h in holdings}
 
-    # 미체결 주문 확인 — 있으면 매매 스킵 (monitor가 처리)
+    # 미체결 주문 취소 (새로 계산해서 주문하므로)
     try:
         pending_orders = get_pending_orders()
         if pending_orders:
-            log.info(f"⏳ 미체결 {len(pending_orders)}건 있음 → 매매 스킵 (monitor 대기)")
+            log.info(f"미체결 {len(pending_orders)}건 취소:")
             for po in pending_orders:
-                log.info(f"  {po['side']} {po['ticker']} x{po['qty']}")
-            return
+                log.info(f"  취소: {po['side']} {po['ticker']} x{po['qty']}")
+                cancel_order(po['order_no'], po['ticker'], po['qty'], po['side'])
+                time.sleep(0.5)
+            time.sleep(3)
     except Exception:
         pass
 
@@ -625,42 +627,89 @@ def run_force():
 
 
 def run_monitor():
-    """미체결 확인 + 재주문. 장중 30분마다 실행."""
-    pending = get_pending_orders()
-    if not pending:
-        log.info("미체결 없음.")
+    """리밸런싱 미완료 시 목표 달성까지 매매 시도. 장중 매시 실행."""
+    kis_state = load_kis_state()
+
+    # rebalancing_needed가 false면 아무것도 안 함
+    if not kis_state.get('rebalancing_needed', False):
+        # 미체결만 확인
+        pending = get_pending_orders()
+        if pending:
+            log.info(f"미체결 {len(pending)}건 (rebal 완료 상태)")
+        else:
+            log.info("미체결 없음. rebal 완료.")
         return
 
-    log.info(f"미체결 {len(pending)}건:")
-    for order in pending:
-        log.info(f"  {order['side']} {order['ticker']} x{order['qty']} @ ${order['price']:.2f} (#{order['order_no']})")
+    log.info("=== Monitor: rebalancing_needed=true ===")
 
-        # 현재가 조회 후 가격 괴리가 크면 취소 → 재주문
-        current = get_current_price(order['ticker'])
-        if current <= 0:
-            continue
+    # 1. 미체결 전부 취소
+    pending = get_pending_orders()
+    if pending:
+        log.info(f"미체결 {len(pending)}건 취소:")
+        for order in pending:
+            log.info(f"  취소: {order['side']} {order['ticker']} x{order['qty']} @ ${order['price']:.2f}")
+            cancel_order(order['order_no'], order['ticker'], order['qty'], order['side'])
+            time.sleep(0.5)
+        time.sleep(3)  # 취소 반영 대기
 
-        if order['side'] == 'buy' and order['price'] < current * 0.99:
-            # 매수 주문 가격이 현재가보다 1% 이상 낮으면 재주문
-            log.info(f"  가격 조정: ${order['price']:.2f} → ${current * 1.005:.2f}")
-            cancel_result = cancel_order(order['order_no'], order['ticker'],
-                                         order['qty'], order['side'])
-            if cancel_result['success']:
-                time.sleep(0.5)
-                new_price = round(current * 1.005, 2)
-                place_order(order['ticker'], order['qty'], new_price, side='buy')
-                log.info(f"  재주문: {order['ticker']} x{order['qty']} @ ${new_price}")
+    # 2. 현재 잔고 + 목표 계산
+    signal = load_signal_state()
+    target_tickers = signal.get('stock_holdings', [])
+    if not target_tickers or target_tickers == ['Cash']:
+        log.info("목표: Cash. 보유 있으면 매도.")
+        holdings, _ = get_balance()
+        for h in holdings:
+            if h['qty'] > 0:
+                _sell_all(h['ticker'], h['qty'], "MONITOR_SELL")
+        kis_state['rebalancing_needed'] = False
+        save_kis_state(kis_state)
+        return
 
-        elif order['side'] == 'sell' and order['price'] > current * 1.01:
-            # 매도 주문 가격이 현재가보다 1% 이상 높으면 재주문
-            log.info(f"  가격 조정: ${order['price']:.2f} → ${current * 0.995:.2f}")
-            cancel_result = cancel_order(order['order_no'], order['ticker'],
-                                         order['qty'], order['side'])
-            if cancel_result['success']:
-                time.sleep(0.5)
-                new_price = round(current * 0.995, 2)
-                place_order(order['ticker'], order['qty'], new_price, side='sell')
-                log.info(f"  재주문: {order['ticker']} x{order['qty']} @ ${new_price}")
+    combined = _calc_combined_target(kis_state, target_tickers)
+    holdings, _ = get_balance()
+    current_map = {h['ticker']: h for h in holdings}
+    total_holdings = sum(h['eval_amt'] for h in holdings)
+    available = get_buying_power_usd()
+    total_asset = total_holdings + available
+    invest_budget = total_asset * 0.98
+
+    log.info(f"목표: {combined}")
+    log.info(f"총 자산: ${total_asset:.2f}")
+
+    # 3. 매도 (퇴출 + 초과)
+    for h in holdings:
+        if h['ticker'] not in combined and h['qty'] > 0:
+            _sell_all(h['ticker'], h['qty'], "MONITOR_REBAL")
+        elif h['ticker'] in combined:
+            target_val = invest_budget * combined[h['ticker']]
+            if h['eval_amt'] - target_val > 50:
+                price = h['current_price'] if h['current_price'] > 0 else get_current_price(h['ticker'])
+                if price > 0:
+                    sell_qty = int((h['eval_amt'] - target_val) / price)
+                    if sell_qty > 0:
+                        _sell_all(h['ticker'], sell_qty, "MONITOR_EW")
+
+    # 4. 매수 (부족)
+    for t, w in combined.items():
+        target_val = invest_budget * w
+        current_val = current_map[t]['eval_amt'] if t in current_map else 0
+        diff = target_val - current_val
+        if diff > 50:
+            _buy_target(t, diff)
+            time.sleep(0.5)
+
+    # 5. 완료 체크
+    time.sleep(3)
+    holdings_after, _ = get_balance()
+    total_after = sum(h['eval_amt'] for h in holdings_after) + get_buying_power_usd()
+    if _check_rebal_complete(holdings_after, combined, total_after):
+        log.info("✅ Monitor: 리밸런싱 완료 — rebalancing_needed: false")
+        kis_state['rebalancing_needed'] = False
+    else:
+        log.info("⏳ Monitor: 아직 미완료 — 다음 실행에서 재시도")
+
+    kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    save_kis_state(kis_state)
 
 
 # ─── Helper Functions ────────────────────────────────────
