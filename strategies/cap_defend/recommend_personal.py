@@ -56,6 +56,13 @@ except Exception:
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
+
+def _save_signal_state(data):
+    """signal_state.json 원자적 저장."""
+    tmp = SIGNAL_STATE_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f)
+    os.replace(tmp, SIGNAL_STATE_FILE)
 STRATEGY_VERSION = "V17"
 VERSION_HISTORY = [
     ("V17", "2026-03",
@@ -591,8 +598,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         _crash_state = {}
     _crash_state['stock_crash'] = stock_crash
     _crash_state['stock_crash_cooldown'] = crash_days_remaining
-    with open(SIGNAL_STATE_FILE, 'w') as _sf:
-        json.dump(_crash_state, _sf)
+    _save_signal_state(_crash_state)
 
     if stock_crash:
         return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)", {'signal_dist': {}, 'next_candidates': []}
@@ -636,8 +642,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
 
         # Save canary state (stock_picks updated after selection below)
         _state.update({'risk_on': bool(risk_on), 'signal_flipped': bool(signal_flipped)})
-        with open(SIGNAL_STATE_FILE, 'w') as _sf:
-            json.dump(_state, _sf)
+        _save_signal_state(_state)
 
         log.append(f"<p><b>[Canary]</b> EEM: ${eem_cur:.2f} (MA{STOCK_CANARY_MA_PERIOD} ${eem_sma:.2f}, dist {dist:+.2%}, hyst ±{STOCK_CANARY_HYST:.1%})</p>")
         flip_info = " \U0001f504 <b>SIGNAL FLIP</b>" if signal_flipped else ""
@@ -696,8 +701,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
                     _st = json.load(_sf)
                 _st['stock_holdings'] = picks
                 _st['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-                with open(SIGNAL_STATE_FILE, 'w') as _sf:
-                    json.dump(_st, _sf)
+                _save_signal_state(_st)
             except Exception:
                 pass
             return {t: 1.0/len(picks) for t in picks}, "공격 모드", meta
@@ -729,8 +733,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
             _st = json.load(_sf)
         _st['stock_holdings'] = picks
         _st['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-        with open(SIGNAL_STATE_FILE, 'w') as _sf:
-            json.dump(_st, _sf)
+        _save_signal_state(_st)
     except Exception:
         pass
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})", meta
@@ -789,8 +792,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     except (FileNotFoundError, json.JSONDecodeError):
         _state = {}
     _state.update({'coin_risk_on': bool(coin_risk_on), 'coin_signal_flipped': bool(coin_signal_flipped), 'updated': datetime.now().strftime('%Y-%m-%d %H:%M')})
-    with open(SIGNAL_STATE_FILE, 'w') as _sf:
-        json.dump(_state, _sf)
+    _save_signal_state(_state)
 
     # Sync coin_risk_on to trade_state.json (auto_trade가 읽는 파일)
     try:

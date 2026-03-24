@@ -176,7 +176,7 @@
         <tr>
           <td>트랜치</td>
           <td>4트랜치 (Day 1/8/15/22)</td>
-          <td>3트랜치 (Day 1/10/19)</td>
+          <td>3트랜치 (Day 1/11/21)</td>
         </tr>
         <tr>
           <td>TX</td>
@@ -258,17 +258,19 @@
 
       <h3>2.6 4트랜치</h3>
       <pre>
-Day 1:  트랜치1 (25%) 리밸런싱
-Day 8:  트랜치2 (25%) 리밸런싱
-Day 15: 트랜치3 (25%) 리밸런싱
-Day 22: 트랜치4 (25%) 리밸런싱
+Day 1:  트랜치1 (25%) — 그날의 Z-score로 독립적으로 종목 선정
+Day 8:  트랜치2 (25%) — 그날의 Z-score로 독립적으로 종목 선정
+Day 15: 트랜치3 (25%) — 그날의 Z-score로 독립적으로 종목 선정
+Day 22: 트랜치4 (25%) — 그날의 Z-score로 독립적으로 종목 선정
 </pre
       >
       <p>
-        같은 달에는 보통 같은 종목을 고르지만, 종목 교체가 있는 달에
-        <b>매수 가격이 분산</b>됩니다.
+        <b>각 트랜치는 독립적으로 운영됩니다.</b> 자기 앵커일에 그날의 신호로
+        종목을 선정하고 비중을 결정합니다. 4개 트랜치의 목표를 합산하여 단일
+        포트폴리오로 매매합니다. 종목 교체가 있는 달에는 트랜치마다 다른 날에
+        교체하므로 <b>매수/매도 가격이 분산</b>됩니다.
       </p>
-      <p>Crash/플립은 전 트랜치 동시 처리.</p>
+      <p><b>Crash/플립은 예외:</b> 전 트랜치를 동시에 즉시 처리합니다.</p>
 
       <h3>2.7 백테스트 성과 (2017~2025, 11-anchor 평균, tx 0.2%)</h3>
       <table>
@@ -401,7 +403,9 @@ Day 22: 트랜치4 (25%) 리밸런싱
 앵커일 도달 &rarr; 해당 트랜치 목표 갱신 &rarr; rebalancing_needed: true
 매매 시도 &rarr; 목표 &asymp; 현재 (&plusmn;5%) &rarr; rebalancing_needed: false
 false면 다음 앵커까지 가격 변동 무시
-Crash/플립 &rarr; 강제 true (즉시 처리)
+Crash &rarr; 전량 매도 + rebalancing_needed: false + 쿨다운 3일 (매매 차단)
+플립 &rarr; 전 트랜치 즉시 전환 + rebalancing_needed: true
+쿨다운 중 &rarr; 앵커일이 와도 리밸런싱 차단
 </pre
       >
 
@@ -414,18 +418,58 @@ Crash/플립 &rarr; 강제 true (즉시 처리)
         </tr>
         <tr>
           <td>VT Crash</td>
-          <td>주식 전량 매도 필요</td>
+          <td>주식 전량 매도</td>
           <td>연 0~1회</td>
         </tr>
         <tr>
-          <td>카나리 플립</td>
+          <td>주식 카나리 플립</td>
           <td>공격/방어 전환</td>
           <td>연 2~4회</td>
         </tr>
         <tr>
-          <td>코인 체결</td>
-          <td>매수/매도 내역</td>
+          <td>코인 카나리 플립</td>
+          <td>코인 전량 매도/매수</td>
+          <td>연 2~4회</td>
+        </tr>
+        <tr>
+          <td>BTC Crash</td>
+          <td>코인 전량 매도</td>
+          <td>연 0~1회</td>
+        </tr>
+        <tr>
+          <td>코인 DD Exit</td>
+          <td>개별 코인 매도</td>
+          <td>수시</td>
+        </tr>
+        <tr>
+          <td>코인 리밸런싱</td>
+          <td>앵커일 매매 결과</td>
+          <td>월 3회</td>
+        </tr>
+        <tr>
+          <td>주식 리밸런싱</td>
+          <td>앵커일 매매 결과</td>
+          <td>월 4회</td>
+        </tr>
+        <tr>
+          <td>주식 매수/매도</td>
+          <td>체결 상세</td>
           <td>거래 시</td>
+        </tr>
+        <tr>
+          <td>코인 매수/매도</td>
+          <td>체결 상세</td>
+          <td>거래 시</td>
+        </tr>
+        <tr>
+          <td>60:40 밴드 이탈</td>
+          <td>자금 이동 필요</td>
+          <td>연 1~2회</td>
+        </tr>
+        <tr>
+          <td>에러/장애</td>
+          <td>API 실패, 주문 거부 등</td>
+          <td>수시</td>
         </tr>
       </table>
 
@@ -483,33 +527,33 @@ Crash/플립 &rarr; 강제 true (즉시 처리)
         </tr>
         <tr>
           <td>5</td>
-          <td>주식 자동매매 테스트 (소액)</td>
+          <td>KIS 시세 API 문제 해결 (한투 고객센터 확인)</td>
           <td><span class="tag tag-pending">진행 중</span></td>
         </tr>
         <tr>
           <td>6</td>
-          <td>KIS 시세 API 문제 해결</td>
-          <td><span class="tag tag-pending">대기</span></td>
+          <td>장중 모니터 (VT/EEM 실시간 체크)</td>
+          <td><span class="tag tag-pending">5번 선행</span></td>
         </tr>
         <tr>
           <td>7</td>
-          <td>신한 &rarr; 한투 자금 이전</td>
-          <td><span class="tag tag-pending">대기</span></td>
+          <td>주식 자동매매 테스트 (소액, 5+6 필요)</td>
+          <td><span class="tag tag-pending">진행 중</span></td>
         </tr>
         <tr>
           <td>8</td>
-          <td>일간 자동 자산 기록 (daily_assets)</td>
-          <td><span class="tag tag-pending">대기</span></td>
+          <td>신한 &rarr; 한투 자금 이전</td>
+          <td><span class="tag tag-pending">7번 안정 후</span></td>
         </tr>
         <tr>
           <td>9</td>
-          <td>장중 모니터 (VT/EEM 실시간)</td>
-          <td><span class="tag tag-pending">대기</span></td>
+          <td>일간 자동 자산 기록 (daily_assets)</td>
+          <td><span class="tag tag-pending">8번 후</span></td>
         </tr>
         <tr>
           <td>10</td>
           <td>완전 자율주행</td>
-          <td><span class="tag tag-pending">대기</span></td>
+          <td><span class="tag tag-pending">전부 완료 후</span></td>
         </tr>
       </table>
 
@@ -582,7 +626,14 @@ Crash/플립 &rarr; 강제 true (즉시 처리)
           <td>불안정</td>
         </tr>
       </table>
-      <p>V17d(동적 복귀)만 유의미. 나머지는 채택 근거 없음.</p>
+      <div class="warn">
+        <b>V17d(동적 복귀)만 유의미한 개선.</b> Crash 후 3일 고정 대기 대신 VT
+        &gt; SMA10 회복 시 재진입. 최근 구간(2021~)에서 Sharpe +0.07, MDD -0.6%p
+        개선. 단순하고 논리적으로 타당. <br /><br />
+        <b>현재 미적용.</b> 현재 V17은 3일 고정 복귀. V17d 적용 시 장중
+        모니터(VT 실시간 체크)가 선행되어야 동적 복귀 판단이 가능. KIS 시세 API
+        해결 + 장중 모니터 구현 후 검토 예정.
+      </div>
 
       <h2>9. 핵심 규칙 요약</h2>
 
