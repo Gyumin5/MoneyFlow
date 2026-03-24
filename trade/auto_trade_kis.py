@@ -428,6 +428,17 @@ def run_trade():
     holdings, _ = get_balance()
     current_map = {h['ticker']: h for h in holdings}
 
+    # 미체결 주문 확인 — 있으면 매매 스킵 (monitor가 처리)
+    try:
+        pending_orders = get_pending_orders()
+        if pending_orders:
+            log.info(f"⏳ 미체결 {len(pending_orders)}건 있음 → 매매 스킵 (monitor 대기)")
+            for po in pending_orders:
+                log.info(f"  {po['side']} {po['ticker']} x{po['qty']}")
+            return
+    except Exception:
+        pass
+
     log.info(f"=== KIS Trade (4트랜치) ===")
     log.info(f"Signal: crash={stock_crash}, cooldown={crash_cooldown}, risk_on={risk_on}, flipped={signal_flipped}")
     log.info(f"Target: {target_tickers}")

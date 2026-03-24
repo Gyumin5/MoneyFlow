@@ -832,10 +832,21 @@ class V16UpbitTrader:
         if holdings_qty.get('POL', 0) > 0 and 'POL' not in healthy_list:
              log(f"  🚨 POL: 헬스체크 탈락 (보유중) -> 전량 매도 필요")
         
-        # 헬스체크 실패 보유 코인 검사
+        # 헬스체크 실패 코인 검사 (보유 + 트랜치 목표 모두 포함)
         bad_coins = []
         healthy_set = set(healthy_list)
-        for t in curr_w.keys():
+        # 트랜치 목표 코인도 검사 범위에 포함
+        all_tranche_coins_for_health = set(curr_w.keys())
+        try:
+            with open('trade_state.json', 'r') as _hf:
+                _hstate = json.load(_hf)
+            for _htr in _hstate.get('tranches', {}).values():
+                all_tranche_coins_for_health.update(_htr.get('picks', []))
+        except Exception:
+            pass
+        for t in all_tranche_coins_for_health:
+            if t == 'Cash':
+                continue
             if t not in healthy_set and t not in target_w:
                 bad_coins.append(t)
         
@@ -1049,16 +1060,11 @@ class V16UpbitTrader:
 
         if not trade_reasons:
             log(f"✅ HOLD — 트리거 없음 (턴오버: {turnover:.1%})")
-            # HOLD에서도 monitor 캐시 갱신 (stale 방지)
-            try:
-                with open(TRADE_STATE_FILE, 'r') as _sf:
-                    existing = json.load(_sf)
-                existing['coin_risk_on'] = is_risk_on_now
-                existing['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-                self._refresh_monitor_cache(existing)
-                self._save_trade_state(existing, TRADE_STATE_FILE)
-            except Exception:
-                pass
+            # HOLD에서도 trade_state를 저장 (앵커 마킹 + monitor 캐시 갱신)
+            trade_state['coin_risk_on'] = is_risk_on_now
+            trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+            self._refresh_monitor_cache(trade_state)
+            self._save_trade_state(trade_state, TRADE_STATE_FILE)
             return turnover
 
         log(f"⚡ 매매 트리거: {', '.join(trade_reasons)}")
@@ -1094,6 +1100,12 @@ class V16UpbitTrader:
                 log(f"📉 {t} 전량 매도")
                 qty = holdings_qty.get(t, 0)
                 self.ensure_sell(t, qty, is_clearance=True)
+                # 전량 매도 후 잔량 체크 → 실패 시 pending에 저장
+                remaining_bal = self.upbit.get_balance(f"KRW-{t}") or 0
+                remaining_price = pyupbit.get_current_price(f"KRW-{t}") or 0
+                if remaining_bal * remaining_price >= MIN_ORDER_KRW:
+                    pending[t] = {'side': 'sell_all', 'target_krw': 0, 'filled_krw': 0,
+                                  'created': datetime.now().strftime('%Y-%m-%d %H:%M')}
             else:
                 log(f"📉 {t} 부분 매도 (-{sell_amt:,.0f}원)")
                 sold = self.split_sell(t, sell_amt, timeout_sec=180)
@@ -1232,7 +1244,8 @@ class V16UpbitTrader:
                             emergency = True
                             emergency_reason = f"카나리아 OFF (BTC ${btc_usd:,.0f} < SMA60*0.99 ${btc_sma60_usd*0.99:,.0f})"
 
-            # ── DD Exit: 보유코인 USD 60일 고점 대비 -25% (CSV 직접 조회) ──
+            # ── DD Exit: 보유코인 USD 60일 고점 대비 -25% → 해당 코인만 매도 ──
+            dd_exit_coins = []
             if not emergency:
                 try:
                     active_coins = set()
@@ -1250,18 +1263,40 @@ class V16UpbitTrader:
                         if peak_60d > 0 and cur_usd > 0:
                             dd = cur_usd / peak_60d - 1
                             if dd <= DD_EXIT_THRESHOLD:
-                                emergency = True
-                                emergency_reason = f"DD Exit {coin} ({dd:+.1%}, ${cur_usd:,.1f} vs 60d peak ${peak_60d:,.1f})"
-                                break
+                                dd_exit_coins.append((coin, dd, cur_usd, peak_60d))
                 except Exception as e:
                     log(f"⚠️ DD Exit CSV 조회 실패: {e}")
 
-            # ── 긴급 발동 시 ──
+            # ── DD Exit 발동: 해당 코인만 개별 매도 ──
+            if dd_exit_coins:
+                for coin, dd, cur, peak in dd_exit_coins:
+                    reason = f"DD Exit {coin} ({dd:+.1%}, ${cur:,.1f} vs 60d peak ${peak:,.1f})"
+                    log(f"📉 MONITOR DD: {reason}")
+                    send_telegram(f"📉 DD Exit: {reason}")
+                    # 해당 코인만 매도
+                    try:
+                        bal = self.upbit.get_balance(f"KRW-{coin}") or 0
+                        if bal > 0:
+                            self.order(coin, 'sell', bal)
+                            log(f"  ✅ {coin} 매도 완료 ({bal:.4f}개)")
+                    except Exception as e:
+                        log(f"  ⚠️ {coin} 매도 실패: {e}")
+                    # 전 트랜치에서 제거
+                    for a_str in trade_state.get('tranches', {}):
+                        tr = trade_state['tranches'][a_str]
+                        if coin in tr.get('weights', {}):
+                            del tr['weights'][coin]
+                        if coin in tr.get('picks', []):
+                            tr['picks'].remove(coin)
+                trade_state['rebalancing_needed'] = True
+                trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                self._save_trade_state(trade_state, TRADE_STATE_FILE)
+
+            # ── Crash/카나리OFF 긴급 발동 시 → 전량 매도 ──
             if emergency:
                 log(f"🚨 MONITOR 긴급: {emergency_reason}")
                 send_telegram(f"🚨 V16 긴급 탈출: {emergency_reason}")
 
-                # 미체결 취소 + 전량 매도
                 held_coins = []
                 try:
                     balances = self.upbit.get_balances()
@@ -1278,13 +1313,13 @@ class V16UpbitTrader:
                 if held_coins:
                     self.emergency_sell_all(held_coins)
 
-                # pending 삭제 + 트랜치 초기화 + coin_peaks 초기화
                 trade_state['pending_trades'] = {}
                 for a_str in trade_state.get('tranches', {}):
                     trade_state['tranches'][a_str]['picks'] = []
                     trade_state['tranches'][a_str]['weights'] = {}
-                trade_state['coin_peaks'] = {}  # 긴급 청산 후 stale peaks 방지
+                trade_state['coin_peaks'] = {}
                 trade_state['coin_risk_on'] = False
+                trade_state['rebalancing_needed'] = False
                 trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
                 trade_state['last_emergency'] = emergency_reason
                 self._save_trade_state(trade_state, TRADE_STATE_FILE)
@@ -1337,6 +1372,10 @@ class V16UpbitTrader:
                         self.ensure_sell(ticker, bal, is_clearance=True)
 
             trade_state['pending_trades'] = pending
+            # pending 모두 완료되면 rebalancing_needed 해제
+            if not pending and trade_state.get('rebalancing_needed'):
+                trade_state['rebalancing_needed'] = False
+                log(f"✅ 모든 pending 완료 → rebalancing_needed: false")
             trade_state['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
             self._save_trade_state(trade_state, TRADE_STATE_FILE)
             log(f"💾 Monitor 완료 (pending {len(pending)}건 남음)")
