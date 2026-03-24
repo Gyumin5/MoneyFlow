@@ -394,13 +394,23 @@ def _calc_combined_target(kis_state, target_tickers):
 
 
 def _check_rebal_complete(holdings, combined_target, total_asset):
-    """목표 대비 보유가 허용 오차 이내인지 확인."""
+    """목표 대비 보유가 허용 오차 이내인지 확인.
+    금액 기준 ±5% OR 주수가 목표와 동일하면 완료."""
     if total_asset <= 0:
         return True
     current_map = {h['ticker']: h for h in holdings}
+    invest = total_asset * 0.98
     for t, target_w in combined_target.items():
-        target_val = total_asset * 0.98 * target_w
+        target_val = invest * target_w
         current_val = current_map[t]['eval_amt'] if t in current_map else 0
+        current_qty = current_map[t]['qty'] if t in current_map else 0
+        # 목표 주수 계산
+        price = current_map[t]['current_price'] if t in current_map and current_map[t]['current_price'] > 0 else 0
+        target_qty = int(target_val / price) if price > 0 else 0
+        # 주수가 같으면 OK (소액에서 금액 차이가 나도 더 살 수 없으므로)
+        if target_qty > 0 and current_qty == target_qty:
+            continue
+        # 금액 기준 ±5%
         if target_val > 50 and abs(current_val - target_val) / target_val > REBAL_TOLERANCE_PCT:
             return False
     # 퇴출 종목이 남아있는지
