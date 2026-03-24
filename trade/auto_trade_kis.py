@@ -479,7 +479,13 @@ def run_trade():
             for a_str in kis_state['tranches']:
                 kis_state['tranches'][a_str]['picks'] = []
                 kis_state['tranches'][a_str]['weights'] = {}
-        kis_state['rebalancing_needed'] = False
+        # 매도 후 잔고 확인 — 잔량 있으면 재시도 필요
+        holdings_after, _ = get_balance()
+        if any(h['qty'] > 0 for h in holdings_after):
+            kis_state['rebalancing_needed'] = True
+            log.warning("⏳ Crash 매도 미완료 — 잔량 있음")
+        else:
+            kis_state['rebalancing_needed'] = False
         kis_state['last_action'] = 'crash_sell'
         kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         save_kis_state(kis_state)
@@ -494,7 +500,13 @@ def run_trade():
             for a_str in kis_state['tranches']:
                 kis_state['tranches'][a_str]['picks'] = []
                 kis_state['tranches'][a_str]['weights'] = {}
-        kis_state['rebalancing_needed'] = False
+        # 매도 후 잔고 확인
+        holdings_after, _ = get_balance()
+        if any(h['qty'] > 0 for h in holdings_after):
+            kis_state['rebalancing_needed'] = True
+            log.warning("⏳ 카나리OFF 매도 미완료 — 잔량 있음")
+        else:
+            kis_state['rebalancing_needed'] = False
         kis_state['last_action'] = 'canary_sell'
         kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         save_kis_state(kis_state)
@@ -718,12 +730,30 @@ ORDER_WAIT_SEC = 5
 
 
 def _sell_all(ticker: str, qty: int, reason: str):
-    """반복 매도: 주문 → 대기 → 미체결 취소 → 재시도."""
+    """반복 매도: 주문 → 대기 → 미체결 취소 → 재시도.
+    qty: 매도할 주수 (전량이 아닌 delta 기준)."""
     log.info(f"  SELL {ticker} x{qty} ({reason})")
-    remaining = qty
+    # 매도 전 보유수량 기록
+    holdings_before, _ = get_balance()
+    qty_before = 0
+    for h in holdings_before:
+        if h['ticker'] == ticker:
+            qty_before = h['qty']
+    target_qty_after = max(0, qty_before - qty)  # 매도 후 목표 보유수량
+
     for attempt in range(1, MAX_ORDER_ATTEMPTS + 1):
+        holdings_now, _ = get_balance()
+        current_qty = 0
+        for h in holdings_now:
+            if h['ticker'] == ticker:
+                current_qty = h['qty']
+        remaining = current_qty - target_qty_after
         if remaining <= 0:
-            break
+            sold = qty_before - current_qty
+            log.info(f"    ✅ {ticker} 매도 완료 ({sold}주)")
+            if sold > 0:
+                send_telegram(f"📉 <b>매도</b>: {ticker} x{sold}\n사유: {reason}")
+            return
         price = get_current_price(ticker)
         if price <= 0:
             log.error(f"  {ticker}: 가격 조회 실패")
@@ -741,39 +771,55 @@ def _sell_all(ticker: str, qty: int, reason: str):
             if p['ticker'] == ticker and p['side'] == 'sell':
                 cancel_order(p['order_no'], p['ticker'], p['qty'], p['side'])
                 time.sleep(0.5)
-        # 체결 확인
-        holdings, _ = get_balance()
-        current_qty = 0
-        for h in holdings:
-            if h['ticker'] == ticker:
-                current_qty = h['qty']
-        filled = qty - current_qty
-        remaining = qty - filled
-        if remaining <= 0:
-            log.info(f"    ✅ {ticker} 매도 완료 ({filled}주)")
-            send_telegram(f"📉 <b>매도</b>: {ticker} x{filled}\n사유: {reason}")
-            return
-    if remaining > 0:
-        log.warning(f"    ⏳ {ticker} 매도 미완료 ({remaining}주 남음)")
-        send_telegram(f"⚠️ <b>매도 미완료</b>: {ticker} {remaining}주 남음\n사유: {reason}")
+    # 최종 확인
+    holdings_final, _ = get_balance()
+    final_qty = 0
+    for h in holdings_final:
+        if h['ticker'] == ticker:
+            final_qty = h['qty']
+    sold_total = qty_before - final_qty
+    if final_qty > target_qty_after:
+        log.warning(f"    ⏳ {ticker} 매도 미완료 ({final_qty - target_qty_after}주 남음)")
+        send_telegram(f"⚠️ <b>매도 미완료</b>: {ticker} {final_qty - target_qty_after}주 남음\n사유: {reason}")
+    elif sold_total > 0:
+        send_telegram(f"📉 <b>매도</b>: {ticker} x{sold_total}\n사유: {reason}")
 
 
 def _buy_target(ticker: str, budget_usd: float):
-    """반복 매수: 주문 → 대기 → 미체결 취소 → 재시도."""
+    """반복 매수: 주문 → 대기 → 미체결 취소 → 재시도.
+    budget_usd: 추가로 매수할 금액 (기존 보유분 제외)."""
     price = get_current_price(ticker)
     if price <= 0:
         log.error(f"  {ticker}: 가격 조회 실패, 매수 스킵")
         return
-    target_qty = int(budget_usd / (price * 1.02))
-    if target_qty <= 0:
+    add_qty = int(budget_usd / (price * 1.02))
+    if add_qty <= 0:
         log.warning(f"  {ticker}: 수량 0 (budget ${budget_usd:.2f}, price ${price})")
         return
-    log.info(f"  BUY {ticker} 목표 {target_qty}주 (budget ${budget_usd:.2f})")
-    bought = 0
+
+    # 매수 전 보유수량 기록
+    holdings_before, _ = get_balance()
+    qty_before = 0
+    for h in holdings_before:
+        if h['ticker'] == ticker:
+            qty_before = h['qty']
+    target_qty_after = qty_before + add_qty  # 매수 후 목표 보유수량
+
+    log.info(f"  BUY {ticker} +{add_qty}주 (현재 {qty_before} → 목표 {target_qty_after})")
+
     for attempt in range(1, MAX_ORDER_ATTEMPTS + 1):
-        remaining = target_qty - bought
+        holdings_now, _ = get_balance()
+        current_qty = 0
+        for h in holdings_now:
+            if h['ticker'] == ticker:
+                current_qty = h['qty']
+        remaining = target_qty_after - current_qty
         if remaining <= 0:
-            break
+            bought = current_qty - qty_before
+            log.info(f"    ✅ {ticker} 매수 완료 (+{bought}주, 총 {current_qty}주)")
+            if bought > 0:
+                send_telegram(f"📈 <b>매수</b>: {ticker} +{bought}주 (총 {current_qty}주)")
+            return
         price = get_current_price(ticker)
         if price <= 0:
             break
@@ -790,19 +836,18 @@ def _buy_target(ticker: str, budget_usd: float):
             if p['ticker'] == ticker and p['side'] == 'buy':
                 cancel_order(p['order_no'], p['ticker'], p['qty'], p['side'])
                 time.sleep(0.5)
-        # 체결 확인
-        holdings, _ = get_balance()
-        for h in holdings:
-            if h['ticker'] == ticker:
-                bought = h['qty']
-                break
-        if bought >= target_qty:
-            log.info(f"    ✅ {ticker} 매수 완료 ({bought}주)")
-            send_telegram(f"📈 <b>매수</b>: {ticker} x{bought}")
-            return
-    if bought < target_qty:
-        log.warning(f"    ⏳ {ticker} 매수 미완료 ({bought}/{target_qty}주)")
-        send_telegram(f"⚠️ <b>매수 미완료</b>: {ticker} {bought}/{target_qty}주")
+    # 최종 확인
+    holdings_final, _ = get_balance()
+    final_qty = 0
+    for h in holdings_final:
+        if h['ticker'] == ticker:
+            final_qty = h['qty']
+    bought_total = final_qty - qty_before
+    if final_qty < target_qty_after:
+        log.warning(f"    ⏳ {ticker} 매수 미완료 (+{bought_total}/{add_qty}주)")
+        send_telegram(f"⚠️ <b>매수 미완료</b>: {ticker} +{bought_total}/{add_qty}주")
+    elif bought_total > 0:
+        send_telegram(f"📈 <b>매수</b>: {ticker} +{bought_total}주 (총 {final_qty}주)")
 
 
 # ─── CLI ─────────────────────────────────────────────────
