@@ -47,9 +47,10 @@ KIS_TRADE_STATE_FILE = "kis_trade_state.json"
 
 # ETF → 거래소 매핑
 EXCHANGE_MAP = {
-    'SPY': 'AMEX', 'VEA': 'AMEX', 'VNQ': 'AMEX', 'EEM': 'AMEX',
-    'GLD': 'AMEX', 'PDBC': 'NASD', 'IEF': 'NASD', 'BIL': 'AMEX',
-    'BNDX': 'NASD', 'VT': 'AMEX', 'QQQ': 'NASD',
+    # 한투 실전계좌: NASD = 미국 전체 (NASDAQ+NYSE+AMEX)
+    'SPY': 'NASD', 'QQQ': 'NASD', 'VEA': 'NASD', 'EEM': 'NASD',
+    'GLD': 'NASD', 'PDBC': 'NASD', 'VNQ': 'NASD',
+    'IEF': 'NASD', 'BIL': 'NASD', 'BNDX': 'NASD', 'VT': 'NASD',
 }
 
 
