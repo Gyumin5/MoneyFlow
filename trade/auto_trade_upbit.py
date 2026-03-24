@@ -1024,6 +1024,10 @@ class V16UpbitTrader:
         if self.is_force:
             trade_reasons.append("강제 실행")
 
+        # rebalancing_needed 플래그: 이전 리밸런싱이 미완료면 재시도
+        if trade_state.get('rebalancing_needed') and not trade_reasons:
+            trade_reasons.append("리밸런싱 미완료 재시도")
+
         # pending이 남아있으면 트리거로 판단
         existing_pending = trade_state.get('pending_trades', {})
         if existing_pending and not trade_reasons:
@@ -1033,6 +1037,10 @@ class V16UpbitTrader:
         if trade_state.get('buffer_changed') and not trade_reasons:
             trade_reasons.append("buffer 변경")
             del trade_state['buffer_changed']
+
+        # 트리거가 있으면 rebalancing_needed 설정
+        if trade_reasons:
+            trade_state['rebalancing_needed'] = True
 
         # Recalculate turnover for logging
         turnover = sum(abs(curr_w.get(k,0) - target_w.get(k,0))
@@ -1130,7 +1138,15 @@ class V16UpbitTrader:
         trade_state['pending_trades'] = pending
         if pending:
             log(f"📋 Pending: {list(pending.keys())}")
-        
+
+        # rebalancing_needed 플래그: pending이 없으면 완료
+        if not pending:
+            trade_state['rebalancing_needed'] = False
+            log(f"✅ 리밸런싱 완료 — rebalancing_needed: false")
+        else:
+            trade_state['rebalancing_needed'] = True
+            log(f"⏳ 리밸런싱 미완료 — rebalancing_needed: true (pending 있음)")
+
         self._refresh_monitor_cache(trade_state)
 
         # ── State 저장 (매매 실행 후) ──

@@ -144,7 +144,7 @@ def get_balance() -> Tuple[list, dict]:
     """해외주식 잔고 → (holdings, summary)"""
     data = _get("/uapi/overseas-stock/v1/trading/inquire-balance", "TTTS3012R", {
         "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
-        "OVRS_EXCG_CD": "NASD", "TR_CRCY_CD": "USD",
+        "OVRS_EXCG_CD": "NASD", "TR_CRCY_CD": "USD",  # NASD=미국전체(실전)
         "CTX_AREA_FK200": "", "CTX_AREA_NK200": "",
     })
     holdings = []
@@ -166,15 +166,53 @@ def get_balance() -> Tuple[list, dict]:
 
 
 def get_buying_power_usd() -> float:
-    """달러 매수가능 금액."""
-    data = _get("/uapi/overseas-stock/v1/trading/inquire-present-balance", "CTRP6504R", {
-        "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
-        "WCRC_FRCR_DVSN_CD": "01", "NATN_CD": "840",
-        "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
-    })
-    for item in data.get('output2', []):
-        if isinstance(item, dict) and item.get('crcy_cd') == 'USD':
-            return float(item.get('frcr_drwg_psbl_amt_1', 0))
+    """매수가능 금액. 장중: psamount(통합증거금), 장외: foreign-margin."""
+    # 1차: psamount (장중, 통합증거금 포함)
+    try:
+        data = _get("/uapi/overseas-stock/v1/trading/inquire-psamount", "TTTS3007R", {
+            "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+            "OVRS_EXCG_CD": "NASD", "OVRS_ORD_UNPR": "100",
+            "ITEM_CD": "SPY",
+        }, retries=1)
+        output = data.get('output', {})
+        integrated = float(output.get('frcr_ord_psbl_amt1', 0))
+        if integrated > 0:
+            return integrated
+        basic = float(output.get('ord_psbl_frcr_amt', 0))
+        if basic > 0:
+            return basic
+    except Exception:
+        pass
+
+    # 2차: foreign-margin (장외에도 동작)
+    try:
+        data = _get("/uapi/overseas-stock/v1/trading/foreign-margin", "TTTC2101R", {
+            "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+        }, retries=1)
+        for item in data.get('output', []):
+            if isinstance(item, dict) and item.get('natn_name') == '미국' and item.get('crcy_cd') == 'USD':
+                integrated = float(item.get('itgr_ord_psbl_amt', 0))
+                if integrated > 0:
+                    return integrated
+                basic = float(item.get('frcr_gnrl_ord_psbl_amt', 0))
+                if basic > 0:
+                    return basic
+    except Exception:
+        pass
+
+    # 3차: present-balance (외화 출금가능)
+    try:
+        data = _get("/uapi/overseas-stock/v1/trading/inquire-present-balance", "CTRP6504R", {
+            "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+            "WCRC_FRCR_DVSN_CD": "01", "NATN_CD": "840",
+            "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
+        }, retries=1)
+        for item in data.get('output2', []):
+            if isinstance(item, dict) and item.get('crcy_cd') == 'USD':
+                return float(item.get('frcr_drwg_psbl_amt_1', 0))
+    except Exception:
+        pass
+
     return 0.0
 
 
@@ -334,11 +372,47 @@ def save_kis_state(state: dict):
     os.replace(tmp, KIS_TRADE_STATE_FILE)
 
 
-# ─── Trade Logic ─────────────────────────────────────────
+# ─── Trade Logic (4트랜치 + rebalancing_needed 플래그) ────
+ANCHOR_DAYS = (1, 8, 15, 22)  # 4트랜치
+REBAL_TOLERANCE_PCT = 0.05     # 목표 대비 5% 이내면 완료로 판단
+
+
+def _calc_combined_target(kis_state, target_tickers):
+    """트랜치별 목표를 합산하여 전체 목표 비중 계산."""
+    tranches = kis_state.get('tranches', {})
+    n = len(ANCHOR_DAYS)
+    combined = {}
+    for a_str, tr in tranches.items():
+        for t, w in tr.get('weights', {}).items():
+            combined[t] = combined.get(t, 0) + w / n
+    # 트랜치가 비어있으면 signal 기반 초기화
+    if not combined and target_tickers:
+        w = 1.0 / len(target_tickers)
+        combined = {t: w for t in target_tickers}
+    return combined
+
+
+def _check_rebal_complete(holdings, combined_target, total_asset):
+    """목표 대비 보유가 허용 오차 이내인지 확인."""
+    if total_asset <= 0:
+        return True
+    current_map = {h['ticker']: h for h in holdings}
+    for t, target_w in combined_target.items():
+        target_val = total_asset * 0.98 * target_w
+        current_val = current_map[t]['eval_amt'] if t in current_map else 0
+        if target_val > 50 and abs(current_val - target_val) / target_val > REBAL_TOLERANCE_PCT:
+            return False
+    # 퇴출 종목이 남아있는지
+    for h in holdings:
+        if h['ticker'] not in combined_target and h['qty'] > 0:
+            return False
+    return True
+
+
 def run_trade():
-    """전략 신호 기반 자동 매매.
+    """전략 신호 기반 자동 매매 (4트랜치 + rebalancing_needed).
     09:15에 recommend_personal.py가 signal_state.json 갱신.
-    23:25에 이 함수가 실행되어 장 개시 전 주문.
+    23:35에 이 함수가 실행.
     """
     signal = load_signal_state()
     kis_state = load_kis_state()
@@ -348,112 +422,159 @@ def run_trade():
     risk_on = signal.get('risk_on', True)
     signal_flipped = signal.get('signal_flipped', False)
     target_tickers = signal.get('stock_holdings', [])
+    current_month = datetime.now().strftime('%Y-%m')
+    today = datetime.now().day
 
     holdings, _ = get_balance()
     current_map = {h['ticker']: h for h in holdings}
-    current_tickers = set(current_map.keys())
 
-    log.info(f"=== KIS Trade ===")
+    log.info(f"=== KIS Trade (4트랜치) ===")
     log.info(f"Signal: crash={stock_crash}, cooldown={crash_cooldown}, risk_on={risk_on}, flipped={signal_flipped}")
     log.info(f"Target: {target_tickers}")
-    log.info(f"Current: {list(current_tickers)}")
+    log.info(f"Current: {[h['ticker'] for h in holdings]}")
 
-    # ── 1. Crash: 전량 매도 ──
+    # ── 트랜치 초기화 ──
+    if 'tranches' not in kis_state:
+        kis_state['tranches'] = {}
+        for a in ANCHOR_DAYS:
+            kis_state['tranches'][str(a)] = {
+                'anchor_month': '',
+                'picks': target_tickers if target_tickers else [],
+                'weights': {t: 1.0/len(target_tickers) for t in target_tickers} if target_tickers else {},
+            }
+
+    # ── 1. 트리거: Crash → 전 트랜치 즉시 매도 ──
     if stock_crash:
-        if not current_tickers:
+        if not holdings:
             log.info("Crash 상태, 보유 없음. 대기.")
-            return
-        log.info(f"🚨 CRASH — 전량 매도")
-        for h in holdings:
-            _sell_all(h['ticker'], h['qty'], "CRASH")
+        else:
+            log.info(f"🚨 CRASH — 전량 매도")
+            for h in holdings:
+                _sell_all(h['ticker'], h['qty'], "CRASH")
+            # 전 트랜치 현금화
+            for a_str in kis_state['tranches']:
+                kis_state['tranches'][a_str]['picks'] = []
+                kis_state['tranches'][a_str]['weights'] = {}
+        kis_state['rebalancing_needed'] = False
         kis_state['last_action'] = 'crash_sell'
         kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         save_kis_state(kis_state)
         return
 
-    # ── 2. 이전 Crash에서 복귀 (cooldown 끝) ──
-    if kis_state.get('last_action') == 'crash_sell' and not stock_crash:
-        log.info("Crash 쿨다운 종료 → 재진입")
-        kis_state['last_action'] = 'normal'
-        save_kis_state(kis_state)
-        # target_tickers로 매수 진행 (아래 로직에서 처리)
-
-    # ── 3. 목표가 Cash (카나리 OFF + Crash 아님) ──
+    # ── 2. 트리거: 카나리 OFF → 전 트랜치 즉시 매도 ──
     if not target_tickers or target_tickers == ['Cash']:
-        if current_tickers:
+        if holdings:
             log.info("카나리 OFF — 전량 매도")
             for h in holdings:
                 _sell_all(h['ticker'], h['qty'], "CANARY_OFF")
-            kis_state['last_action'] = 'canary_sell'
-            kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-            save_kis_state(kis_state)
-        else:
-            log.info("카나리 OFF, 보유 없음. 대기.")
-        return
-
-    # ── 4. 목표 비중 계산 (EW, 2% 현금 마진) ──
-    target_set = set(target_tickers)
-
-    # 총 자산 = 보유 평가 + 매수가능
-    total_holdings = sum(h['eval_amt'] for h in holdings)
-    available = get_buying_power_usd()
-    total_asset = total_holdings + available
-    invest_budget = total_asset * 0.98  # 2% 현금 마진
-    target_per_stock = invest_budget / len(target_tickers)
-
-    log.info(f"총 자산: ${total_asset:.2f}, 투자: ${invest_budget:.2f}, 종목당: ${target_per_stock:.2f}")
-
-    # 각 종목별 delta 계산
-    sells = []  # (ticker, qty, reason)
-    buys = []   # (ticker, budget)
-
-    # 퇴출 종목: 전량 매도
-    for ticker in current_tickers - target_set:
-        h = current_map[ticker]
-        if h['qty'] > 0:
-            sells.append((ticker, h['qty'], "REBALANCE"))
-
-    # 목표 종목: 차이만큼 매수/매도
-    for ticker in target_tickers:
-        current_val = current_map[ticker]['eval_amt'] if ticker in current_map else 0
-        diff = target_per_stock - current_val
-
-        if diff > 50:  # $50 이상 부족 → 매수
-            buys.append((ticker, diff))
-        elif diff < -50:  # $50 이상 초과 → 매도
-            h = current_map[ticker]
-            price = h['current_price'] if h['current_price'] > 0 else get_current_price(ticker)
-            if price > 0:
-                sell_qty = int(abs(diff) / price)
-                if sell_qty > 0:
-                    sells.append((ticker, sell_qty, "EW_ADJUST"))
-
-    if not sells and not buys:
-        log.info("비중 조정 불필요 (모두 ±$50 이내).")
-        kis_state['last_action'] = 'hold'
+            for a_str in kis_state['tranches']:
+                kis_state['tranches'][a_str]['picks'] = []
+                kis_state['tranches'][a_str]['weights'] = {}
+        kis_state['rebalancing_needed'] = False
+        kis_state['last_action'] = 'canary_sell'
         kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
         save_kis_state(kis_state)
         return
 
-    # ── 5. 매도 먼저 ──
+    # ── 2.5. 트리거: Crash 복귀 → 전 트랜치 즉시 재진입 ──
+    was_crash = kis_state.get('last_action') in ('crash_sell', 'canary_sell')
+    if was_crash and not stock_crash and target_tickers and target_tickers != ['Cash']:
+        log.info("📈 Crash/카나리 복귀 — 전 트랜치 즉시 재진입")
+        for a_str in kis_state['tranches']:
+            tr = kis_state['tranches'][a_str]
+            tr['picks'] = target_tickers
+            tr['weights'] = {t: 1.0/len(target_tickers) for t in target_tickers}
+        kis_state['rebalancing_needed'] = True
+        kis_state['last_action'] = 'recovery'
+
+    # ── 3. 트리거: 카나리 플립 → 전 트랜치 즉시 전환 ──
+    if signal_flipped:
+        log.info("🔄 카나리 플립 — 전 트랜치 즉시 전환")
+        for a_str in kis_state['tranches']:
+            tr = kis_state['tranches'][a_str]
+            tr['picks'] = target_tickers
+            tr['weights'] = {t: 1.0/len(target_tickers) for t in target_tickers}
+        kis_state['rebalancing_needed'] = True
+
+    # ── 4. 앵커일 체크: 해당 트랜치만 목표 갱신 ──
+    for a in ANCHOR_DAYS:
+        a_str = str(a)
+        tr = kis_state['tranches'].get(a_str, {})
+        if today >= a and tr.get('anchor_month', '') < current_month:
+            log.info(f"📅 앵커일 Day {a} → 트랜치 갱신")
+            tr['picks'] = target_tickers
+            tr['weights'] = {t: 1.0/len(target_tickers) for t in target_tickers}
+            tr['anchor_month'] = current_month
+            kis_state['tranches'][a_str] = tr
+            kis_state['rebalancing_needed'] = True
+
+    # ── 5. rebalancing_needed가 false면 종료 ──
+    if not kis_state.get('rebalancing_needed', False):
+        log.info("리밸런싱 불필요. 종료.")
+        save_kis_state(kis_state)
+        return
+
+    # ── 6. 합산 목표 계산 + 매매 ──
+    combined = _calc_combined_target(kis_state, target_tickers)
+    log.info(f"합산 목표: {combined}")
+
+    total_holdings = sum(h['eval_amt'] for h in holdings)
+    available = get_buying_power_usd()
+    total_asset = total_holdings + available
+    invest_budget = total_asset * 0.98
+    log.info(f"총 자산: ${total_asset:.2f}, 투자: ${invest_budget:.2f}")
+
+    # 매도 (퇴출 + 초과)
+    sells = []
+    for h in holdings:
+        if h['ticker'] not in combined and h['qty'] > 0:
+            sells.append((h['ticker'], h['qty'], "REBALANCE"))
+        elif h['ticker'] in combined:
+            target_val = invest_budget * combined[h['ticker']]
+            diff = h['eval_amt'] - target_val
+            if diff > 50:
+                price = h['current_price'] if h['current_price'] > 0 else get_current_price(h['ticker'])
+                if price > 0:
+                    sell_qty = int(diff / price)
+                    if sell_qty > 0:
+                        sells.append((h['ticker'], sell_qty, "EW_ADJUST"))
+
     for ticker, qty, reason in sells:
         _sell_all(ticker, qty, reason)
 
-    # ── 6. 매수 ──
+    # 매수 (부족)
+    buys = []
+    for t, w in combined.items():
+        target_val = invest_budget * w
+        current_val = current_map[t]['eval_amt'] if t in current_map else 0
+        diff = target_val - current_val
+        if diff > 50:
+            buys.append((t, diff))
+
     if buys:
-        time.sleep(3)  # 증거금 갱신 대기
+        time.sleep(3)
         for ticker, budget in buys:
             _buy_target(ticker, budget)
             time.sleep(0.5)
 
-    kis_state['last_action'] = 'rebalance'
+    # ── 7. 완료 체크 ──
+    holdings_after, _ = get_balance()
+    total_after = sum(h['eval_amt'] for h in holdings_after) + get_buying_power_usd()
+    if _check_rebal_complete(holdings_after, combined, total_after):
+        log.info("✅ 리밸런싱 완료 — rebalancing_needed: false")
+        kis_state['rebalancing_needed'] = False
+    else:
+        log.info("⏳ 리밸런싱 미완료 — 다음 실행에서 재시도")
+        kis_state['rebalancing_needed'] = True
+
+    kis_state['last_action'] = 'trade'
     kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
     save_kis_state(kis_state)
     log.info("=== Trade 완료 ===")
 
 
 def run_force():
-    """현재 신호대로 강제 리밸런싱 (최초 설정/수동 재시작용). --trade와 동일 로직."""
+    """현재 신호대로 전 트랜치 강제 리밸런싱."""
     signal = load_signal_state()
     target_tickers = signal.get('stock_holdings', [])
 
@@ -461,39 +582,24 @@ def run_force():
         log.info("현재 신호: Cash. 매수 대상 없음.")
         return
 
-    holdings, _ = get_balance()
-    current_map = {h['ticker']: h for h in holdings}
-    current_tickers = set(current_map.keys())
+    kis_state = load_kis_state()
 
-    total_holdings = sum(h['eval_amt'] for h in holdings)
-    available = get_buying_power_usd()
-    total_asset = total_holdings + available
-    invest_budget = total_asset * 0.98
-    target_per_stock = invest_budget / len(target_tickers)
+    # 전 트랜치 강제 갱신 (anchor_month는 변경 안 함)
+    if 'tranches' not in kis_state:
+        kis_state['tranches'] = {}
+    for a in ANCHOR_DAYS:
+        a_str = str(a)
+        kis_state['tranches'][a_str] = {
+            'anchor_month': kis_state.get('tranches', {}).get(a_str, {}).get('anchor_month', ''),
+            'picks': target_tickers,
+            'weights': {t: 1.0/len(target_tickers) for t in target_tickers},
+        }
+    kis_state['rebalancing_needed'] = True
+    save_kis_state(kis_state)
 
-    log.info(f"Force: 총 ${total_asset:.2f}, 종목당 ${target_per_stock:.2f}")
-    log.info(f"  Target: {target_tickers}, Current: {list(current_tickers)}")
-
-    # 퇴출 매도
-    for ticker in current_tickers - set(target_tickers):
-        h = current_map[ticker]
-        if h['qty'] > 0:
-            _sell_all(ticker, h['qty'], "FORCE_SELL")
-
-    # 차이만큼 매수
-    time.sleep(3)
-    for ticker in target_tickers:
-        current_val = current_map[ticker]['eval_amt'] if ticker in current_map else 0
-        diff = target_per_stock - current_val
-        if diff > 50:
-            _buy_target(ticker, diff)
-            time.sleep(0.5)
-
-    save_kis_state({
-        'last_action': 'force',
-        'last_date': datetime.now().strftime('%Y-%m-%d %H:%M'),
-    })
-    log.info("=== Force 완료 ===")
+    # run_trade 호출하여 실제 매매
+    log.info("=== Force → Trade 실행 ===")
+    run_trade()
 
 
 def run_monitor():
@@ -553,12 +659,12 @@ def _sell_all(ticker: str, qty: int, reason: str):
 
 
 def _buy_target(ticker: str, budget_usd: float):
-    """목표 금액만큼 매수 (현재가 +0.5% 지정가)."""
+    """목표 금액만큼 매수 (현재가 +2% 지정가, 장외 종가 기반이면 여유있게)."""
     price = get_current_price(ticker)
     if price <= 0:
         log.error(f"  {ticker}: 가격 조회 실패, 매수 스킵")
         return
-    buy_price = round(price * 1.005, 2)  # 현재가 +0.5%
+    buy_price = round(price * 1.02, 2)  # +2% 여유 (종가 기반일 수 있으므로)
     qty = int(budget_usd / buy_price)
     if qty <= 0:
         log.warning(f"  {ticker}: 수량 0 (budget ${budget_usd:.2f}, price ${buy_price})")
