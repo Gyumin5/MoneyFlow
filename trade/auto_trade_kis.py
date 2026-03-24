@@ -713,40 +713,96 @@ def run_monitor():
 
 
 # ─── Helper Functions ────────────────────────────────────
+MAX_ORDER_ATTEMPTS = 5
+ORDER_WAIT_SEC = 5
+
+
 def _sell_all(ticker: str, qty: int, reason: str):
-    """전량 매도 (현재가 -0.5% 지정가)."""
-    price = get_current_price(ticker)
-    if price <= 0:
-        log.error(f"  {ticker}: 가격 조회 실패, 매도 스킵")
-        return
-    sell_price = round(price * 0.995, 2)  # 현재가 -0.5%
-    log.info(f"  SELL {ticker} x{qty} @ ${sell_price} ({reason})")
-    result = place_order(ticker, qty, sell_price, side="sell")
-    log.info(f"  → {result['message']}")
-    if result['success']:
-        send_telegram(f"📉 <b>매도</b>: {ticker} x{qty} @ ${sell_price}\n사유: {reason}")
-    else:
-        send_telegram(f"⚠️ <b>매도 실패</b>: {ticker}\n{result['message']}")
+    """반복 매도: 주문 → 대기 → 미체결 취소 → 재시도."""
+    log.info(f"  SELL {ticker} x{qty} ({reason})")
+    remaining = qty
+    for attempt in range(1, MAX_ORDER_ATTEMPTS + 1):
+        if remaining <= 0:
+            break
+        price = get_current_price(ticker)
+        if price <= 0:
+            log.error(f"  {ticker}: 가격 조회 실패")
+            break
+        sell_price = round(price * 0.995, 2)
+        log.info(f"    [{attempt}] 매도 {remaining}주 @ ${sell_price}")
+        result = place_order(ticker, remaining, sell_price, side="sell")
+        if not result['success']:
+            log.warning(f"    주문 실패: {result['message']}")
+            break
+        time.sleep(ORDER_WAIT_SEC)
+        # 미체결 취소
+        pending = get_pending_orders()
+        for p in pending:
+            if p['ticker'] == ticker and p['side'] == 'sell':
+                cancel_order(p['order_no'], p['ticker'], p['qty'], p['side'])
+                time.sleep(0.5)
+        # 체결 확인
+        holdings, _ = get_balance()
+        current_qty = 0
+        for h in holdings:
+            if h['ticker'] == ticker:
+                current_qty = h['qty']
+        filled = qty - current_qty
+        remaining = qty - filled
+        if remaining <= 0:
+            log.info(f"    ✅ {ticker} 매도 완료 ({filled}주)")
+            send_telegram(f"📉 <b>매도</b>: {ticker} x{filled}\n사유: {reason}")
+            return
+    if remaining > 0:
+        log.warning(f"    ⏳ {ticker} 매도 미완료 ({remaining}주 남음)")
+        send_telegram(f"⚠️ <b>매도 미완료</b>: {ticker} {remaining}주 남음\n사유: {reason}")
 
 
 def _buy_target(ticker: str, budget_usd: float):
-    """목표 금액만큼 매수 (현재가 +2% 지정가, 장외 종가 기반이면 여유있게)."""
+    """반복 매수: 주문 → 대기 → 미체결 취소 → 재시도."""
     price = get_current_price(ticker)
     if price <= 0:
         log.error(f"  {ticker}: 가격 조회 실패, 매수 스킵")
         return
-    buy_price = round(price * 1.02, 2)  # +2% 여유 (종가 기반일 수 있으므로)
-    qty = int(budget_usd / buy_price)
-    if qty <= 0:
-        log.warning(f"  {ticker}: 수량 0 (budget ${budget_usd:.2f}, price ${buy_price})")
+    target_qty = int(budget_usd / (price * 1.02))
+    if target_qty <= 0:
+        log.warning(f"  {ticker}: 수량 0 (budget ${budget_usd:.2f}, price ${price})")
         return
-    log.info(f"  BUY {ticker} x{qty} @ ${buy_price} (budget ${budget_usd:.2f})")
-    result = place_order(ticker, qty, buy_price, side="buy")
-    log.info(f"  → {result['message']}")
-    if result['success']:
-        send_telegram(f"📈 <b>매수</b>: {ticker} x{qty} @ ${buy_price}")
-    else:
-        send_telegram(f"⚠️ <b>매수 실패</b>: {ticker}\n{result['message']}")
+    log.info(f"  BUY {ticker} 목표 {target_qty}주 (budget ${budget_usd:.2f})")
+    bought = 0
+    for attempt in range(1, MAX_ORDER_ATTEMPTS + 1):
+        remaining = target_qty - bought
+        if remaining <= 0:
+            break
+        price = get_current_price(ticker)
+        if price <= 0:
+            break
+        buy_price = round(price * 1.02, 2)
+        log.info(f"    [{attempt}] 매수 {remaining}주 @ ${buy_price}")
+        result = place_order(ticker, remaining, buy_price, side="buy")
+        if not result['success']:
+            log.warning(f"    주문 실패: {result['message']}")
+            break
+        time.sleep(ORDER_WAIT_SEC)
+        # 미체결 취소
+        pending = get_pending_orders()
+        for p in pending:
+            if p['ticker'] == ticker and p['side'] == 'buy':
+                cancel_order(p['order_no'], p['ticker'], p['qty'], p['side'])
+                time.sleep(0.5)
+        # 체결 확인
+        holdings, _ = get_balance()
+        for h in holdings:
+            if h['ticker'] == ticker:
+                bought = h['qty']
+                break
+        if bought >= target_qty:
+            log.info(f"    ✅ {ticker} 매수 완료 ({bought}주)")
+            send_telegram(f"📈 <b>매수</b>: {ticker} x{bought}")
+            return
+    if bought < target_qty:
+        log.warning(f"    ⏳ {ticker} 매수 미완료 ({bought}/{target_qty}주)")
+        send_telegram(f"⚠️ <b>매수 미완료</b>: {ticker} {bought}/{target_qty}주")
 
 
 # ─── CLI ─────────────────────────────────────────────────
