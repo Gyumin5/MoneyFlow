@@ -1,0 +1,607 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cap Defend V17 - 전략 가이드</title>
+    <style>
+      body {
+        font-family: -apple-system, sans-serif;
+        background: #f0f2f5;
+        padding: 10px;
+        color: #333;
+        line-height: 1.7;
+      }
+      .container {
+        max-width: 850px;
+        margin: 0 auto;
+        background: #fff;
+        padding: 30px;
+        border-radius: 16px;
+      }
+      h1 {
+        color: #1a73e8;
+        border-bottom: 3px solid #1a73e8;
+        padding-bottom: 10px;
+      }
+      h2 {
+        color: #333;
+        margin-top: 40px;
+        border-left: 4px solid #1a73e8;
+        padding-left: 12px;
+      }
+      h3 {
+        color: #555;
+        margin-top: 25px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 15px 0;
+      }
+      th,
+      td {
+        padding: 10px 12px;
+        border: 1px solid #e0e0e0;
+        text-align: left;
+        font-size: 0.95em;
+      }
+      th {
+        background: #f5f7fa;
+        font-weight: 600;
+      }
+      .highlight {
+        background: #e8f0fe;
+        padding: 16px;
+        border-radius: 10px;
+        margin: 15px 0;
+      }
+      .warn {
+        background: #fef7e0;
+        border-left: 4px solid #f9ab00;
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin: 15px 0;
+      }
+      .success {
+        background: #e6f4ea;
+        border-left: 4px solid #34a853;
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin: 15px 0;
+      }
+      .danger {
+        background: #fce8e6;
+        border-left: 4px solid #d93025;
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin: 15px 0;
+      }
+      code {
+        background: #f1f3f4;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.9em;
+      }
+      pre {
+        background: #f8f9fa;
+        padding: 16px;
+        border-radius: 8px;
+        overflow-x: auto;
+        font-size: 0.9em;
+      }
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.8em;
+        font-weight: 600;
+      }
+      .tag-auto {
+        background: #e8f0fe;
+        color: #1a73e8;
+      }
+      .tag-manual {
+        background: #fef7e0;
+        color: #e37400;
+      }
+      .tag-pending {
+        background: #f1f3f4;
+        color: #666;
+      }
+      .perf {
+        font-size: 1.1em;
+        font-weight: 700;
+        color: #1a73e8;
+      }
+      @media (max-width: 600px) {
+        .container {
+          padding: 15px;
+        }
+        table {
+          font-size: 0.85em;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Cap Defend V17 - 전략 가이드</h1>
+      <p>최종 업데이트: 2026-03-24</p>
+
+      <h2>1. 전략 개요</h2>
+
+      <div class="highlight">
+        <b>핵심 아이디어:</b> 주식 60% + 코인 40% 이중 모멘텀 전략.<br />
+        카나리 신호로 공격/방어 전환, Crash Breaker로 급락 방어, 월간
+        리밸런싱으로 종목 교체.
+      </div>
+
+      <table>
+        <tr>
+          <th>항목</th>
+          <th>주식</th>
+          <th>코인</th>
+        </tr>
+        <tr>
+          <td>비중</td>
+          <td>58.8%</td>
+          <td>39.2%</td>
+        </tr>
+        <tr>
+          <td>카나리</td>
+          <td>EEM > SMA200 (0.5% hyst)</td>
+          <td>BTC > SMA60 (1% hyst)</td>
+        </tr>
+        <tr>
+          <td>선정</td>
+          <td>Z-score Top 3 (Mom12M + Sh252)</td>
+          <td>시총순 Top 5</td>
+        </tr>
+        <tr>
+          <td>비중</td>
+          <td>EW 33%</td>
+          <td>EW + 20% Cap</td>
+        </tr>
+        <tr>
+          <td>방어</td>
+          <td>Top 3 by 6M ret (IEF,BIL,BNDX,GLD,PDBC)</td>
+          <td>현금</td>
+        </tr>
+        <tr>
+          <td>Crash</td>
+          <td>VT -3% daily &rarr; 3일 현금</td>
+          <td>BTC -10% daily &rarr; 3일 현금</td>
+        </tr>
+        <tr>
+          <td>트랜치</td>
+          <td>4트랜치 (Day 1/8/15/22)</td>
+          <td>3트랜치 (Day 1/10/19)</td>
+        </tr>
+        <tr>
+          <td>TX</td>
+          <td>0.2%</td>
+          <td>0.4%</td>
+        </tr>
+      </table>
+
+      <h2>2. 주식 전략 상세</h2>
+
+      <h3>2.1 유니버스 (R7)</h3>
+      <table>
+        <tr>
+          <th>ETF</th>
+          <th>설명</th>
+          <th>역할</th>
+        </tr>
+        <tr>
+          <td>SPY</td>
+          <td>S&P 500</td>
+          <td>미국 대형주</td>
+        </tr>
+        <tr>
+          <td>QQQ</td>
+          <td>NASDAQ 100</td>
+          <td>미국 기술주</td>
+        </tr>
+        <tr>
+          <td>VEA</td>
+          <td>선진국 (미국 제외)</td>
+          <td>글로벌 분산</td>
+        </tr>
+        <tr>
+          <td>EEM</td>
+          <td>신흥국</td>
+          <td>글로벌 분산 + 카나리</td>
+        </tr>
+        <tr>
+          <td>GLD</td>
+          <td>금</td>
+          <td>인플레 헤지</td>
+        </tr>
+        <tr>
+          <td>PDBC</td>
+          <td>원자재</td>
+          <td>인플레 헤지</td>
+        </tr>
+        <tr>
+          <td>VNQ</td>
+          <td>미국 리츠</td>
+          <td>부동산</td>
+        </tr>
+      </table>
+
+      <h3>2.2 카나리 신호</h3>
+      <p>
+        EEM(신흥국 ETF)이 200일 이동평균 위에 있으면 <b>Risk-On</b>(공격),
+        아래면 <b>Risk-Off</b>(방어).
+      </p>
+      <p>0.5% Hysteresis: 전환 시 ±0.5% 밴드로 노이즈 필터링.</p>
+
+      <h3>2.3 종목 선정</h3>
+      <p><b>Z-score = zscore(12M 모멘텀) + zscore(Sharpe 252일)</b></p>
+      <p>Z-score 상위 3개 종목을 33%씩 균등 배분.</p>
+      <p>
+        Sharpe가 포함되어 변동성이 큰 종목(PDBC 등)은 자연스럽게 패널티를 받음.
+      </p>
+
+      <h3>2.4 방어 모드</h3>
+      <p>
+        Risk-Off 시 IEF, BIL, BNDX, GLD, PDBC 중 6개월 수익률 Top 3을 EW로 보유.
+      </p>
+
+      <h3>2.5 Crash Breaker</h3>
+      <div class="danger">
+        <b>VT(글로벌 주식) 일간 수익률 &le; -3%</b> &rarr; 전량 매도 (공격+방어
+        모두) &rarr; 3영업일 현금 대기 후 재진입.
+      </div>
+
+      <h3>2.6 4트랜치</h3>
+      <pre>
+Day 1:  트랜치1 (25%) 리밸런싱
+Day 8:  트랜치2 (25%) 리밸런싱
+Day 15: 트랜치3 (25%) 리밸런싱
+Day 22: 트랜치4 (25%) 리밸런싱
+</pre
+      >
+      <p>
+        같은 달에는 보통 같은 종목을 고르지만, 종목 교체가 있는 달에
+        <b>매수 가격이 분산</b>됩니다.
+      </p>
+      <p>Crash/플립은 전 트랜치 동시 처리.</p>
+
+      <h3>2.7 백테스트 성과 (2017~2025, 11-anchor 평균, tx 0.2%)</h3>
+      <table>
+        <tr>
+          <th></th>
+          <th>Sharpe</th>
+          <th>CAGR</th>
+          <th>MDD</th>
+          <th>&sigma;(Sharpe)</th>
+        </tr>
+        <tr>
+          <td>1트랜치</td>
+          <td>1.183</td>
+          <td>+12.8%</td>
+          <td>-11.1%</td>
+          <td>0.063</td>
+        </tr>
+        <tr>
+          <td><b>4트랜치</b></td>
+          <td class="perf">1.255</td>
+          <td class="perf">+13.3%</td>
+          <td>-11.4%</td>
+          <td class="perf">0.019</td>
+        </tr>
+      </table>
+
+      <h2>3. 코인 전략 상세</h2>
+
+      <h3>3.1 카나리 + 헬스</h3>
+      <p>카나리: BTC > SMA(60), 1% Hysteresis</p>
+      <p>헬스: Mom(30)>0 AND Mom(90)>0 AND Vol(90)&le;5%</p>
+
+      <h3>3.2 선정 + 비중</h3>
+      <p>
+        CoinGecko 시총순 Top 40 &rarr; Upbit KRW + 거래대금 10억+ 필터 &rarr;
+        Top 5
+      </p>
+      <p>Equal Weight + 20% Cap (한 종목 최대 20%)</p>
+
+      <h3>3.3 보호 장치</h3>
+      <table>
+        <tr>
+          <th>장치</th>
+          <th>조건</th>
+          <th>행동</th>
+        </tr>
+        <tr>
+          <td>Crash</td>
+          <td>BTC -10% daily</td>
+          <td>전량 현금, 3일 대기</td>
+        </tr>
+        <tr>
+          <td>DD Exit</td>
+          <td>60일 고점 -25%</td>
+          <td>해당 코인 매도</td>
+        </tr>
+        <tr>
+          <td>Blacklist</td>
+          <td>-15% daily</td>
+          <td>7일 제외</td>
+        </tr>
+        <tr>
+          <td>PFD5</td>
+          <td>카나리 플립 후 5일</td>
+          <td>추가 리밸런싱</td>
+        </tr>
+      </table>
+
+      <h3>3.4 백테스트 성과 (2018~2025, 10-anchor 평균)</h3>
+      <div class="highlight">
+        <span class="perf"
+          >Sharpe 1.645, CAGR +73.2%, MDD -35.3%, Calmar 2.07</span
+        >
+      </div>
+
+      <h2>4. 60:40 자산 배분</h2>
+
+      <p>주식 58.8% / 코인 39.2% / 현금 2% (자연 잔여)</p>
+      <p>&plusmn;5%p 밴드: 월 1회 확인, 벗어나면 자금 이동</p>
+
+      <div class="highlight">
+        통합 성과 (2018~2025):
+        <span class="perf">Sharpe 2.063, CAGR +34.6%, MDD -16.4%</span>
+      </div>
+
+      <h2>5. 자동매매 시스템</h2>
+
+      <h3>5.1 서버 구성</h3>
+      <table>
+        <tr>
+          <th>항목</th>
+          <th>내용</th>
+        </tr>
+        <tr>
+          <td>서버</td>
+          <td>Oracle Cloud VM ([REDACTED_SERVER])</td>
+        </tr>
+        <tr>
+          <td>코인</td>
+          <td>업비트 API (pyupbit) <span class="tag tag-auto">자동</span></td>
+        </tr>
+        <tr>
+          <td>주식</td>
+          <td>한국투자증권 Open API <span class="tag tag-auto">자동</span></td>
+        </tr>
+        <tr>
+          <td>알림</td>
+          <td>텔레그램 [REDACTED_BOT]</td>
+        </tr>
+      </table>
+
+      <h3>5.2 코인 자동매매 (auto_trade_upbit.py)</h3>
+      <pre>
+09:15  recommend_personal.py (신호 계산 + HTML + 텔레그램)
+09:20  auto_trade_upbit.py --trade (매매)
+:05,:35 auto_trade_upbit.py --monitor (긴급 매도 + pending 복구)
+</pre
+      >
+
+      <h3>5.3 주식 자동매매 (auto_trade_kis.py)</h3>
+      <pre>
+09:15  recommend_personal.py (신호 계산 + signal_state.json)
+23:35  auto_trade_kis.py --trade (4트랜치 매매)
+00:05~ auto_trade_kis.py --monitor (미체결 재주문)
+</pre
+      >
+
+      <h3>5.4 리밸런싱 플래그 패턴</h3>
+      <pre>
+앵커일 도달 &rarr; 해당 트랜치 목표 갱신 &rarr; rebalancing_needed: true
+매매 시도 &rarr; 목표 &asymp; 현재 (&plusmn;5%) &rarr; rebalancing_needed: false
+false면 다음 앵커까지 가격 변동 무시
+Crash/플립 &rarr; 강제 true (즉시 처리)
+</pre
+      >
+
+      <h3>5.5 텔레그램 알림</h3>
+      <table>
+        <tr>
+          <th>이벤트</th>
+          <th>알림 내용</th>
+          <th>빈도</th>
+        </tr>
+        <tr>
+          <td>VT Crash</td>
+          <td>주식 전량 매도 필요</td>
+          <td>연 0~1회</td>
+        </tr>
+        <tr>
+          <td>카나리 플립</td>
+          <td>공격/방어 전환</td>
+          <td>연 2~4회</td>
+        </tr>
+        <tr>
+          <td>코인 체결</td>
+          <td>매수/매도 내역</td>
+          <td>거래 시</td>
+        </tr>
+      </table>
+
+      <h2>6. 운영 가이드</h2>
+
+      <h3>6.1 평소 (할 일 없음)</h3>
+      <p>
+        텔레그램 알림이 올 때만 대응. 코인은 서버가 자동, 주식은 자동매매 안정화
+        후 자동.
+      </p>
+
+      <h3>6.2 텔레그램 알림 시 (연 3~5회)</h3>
+      <div class="warn">
+        페이지 열기 &rarr; 매일 확인 섹션 &rarr; 지시대로 매도/매수 예약
+        (자동매매 미안정 시)<br />
+        자동매매 안정화 후: 서버가 자동 처리, 텔레그램은 확인용
+      </div>
+
+      <h3>6.3 자산 관리 (월 1회 또는 수시)</h3>
+      <pre>
+자산 관리 섹션 열기
+&rarr; 주식-신한 수동 입력 + 한투 조회 + 코인 조회 + 환율 조회
+&rarr; 계산 (60:40 비중 + ETF 주수)
+&rarr; 스냅샷 저장
+</pre
+      >
+
+      <h2>7. 자율주행 로드맵</h2>
+
+      <table>
+        <tr>
+          <th>단계</th>
+          <th>내용</th>
+          <th>상태</th>
+        </tr>
+        <tr>
+          <td>1</td>
+          <td>코인 자동매매 (업비트)</td>
+          <td><span class="tag tag-auto">완료</span></td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>전략 신호 + 텔레그램 알림</td>
+          <td><span class="tag tag-auto">완료</span></td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>한투 API 연동 (잔고/환율 조회)</td>
+          <td><span class="tag tag-auto">완료</span></td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>주식 자동매매 코드 (4트랜치)</td>
+          <td><span class="tag tag-auto">완료</span></td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>주식 자동매매 테스트 (소액)</td>
+          <td><span class="tag tag-pending">진행 중</span></td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td>KIS 시세 API 문제 해결</td>
+          <td><span class="tag tag-pending">대기</span></td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td>신한 &rarr; 한투 자금 이전</td>
+          <td><span class="tag tag-pending">대기</span></td>
+        </tr>
+        <tr>
+          <td>8</td>
+          <td>일간 자동 자산 기록 (daily_assets)</td>
+          <td><span class="tag tag-pending">대기</span></td>
+        </tr>
+        <tr>
+          <td>9</td>
+          <td>장중 모니터 (VT/EEM 실시간)</td>
+          <td><span class="tag tag-pending">대기</span></td>
+        </tr>
+        <tr>
+          <td>10</td>
+          <td>완전 자율주행</td>
+          <td><span class="tag tag-pending">대기</span></td>
+        </tr>
+      </table>
+
+      <h3>7.1 완전 자율주행 달성 시</h3>
+      <div class="success">
+        <b>사용자가 할 일: 없음</b><br />
+        <ul>
+          <li>코인: 서버 자동매매 (24시간)</li>
+          <li>주식: 서버 자동매매 (장중)</li>
+          <li>자산 기록: 매일 자동 (API 조회 &rarr; DB)</li>
+          <li>알림: 텔레그램으로 체결/이벤트 확인</li>
+          <li>
+            자금 이동(60:40): 밴드 이탈 시 알림 &rarr; 수동 송금 (유일한 수동
+            작업)
+          </li>
+        </ul>
+      </div>
+
+      <h2>8. V17 변형 연구 결과</h2>
+
+      <p>2026-03-24 백테스트 결과 (delta 엔진, tx 0.2%, 2017~2025):</p>
+      <table>
+        <tr>
+          <th>전략</th>
+          <th>Sharpe</th>
+          <th>CAGR</th>
+          <th>MDD</th>
+          <th>평가</th>
+        </tr>
+        <tr>
+          <td>V17 (기준)</td>
+          <td>1.183</td>
+          <td>+12.8%</td>
+          <td>-11.1%</td>
+          <td>-</td>
+        </tr>
+        <tr>
+          <td>V17a (개별 Crash -7%)</td>
+          <td>1.183</td>
+          <td>+12.8%</td>
+          <td>-11.1%</td>
+          <td>= 기준 (미발동)</td>
+        </tr>
+        <tr>
+          <td>V17b (절대 모멘텀)</td>
+          <td>1.166</td>
+          <td>+12.5%</td>
+          <td>-11.2%</td>
+          <td>미미</td>
+        </tr>
+        <tr>
+          <td>V17d (동적 복귀)</td>
+          <td>1.203</td>
+          <td>+13.4%</td>
+          <td>-10.4%</td>
+          <td>유의미 개선</td>
+        </tr>
+        <tr>
+          <td>V17e (연속3일 교체)</td>
+          <td>1.147</td>
+          <td>+12.3%</td>
+          <td>-11.4%</td>
+          <td>열등</td>
+        </tr>
+        <tr>
+          <td>V17f (Trailing Stop)</td>
+          <td>1.151</td>
+          <td>+12.2%</td>
+          <td>-10.8%</td>
+          <td>불안정</td>
+        </tr>
+      </table>
+      <p>V17d(동적 복귀)만 유의미. 나머지는 채택 근거 없음.</p>
+
+      <h2>9. 핵심 규칙 요약</h2>
+
+      <div class="highlight">
+        <ol>
+          <li><b>시그널: t-1일 종가, 체결: t일</b> (Look-Ahead Bias 금지)</li>
+          <li><b>매도 먼저, 매수 나중</b></li>
+          <li><b>Delta 매매</b>: 차이만큼만 거래 (전량 매도→재매수 아님)</li>
+          <li>
+            <b>트리거와 리밸런싱 분리</b>: Crash/플립은 즉시, 종목 교체는
+            앵커일에만
+          </li>
+          <li>
+            <b>rebalancing_needed 플래그</b>: 목표 달성까지 재시도, 달성 후 방치
+          </li>
+          <li><b>현금 2% 마진</b>: 주식/코인 모두</li>
+          <li><b>한 번에 한 가지만 변경</b>: 전략 연구 시 baseline 고정</li>
+        </ol>
+      </div>
+    </div>
+  </body>
+</html>
