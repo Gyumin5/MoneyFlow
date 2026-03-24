@@ -226,9 +226,9 @@ def get_current_price(ticker: str) -> float:
     excd_map = {'NASD': 'NAS', 'AMEX': 'AMS', 'NYSE': 'NYS'}
     excd = excd_map.get(exchange, 'NAS')
 
-    # 1차: 시세 API (장중에만 동작)
+    # 1차: 시세 API (올바른 경로: overseas-price)
     try:
-        data = _get("/uapi/overseas-stock/v1/quotations/price-detail", "HHDFS76200200", {
+        data = _get("/uapi/overseas-price/v1/quotations/price-detail", "HHDFS76200200", {
             "AUTH": "", "EXCD": excd, "SYMB": ticker,
         }, retries=1)
         price = float(data.get('output', {}).get('last', 0))
@@ -256,7 +256,7 @@ def get_current_price(ticker: str) -> float:
     try:
         from datetime import date
         bymd = date.today().strftime('%Y%m%d')
-        data = _get("/uapi/overseas-stock/v1/quotations/dailyprice", "HHDFS76240000", {
+        data = _get("/uapi/overseas-price/v1/quotations/dailyprice", "HHDFS76240000", {
             "AUTH": "", "EXCD": excd, "SYMB": ticker,
             "GUBN": "0", "BYMD": bymd, "MODP": "0",
         }, retries=1)
