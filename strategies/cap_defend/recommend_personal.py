@@ -1127,10 +1127,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             }
 
             async function calcRebalance() {
-                // 먼저 실시간 코인 잔고 조회
-                await fetchCoinBalance();
+                // 코인 + 주식 + 환율 동시 조회
+                await Promise.all([fetchCoinBalance(), fetchStockBalance()]);
 
-                const stockInput = document.getElementById('stockAccountKRW').value.trim().replace(/,/g, '');
+                const stockInput = String(getStockTotal());
                 const resultEl = document.getElementById('rebalResult');
 
                 const stockKRW = parseFloat(stockInput);
@@ -1158,10 +1158,17 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const moveAmount = targetStockKRW - stockKRW;  // +면 코인→주식, -면 주식→코인
 
                 // 3. 비중 상태 표시
+                const shinhanVal = parseFloat((document.getElementById('stockShinhan').value || '0').replace(/,/g,'')) || 0;
+                const kisVal = parseFloat((document.getElementById('stockKIS').value || '0').replace(/,/g,'')) || 0;
+                let stockDetail = Math.round(stockKRW).toLocaleString() + '\\uc6d0';
+                if (shinhanVal > 0 && kisVal > 0) {
+                    stockDetail += '<div style="font-size:0.75em; color:#888; margin-top:2px;">\\uc2e0\\ud55c ' + Math.round(shinhanVal).toLocaleString() + ' + \\ud55c\\ud22c ' + Math.round(kisVal).toLocaleString() + '</div>';
+                }
+
                 let html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">';
                 html += '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
-                    + '<div style="font-size:0.85em; color:#666;">\\uc8fc\\uc2dd \\uacc4\\uc88c</div>'
-                    + '<div style="font-size:1.4em; font-weight:700;">' + Math.round(stockKRW).toLocaleString() + '\\uc6d0</div>'
+                    + '<div style="font-size:0.85em; color:#666;">\\uc8fc\\uc2dd</div>'
+                    + '<div style="font-size:1.4em; font-weight:700;">' + stockDetail + '</div>'
                     + '<div style="color:' + (curStockPct > TARGET_STOCK_RATIO + REBAL_BAND ? '#d93025' : curStockPct < TARGET_STOCK_RATIO - REBAL_BAND ? '#d93025' : '#0d904f') + '; font-weight:600;">'
                     + (curStockPct * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (TARGET_STOCK_RATIO * 100).toFixed(1) + '%)</div></div>';
                 html += '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
@@ -1206,19 +1213,22 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         const shares = Math.floor(perETF / priceKRW);
                         const usedKRW = shares * priceKRW;
                         totalUsed += usedKRW;
+                        const kisQty = kisHoldings[t] || 0;
+                        const shinhanQty = Math.max(0, shares - kisQty);
                         rows += '<tr>'
                             + '<td data-label="ETF" style="font-weight:600;">' + t + '</td>'
-                            + '<td data-label="\\uac00\\uaca9">$' + priceUSD.toFixed(2) + ' (' + Math.round(priceKRW).toLocaleString() + '\\uc6d0)</td>'
-                            + '<td data-label="\\ubc30\\uc815">' + Math.round(perETF).toLocaleString() + '\\uc6d0</td>'
-                            + '<td data-label="\\uc8fc\\uc218" style="font-size:1.3em;font-weight:700;color:#1a73e8;">' + shares + '\\uc8fc</td>'
-                            + '<td data-label="\\ub9e4\\uc218\\uc561">' + Math.round(usedKRW).toLocaleString() + '\\uc6d0</td>'
+                            + '<td data-label="\\uac00\\uaca9">$' + priceUSD.toFixed(2) + '</td>'
+                            + '<td data-label="\\ucd1d\\uc8fc\\uc218" style="font-size:1.2em;font-weight:700;color:#1a73e8;">' + shares + '\\uc8fc</td>'
+                            + '<td data-label="\\ud55c\\ud22c">' + kisQty + '\\uc8fc</td>'
+                            + '<td data-label="\\uc2e0\\ud55c">' + shinhanQty + '\\uc8fc</td>'
+                            + '<td data-label="\\uae08\\uc561">' + Math.round(usedKRW).toLocaleString() + '\\uc6d0</td>'
                             + '</tr>';
                     });
 
                     const remainder = finalStockKRW - totalUsed;
-                    html += '<h3 style="margin:16px 0 8px 0;">\\uc8fc\\uc2dd ETF \\ub9e4\\uc218 \\uac00\\uc774\\ub4dc' + (needRebal ? ' (\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud6c4)' : '') + '</h3>';
+                    html += '<h3 style="margin:16px 0 8px 0;">\\uc8fc\\uc2dd ETF \\ubcf4\\uc720 \\uac00\\uc774\\ub4dc' + (needRebal ? ' (\\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud6c4)' : '') + '</h3>';
                     html += '<table class="mobile-card-table">'
-                        + '<thead><tr><th>ETF</th><th>\\uac00\\uaca9</th><th>\\ubc30\\uc815</th><th>\\uc8fc\\uc218</th><th>\\ub9e4\\uc218\\uc561</th></tr></thead>'
+                        + '<thead><tr><th>ETF</th><th>\\uac00\\uaca9</th><th>\\ucd1d\\uc8fc\\uc218</th><th>\\ud55c\\ud22c</th><th>\\uc2e0\\ud55c</th><th>\\uae08\\uc561</th></tr></thead>'
                         + '<tbody>' + rows + '</tbody></table>';
                     html += '<div style="margin-top:10px;padding:10px;background:#f0f4ff;border-radius:8px;">'
                         + '<b>\\uc8fc\\uc2dd \\ud22c\\uc790:</b> ' + Math.round(finalStockKRW).toLocaleString() + '\\uc6d0'
@@ -1360,17 +1370,25 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             </div>
             <div class="section-body collapsed" id="secAsset">
                 <div class="card">
-                    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:12px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
                         <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uc8fc\uc2dd \ucd1d\uc561 (\uc6d0)</label>
-                            <input id="stockAccountKRW" type="text" placeholder="350,000,000"
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uc8fc\uc2dd - \uc2e0\ud55c (\uc6d0, \uc218\ub3d9)</label>
+                            <input id="stockShinhan" type="text" placeholder="0"
                                 style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
                         </div>
                         <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ucf54\uc778 (\uc6d0)</label>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uc8fc\uc2dd - \ud55c\ud22c (\uc6d0, \uc790\ub3d9)</label>
                             <div style="display:flex; gap:6px; margin-top:4px;">
-                                <input id="snapCoin" type="number" placeholder="0"
-                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px;" />
+                                <input id="stockKIS" type="text" readonly placeholder="\uc870\ud68c \ud544\uc694"
+                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px; background:#f8f9fa;" />
+                                <button onclick="fetchStockBalance()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ucf54\uc778 (\uc6d0, \uc790\ub3d9)</label>
+                            <div style="display:flex; gap:6px; margin-top:4px;">
+                                <input id="snapCoin" type="text" readonly placeholder="\uc870\ud68c \ud544\uc694"
+                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px; background:#f8f9fa;" />
                                 <button onclick="fetchCoinForSnap()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
                             </div>
                         </div>
@@ -1382,9 +1400,12 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
                         <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ud658\uc728 (\uc6d0/\ub2ec\ub7ec, ETF \uc8fc\uc218 \uacc4\uc0b0\uc6a9)</label>
-                            <input id="exchangeRate" type="number" placeholder="1380"
-                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
+                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ud658\uc728 (\uc6d0/\ub2ec\ub7ec, \uc790\ub3d9)</label>
+                            <div style="display:flex; gap:6px; margin-top:4px;">
+                                <input id="exchangeRate" type="text" readonly placeholder="\uc870\ud68c \ud544\uc694"
+                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px; background:#f8f9fa;" />
+                                <button onclick="fetchExchangeRate()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
+                            </div>
                         </div>
                         <div>
                             <label style="font-weight:600; color:#555; font-size:0.9em;">\uba54\ubaa8 (\uc120\ud0dd)</label>
@@ -1402,7 +1423,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             color:white; border:none; padding:12px 24px; border-radius:8px;
                             font-weight:600; font-size:1em; cursor:pointer;">\U0001f4be \uc2a4\ub0c5\uc0f7 \uc800\uc7a5</button>
                     </div>
-                    <div id="coinFetchStatus" style="font-size:0.85em; margin-top:8px; color:#666;"></div>
+                    <div id="stockFetchStatus" style="font-size:0.85em; margin-top:4px; color:#666;"></div>
+                    <div id="coinFetchStatus" style="font-size:0.85em; margin-top:4px; color:#666;"></div>
                     <div id="rebalResult" style="margin-top:12px;"></div>
                     <div id="snapStatus" style="margin-top:8px; font-size:0.9em;"></div>
                 </div>
@@ -1541,10 +1563,50 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 }} catch(e) {{ alert('\ucf54\uc778 \uc870\ud68c \uc2e4\ud328'); }}
             }}
 
+            let kisHoldings = {{}};  // {{ticker: qty}} 한투 보유
+
+            async function fetchStockBalance() {{
+                const statusEl = document.getElementById('stockFetchStatus');
+                try {{
+                    if (statusEl) {{ statusEl.innerHTML = '\u23f3 \ud55c\ud22c \uc794\uace0 \uc870\ud68c \uc911...'; statusEl.style.color = '#1967d2'; }}
+                    const r = await fetch(API + '/api/assets/stock_balance');
+                    const d = await r.json();
+                    if (d.error) {{ if (statusEl) {{ statusEl.innerHTML = '\u26a0\ufe0f ' + d.error; statusEl.style.color = '#d93025'; }} return; }}
+                    document.getElementById('stockKIS').value = Math.round(d.total_krw);
+                    if (d.exchange_rate > 0) document.getElementById('exchangeRate').value = d.exchange_rate;
+                    // 보유 종목 저장
+                    kisHoldings = {{}};
+                    if (d.holdings) d.holdings.forEach(h => {{ kisHoldings[h.ticker] = h.qty; }});
+                    let info = '\u2705 $' + d.total_usd.toFixed(0) + ' (\u00d7' + d.exchange_rate.toFixed(0) + ') = ' + Math.round(d.total_krw).toLocaleString() + '\uc6d0';
+                    if (d.holdings && d.holdings.length > 0) {{
+                        info += ' | ';
+                        d.holdings.forEach(h => {{ info += h.ticker + ':' + h.qty + '\uc8fc '; }});
+                    }}
+                    info += ' (\uac00\uc6a9 $' + d.buying_power_usd.toFixed(0) + ')';
+                    if (statusEl) {{ statusEl.innerHTML = info; statusEl.style.color = '#0d904f'; }}
+                }} catch(e) {{ if (statusEl) {{ statusEl.innerHTML = '\u274c \ud55c\ud22c \uc870\ud68c \uc2e4\ud328'; statusEl.style.color = '#d93025'; }} }}
+            }}
+
+            async function fetchExchangeRate() {{
+                try {{
+                    const r = await fetch(API + '/api/assets/stock_balance');
+                    const d = await r.json();
+                    if (d.exchange_rate > 0) {{
+                        document.getElementById('exchangeRate').value = d.exchange_rate;
+                    }}
+                }} catch(e) {{}}
+            }}
+
+            function getStockTotal() {{
+                const shinhan = parseFloat((document.getElementById('stockShinhan').value || '0').replace(/,/g,'')) || 0;
+                const kis = parseFloat((document.getElementById('stockKIS').value || '0').replace(/,/g,'')) || 0;
+                return shinhan + kis;
+            }}
+
             async function saveSnapshot() {{
                 const now = new Date();
                 const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-                const stock = parseFloat(document.getElementById('stockAccountKRW').value.replace(/,/g,'')) || 0;
+                const stock = getStockTotal();
                 const coin = parseFloat(document.getElementById('snapCoin').value) || 0;
                 const bankCash = sumText('snapBankCash');
                 const cash = bankCash;
@@ -1608,7 +1670,6 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             // Init
             document.addEventListener('DOMContentLoaded', function() {{
                 loadHistory();
-                try {{ const sr = localStorage.getItem('cap_defend_exchange_rate'); if (sr) document.getElementById('exchangeRate').value = sr; }} catch(e) {{}}
             }});
             </script>
         </div>
