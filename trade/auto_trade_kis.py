@@ -758,7 +758,7 @@ def _sell_all(ticker: str, qty: int, reason: str):
         if price <= 0:
             log.error(f"  {ticker}: 가격 조회 실패")
             break
-        sell_price = round(price * 0.995, 2)
+        sell_price = round(price * 0.99, 2)
         log.info(f"    [{attempt}] 매도 {remaining}주 @ ${sell_price}")
         result = place_order(ticker, remaining, sell_price, side="sell")
         if not result['success']:
@@ -792,7 +792,7 @@ def _buy_target(ticker: str, budget_usd: float):
     if price <= 0:
         log.error(f"  {ticker}: 가격 조회 실패, 매수 스킵")
         return
-    add_qty = int(budget_usd / (price * 1.02))
+    add_qty = int(budget_usd / (price * 1.01))
     if add_qty <= 0:
         log.warning(f"  {ticker}: 수량 0 (budget ${budget_usd:.2f}, price ${price})")
         return
@@ -823,7 +823,7 @@ def _buy_target(ticker: str, budget_usd: float):
         price = get_current_price(ticker)
         if price <= 0:
             break
-        buy_price = round(price * 1.02, 2)
+        buy_price = round(price * 1.01, 2)
         log.info(f"    [{attempt}] 매수 {remaining}주 @ ${buy_price}")
         result = place_order(ticker, remaining, buy_price, side="buy")
         if not result['success']:
