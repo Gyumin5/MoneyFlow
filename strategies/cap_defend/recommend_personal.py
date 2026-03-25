@@ -632,6 +632,9 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         _crash_state = {}
     _crash_state['stock_crash'] = stock_crash
     _crash_state['stock_crash_cooldown'] = crash_days_remaining
+    # VT 전일 종가 저장 (장중 모니터용)
+    if vt is not None and len(vt) >= 1:
+        _crash_state['vt_prev_close'] = float(vt.iloc[-1])
     _save_signal_state(_crash_state)
 
     if stock_crash:
