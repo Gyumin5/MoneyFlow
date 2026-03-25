@@ -409,7 +409,7 @@ Day 22: 트랜치4 (25%) — 그날의 Z-score로 독립적으로 종목 선정
       <pre>
 for attempt in 1..5:
   1. 현재가 조회
-  2. 주문 (주식: 지정가 매수+2%/매도-0.5%, 코인: 시장가 분할)
+  2. 주문 (주식: 지정가 매수+1%/매도-1%, 코인: 시장가 분할)
   3. 5초 대기
   4. 미체결 전량 취소
   5. 잔고 조회 &rarr; 체결량 확인
@@ -425,7 +425,7 @@ for attempt in 1..5:
         </tr>
         <tr>
           <td>주문 방식</td>
-          <td>지정가 (매수 +2%, 매도 -0.5%)</td>
+          <td>지정가 (매수 +1%, 매도 -1%)</td>
           <td>시장가 분할매매</td>
         </tr>
         <tr>
@@ -445,33 +445,133 @@ for attempt in 1..5:
         </tr>
       </table>
 
-      <h3>5.3 Monitor 역할</h3>
-      <div class="warn">
-        <b>Monitor는 단순 미체결 확인이 아닙니다.</b><br />
-        <code>rebalancing_needed=true</code>면 능동적으로 매매합니다: 미체결
-        전량 취소 &rarr; 목표 재계산 &rarr; 새 주문 &rarr; 완료 체크
-      </div>
+      <h3>5.3 --trade vs --monitor 상세</h3>
+
+      <h4>주식 (auto_trade_kis.py)</h4>
       <table>
         <tr>
           <th></th>
-          <th>rebalancing_needed=true</th>
-          <th>rebalancing_needed=false</th>
+          <th>--trade (23:35, 1일 1회)</th>
+          <th>--monitor (00:05~06:05, 매시)</th>
         </tr>
         <tr>
-          <td>--trade</td>
-          <td>앵커 갱신 + 매매</td>
-          <td>앵커 체크만 (매매 없음)</td>
+          <td><b>앵커 체크</b></td>
+          <td>
+            오늘이 앵커일(1/8/15/22)이고 이번 달 미처리면 &rarr; 트랜치 목표
+            갱신 + rebalancing_needed=true
+          </td>
+          <td>앵커 체크 안 함</td>
         </tr>
         <tr>
-          <td>--monitor</td>
-          <td>미체결 취소 + 재계산 + 매매</td>
-          <td>미체결 확인만</td>
+          <td><b>트리거 체크</b></td>
+          <td>Crash, 카나리 플립, Crash 복귀 &rarr; 즉시 매도/전환</td>
+          <td>트리거 체크 안 함 (09:15 신호 기준)</td>
+        </tr>
+        <tr>
+          <td><b>매매 실행</b></td>
+          <td>rebalancing_needed=true면 delta 매매</td>
+          <td>
+            rebalancing_needed=true면 미체결 취소 &rarr; 재계산 &rarr; 새 주문
+          </td>
+        </tr>
+        <tr>
+          <td><b>rebal=false일 때</b></td>
+          <td>앵커 날짜만 확인, 해당 안 되면 아무것도 안 함</td>
+          <td>미체결 확인만, 없으면 즉시 종료</td>
         </tr>
       </table>
-      <p>
-        <b>코인 monitor 추가 역할:</b> Crash(BTC -10%), 카나리 OFF, DD
-        Exit(-25%) 긴급 매도. DD Exit은 해당 코인만 개별 매도 (전량청산 아님).
-      </p>
+
+      <h4>코인 (auto_trade_upbit.py)</h4>
+      <table>
+        <tr>
+          <th></th>
+          <th>--trade (09:20, 1일 1회)</th>
+          <th>--monitor (:05/:35, 30분마다)</th>
+        </tr>
+        <tr>
+          <td><b>앵커 체크</b></td>
+          <td>
+            오늘이 앵커일(1/11/21)이고 이번 달 미처리면 &rarr; 트랜치 목표 갱신
+          </td>
+          <td>앵커 체크 안 함</td>
+        </tr>
+        <tr>
+          <td><b>트리거 체크</b></td>
+          <td>Crash, 카나리 플립, DD Exit, 헬스 실패, PFD5, buffer 변경</td>
+          <td>
+            <b>긴급 트리거:</b> Crash(BTC -10%), 카나리 OFF(BTC &lt;
+            SMA60&times;0.99), DD Exit(-25%)
+          </td>
+        </tr>
+        <tr>
+          <td><b>매매 실행</b></td>
+          <td>트리거 있으면 분할매매 (시장가)</td>
+          <td>긴급 시 즉시 매도 + pending 복구 + rebalancing_needed 재시도</td>
+        </tr>
+        <tr>
+          <td><b>DD Exit</b></td>
+          <td>전 트랜치에서 해당 코인 제거 + 매도</td>
+          <td><b>해당 코인만 개별 매도</b> (전량청산 아님)</td>
+        </tr>
+      </table>
+
+      <h4>rebalancing_needed가 true로 바뀌는 상황</h4>
+      <table>
+        <tr>
+          <th>상황</th>
+          <th>주식</th>
+          <th>코인</th>
+        </tr>
+        <tr>
+          <td>앵커일 도달</td>
+          <td>해당 트랜치 목표 갱신 &rarr; true</td>
+          <td>해당 트랜치 목표 갱신 &rarr; true</td>
+        </tr>
+        <tr>
+          <td>카나리 플립</td>
+          <td>전 트랜치 즉시 전환 &rarr; true</td>
+          <td>전 트랜치 즉시 전환 &rarr; true</td>
+        </tr>
+        <tr>
+          <td>Crash 복귀</td>
+          <td>전 트랜치 재진입 &rarr; true</td>
+          <td>(3일 윈도우 자동 해소)</td>
+        </tr>
+        <tr>
+          <td>Crash/Canary-off 매도 실패</td>
+          <td>잔량 있으면 true 유지</td>
+          <td>pending에 저장 &rarr; true</td>
+        </tr>
+        <tr>
+          <td>DD Exit / 헬스 실패</td>
+          <td>-</td>
+          <td>트랜치 제거 + true</td>
+        </tr>
+      </table>
+
+      <h4>rebalancing_needed가 false로 바뀌는 상황</h4>
+      <table>
+        <tr>
+          <th>상황</th>
+          <th>설명</th>
+        </tr>
+        <tr>
+          <td>목표 달성</td>
+          <td>금액 &plusmn;5% 이내 OR 주수 일치</td>
+        </tr>
+        <tr>
+          <td>Crash 전량 매도 성공</td>
+          <td>잔고 0 확인 &rarr; false</td>
+        </tr>
+        <tr>
+          <td>Canary-off 전량 매도 성공</td>
+          <td>잔고 0 확인 &rarr; false</td>
+        </tr>
+        <tr>
+          <td>pending 모두 완료 (코인)</td>
+          <td>monitor에서 false로 해제</td>
+        </tr>
+      </table>
 
       <h3>5.4 데이터 연동 (시세, 잔고, 환율)</h3>
       <table>
