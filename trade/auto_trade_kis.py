@@ -639,12 +639,39 @@ def run_force():
 
 
 def run_monitor():
-    """리밸런싱 미완료 시 목표 달성까지 매매 시도. 장중 매시 실행."""
+    """장중 모니터: VT Crash 체크 + 리밸런싱 복구. 매시 실행."""
     kis_state = load_kis_state()
+
+    # ── VT Crash 장중 체크 ──
+    signal = load_signal_state()
+    if not signal.get('stock_crash', False):
+        # Crash 상태가 아닐 때만 장중 체크 (이미 Crash면 trade가 처리)
+        try:
+            vt_price = get_current_price('VT')
+            vt_prev = signal.get('vt_prev_close', 0)
+            if vt_price > 0 and vt_prev > 0:
+                vt_ret = vt_price / vt_prev - 1
+                if vt_ret <= -0.03:
+                    log.info(f"🚨 장중 VT Crash! {vt_ret:+.1%} (${vt_price:.2f} vs prev ${vt_prev:.2f})")
+                    send_telegram(f"🚨 <b>장중 VT Crash!</b> {vt_ret:+.1%}\n즉시 전량 매도")
+                    # 전량 매도
+                    holdings, _ = get_balance()
+                    for h in holdings:
+                        if h['qty'] > 0:
+                            _sell_all(h['ticker'], h['qty'], "MONITOR_CRASH")
+                    for a_str in kis_state.get('tranches', {}):
+                        kis_state['tranches'][a_str]['picks'] = []
+                        kis_state['tranches'][a_str]['weights'] = {}
+                    kis_state['rebalancing_needed'] = False
+                    kis_state['last_action'] = 'crash_sell'
+                    kis_state['last_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                    save_kis_state(kis_state)
+                    return
+        except Exception as e:
+            log.info(f"⚠️ VT 장중 체크 실패: {e}")
 
     # rebalancing_needed가 false면 아무것도 안 함
     if not kis_state.get('rebalancing_needed', False):
-        # 미체결만 확인
         pending = get_pending_orders()
         if pending:
             log.info(f"미체결 {len(pending)}건 (rebal 완료 상태)")
