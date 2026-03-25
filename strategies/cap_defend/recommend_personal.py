@@ -1884,22 +1884,5 @@ if __name__ == "__main__":
     coin_total_krw = sum(my_holdings_krw.values()) + my_cash
     save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows, coin_total_krw=coin_total_krw)
 
-    # ─── Telegram 알림 ─────────────────────────────────────
-    alerts = []
-
-    # 1. VT Crash
-    if 'CRASH' in s_stat:
-        alerts.append(f"🚨 <b>VT CRASH 발동!</b>\n주식 전량 매도 필요\n→ 페이지 확인: http://[REDACTED_SERVER]:8080/portfolio_result_gmoh.html")
-
-    # 2. 카나리 플립
-    try:
-        with open('signal_state.json', 'r') as _sf:
-            _sig = json.load(_sf)
-            if _sig.get('signal_flipped'):
-                mode = "Risk-On 🟢" if _sig.get('risk_on') else "Risk-Off 🔴"
-                alerts.append(f"🚨 <b>카나리 플립! ({mode})</b>\n주식 종목 전환 필요\n→ 페이지 확인: http://[REDACTED_SERVER]:8080/portfolio_result_gmoh.html")
-    except Exception:
-        pass
-
-    for msg in alerts:
-        send_telegram(msg)
+    # ─── Telegram 알림은 trade/monitor에서 실행 시점에 발송 ───
+    # recommend는 signal_state.json에 상태만 저장, 알림은 매매 실행 모듈이 담당
