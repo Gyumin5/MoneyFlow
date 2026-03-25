@@ -559,36 +559,70 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     """V17 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash"""
     log.append("<h2>📈 주식 포트폴리오 분석 (V17: R7+EEM+Zscore3+Sh252+VT Crash)</h2>")
 
-    # --- VT Crash Breaker ---
+    # --- VT Crash Breaker (V17d: 동적 복귀) ---
+    # 최근 60일을 시뮬레이션하여 오늘의 Crash 상태를 stateless로 도출
     vt = all_prices.get(STOCK_CRASH_TICKER)
     stock_crash = False
     crash_days_remaining = 0
-    if vt is not None and len(vt) >= 2:
-        vt_ret = vt.iloc[-1] / vt.iloc[-2] - 1
-        log.append(f"<p><b>[Crash Check]</b> {STOCK_CRASH_TICKER}: 일간 수익률 {vt_ret:+.2%} (임계 {STOCK_CRASH_THRESHOLD:.0%})</p>")
-        if vt_ret <= STOCK_CRASH_THRESHOLD:
-            stock_crash = True
-            crash_days_remaining = STOCK_CRASH_COOL_DAYS
-            log.append(f"<div style='background:#fce8e6;border:2px solid #d93025;padding:16px;border-radius:8px;margin:12px 0'>"
-                       f"<h3 style='color:#d93025;margin:0'>🚨 VT CRASH 발동! ({STOCK_CRASH_TICKER} {vt_ret:+.2%})</h3>"
-                       f"<p style='font-size:1.2em;margin:8px 0'><b>즉시 행동:</b> 주식 전량 매도 (공격+방어 모두)</p>"
-                       f"<p><b>{STOCK_CRASH_COOL_DAYS}영업일 후 재진입</b> — 그때 이 페이지를 다시 확인하세요</p></div>")
-        if not stock_crash and len(vt) >= STOCK_CRASH_COOL_DAYS + 2:
-            recent_rets = vt.iloc[-(STOCK_CRASH_COOL_DAYS + 2):].pct_change().dropna()
-            for i, r in enumerate(recent_rets):
-                if r <= STOCK_CRASH_THRESHOLD:
-                    days_ago = len(recent_rets) - 1 - i
-                    if days_ago <= STOCK_CRASH_COOL_DAYS:
-                        stock_crash = True
-                        crash_days_remaining = STOCK_CRASH_COOL_DAYS - days_ago
-                        if crash_days_remaining > 0:
-                            log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
-                                       f"<h3 style='color:#e37400;margin:0'>⏸️ Crash 쿨다운 중</h3>"
-                                       f"<p>{days_ago}일 전 {STOCK_CRASH_TICKER} {r:+.2%} 발동</p>"
-                                       f"<p style='font-size:1.2em'><b>잔여 {crash_days_remaining}영업일 대기</b> — 현금 유지</p></div>")
-                        else:
-                            stock_crash = False
-                        break
+    crash_trigger_day_idx = -1
+    recovered_today = False
+
+    if vt is not None and len(vt) >= 10:
+        vt_rets = vt.pct_change()
+        vt_sma10 = vt.rolling(10).mean()
+
+        sim_len = min(60, len(vt))
+        for i in range(len(vt) - sim_len, len(vt)):
+            ret = vt_rets.iloc[i]
+            cur_vt = vt.iloc[i]
+            cur_sma = vt_sma10.iloc[i]
+            is_today = (i == len(vt) - 1)
+
+            # 새 Crash 발생 → 쿨다운 리셋
+            if not np.isnan(ret) and ret <= STOCK_CRASH_THRESHOLD:
+                stock_crash = True
+                crash_days_remaining = STOCK_CRASH_COOL_DAYS
+                crash_trigger_day_idx = i
+                if is_today:
+                    recovered_today = False
+
+            # Crash 상태 → 쿨다운 처리 + V17d 동적 연장
+            elif stock_crash:
+                if crash_days_remaining > 0:
+                    crash_days_remaining -= 1
+                if crash_days_remaining == 0:
+                    if not np.isnan(cur_sma) and cur_vt > cur_sma:
+                        stock_crash = False
+                        if is_today:
+                            recovered_today = True
+                    else:
+                        crash_days_remaining = 1  # VT ≤ SMA10 → 1일 연장
+
+        # 로그
+        vt_ret_today = vt_rets.iloc[-1] if not np.isnan(vt_rets.iloc[-1]) else 0
+        vt_cur_today = vt.iloc[-1]
+        sma_cur_today = vt_sma10.iloc[-1] if not np.isnan(vt_sma10.iloc[-1]) else 0
+
+        log.append(f"<p><b>[Crash Check]</b> {STOCK_CRASH_TICKER}: 일간 수익률 {vt_ret_today:+.2%} (임계 {STOCK_CRASH_THRESHOLD:.0%})</p>")
+
+        if stock_crash:
+            days_ago = (len(vt) - 1) - crash_trigger_day_idx if crash_trigger_day_idx >= 0 else 0
+            if days_ago == 0:
+                log.append(f"<div style='background:#fce8e6;border:2px solid #d93025;padding:16px;border-radius:8px;margin:12px 0'>"
+                           f"<h3 style='color:#d93025;margin:0'>🚨 VT CRASH 발동! ({STOCK_CRASH_TICKER} {vt_ret_today:+.2%})</h3>"
+                           f"<p style='font-size:1.2em;margin:8px 0'><b>즉시 행동:</b> 주식 전량 매도</p>"
+                           f"<p><b>최소 {STOCK_CRASH_COOL_DAYS}영업일 + VT &gt; SMA10 회복 시 재진입</b></p></div>")
+            elif days_ago < STOCK_CRASH_COOL_DAYS:
+                log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
+                           f"<h3 style='color:#e37400;margin:0'>⏸️ Crash 쿨다운 중</h3>"
+                           f"<p>{days_ago}일 전 Crash 발동. 잔여 {crash_days_remaining}영업일 대기</p></div>")
+            else:
+                log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
+                           f"<h3 style='color:#e37400;margin:0'>⏸️ Crash 동적 대기 (V17d)</h3>"
+                           f"<p>VT ${vt_cur_today:.2f} &le; SMA10 ${sma_cur_today:.2f} → 현금 유지</p>"
+                           f"<p style='font-size:1.2em'><b>VT &gt; SMA10 회복 시 재진입</b></p></div>")
+        elif recovered_today:
+            log.append(f"<p style='color:#0d904f'><b>✅ Crash 복귀 (V17d):</b> VT ${vt_cur_today:.2f} &gt; SMA10 ${sma_cur_today:.2f}</p>")
 
     # Crash 상태를 signal_state.json에 저장 (자동매매용)
     try:
