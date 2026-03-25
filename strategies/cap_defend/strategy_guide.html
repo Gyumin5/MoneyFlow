@@ -127,7 +127,7 @@
   <body>
     <div class="container">
       <h1>Cap Defend V17 - 전략 가이드</h1>
-      <p>최종 업데이트: 2026-03-24</p>
+      <p>최종 업데이트: 2026-03-25</p>
 
       <h2>1. 전략 개요</h2>
 
@@ -185,166 +185,106 @@
         </tr>
       </table>
 
-      <h2>2. 주식 전략 상세</h2>
+      <h2>2. 전략 상세 비교 (주식 vs 코인)</h2>
 
-      <h3>2.1 유니버스 (R7)</h3>
       <table>
         <tr>
-          <th>ETF</th>
-          <th>설명</th>
-          <th>역할</th>
+          <th>항목</th>
+          <th>주식</th>
+          <th>코인</th>
         </tr>
         <tr>
-          <td>SPY</td>
-          <td>S&P 500</td>
-          <td>미국 대형주</td>
+          <td><b>유니버스</b></td>
+          <td>R7: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ</td>
+          <td>CoinGecko Top 40 &rarr; Upbit KRW + 거래대금 10억+ 필터</td>
         </tr>
         <tr>
-          <td>QQQ</td>
-          <td>NASDAQ 100</td>
-          <td>미국 기술주</td>
+          <td><b>카나리 신호</b></td>
+          <td>EEM &gt; SMA(200), 0.5% Hysteresis</td>
+          <td>BTC &gt; SMA(60), 1% Hysteresis</td>
         </tr>
         <tr>
-          <td>VEA</td>
-          <td>선진국 (미국 제외)</td>
-          <td>글로벌 분산</td>
+          <td><b>헬스 필터</b></td>
+          <td>없음 (카나리가 방어)</td>
+          <td>Mom(30)&gt;0 AND Mom(90)&gt;0 AND Vol(90)&le;5%</td>
         </tr>
         <tr>
-          <td>EEM</td>
-          <td>신흥국</td>
-          <td>글로벌 분산 + 카나리</td>
+          <td><b>종목 선정</b></td>
+          <td>Z-score Top 3 (12M mom + Sharpe 252d)</td>
+          <td>시총순 Top 5</td>
         </tr>
         <tr>
-          <td>GLD</td>
-          <td>금</td>
-          <td>인플레 헤지</td>
+          <td><b>비중</b></td>
+          <td>EW (33%씩)</td>
+          <td>EW + 20% Cap</td>
         </tr>
         <tr>
-          <td>PDBC</td>
-          <td>원자재</td>
-          <td>인플레 헤지</td>
+          <td><b>방어 모드</b></td>
+          <td>Top 3 by 6M return (IEF, BIL, BNDX, GLD, PDBC)</td>
+          <td>전량 현금</td>
         </tr>
         <tr>
-          <td>VNQ</td>
-          <td>미국 리츠</td>
-          <td>부동산</td>
+          <td><b>Crash Breaker</b></td>
+          <td>VT -3% daily &rarr; 전량 매도 &rarr; 3영업일 현금</td>
+          <td>BTC -10% daily (최근 3일 내) &rarr; 전량 현금</td>
+        </tr>
+        <tr>
+          <td><b>DD Exit</b></td>
+          <td>없음</td>
+          <td>
+            60일 고점 -25% &rarr; 해당 코인만 매도 &rarr; 현금 유지 &rarr; 다음
+            앵커일에 새 종목으로 채움
+          </td>
+        </tr>
+        <tr>
+          <td><b>Blacklist</b></td>
+          <td>없음</td>
+          <td>-15% daily &rarr; 7일 제외</td>
+        </tr>
+        <tr>
+          <td><b>PFD (플립 후 추가)</b></td>
+          <td>없음</td>
+          <td>카나리 플립 후 5일에 전 트랜치 재갱신</td>
+        </tr>
+        <tr>
+          <td><b>트랜치</b></td>
+          <td>4트랜치 (Day 1/8/15/22), 각 25%</td>
+          <td>3트랜치 (Day 1/11/21), 각 33%</td>
+        </tr>
+        <tr>
+          <td><b>TX</b></td>
+          <td>0.2%</td>
+          <td>0.4%</td>
         </tr>
       </table>
 
-      <h3>2.2 카나리 신호</h3>
-      <p>
-        EEM(신흥국 ETF)이 200일 이동평균 위에 있으면 <b>Risk-On</b>(공격),
-        아래면 <b>Risk-Off</b>(방어).
-      </p>
-      <p>0.5% Hysteresis: 전환 시 ±0.5% 밴드로 노이즈 필터링.</p>
-
-      <h3>2.3 종목 선정</h3>
-      <p><b>Z-score = zscore(12M 모멘텀) + zscore(Sharpe 252일)</b></p>
-      <p>Z-score 상위 3개 종목을 33%씩 균등 배분.</p>
-      <p>
-        Sharpe가 포함되어 변동성이 큰 종목(PDBC 등)은 자연스럽게 패널티를 받음.
-      </p>
-
-      <h3>2.4 방어 모드</h3>
-      <p>
-        Risk-Off 시 IEF, BIL, BNDX, GLD, PDBC 중 6개월 수익률 Top 3을 EW로 보유.
-      </p>
-
-      <h3>2.5 Crash Breaker</h3>
-      <div class="danger">
-        <b>VT(글로벌 주식) 일간 수익률 &le; -3%</b> &rarr; 전량 매도 (공격+방어
-        모두) &rarr; 3영업일 현금 대기 후 재진입.
+      <div class="highlight">
+        <b>공통 원칙:</b> 각 트랜치는 독립적으로 자기 앵커일에 종목 선정. 트랜치
+        합산으로 단일 포트폴리오 매매.<br />
+        <b>Crash/플립은 예외:</b> 전 트랜치를 동시에 즉시 처리.
       </div>
 
-      <h3>2.6 4트랜치</h3>
-      <pre>
-Day 1:  트랜치1 (25%) — 그날의 Z-score로 독립적으로 종목 선정
-Day 8:  트랜치2 (25%) — 그날의 Z-score로 독립적으로 종목 선정
-Day 15: 트랜치3 (25%) — 그날의 Z-score로 독립적으로 종목 선정
-Day 22: 트랜치4 (25%) — 그날의 Z-score로 독립적으로 종목 선정
-</pre
-      >
-      <p>
-        <b>각 트랜치는 독립적으로 운영됩니다.</b> 자기 앵커일에 그날의 신호로
-        종목을 선정하고 비중을 결정합니다. 4개 트랜치의 목표를 합산하여 단일
-        포트폴리오로 매매합니다. 종목 교체가 있는 달에는 트랜치마다 다른 날에
-        교체하므로 <b>매수/매도 가격이 분산</b>됩니다.
-      </p>
-      <p><b>Crash/플립은 예외:</b> 전 트랜치를 동시에 즉시 처리합니다.</p>
-
-      <h3>2.7 백테스트 성과 (2017~2025, 11-anchor 평균, tx 0.2%)</h3>
+      <h3>2.1 백테스트 성과</h3>
       <table>
         <tr>
           <th></th>
           <th>Sharpe</th>
           <th>CAGR</th>
           <th>MDD</th>
-          <th>&sigma;(Sharpe)</th>
         </tr>
         <tr>
-          <td>1트랜치</td>
-          <td>1.183</td>
-          <td>+12.8%</td>
-          <td>-11.1%</td>
-          <td>0.063</td>
-        </tr>
-        <tr>
-          <td><b>4트랜치</b></td>
+          <td><b>주식 4트랜치</b> (2017~2025, 11-anchor, tx 0.2%)</td>
           <td class="perf">1.255</td>
           <td class="perf">+13.3%</td>
           <td>-11.4%</td>
-          <td class="perf">0.019</td>
+        </tr>
+        <tr>
+          <td><b>코인</b> (2018~2025, 10-anchor, tx 0.4%)</td>
+          <td class="perf">1.645</td>
+          <td class="perf">+73.2%</td>
+          <td>-35.3%</td>
         </tr>
       </table>
-
-      <h2>3. 코인 전략 상세</h2>
-
-      <h3>3.1 카나리 + 헬스</h3>
-      <p>카나리: BTC > SMA(60), 1% Hysteresis</p>
-      <p>헬스: Mom(30)>0 AND Mom(90)>0 AND Vol(90)&le;5%</p>
-
-      <h3>3.2 선정 + 비중</h3>
-      <p>
-        CoinGecko 시총순 Top 40 &rarr; Upbit KRW + 거래대금 10억+ 필터 &rarr;
-        Top 5
-      </p>
-      <p>Equal Weight + 20% Cap (한 종목 최대 20%)</p>
-
-      <h3>3.3 보호 장치</h3>
-      <table>
-        <tr>
-          <th>장치</th>
-          <th>조건</th>
-          <th>행동</th>
-        </tr>
-        <tr>
-          <td>Crash</td>
-          <td>BTC -10% daily</td>
-          <td>전량 현금, 3일 대기</td>
-        </tr>
-        <tr>
-          <td>DD Exit</td>
-          <td>60일 고점 -25%</td>
-          <td>해당 코인 매도</td>
-        </tr>
-        <tr>
-          <td>Blacklist</td>
-          <td>-15% daily</td>
-          <td>7일 제외</td>
-        </tr>
-        <tr>
-          <td>PFD5</td>
-          <td>카나리 플립 후 5일</td>
-          <td>추가 리밸런싱</td>
-        </tr>
-      </table>
-
-      <h3>3.4 백테스트 성과 (2018~2025, 10-anchor 평균)</h3>
-      <div class="highlight">
-        <span class="perf"
-          >Sharpe 1.645, CAGR +73.2%, MDD -35.3%, Calmar 2.07</span
-        >
-      </div>
 
       <h2>4. 60:40 자산 배분</h2>
 
@@ -525,7 +465,7 @@ for attempt in 1..5:
         <tr>
           <td>앵커일 도달</td>
           <td>해당 트랜치 목표 갱신 &rarr; true</td>
-          <td>해당 트랜치 목표 갱신 &rarr; true</td>
+          <td>해당 트랜치 목표 갱신 &rarr; true (트리거로 매매)</td>
         </tr>
         <tr>
           <td>카나리 플립</td>
@@ -573,26 +513,22 @@ for attempt in 1..5:
         </tr>
       </table>
 
-      <h3>5.4 데이터 연동 (시세, 잔고, 환율)</h3>
+      <h3>5.4 데이터 연동</h3>
+      <h4>주식 (한투 KIS API)</h4>
       <table>
         <tr>
           <th>항목</th>
-          <th>데이터 소스</th>
+          <th>소스</th>
           <th>비고</th>
         </tr>
         <tr>
-          <td>코인 잔고</td>
-          <td>업비트 API</td>
-          <td>24시간</td>
+          <td>잔고</td>
+          <td>inquire-balance (TTTS3012R)</td>
+          <td>24시간, 장외=전일종가</td>
         </tr>
         <tr>
-          <td>주식 잔고</td>
-          <td>KIS inquire-balance</td>
-          <td>24시간 (장외=전일종가)</td>
-        </tr>
-        <tr>
-          <td>주식 시세</td>
-          <td>KIS overseas-<b>price</b>/quotations</td>
+          <td>시세</td>
+          <td>overseas-<b>price</b>/quotations/price-detail</td>
           <td>장중만 (overseas-stock 아님!)</td>
         </tr>
         <tr>
@@ -609,13 +545,56 @@ for attempt in 1..5:
         </tr>
         <tr>
           <td>환율</td>
-          <td>KIS foreign-margin bass_exrt</td>
+          <td>foreign-margin bass_exrt</td>
           <td>한투 기준환율</td>
         </tr>
         <tr>
           <td>거래소 코드</td>
           <td>미국 ETF 전부 <code>NASD</code></td>
           <td>실전계좌=미국전체</td>
+        </tr>
+        <tr>
+          <td>상태 파일</td>
+          <td>kis_trade_state.json</td>
+          <td>트랜치 + rebalancing_needed</td>
+        </tr>
+      </table>
+      <h4>코인 (업비트 API)</h4>
+      <table>
+        <tr>
+          <th>항목</th>
+          <th>소스</th>
+          <th>비고</th>
+        </tr>
+        <tr>
+          <td>잔고</td>
+          <td>pyupbit get_balances()</td>
+          <td>24시간</td>
+        </tr>
+        <tr>
+          <td>시세</td>
+          <td>pyupbit get_current_price()</td>
+          <td>24시간, 실시간</td>
+        </tr>
+        <tr>
+          <td>시세 Fallback</td>
+          <td>Yahoo Finance (전략 신호용)</td>
+          <td>종가 기준</td>
+        </tr>
+        <tr>
+          <td>카나리/Crash (monitor)</td>
+          <td>BTC KRW / USDT KRW &rarr; USD 환산</td>
+          <td>환율 왜곡 방지</td>
+        </tr>
+        <tr>
+          <td>DD Exit (monitor)</td>
+          <td>data/{coin}-USD.csv 60일 rolling peak</td>
+          <td>CSV 직접 조회</td>
+        </tr>
+        <tr>
+          <td>상태 파일</td>
+          <td>trade_state.json</td>
+          <td>트랜치 + rebalancing_needed + pending</td>
         </tr>
       </table>
 
@@ -650,17 +629,33 @@ for attempt in 1..5:
         </tr>
       </table>
 
-      <h3>5.6 리밸런싱 플래그 사이클</h3>
+      <h3>5.6 리밸런싱 플래그 사이클 (주식+코인 공통)</h3>
+      <div class="highlight">
+        주식과 코인은 <b>별도 상태 파일</b>에서 독립적으로 플래그를
+        관리합니다.<br />
+        주식: <code>kis_trade_state.json</code> / 코인:
+        <code>trade_state.json</code>
+      </div>
       <pre>
+[정상 리밸런싱]
 앵커일 도달 &rarr; 해당 트랜치 목표 갱신 &rarr; rebalancing_needed: true
   &rarr; --trade 매매 시도 (주문 &rarr; 5초 &rarr; 취소 &rarr; 재시도 x5)
-  &rarr; 목표 &asymp; 현재 (&plusmn;5% or 주수 일치) &rarr; rebalancing_needed: false
-  &rarr; 미완료 &rarr; --monitor가 장중 매시 재시도
+  &rarr; 목표 &asymp; 현재 (&plusmn;5% or 주수 일치) &rarr; false
+  &rarr; 미완료 &rarr; --monitor가 재시도 (주식: 장중 매시, 코인: pending 복구)
   &rarr; false면 다음 앵커까지 가격 변동 무시
 
-Crash &rarr; 전량 매도 &rarr; 잔량 있으면 true 유지 &rarr; 쿨다운 3일 (매매 차단)
-플립 &rarr; 전 트랜치 즉시 전환 &rarr; rebalancing_needed: true
-쿨다운 중 &rarr; 앵커일이 와도 리밸런싱 차단
+[Crash]
+전량 매도 &rarr; 잔량 있으면 true 유지 (monitor가 재시도)
+  &rarr; 잔량 없으면 false &rarr; 쿨다운 기간 동안 매매 차단
+  &rarr; 주식: 3영업일 고정 / 코인: 최근 3일 윈도우 자동 해소
+
+[카나리 플립]
+전 트랜치 즉시 전환 &rarr; true &rarr; 매매 후 false
+
+[코인 전용]
+DD Exit &rarr; 해당 코인만 매도 + 트랜치 제거 &rarr; true
+  &rarr; 빈 비중은 현금 유지 &rarr; 다음 앵커일에 새 종목으로 채움
+PFD5 &rarr; 플립 후 5일에 전 트랜치 재갱신 &rarr; true
 </pre
       >
 
@@ -787,13 +782,13 @@ Crash &rarr; 전량 매도 &rarr; 잔량 있으면 true 유지 &rarr; 쿨다운 
         </tr>
         <tr>
           <td>6</td>
-          <td>장중 모니터 (VT/EEM 실시간 체크)</td>
-          <td><span class="tag tag-pending">5번 선행</span></td>
+          <td>주식 자동매매 테스트 (소액) — GLD+EEM+PDBC 체결 완료</td>
+          <td><span class="tag tag-auto">완료</span></td>
         </tr>
         <tr>
           <td>7</td>
-          <td>주식 자동매매 테스트 (소액, 5+6 필요)</td>
-          <td><span class="tag tag-pending">진행 중</span></td>
+          <td>장중 모니터 (VT/EEM 실시간 체크) + V17d 동적 복귀 검토</td>
+          <td><span class="tag tag-pending">다음 단계</span></td>
         </tr>
         <tr>
           <td>8</td>
