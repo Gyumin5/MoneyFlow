@@ -251,14 +251,8 @@ class V16UpbitTrader:
         # BTC 기준 Target Date
         tgt_dt = btc.index[-1].date() if hasattr(btc.index[-1], 'date') else btc.index[-1]
 
-        # --- Crash Breaker (G5): BTC daily -10% in last 3d → cash ---
-        CRASH_COOLDOWN = 3
-        if len(btc) >= CRASH_COOLDOWN + 1:
-            recent_rets = btc.iloc[-(CRASH_COOLDOWN + 1):].pct_change().dropna()
-            worst_crash = recent_rets.min()
-            if worst_crash <= CRASH_THRESHOLD:
-                log(f"🚨 CRASH BREAKER: BTC worst {worst_crash:+.1%} in {CRASH_COOLDOWN}d → 현금 대기")
-                return {}, True, f"🚨 CRASH: BTC {worst_crash:+.1%}", []
+        # --- Crash Breaker 제거 (V17d): 과적합으로 판단. DD Exit + Blacklist + 카나리가 방어 ---
+        # BTC -10% crash는 카나리/DD/Blacklist와 중복되어 효과 없음 (백테스트 확인)
 
         # --- Canary: BTC > SMA(60) with 1% Hysteresis ---
         sma = self.calc_sma(btc, CANARY_SMA_PERIOD)
@@ -1214,20 +1208,51 @@ class V16UpbitTrader:
             except Exception as e:
                 log(f"⚠️ Monitor BTC 가격 조회 실패: {e}")
 
-            # ── Crash: BTC USD 전일 대비 -10% ──
+            # ── BTC 가격 로그 ──
             if btc_usd > 0:
                 log(f"📡 BTC USD: ${btc_usd:,.0f}")
-                # 하위호환: USD 키 없으면 KRW 키로 fallback
-                btc_prev_usd = trade_state.get('btc_prev_close_usd', 0)
-                if btc_prev_usd == 0:
-                    btc_prev_krw = trade_state.get('btc_prev_close', 0)
-                    if btc_prev_krw > 0 and usdt_krw > 0:
-                        btc_prev_usd = btc_prev_krw / usdt_krw
-                if btc_prev_usd > 0:
-                    btc_ret = btc_usd / btc_prev_usd - 1
-                    if btc_ret <= CRASH_THRESHOLD:
-                        emergency = True
-                        emergency_reason = f"CRASH BTC {btc_ret:+.1%} (${btc_usd:,.0f} vs prev ${btc_prev_usd:,.0f})"
+
+            # ── Blacklist 장중 체크: 보유 코인 전일 대비 -15% ──
+            if not emergency:
+                try:
+                    active_coins = set()
+                    for tr in trade_state.get('tranches', {}).values():
+                        active_coins.update(tr.get('picks', []))
+                    if active_coins:
+                        for coin in active_coins:
+                            try:
+                                cur_price = pyupbit.get_current_price(f"KRW-{coin}") or 0
+                                # 전일 종가: Yahoo CSV에서 가져오기
+                                csv_path = f"data/{coin}-USD.csv"
+                                if not os.path.exists(csv_path) or cur_price <= 0:
+                                    continue
+                                import pandas as _pd
+                                df = _pd.read_csv(csv_path)
+                                if len(df) < 2:
+                                    continue
+                                prev_close_usd = float(df['Adj_Close'].iloc[-1])
+                                if prev_close_usd <= 0 or usdt_krw <= 0:
+                                    continue
+                                prev_close_krw = prev_close_usd * usdt_krw
+                                ret = cur_price / prev_close_krw - 1
+                                if ret <= BL_THRESHOLD:
+                                    log(f"🚫 Blacklist 장중: {coin} {ret:+.1%} (현재 {cur_price:,.0f} vs 전일 {prev_close_krw:,.0f})")
+                                    # 해당 코인만 매도
+                                    bal = self.upbit.get_balance(f"KRW-{coin}") or 0
+                                    if bal > 0:
+                                        self.order(coin, 'sell', bal)
+                                        send_telegram(f"🚫 Blacklist: {coin} {ret:+.1%}")
+                                    for a_str in trade_state.get('tranches', {}):
+                                        tr = trade_state['tranches'][a_str]
+                                        if coin in tr.get('weights', {}):
+                                            del tr['weights'][coin]
+                                        if coin in tr.get('picks', []):
+                                            tr['picks'].remove(coin)
+                                    trade_state['rebalancing_needed'] = True
+                            except Exception:
+                                pass
+                except Exception as e:
+                    log(f"⚠️ Blacklist 장중 체크 실패: {e}")
 
             # ── 카나리아 OFF: BTC USD < SMA60 USD * 0.99 ──
             has_positions = any(t.get('picks') for t in trade_state.get('tranches', {}).values())
