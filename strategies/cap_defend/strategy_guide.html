@@ -530,23 +530,137 @@ for attempt in 1..5:
 </pre
       >
 
-      <h3>5.4 리밸런싱 플래그</h3>
+      <h3>5.4 상태 파일</h3>
+
+      <h4>signal_state.json — 시장 신호 (recommend가 생성)</h4>
+      <div class="tw">
+        <table>
+          <tr>
+            <th>키</th>
+            <th>의미</th>
+            <th>예시</th>
+          </tr>
+          <tr>
+            <td>stock_holdings</td>
+            <td>주식 추천 종목 리스트</td>
+            <td>["GLD", "EEM", "PDBC"]</td>
+          </tr>
+          <tr>
+            <td>risk_on</td>
+            <td>주식 카나리 상태 (공격/방어)</td>
+            <td>true</td>
+          </tr>
+          <tr>
+            <td>signal_flipped</td>
+            <td>카나리가 이번에 전환됐는지</td>
+            <td>false</td>
+          </tr>
+          <tr>
+            <td>stock_crash</td>
+            <td>VT Crash 발동 중인지</td>
+            <td>false</td>
+          </tr>
+          <tr>
+            <td>stock_crash_cooldown</td>
+            <td>Crash 잔여 쿨다운 일수</td>
+            <td>0</td>
+          </tr>
+          <tr>
+            <td>vt_prev_close</td>
+            <td>VT 전일 종가 (장중 모니터용)</td>
+            <td>112.35</td>
+          </tr>
+          <tr>
+            <td>coin_risk_on</td>
+            <td>코인 카나리 상태</td>
+            <td>true</td>
+          </tr>
+        </table>
+      </div>
+      <p style="color: #666; font-size: 0.9em">
+        recommend가 매일 09:15에 덮어씀. trade/monitor는 읽기만 함.
+      </p>
+
+      <h4>trade_state.json (코인) / kis_trade_state.json (주식) — 매매 상태</h4>
+      <div class="tw">
+        <table>
+          <tr>
+            <th>키</th>
+            <th>의미</th>
+            <th>예시</th>
+          </tr>
+          <tr>
+            <td>rebalancing_needed</td>
+            <td>목표 미달성 → true면 매매 시도</td>
+            <td>false</td>
+          </tr>
+          <tr>
+            <td>tranches</td>
+            <td>각 트랜치의 종목/비중/앵커월</td>
+            <td>
+              {"1": {"picks": ["GLD","EEM","PDBC"], "anchor_month": "2026-03",
+              ...}}
+            </td>
+          </tr>
+          <tr>
+            <td>last_action</td>
+            <td>마지막 매매 유형</td>
+            <td>"trade" / "crash_sell" / "canary_sell"</td>
+          </tr>
+          <tr>
+            <td>pending_trades (코인)</td>
+            <td>미완료 매매 목록</td>
+            <td>{"BTC": {"side": "buy", "target_krw": 500000}}</td>
+          </tr>
+          <tr>
+            <td>coin_risk_on (코인)</td>
+            <td>코인 카나리 상태 (매매 기준)</td>
+            <td>true</td>
+          </tr>
+          <tr>
+            <td>btc_sma60_usd (코인)</td>
+            <td>BTC SMA60 USD (모니터용)</td>
+            <td>85000</td>
+          </tr>
+          <tr>
+            <td>btc_prev_close_usd (코인)</td>
+            <td>BTC 전일 종가 USD (모니터용)</td>
+            <td>87000</td>
+          </tr>
+        </table>
+      </div>
+      <p style="color: #666; font-size: 0.9em">
+        trade/monitor가 읽고 씀. recommend는 건드리지 않음.
+      </p>
+
+      <div class="highlight">
+        <b>흐름:</b> recommend가 signal에 "추천 종목"을 쓰면 &rarr; trade가
+        읽어서 트랜치에 반영 + rebalancing_needed=true &rarr; trade/monitor가
+        매매 실행 &rarr; 목표 도달 시 rebalancing_needed=false
+      </div>
+
+      <h3>5.5 리밸런싱 플래그</h3>
       <div class="highlight">
         주식(<code>kis_trade_state.json</code>)과
         코인(<code>trade_state.json</code>)은 <b>별도 상태 파일</b>에서 독립
         관리.
       </div>
+      <p><b>true가 되는 상황:</b> 포트폴리오 목표가 바뀔 때</p>
+      <ul style="margin: 4px 0">
+        <li>앵커일 도달 → 트랜치 종목 갱신 (목표: 새 종목 33%씩)</li>
+        <li>카나리 플립 → 공격/방어 전환 (목표: 새 포트폴리오)</li>
+        <li>Crash → 전량 매도 (목표: 보유 0주, 전액 현금)</li>
+        <li>DD Exit / Blacklist → 해당 코인 매도 (목표: 해당 코인 0)</li>
+      </ul>
       <p>
-        <b>true가 되는 상황:</b> 앵커일 도달, 카나리 플립, Crash 복귀, DD Exit,
-        매도 실패(잔량)
+        <b>false가 되는 상황:</b> 목표 달성 (금액 &plusmn;5% 이내 or 주수 일치)
       </p>
-      <p>
-        <b>false가 되는 상황:</b> 목표 달성 (금액 &plusmn;5% or 주수 일치),
-        Crash 전량 매도 성공, pending 모두 완료
+      <p style="color: #666; font-size: 0.9em">
+        Crash든 리밸런싱이든 동일. "현재 보유가 목표와 맞으면 false."
       </p>
       <p><b>false이면:</b> 다음 앵커까지 가격 변동 무시. 매매 안 함.</p>
 
-      <h3>5.5 데이터 연동</h3>
+      <h3>5.6 데이터 연동</h3>
       <div class="tw">
         <table>
           <tr>
@@ -587,7 +701,7 @@ for attempt in 1..5:
         </table>
       </div>
 
-      <h3>5.6 안전장치</h3>
+      <h3>5.7 안전장치</h3>
       <div class="tw">
         <table>
           <tr>
