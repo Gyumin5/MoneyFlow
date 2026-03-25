@@ -52,6 +52,10 @@ BL_DAYS = 7
 DD_EXIT_LOOKBACK = 60            # 60-day peak
 DD_EXIT_THRESHOLD = -0.25        # -25% drawdown → sell
 
+# Feature flag: True면 execution_plan 기반, False면 legacy
+USE_EXECUTION_PLAN = True
+SIGNAL_STATE_FILE = 'signal_state.json'
+
 # 유니버스 선정 기준
 MIN_TRADE_VALUE_KRW = 1_000_000_000
 DAYS_TO_CHECK = 260
@@ -751,18 +755,51 @@ class V16UpbitTrader:
                         self.cancel_all_orders(b['currency'])
             except: pass
 
-        universe, _ = self.get_coingecko_top100()
-        if universe is None:
-            log("🚨 CoinGecko 완전 실패 — 포지션 유지, 매매 없음")
-            send_telegram("⚠️ V16: CoinGecko API 실패, 매매 중단")
-            return
-        target_w, is_risk_off, status, healthy_list = self.get_target_portfolio(universe)
+        # Execution plan 기반 (새 아키텍처)
+        plan = None
+        if USE_EXECUTION_PLAN:
+            try:
+                with open(SIGNAL_STATE_FILE, 'r') as _sf:
+                    _sig = json.load(_sf)
+                plan = _sig.get('execution_plan', {}).get('coin', {})
+            except Exception:
+                pass
 
-        # API 장애 시 매매 중단 (포지션 유지)
-        if target_w is None:
-            log(f"\n🚨 {status} — 포지션 유지, 매매 없음")
-            send_telegram(f"⚠️ V16 매매 중단: {status}")
-            return
+        if plan and plan.get('ideal_picks') is not None:
+            # Plan 기반: recommend가 이미 계산한 결과 사용
+            coin_risk_on = plan.get('risk_on', True)
+            is_risk_off = not coin_risk_on
+            if coin_risk_on and plan.get('ideal_picks'):
+                target_w = dict(plan.get('ideal_weights', {}))
+                # Cash 비중 보정
+                invested = sum(target_w.values())
+                if invested < 1.0:
+                    target_w['Cash'] = 1.0 - invested
+                status = f"[PLAN] Risk-On: {list(target_w.keys())}"
+                healthy_list = plan.get('ideal_picks', [])
+            else:
+                target_w = {'Cash': 1.0}
+                status = "[PLAN] Risk-Off: 전량 현금"
+                healthy_list = []
+            log(f"\n🎯 [PLAN] risk_on={coin_risk_on}, picks={plan.get('ideal_picks')}, anchors={plan.get('today_anchors')}")
+            # 데이터 다운로드는 여전히 필요 (DD/Blacklist 모니터용)
+            universe, _ = self.get_coingecko_top100()
+            if universe is None:
+                universe = healthy_list  # fallback
+        else:
+            # Legacy: 자체 신호 계산
+            universe, _ = self.get_coingecko_top100()
+            if universe is None:
+                log("🚨 CoinGecko 완전 실패 — 포지션 유지, 매매 없음")
+                send_telegram("⚠️ V16: CoinGecko API 실패, 매매 중단")
+                return
+            target_w, is_risk_off, status, healthy_list = self.get_target_portfolio(universe)
+
+            # API 장애 시 매매 중단 (포지션 유지)
+            if target_w is None:
+                log(f"\n🚨 {status} — 포지션 유지, 매매 없음")
+                send_telegram(f"⚠️ V16 매매 중단: {status}")
+                return
 
         log(f"\n🎯 상태: {status}")
         
@@ -950,7 +987,30 @@ class V16UpbitTrader:
 
         # ── 5. 앵커일: 해당 트랜치만 갱신 ──
         anchors_triggered = []
-        if is_risk_on_now and not signal_flipped:
+
+        # Plan 기반: recommend가 앵커 대상을 알려줌
+        plan_anchors = None
+        if USE_EXECUTION_PLAN:
+            try:
+                with open(SIGNAL_STATE_FILE, 'r') as _sf:
+                    _plan = json.load(_sf).get('execution_plan', {}).get('coin', {})
+                plan_anchors = _plan.get('today_anchors', [])
+            except Exception:
+                pass
+
+        if plan_anchors is not None and is_risk_on_now and not signal_flipped:
+            for a in plan_anchors:
+                a_str = str(a)
+                tr = trade_state['tranches'].get(a_str, {})
+                if tr.get('last_anchor_month', '') < current_month:
+                    log(f"📅 [PLAN] 앵커 Day {a} → 트랜치 갱신")
+                    tr['picks'] = [t for t in current_signal_w if t != 'Cash']
+                    tr['weights'] = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
+                    tr['last_anchor_month'] = current_month
+                    trade_state['tranches'][a_str] = tr
+                    anchors_triggered.append(a)
+        elif plan_anchors is None and is_risk_on_now and not signal_flipped:
+            # Legacy fallback
             for a in ANCHOR_DAYS:
                 a_str = str(a)
                 tr = trade_state['tranches'].get(a_str, {})

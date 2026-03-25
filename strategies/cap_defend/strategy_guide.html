@@ -476,35 +476,23 @@
         trade/monitor가 이전 데이터로 동작. recommend 실패 시 로그 확인 필요.
       </div>
 
-      <h4>향후 아키텍처 개선 (계획)</h4>
-      <div class="highlight">
-        <b>목표:</b> trade+monitor를 executor로 통합. recommend는 state를 읽지
-        않는 순수 계산.<br /><br />
+      <h4>Execution Plan 아키텍처 (구현됨)</h4>
+      <div class="success">
+        <b>recommend가 execution plan을 생성, executor가 plan대로 매매.</b
+        ><br /><br />
 
-        <b>새 구조:</b><br />
-        1. <b>recommend</b>: 각 트랜치의 이상적 목표를 전부 계산 (state 안 읽음,
-        멱등)<br />
-        &nbsp;&nbsp;&rarr; signal_state에 ideal_tranches + today_anchors 저장<br />
-        2. <b>executor</b> (trade+monitor 통합): trade_state에서 기존 트랜치
-        읽기<br />
-        &nbsp;&nbsp;+ signal에서 today_anchors 트랜치만 새 목표로 교체<br />
-        &nbsp;&nbsp;+ 나머지 기존 유지 &rarr; 합산 &rarr; 매매<br />
-        &nbsp;&nbsp;+ 앵커 완료 마킹 + rebalancing_needed 관리<br /><br />
+        <b>데이터 흐름 (일방향):</b><br />
+        recommend &rarr; <code>signal_state.json</code>에 execution_plan
+        저장:<br />
+        &nbsp;&nbsp;ideal_picks, ideal_weights, today_anchors (코인/주식
+        분리)<br />
+        executor (trade/monitor) &rarr; plan 읽기 &rarr; 트랜치 갱신 &rarr;
+        매매<br />
+        &nbsp;&nbsp;&rarr; <code>trade_state</code>에 앵커 완료 마킹<br /><br />
 
-        <b>핵심 원칙:</b><br />
-        &bull; 데이터 흐름: recommend &rarr; signal &rarr; executor &rarr;
-        trade_state (일방향)<br />
-        &bull; combined_target은 코인/주식 분리 (Cash 의미, 단위, 시장 시간이
-        다름)<br />
-        &bull; executor는 코인/주식 각각 유지 (API, 체결 단위, 장 시간이
-        다름)<br />
-        &bull; signal_state에 updated_at 포함, executor가 freshness 체크<br /><br />
-
-        <b>전환 단계:</b><br />
-        1단계: signal_state에 새 키 추가 (기존 키 유지)<br />
-        2단계: shadow 계산 (diff 로그만, 실매매 안 함)<br />
-        3단계: 자산군별 feature flag로 전환<br />
-        4단계: 기존 로직 제거
+        <b>feature flag:</b> <code>USE_EXECUTION_PLAN = True</code> (코인+주식
+        모두)<br />
+        False로 바꾸면 즉시 legacy 로직으로 복귀 가능.
       </div>
 
       <h3>5.2 실행 스케줄 (KST)</h3>
