@@ -45,6 +45,9 @@ TOKEN_FILE = os.path.expanduser("~/.kis_token.json")
 SIGNAL_STATE_FILE = "signal_state.json"
 KIS_TRADE_STATE_FILE = "kis_trade_state.json"
 
+# Feature flag: True면 execution_plan 기반, False면 legacy
+USE_EXECUTION_PLAN = True
+
 # ETF → 거래소 매핑
 EXCHANGE_MAP = {
     # 한투 실전계좌: NASD = 미국 전체 (NASDAQ+NYSE+AMEX)
@@ -428,11 +431,23 @@ def run_trade():
     signal = load_signal_state()
     kis_state = load_kis_state()
 
-    stock_crash = signal.get('stock_crash', False)
+    # Execution plan 기반 (새 아키텍처)
+    plan = signal.get('execution_plan', {}).get('stock', {})
+    if USE_EXECUTION_PLAN and plan:
+        stock_crash = plan.get('crash', False)
+        signal_flipped = plan.get('flipped', False)
+        risk_on = plan.get('risk_on', True)
+        target_tickers = plan.get('ideal_picks', [])
+        today_anchors = plan.get('today_anchors', [])
+        log.info(f"[PLAN] picks={target_tickers}, anchors={today_anchors}, crash={stock_crash}, flipped={signal_flipped}")
+    else:
+        stock_crash = signal.get('stock_crash', False)
+        signal_flipped = signal.get('signal_flipped', False)
+        risk_on = signal.get('risk_on', True)
+        target_tickers = signal.get('stock_holdings', [])
+        today_anchors = None  # legacy: run_trade가 직접 앵커 체크
+
     crash_cooldown = signal.get('stock_crash_cooldown', 0)
-    risk_on = signal.get('risk_on', True)
-    signal_flipped = signal.get('signal_flipped', False)
-    target_tickers = signal.get('stock_holdings', [])
     current_month = datetime.now().strftime('%Y-%m')
     today = datetime.now().day
 
@@ -533,16 +548,30 @@ def run_trade():
         kis_state['rebalancing_needed'] = True
 
     # ── 4. 앵커일 체크: 해당 트랜치만 목표 갱신 ──
-    for a in ANCHOR_DAYS:
-        a_str = str(a)
-        tr = kis_state['tranches'].get(a_str, {})
-        if today >= a and tr.get('anchor_month', '') < current_month:
-            log.info(f"📅 앵커일 Day {a} → 트랜치 갱신")
-            tr['picks'] = target_tickers
-            tr['weights'] = {t: 1.0/len(target_tickers) for t in target_tickers}
-            tr['anchor_month'] = current_month
-            kis_state['tranches'][a_str] = tr
-            kis_state['rebalancing_needed'] = True
+    if USE_EXECUTION_PLAN and today_anchors is not None:
+        # Plan 기반: recommend가 이미 앵커 대상을 알려줌
+        for a in today_anchors:
+            a_str = str(a)
+            tr = kis_state['tranches'].get(a_str, {})
+            if tr.get('anchor_month', '') < current_month:
+                log.info(f"📅 [PLAN] 앵커 Day {a} → 트랜치 갱신")
+                tr['picks'] = target_tickers
+                tr['weights'] = {t: 1.0/len(target_tickers) for t in target_tickers} if target_tickers else {}
+                tr['anchor_month'] = current_month
+                kis_state['tranches'][a_str] = tr
+                kis_state['rebalancing_needed'] = True
+    else:
+        # Legacy: executor가 직접 앵커 체크
+        for a in ANCHOR_DAYS:
+            a_str = str(a)
+            tr = kis_state['tranches'].get(a_str, {})
+            if today >= a and tr.get('anchor_month', '') < current_month:
+                log.info(f"📅 앵커일 Day {a} → 트랜치 갱신")
+                tr['picks'] = target_tickers
+                tr['weights'] = {t: 1.0/len(target_tickers) for t in target_tickers} if target_tickers else {}
+                tr['anchor_month'] = current_month
+                kis_state['tranches'][a_str] = tr
+                kis_state['rebalancing_needed'] = True
 
     # ── 5. rebalancing_needed가 false면 종료 ──
     if not kis_state.get('rebalancing_needed', False):
