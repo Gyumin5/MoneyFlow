@@ -225,7 +225,10 @@
         </tr>
         <tr>
           <td><b>Crash Breaker</b></td>
-          <td>VT -3% daily &rarr; 전량 매도 &rarr; 3영업일 현금</td>
+          <td>
+            VT -3% daily &rarr; 전량 매도 &rarr; 최소 3영업일 + VT &gt; SMA10
+            회복 시 재진입 (V17d)
+          </td>
           <td>BTC -10% daily (최근 3일 내) &rarr; 전량 현금</td>
         </tr>
         <tr>
@@ -876,13 +879,12 @@ PFD5 &rarr; 플립 후 5일에 전 트랜치 재갱신 &rarr; true
           <td>불안정</td>
         </tr>
       </table>
-      <div class="warn">
-        <b>V17d(동적 복귀)만 유의미한 개선.</b> Crash 후 3일 고정 대기 대신 VT
-        &gt; SMA10 회복 시 재진입. 최근 구간(2021~)에서 Sharpe +0.07, MDD -0.6%p
-        개선. 단순하고 논리적으로 타당. <br /><br />
-        <b>현재 미적용.</b> 현재 V17은 3일 고정 복귀. V17d 적용 시 장중
-        모니터(VT 실시간 체크)가 선행되어야 동적 복귀 판단이 가능. KIS 시세 API
-        해결 + 장중 모니터 구현 후 검토 예정.
+      <div class="success">
+        <b>V17d(동적 복귀) 적용됨.</b> Crash 후 최소 3영업일 대기 + VT 전일종가
+        &gt; SMA(10) 회복 시 재진입. VT &le; SMA10이면 하루씩 연장.<br />
+        종가 기준 판단 (09:15 recommend_personal.py). 장중 실시간 불필요.<br /><br />
+        <b>성과:</b> Sharpe 1.158→1.203(+0.04), MDD -11.1%→-10.4%. 3기간 일관적
+        개선.
       </div>
 
       <h2>9. 핵심 규칙 요약</h2>
