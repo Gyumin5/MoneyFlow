@@ -829,6 +829,63 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     except (FileNotFoundError, json.JSONDecodeError):
         _state = {}
     _state.update({'coin_risk_on': bool(coin_risk_on), 'coin_signal_flipped': bool(coin_signal_flipped), 'updated': datetime.now().strftime('%Y-%m-%d %H:%M')})
+
+    # ─── Execution Plan (새 아키텍처) ───
+    today = target_date.day if hasattr(target_date, 'day') else int(str(target_date).split('-')[-1])
+    current_month = target_date.strftime('%Y-%m') if hasattr(target_date, 'strftime') else str(target_date)[:7]
+
+    # 주식: 오늘 기준 앵커 확인 (4트랜치: 1/8/15/22)
+    stock_anchors_due = []
+    try:
+        with open('kis_trade_state.json', 'r') as _kf:
+            _kis = json.load(_kf)
+        for a in [1, 8, 15, 22]:
+            tr = _kis.get('tranches', {}).get(str(a), {})
+            if today >= a and tr.get('anchor_month', '') < current_month:
+                stock_anchors_due.append(a)
+    except Exception:
+        pass
+
+    # 코인: 오늘 기준 앵커 확인 (3트랜치: 1/11/21)
+    coin_anchors_due = []
+    try:
+        with open('trade_state.json', 'r') as _cf:
+            _coin_ts = json.load(_cf)
+        for a in [1, 11, 21]:
+            tr = _coin_ts.get('tranches', {}).get(str(a), {})
+            if today >= a and tr.get('last_anchor_month', '') < current_month:
+                coin_anchors_due.append(a)
+    except Exception:
+        pass
+
+    # 주식 ideal picks/weights
+    stock_picks = sorted([t for t in s_port.keys() if t != 'Cash'])
+    stock_weights = {t: w for t, w in s_port.items() if t != 'Cash'}
+
+    # 코인 ideal picks/weights
+    coin_picks = sorted([t for t in c_port.keys() if t != 'Cash'])
+    coin_weights = {t: w for t, w in c_port.items() if t != 'Cash'}
+
+    _state['execution_plan'] = {
+        'stock': {
+            'ideal_picks': stock_picks,
+            'ideal_weights': stock_weights,
+            'today_anchors': stock_anchors_due,
+            'crash': _state.get('stock_crash', False),
+            'flipped': _state.get('signal_flipped', False),
+            'risk_on': _state.get('risk_on', True),
+            'defense_mode': 'CRASH' in s_stat or not _state.get('risk_on', True),
+        },
+        'coin': {
+            'ideal_picks': coin_picks,
+            'ideal_weights': coin_weights,
+            'today_anchors': coin_anchors_due,
+            'risk_on': bool(coin_risk_on),
+            'flipped': bool(coin_signal_flipped),
+        },
+        'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+    }
+
     _save_signal_state(_state)
 
     # Sync coin_risk_on to trade_state.json (auto_trade가 읽는 파일)
