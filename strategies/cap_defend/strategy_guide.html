@@ -246,9 +246,7 @@
               + VT &gt; SMA(10) 회복 시 재진입 (V17d)
             </td>
             <td>
-              BTC -10% daily &rarr; 전량 매도 &rarr; 현금 대기 &rarr; 3영업일
-              경과 시 자동 재진입 (매일 최근 3일을 확인, -10%가 3일 전 밖이면
-              해소)
+              제거됨 (카나리+DD+Blacklist가 방어. 백테스트에서 과적합으로 판단)
             </td>
           </tr>
           <tr>
@@ -400,7 +398,64 @@
       <!-- ═══ 5. 자동매매 시스템 ═══ -->
       <h2>5. 자동매매 시스템</h2>
 
-      <h3>5.1 실행 스케줄 (KST)</h3>
+      <h3>5.1 모듈 역할 분리</h3>
+      <div class="tw">
+        <table>
+          <tr>
+            <th>모듈</th>
+            <th>역할</th>
+            <th>하는 일</th>
+            <th>안 하는 일</th>
+          </tr>
+          <tr>
+            <td><b>recommend_personal.py</b><br />(09:15, 1일 1회)</td>
+            <td>신호 생성</td>
+            <td>
+              &bull; 데이터 다운로드 (Yahoo, CoinGecko, Upbit)<br />
+              &bull; 전략 신호 계산 (카나리, Crash, Z-score, 헬스)<br />
+              &bull; <code>signal_state.json</code> 저장 (추천 종목, Crash 상태,
+              플립 여부, VT 전일종가)<br />
+              &bull; HTML 리포트 생성 (자산관리 페이지)
+            </td>
+            <td>매매 실행, 텔레그램 알림, 트랜치 관리</td>
+          </tr>
+          <tr>
+            <td><b>--trade</b><br />(코인 09:20, 주식 23:35)</td>
+            <td>매매 실행 (1일 1회)</td>
+            <td>
+              &bull; <code>signal_state.json</code> 읽기<br />
+              &bull; 앵커일 체크 &rarr; 해당 트랜치 목표 갱신<br />
+              &bull; 트리거 체크 (Crash/플립) &rarr; 즉시 처리<br />
+              &bull; delta 매매 (목표와 현재 차이만큼)<br />
+              &bull; <code>trade_state.json</code> /
+              <code>kis_trade_state.json</code> 저장<br />
+              &bull; 텔레그램 알림 (체결 시)
+            </td>
+            <td>데이터 다운로드, 신호 계산, HTML 생성</td>
+          </tr>
+          <tr>
+            <td><b>--monitor</b><br />(코인 30분, 주식 매시)</td>
+            <td>실시간 감시 + 복구</td>
+            <td>
+              &bull; 실시간 보호 장치 체크:<br />
+              &nbsp;&nbsp;코인: 카나리 OFF, DD Exit(-25%), Blacklist(-15%)<br />
+              &nbsp;&nbsp;주식: VT Crash(-3%)<br />
+              &bull; <code>rebalancing_needed=true</code>면 미체결 취소 &rarr;
+              재계산 &rarr; 새 주문<br />
+              &bull; 텔레그램 알림 (매매 실행 시)
+            </td>
+            <td>앵커 체크, 데이터 다운로드, 신호 계산</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="highlight">
+        <b>핵심:</b> recommend는 기준만 만들고, trade/monitor는 기준을 읽어서
+        판단+실행.<br />
+        recommend가 죽어도 매매 상태는 안전. trade가 죽어도 HTML은 정상 생성.
+      </div>
+
+      <h3>5.2 실행 스케줄 (KST)</h3>
       <div class="tw">
         <table>
           <tr>
@@ -411,35 +466,34 @@
           <tr>
             <td>09:15</td>
             <td colspan="2">
-              recommend_personal.py: 신호 계산 + HTML + signal_state.json +
-              텔레그램
+              recommend_personal.py: 신호 계산 + HTML + signal_state.json
             </td>
           </tr>
           <tr>
             <td>09:20</td>
-            <td>--trade (매매)</td>
+            <td>--trade (앵커 체크 + 매매)</td>
             <td>-</td>
           </tr>
           <tr>
             <td>매 :05/:35</td>
-            <td>--monitor (긴급+복구)</td>
+            <td>--monitor (실시간 체크 + 복구)</td>
             <td>-</td>
           </tr>
           <tr>
             <td>23:35</td>
             <td>-</td>
-            <td>--trade (4트랜치 매매)</td>
+            <td>--trade (앵커 체크 + 매매)</td>
           </tr>
           <tr>
             <td>00:05~06:05</td>
             <td>-</td>
-            <td>--monitor (리밸런싱 복구, 매시)</td>
+            <td>--monitor (VT Crash 체크 + 복구)</td>
           </tr>
         </table>
       </div>
       <p>모두 <code>run_trade.sh</code> flock 래퍼로 동시실행 방지.</p>
 
-      <h3>5.2 주문 실행 패턴 (공통)</h3>
+      <h3>5.3 주문 실행 패턴 (공통)</h3>
       <pre>
 원칙: 매도 우선, 목표 delta 기준, 주문 후 잔고 재조회
 for attempt in 1..5:
@@ -452,37 +506,6 @@ for attempt in 1..5:
   7. 미달 &rarr; 다음 시도
 </pre
       >
-
-      <h3>5.3 --trade vs --monitor</h3>
-      <div class="tw">
-        <table>
-          <tr>
-            <th></th>
-            <th>--trade (1일 1회)</th>
-            <th>--monitor (수시)</th>
-          </tr>
-          <tr>
-            <td>앵커 체크</td>
-            <td>앵커일이면 트랜치 목표 갱신 &rarr; rebalancing_needed=true</td>
-            <td>안 함</td>
-          </tr>
-          <tr>
-            <td>트리거 (Crash/플립)</td>
-            <td>체크 + 즉시 처리</td>
-            <td>코인: Crash/카나리/DD 체크. 주식: 미구현 (09:15 종가 기준)</td>
-          </tr>
-          <tr>
-            <td>매매 (rebal=true)</td>
-            <td>delta 매매</td>
-            <td>미체결 취소 &rarr; 재계산 &rarr; 새 주문</td>
-          </tr>
-          <tr>
-            <td>매매 (rebal=false)</td>
-            <td>앵커 날짜만 확인</td>
-            <td>미체결 확인만</td>
-          </tr>
-        </table>
-      </div>
 
       <h3>5.4 리밸런싱 플래그</h3>
       <div class="highlight">
