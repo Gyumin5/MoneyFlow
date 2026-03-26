@@ -1672,7 +1672,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         const clickAttr = hasMore ? 'onclick="document.querySelectorAll(\\'.mr_'+monthId+'\\').forEach(r=>r.style.display=r.style.display===\\'none\\'?\\'\\':\\'none\\')" style="cursor:pointer;background:#f8f9fa;"' : 'style="background:#f8f9fa;"';
                         const arrow = hasMore ? '<span style="color:#999;font-size:0.8em;">\u25b6 '+items.length+'\uac74</span> ' : '';
                         tbody.innerHTML += '<tr '+clickAttr+'>'
-                            +'<td style="font-weight:600;">'+arrow+lastItem.month+'</td>'
+                            +'<td style="font-weight:600;">'+arrow+(lastItem.snapshot_date||lastItem.month)+'</td>'
                             +'<td>'+fmt(lastItem.stock_krw)+'</td><td>'+fmt(lastItem.coin_krw)+'</td>'
                             +'<td>'+fmt(lastItem.cash_krw)+'</td><td style="font-weight:700;">'+fmt(lastItem.total_krw)+'</td>'
                             +'<td>'+(lastItem.memo||'')+'</td></tr>';

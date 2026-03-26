@@ -165,6 +165,7 @@ class UpbitAPI:
             if result and 'uuid' in str(result):
                 log(f'  매도 {coin} qty={qty:.6f} → {result}')
                 return True
+            send_telegram(f'⚠️ [코인] 매도 실패: {coin}')
             log(f'  매도 실패 {coin}: {result}')
             return False
         except Exception as e:
@@ -193,6 +194,7 @@ class UpbitAPI:
                 except Exception:
                     pass
                 return True
+            send_telegram(f'⚠️ [코인] 매수 실패: {coin}')
             log(f'  매수 실패 {coin}: {result}')
             return False
         except Exception as e:
