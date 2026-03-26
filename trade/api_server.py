@@ -88,7 +88,7 @@ def set_holdings():
 def get_status():
     return jsonify(running_tasks)
 
-TRADE_STATE_FILE = '/home/ubuntu/trade_state.json'
+TRADE_STATE_FILE = '/home/ubuntu/coin_trade_state.json'
 
 @app.route('/api/cash_buffer', methods=['POST'])
 def update_cash_buffer():
@@ -139,17 +139,17 @@ def health():
 ASSETS_DB = '/home/ubuntu/assets.db'
 
 def init_assets_db():
-    """SQLite 초기화."""
+    """SQLite 초기화 (v2: snapshot_date 유니크)."""
     conn = sqlite3.connect(ASSETS_DB)
     conn.execute("""CREATE TABLE IF NOT EXISTS snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        month TEXT NOT NULL UNIQUE,
+        snapshot_date TEXT UNIQUE NOT NULL,
         stock_krw REAL DEFAULT 0,
         coin_krw REAL DEFAULT 0,
         cash_krw REAL DEFAULT 0,
         total_krw REAL DEFAULT 0,
-        income_krw REAL DEFAULT 0,
-        expense_krw REAL DEFAULT 0,
+        fx_rate REAL DEFAULT 0,
+        usd_cash REAL DEFAULT 0,
         memo TEXT DEFAULT '',
         accounts_json TEXT DEFAULT '{}',
         created_at TEXT
@@ -164,37 +164,37 @@ def get_snapshots():
     """전체 히스토리 조회."""
     conn = sqlite3.connect(ASSETS_DB)
     conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM snapshots ORDER BY month").fetchall()
+    rows = conn.execute("SELECT * FROM snapshots ORDER BY snapshot_date").fetchall()
     conn.close()
     return jsonify([dict(r) for r in rows])
 
 @app.route('/api/assets/snapshots', methods=['POST'])
 def save_snapshot():
-    """월별 스냅샷 저장 (upsert)."""
+    """스냅샷 저장 (upsert by date)."""
     data = request.get_json() or {}
-    month = data.get('month')  # '2026-03'
-    if not month:
-        return jsonify({"error": "month 필요 (예: 2026-03)"}), 400
+    date = data.get('month', data.get('snapshot_date'))  # 호환: month 또는 snapshot_date
+    if not date:
+        return jsonify({"error": "snapshot_date 필요 (예: 2026-03-26)"}), 400
 
     stock = float(data.get('stock_krw', 0))
     coin = float(data.get('coin_krw', 0))
     cash = float(data.get('cash_krw', 0))
     total = stock + coin + cash
-    income = float(data.get('income_krw', 0))
-    expense = float(data.get('expense_krw', 0))
+    fx_rate = float(data.get('fx_rate', 0))
+    usd_cash = float(data.get('usd_cash', 0))
     memo = data.get('memo', '')
     accounts = json.dumps(data.get('accounts', {}), ensure_ascii=False)
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
     conn = sqlite3.connect(ASSETS_DB)
-    conn.execute("""INSERT INTO snapshots (month, stock_krw, coin_krw, cash_krw, total_krw,
-                    income_krw, expense_krw, memo, accounts_json, created_at)
+    conn.execute("""INSERT INTO snapshots (snapshot_date, stock_krw, coin_krw, cash_krw, total_krw,
+                    fx_rate, usd_cash, memo, accounts_json, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(month) DO UPDATE SET
+                    ON CONFLICT(snapshot_date) DO UPDATE SET
                     stock_krw=?, coin_krw=?, cash_krw=?, total_krw=?,
-                    income_krw=?, expense_krw=?, memo=?, accounts_json=?, created_at=?""",
-                 (month, stock, coin, cash, total, income, expense, memo, accounts, now,
-                  stock, coin, cash, total, income, expense, memo, accounts, now))
+                    fx_rate=?, usd_cash=?, memo=?, accounts_json=?, created_at=?""",
+                 (date, stock, coin, cash, total, fx_rate, usd_cash, memo, accounts, now,
+                  stock, coin, cash, total, fx_rate, usd_cash, memo, accounts, now))
     conn.commit()
     conn.close()
     return jsonify({"message": f"{month} 저장 완료", "total_krw": total})
