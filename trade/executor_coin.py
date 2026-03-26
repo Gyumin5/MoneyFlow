@@ -507,6 +507,7 @@ def run_once(dry_run=False):
     """단일 실행. cron에서 매 30분마다 호출."""
     global RUN_ID, CASH_BUFFER
     RUN_ID = uuid.uuid4().hex
+    _t0 = time.time()
     log('=' * 50)
     log('코인 executor 시작')
 
@@ -535,7 +536,13 @@ def run_once(dry_run=False):
         state['prev_risk_on'] = signal.get('coin', {}).get('risk_on', True)
         log('  첫 실행: prev_risk_on 초기화')
 
-    # stale signal 체크
+    # signal 신선도 + 경과 시간
+    _su = signal.get('meta', {}).get('updated_at', '')
+    try:
+        _age = (datetime.now() - datetime.strptime(_su, '%Y-%m-%d %H:%M')).total_seconds() / 3600
+        log(f'  signal age: {_age:.1f}h (updated: {_su})')
+    except Exception:
+        log(f'  signal age: ? (updated: {_su})')
     is_fresh = check_signal_freshness(signal)
     if not is_fresh:
         log('  ⚠️ signal이 24시간 이상 오래됨 — 가드만 체크, 매매 보류')
@@ -575,6 +582,8 @@ def run_once(dry_run=False):
 
     log('  [6] Merge + Delta')
     # 8. Merge + Delta 매매
+    if not state.get('rebalancing_needed', False):
+        log('  매매 스킵: rebalancing_needed=false')
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
         log(f'  Target: {target}')
@@ -592,9 +601,11 @@ def run_once(dry_run=False):
     try:
         _final_bal = api.get_balance()
         _total = sum(_final_bal.values())
-        log(f'코인 executor 완료 | 총자산: ₩{_total:,.0f} | 잔고: {_final_bal}')
+        _elapsed = time.time() - _t0
+        log(f'코인 executor 완료 ({_elapsed:.1f}s) | 총자산: ₩{_total:,.0f} | 잔고: {_final_bal}')
     except Exception:
-        log('코인 executor 완료')
+        _elapsed = time.time() - _t0
+        log(f'코인 executor 완료 ({_elapsed:.1f}s)')
 
 
 if __name__ == '__main__':

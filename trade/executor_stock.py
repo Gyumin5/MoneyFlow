@@ -505,6 +505,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
 def run_once(dry_run=False):
     global RUN_ID
     RUN_ID = uuid.uuid4().hex
+    _t0 = time.time()
     log('=' * 50)
     log('주식 executor 시작')
 
@@ -528,6 +529,12 @@ def run_once(dry_run=False):
         state['prev_risk_on'] = signal.get('stock', {}).get('risk_on', True)
         log('  첫 실행: prev_risk_on 초기화')
 
+    _su = signal.get('meta', {}).get('updated_at', '')
+    try:
+        _age = (datetime.now() - datetime.strptime(_su, '%Y-%m-%d %H:%M')).total_seconds() / 3600
+        log(f'  signal age: {_age:.1f}h (updated: {_su})')
+    except Exception:
+        log(f'  signal age: ? (updated: {_su})')
     is_fresh = check_signal_freshness(signal)
     if not is_fresh:
         log('  ⚠️ signal이 24시간 이상 오래됨 — 가드만 체크')
@@ -578,9 +585,11 @@ def run_once(dry_run=False):
     save_json(TRADE_STATE_FILE, state)
     try:
         _h, _t, _e = api.get_balance()
-        log(f'주식 executor 완료 | 총자산: ${_t:,.0f} (환율 {_e:,.0f}) | 잔고: {_h}')
+        _elapsed = time.time() - _t0
+        log(f'주식 executor 완료 ({_elapsed:.1f}s) | 총자산: ${_t:,.0f} (환율 {_e:,.0f}) | 잔고: {_h}')
     except Exception:
-        log('주식 executor 완료')
+        _elapsed = time.time() - _t0
+        log(f'주식 executor 완료 ({_elapsed:.1f}s)')
 
 
 if __name__ == '__main__':
