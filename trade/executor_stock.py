@@ -282,6 +282,7 @@ class KISAPI:
         if success:
             log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f}')
         else:
+            send_telegram(f'⚠️ [주식] 주문 실패: {side} {ticker} {qty}주')
             log(f'  주문 실패 {side} {ticker}: {result}')
         return success
 
