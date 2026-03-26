@@ -189,9 +189,9 @@ CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
 
 def get_cash_buffer():
-    """trade_state.json에서 cash_buffer 읽기. 없으면 기본값."""
+    """현금 버퍼 비율. coin_trade_state에서 읽기 (HTML 표시용)."""
     try:
-        with open('trade_state.json', 'r') as f:
+        with open('coin_trade_state.json', 'r') as f:
             return json.load(f).get('cash_buffer', CASH_BUFFER_PERCENT_DEFAULT)
     except Exception:
         return CASH_BUFFER_PERCENT_DEFAULT
@@ -624,27 +624,26 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         elif recovered_today:
             log.append(f"<p style='color:#0d904f'><b>✅ Crash 복귀 (V17d):</b> VT ${vt_cur_today:.2f} &gt; SMA10 ${sma_cur_today:.2f}</p>")
 
-    # Crash 상태를 signal_state.json에 저장 (자동매매용)
-    try:
-        with open(SIGNAL_STATE_FILE, 'r') as _sf:
-            _crash_state = json.load(_sf)
-    except (FileNotFoundError, json.JSONDecodeError):
-        _crash_state = {}
-    _crash_state['stock_crash'] = stock_crash
-    _crash_state['stock_crash_cooldown'] = crash_days_remaining
-    # VT 전일 종가 저장 (장중 모니터용)
-    if vt is not None and len(vt) >= 1:
-        _crash_state['vt_prev_close'] = float(vt.iloc[-1])
-    _save_signal_state(_crash_state)
+    # VT 기준가 계산 (executor가 Crash 판단에 사용)
+    _vt_prev_close = float(vt.iloc[-1]) if vt is not None and len(vt) >= 1 else 0
+    _vt_sma10 = float(vt.rolling(10).mean().iloc[-1]) if vt is not None and len(vt) >= 10 else 0
 
+    # NOTE: Crash 판단은 executor가 함. recommend는 기준가만 제공.
+    # stock_crash 변수는 HTML 리포트 표시용으로만 유지.
     if stock_crash:
-        return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)", {'signal_dist': {}, 'next_candidates': []}
+        return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)", {'signal_dist': {}, 'next_candidates': [], '_vt_prev_close': _vt_prev_close, '_vt_sma10': _vt_sma10}
 
     eem = all_prices.get('EEM')
-    meta = {'signal_dist': {}, 'next_candidates': []}
+    meta = {'signal_dist': {}, 'next_candidates': [], '_vt_prev_close': _vt_prev_close, '_vt_sma10': _vt_sma10}
+    # 이전 추천 종목 (HTML 리포트 비교 표시용)
     stock_holdings: list = []
     signal_flipped = False
-    _state: dict = {}
+    try:
+        with open(SIGNAL_STATE_FILE, 'r') as _sf:
+            _prev = json.load(_sf)
+        stock_holdings = _prev.get('stock', {}).get('offense_picks', [])
+    except Exception:
+        pass
 
     if eem is not None and len(eem) >= STOCK_CANARY_MA_PERIOD:
         eem_sma = eem.rolling(STOCK_CANARY_MA_PERIOD).mean().iloc[-1]
@@ -660,26 +659,17 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         else:
             risk_on = eem_cur > eem_sma  # dead zone
 
-        # Save state for signal flip detection
+        # 히스테리시스 dead zone → 이전 risk_on 참조
         prev_risk_on = None
         try:
             with open(SIGNAL_STATE_FILE, 'r') as _sf:
-                prev_risk_on = json.load(_sf).get('risk_on')
+                prev_risk_on = json.load(_sf).get('stock', {}).get('risk_on')
         except (FileNotFoundError, json.JSONDecodeError):
             pass
+        # dead zone에서 이전 상태 유지
+        if abs(dist) <= STOCK_CANARY_HYST and prev_risk_on is not None:
+            risk_on = prev_risk_on
         signal_flipped = (prev_risk_on is not None and prev_risk_on != risk_on)
-
-        # Load previous state (including stock_holdings for trigger detection)
-        try:
-            with open(SIGNAL_STATE_FILE, 'r') as _sf:
-                _state = json.load(_sf)
-        except (FileNotFoundError, json.JSONDecodeError):
-            _state = {}
-        stock_holdings = _state.get('stock_holdings', [])
-
-        # Save canary state (stock_picks updated after selection below)
-        _state.update({'risk_on': bool(risk_on), 'signal_flipped': bool(signal_flipped)})
-        _save_signal_state(_state)
 
         log.append(f"<p><b>[Canary]</b> EEM: ${eem_cur:.2f} (MA{STOCK_CANARY_MA_PERIOD} ${eem_sma:.2f}, dist {dist:+.2%}, hyst ±{STOCK_CANARY_HYST:.1%})</p>")
         flip_info = " \U0001f504 <b>SIGNAL FLIP</b>" if signal_flipped else ""
@@ -732,15 +722,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
                 log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정 — signal_state.json에 <code>\"stock_holdings\": [\"SPY\",\"QQQ\",...]</code> 입력 필요</p>")
 
             log.append(f"<p>Z-score Top 3: <b>{picks}</b> (Equal Weight)</p>")
-            # signal_state.json에 추천 종목 저장
-            try:
-                with open(SIGNAL_STATE_FILE, 'r') as _sf:
-                    _st = json.load(_sf)
-                _st['stock_holdings'] = picks
-                _st['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-                _save_signal_state(_st)
-            except Exception:
-                pass
+            # NOTE: signal_state 저장은 main()에서 새 스키마로 일괄 저장
             return {t: 1.0/len(picks) for t in picks}, "공격 모드", meta
 
     # Defense mode: Top 3 by 6M return
@@ -764,15 +746,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         return {CASH_ASSET: 1.0}, "수비 (전부 음수)", meta
     picks = [r['Ticker'] for r in top3]
     log.append(f"<p>Defense Picks: <b>{picks}</b> (Equal Weight)</p>")
-    # signal_state.json에 방어 종목 저장
-    try:
-        with open(SIGNAL_STATE_FILE, 'r') as _sf:
-            _st = json.load(_sf)
-        _st['stock_holdings'] = picks
-        _st['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-        _save_signal_state(_st)
-    except Exception:
-        pass
+    # NOTE: signal_state 저장은 main()에서 새 스키마로 일괄 저장
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})", meta
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=True):
@@ -801,7 +775,8 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     prev_coin_risk_on = None
     try:
         with open(SIGNAL_STATE_FILE, 'r') as _sf:
-            prev_coin_risk_on = json.load(_sf).get('coin_risk_on')
+            _prev_sig = json.load(_sf)
+            prev_coin_risk_on = _prev_sig.get('coin', {}).get('risk_on', _prev_sig.get('coin_risk_on'))
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
@@ -828,25 +803,8 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
             _state = json.load(_sf)
     except (FileNotFoundError, json.JSONDecodeError):
         _state = {}
-    _state.update({'coin_risk_on': bool(coin_risk_on), 'coin_signal_flipped': bool(coin_signal_flipped), 'updated': datetime.now().strftime('%Y-%m-%d %H:%M')})
-
-    _save_signal_state(_state)
-
-    # Sync coin_risk_on to trade_state.json (auto_trade가 읽는 파일)
-    try:
-        _ts = {}
-        try:
-            with open('trade_state.json', 'r') as _tf:
-                _ts = json.load(_tf)
-        except Exception:
-            pass
-        _ts['coin_risk_on'] = bool(coin_risk_on)
-        _tmp = 'trade_state.json.tmp'
-        with open(_tmp, 'w') as _tf:
-            json.dump(_ts, _tf, indent=2)
-        os.replace(_tmp, 'trade_state.json')
-    except Exception:
-        pass
+    # NOTE: signal_state 저장은 main()에서 새 스키마로 일괄 저장
+    # trade_state 동기화 제거 (executor가 signal_state에서 직접 읽음)
 
     # Logging
     hyst_info = f"(Hyst {COIN_CANARY_HYST:.0%}: enter >{upper:.2f}x, exit <{lower:.2f}x)"
@@ -964,11 +922,10 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None, coin_total_krw=0):
     filepath = "portfolio_result_gmoh.html"
 
-    # Read cash_buffer from trade_state.json
-    cash_buffer_pct = 0.02
+    # 현금 버퍼 (coin_trade_state에서 읽기)
+    cash_buffer_pct = get_cash_buffer()
     try:
-        with open('trade_state.json', 'r') as _bf:
-            cash_buffer_pct = json.load(_bf).get('cash_buffer', 0.02)
+        pass
     except Exception:
         pass
 
@@ -1020,9 +977,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     try:
         with open(SIGNAL_STATE_FILE, 'r') as _sf:
             _state = json.load(_sf)
-            signal_flipped = _state.get('signal_flipped', False)
-            current_risk_on = _state.get('risk_on', True)
-            saved_stock_holdings = _state.get('stock_holdings', [])
+            signal_flipped = False  # 플립 감지는 executor가 담당
+            current_risk_on = _state.get('stock', {}).get('risk_on', True)
+            saved_stock_holdings = _state.get('stock', {}).get('offense_picks', [])
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
@@ -1308,6 +1265,21 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     alert_icon = '\U0001f6a8' if is_alert else '\u2705'
     alert_msg = f'{s_stat} / {c_stat}'
 
+    # 배너 추가 정보: 카나리 거리, 다음 앵커
+    eem_dist_str = s_meta.get('signal_dist', {}).get('EEM', 0) if isinstance(s_meta, dict) else 0
+    eem_dist_str = f"{eem_dist_str:+.1%}" if isinstance(eem_dist_str, (int, float)) else "N/A"
+    btc_dist_str = c_meta.get('signal_dist', {}).get('BTC', 0) if isinstance(c_meta, dict) else 0
+    btc_dist_str = f"{btc_dist_str:+.1%}" if isinstance(btc_dist_str, (int, float)) else "N/A"
+    # 다음 앵커일 계산
+    _today_day = date_today.day if hasattr(date_today, 'day') else 1
+    _coin_anchors = [1, 11, 21]
+    _stock_anchors = [1, 8, 15, 22]
+    _next_coin = min([a for a in _coin_anchors if a > _today_day] or [_coin_anchors[0] + 28], default=99)
+    _next_stock = min([a for a in _stock_anchors if a > _today_day] or [_stock_anchors[0] + 28], default=99)
+    _days_coin = _next_coin - _today_day if _next_coin > _today_day else _next_coin + 28 - _today_day
+    _days_stock = _next_stock - _today_day if _next_stock > _today_day else _next_stock + 28 - _today_day
+    next_anchor_str = f"코인 {_days_coin}일후 / 주식 {_days_stock}일후"
+
     html = f"""
     <!DOCTYPE html>
     <html lang="ko">
@@ -1369,6 +1341,12 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             <!-- ===== 오늘 요약 (항상 보임) ===== -->
             <div style="background:{alert_bg}; border:2px solid {alert_border}; padding:16px; border-radius:12px; margin:12px 0;">
                 <div style="font-size:1.2em; font-weight:700;">{alert_icon} {alert_msg}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; font-size:0.9em; color:#555;">
+                    <span>📉 EEM: SMA200 {eem_dist_str}</span>
+                    <span>🪙 BTC: SMA60 {btc_dist_str}</span>
+                    <span>📅 다음앵커: {next_anchor_str}</span>
+                    <span>💰 Buffer: {cash_buffer_pct:.0%}</span>
+                </div>
             </div>
 
             <!-- ===== 매일 확인 (기본 펼침) ===== -->
@@ -1498,7 +1476,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
             <!-- ===== 히스토리 (기본 접힘) ===== -->
             <div class="section-header" onclick="toggleSection('secHistory')">
-                <h2>\U0001f4c8 \uc6d4\ubcc4 \uae30\ub85d</h2>
+                <h2>\U0001f4c8 \uae30\ub85d / \ucd94\uc774</h2>
                 <span class="badge" id="secHistory_badge"></span>
                 <span class="arrow" id="secHistory_arrow">\u25b6</span>
             </div>
@@ -1508,20 +1486,13 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 </div>
                 <div class="card" style="overflow-x:auto;">
                     <table id="historyTable">
-                        <thead><tr><th>\uc6d4</th><th>\uc8fc\uc2dd</th><th>\ucf54\uc778</th><th>\ud604\uae08</th><th>\ucd1d\uc790\uc0b0</th><th>\uba54\ubaa8</th></tr></thead>
+                        <thead><tr><th>\ub0a0\uc9dc</th><th>\uc8fc\uc2dd</th><th>\ucf54\uc778</th><th>\ud604\uae08</th><th>\ucd1d\uc790\uc0b0</th><th>\uba54\ubaa8</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
             </div>
 
-            <!-- ===== 추천 비중 (기본 접힘) ===== -->
-            <div class="section-header" onclick="toggleSection('secPortfolio')">
-                <h2>\U0001f4ca \ucd94\ucc9c \ube44\uc911 (Stock + Coin)</h2>
-                <span class="arrow" id="secPortfolio_arrow">\u25b6</span>
-            </div>
-            <div class="section-body collapsed" id="secPortfolio">
-                <table><thead><tr><th>\uc885\ubaa9</th><th>\uc790\uc0b0\uad70</th><th>\ube44\uc911</th></tr></thead><tbody>{tbody}</tbody></table>
-            </div>
+<!-- 추천 비중: 매일 확인에 통합됨 -->
 
             <!-- ===== 상세 로그 (기본 접힘) ===== -->
             <div class="section-header" onclick="toggleSection('secLog')">
@@ -1536,7 +1507,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
             <script>
             const API = 'http://' + window.location.hostname + ':5000';
-            const fmt = n => n >= 1e8 ? (n/1e8).toFixed(1)+'\uc5b5' : n >= 1e4 ? Math.round(n/1e4).toLocaleString()+'\ub9cc' : Math.round(n).toLocaleString();
+            const fmt = n => (n/1e8).toFixed(3)+'\uc5b5';
 
             // === Section toggle ===
             function toggleSection(id) {{
@@ -1684,19 +1655,50 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     const last = rows[rows.length - 1];
                     const badge1 = document.getElementById('secAsset_badge');
                     const badge2 = document.getElementById('secHistory_badge');
-                    if (badge1) badge1.textContent = '\ucd5c\uadfc: ' + last.month + ' / ' + fmt(last.total_krw);
+                    if (badge1) badge1.textContent = '\ucd5c\uadfc: ' + (last.snapshot_date||last.month) + ' / ' + fmt(last.total_krw);
                     if (badge2) badge2.textContent = rows.length + '\uac74';
 
-                    // Table (역순)
+                    // Table: 월말 요약 항상 표시 + 클릭하면 일별 펼침
                     const tbody = document.querySelector('#historyTable tbody');
                     tbody.innerHTML = '';
-                    for (let i = rows.length - 1; i >= 0; i--) {{
-                        const s = rows[i];
-                        tbody.innerHTML += '<tr><td>'+s.month+'</td><td>'+fmt(s.stock_krw)+'</td><td>'+fmt(s.coin_krw)+'</td><td>'+fmt(s.cash_krw)+'</td><td>'+fmt(s.total_krw)+'</td><td>'+(s.memo||'')+'</td></tr>';
+                    const sorted = [...rows].reverse();
+                    // 월별 그룹핑
+                    let monthRows = {{}};
+                    for (const s of sorted) {{
+                        const ym = (s.snapshot_date||s.month).substring(0, 7);
+                        if (!monthRows[ym]) monthRows[ym] = [];
+                        monthRows[ym].push(s);
+                    }}
+                    const months = Object.keys(monthRows).sort().reverse();
+
+                    for (const ym of months) {{
+                        const items = monthRows[ym];
+                        const lastItem = items[0]; // 최신 = 월말 또는 최근일
+                        const monthId = 'hm_'+ym.replace('-','');
+                        const hasMore = items.length > 1;
+
+                        // 월말 요약 행 (항상 표시, 클릭 가능)
+                        const clickAttr = hasMore ? 'onclick="document.querySelectorAll(\\'.mr_'+monthId+'\\').forEach(r=>r.style.display=r.style.display===\\'none\\'?\\'\\':\\'none\\')" style="cursor:pointer;background:#f8f9fa;"' : 'style="background:#f8f9fa;"';
+                        const arrow = hasMore ? '<span style="color:#999;font-size:0.8em;">\u25b6 '+items.length+'\uac74</span> ' : '';
+                        tbody.innerHTML += '<tr '+clickAttr+'>'
+                            +'<td style="font-weight:600;">'+arrow+lastItem.month+'</td>'
+                            +'<td>'+fmt(lastItem.stock_krw)+'</td><td>'+fmt(lastItem.coin_krw)+'</td>'
+                            +'<td>'+fmt(lastItem.cash_krw)+'</td><td style="font-weight:700;">'+fmt(lastItem.total_krw)+'</td>'
+                            +'<td>'+(lastItem.memo||'')+'</td></tr>';
+
+                        // 나머지 일별 행 (숨김, 클릭 시 펼침)
+                        for (let j = 1; j < items.length; j++) {{
+                            const s = items[j];
+                            tbody.innerHTML += '<tr class="mr_'+monthId+'" style="display:none;">'
+                                +'<td style="padding-left:20px;color:#666;">'+(s.snapshot_date||s.month)+'</td>'
+                                +'<td>'+fmt(s.stock_krw)+'</td><td>'+fmt(s.coin_krw)+'</td>'
+                                +'<td>'+fmt(s.cash_krw)+'</td><td>'+fmt(s.total_krw)+'</td>'
+                                +'<td style="color:#999;">'+(s.memo||'')+'</td></tr>';
+                        }}
                     }}
 
                     // Chart
-                    const labels = rows.map(r => r.month);
+                    const labels = rows.map(r => (r.snapshot_date||r.month));
                     const totals = rows.map(r => r.total_krw / 1e8);
                     if (chartTotal) chartTotal.destroy();
                     chartTotal = new Chart(document.getElementById('chartTotal'), {{
@@ -1885,56 +1887,96 @@ if __name__ == "__main__":
     coin_total_krw = sum(my_holdings_krw.values()) + my_cash
     save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows, coin_total_krw=coin_total_krw)
 
-    # ─── Execution Plan (새 아키텍처) ───
+    # ─── 새 스키마 signal_state.json 저장 ───
     try:
-        _plan_today = target_date.day if hasattr(target_date, 'day') else int(str(target_date).split('-')[-1])
-        _plan_month = target_date.strftime('%Y-%m') if hasattr(target_date, 'strftime') else str(target_date)[:7]
+        # 주식: 공격/방어 picks (s_port는 현재 모드에 따라 하나만 반환됨)
+        # 현재가 공격이면 s_port=공격, 방어이면 s_port=방어
+        # 항상 둘 다 저장하기 위해 현재 모드 기반으로 분류
+        s_picks = sorted([t for t in s_port.keys() if t != 'Cash'])
+        s_weights_all = {t: w for t, w in s_port.items()}
 
-        # 주식 앵커 확인
-        stock_anchors_due = []
-        try:
-            with open('kis_trade_state.json', 'r') as _kf:
-                _kis = json.load(_kf)
-            for a in [1, 8, 15, 22]:
-                tr = _kis.get('tranches', {}).get(str(a), {})
-                if _plan_today >= a and tr.get('anchor_month', '') < _plan_month:
-                    stock_anchors_due.append(a)
-        except Exception:
-            pass
+        is_stock_risk_on = not s_stat.startswith('수비')
+        if is_stock_risk_on:
+            offense_picks = s_picks
+            offense_weights = s_weights_all
+            # 방어 종목은 이전 signal에서 가져오거나 기본값
+            try:
+                with open(SIGNAL_STATE_FILE, 'r') as _pf:
+                    _ps = json.load(_pf)
+                defense_picks = _ps.get('stock', {}).get('defense_picks', ['IEF', 'GLD', 'PDBC'])
+                defense_weights = _ps.get('stock', {}).get('defense_weights', {})
+                # 빈 경우 기본값 생성
+                if not defense_weights and defense_picks:
+                    dw = (1.0 - 0.02) / len(defense_picks)
+                    defense_weights = {t: round(dw, 4) for t in defense_picks}
+                    defense_weights['Cash'] = 0.02
+            except Exception:
+                defense_picks = ['IEF', 'GLD', 'PDBC']
+                dw = (1.0 - 0.02) / 3
+                defense_weights = {t: round(dw, 4) for t in defense_picks}
+                defense_weights['Cash'] = 0.02
+        else:
+            defense_picks = s_picks
+            defense_weights = s_weights_all
+            # 공격 종목은 이전 signal에서 가져오거나 기본값
+            try:
+                with open(SIGNAL_STATE_FILE, 'r') as _pf:
+                    _ps = json.load(_pf)
+                offense_picks = _ps.get('stock', {}).get('offense_picks', [])
+                offense_weights = _ps.get('stock', {}).get('offense_weights', {})
+            except Exception:
+                offense_picks = []
+                offense_weights = {'Cash': 1.0}
 
-        # 코인 앵커 확인
-        coin_anchors_due = []
-        try:
-            with open('trade_state.json', 'r') as _cf:
-                _coin_ts = json.load(_cf)
-            for a in [1, 11, 21]:
-                tr = _coin_ts.get('tranches', {}).get(str(a), {})
-                if _plan_today >= a and tr.get('last_anchor_month', '') < _plan_month:
-                    coin_anchors_due.append(a)
-        except Exception:
-            pass
+        # VT 기준가
+        vt_prev = s_meta.get('_vt_prev_close', 0) if isinstance(s_meta, dict) else 0
+        vt_sma10_val = s_meta.get('_vt_sma10', 0) if isinstance(s_meta, dict) else 0
 
-        # signal_state에 execution plan 추가
-        with open(SIGNAL_STATE_FILE, 'r') as _sf:
-            _plan_state = json.load(_sf)
-        _plan_state['execution_plan'] = {
+        # 코인: guard_refs 계산 (KRW 기준 — executor가 KRW 현재가와 비교)
+        # 보유 중인 코인 + 추천 코인 모두 포함 (보유중이지만 추천에서 빠진 종목도 가드 필요)
+        coin_guard_refs = {}
+        all_coin_tickers = set(t for t in c_port.keys() if t != 'Cash')
+        # 기존 트랜치 보유 종목도 포함하면 좋지만, recommend는 trade_state를 안 읽으므로
+        # 추천 종목 기반으로만 생성. executor가 잔고 기반으로 추가 체크함.
+        for t in sorted(all_coin_tickers):
+            p = prices.get(t)  # USD 시계열
+            if p is not None and len(p) >= 60:
+                # KRW 변환: Upbit 현재가 사용
+                try:
+                    krw_ticker = f"KRW-{t.replace('-USD', '')}"
+                    krw_price = pyupbit.get_current_price(krw_ticker)
+                    if krw_price and krw_price > 0:
+                        # USD→KRW 비율로 과거 가격도 변환
+                        usd_cur = float(p.iloc[-1])
+                        ratio = krw_price / usd_cur if usd_cur > 0 else 1
+                        coin_guard_refs[t.replace('-USD', '')] = {
+                            'prev_close': round(float(p.iloc[-1]) * ratio),
+                            'peak_60d': round(float(p.iloc[-60:].max()) * ratio),
+                        }
+                except Exception:
+                    pass
+
+        new_signal = {
             'stock': {
-                'ideal_picks': sorted([t for t in s_port.keys() if t != 'Cash']),
-                'ideal_weights': {t: w for t, w in s_port.items() if t != 'Cash'},
-                'today_anchors': stock_anchors_due,
-                'crash': _plan_state.get('stock_crash', False),
-                'flipped': _plan_state.get('signal_flipped', False),
-                'risk_on': _plan_state.get('risk_on', True),
+                'offense_picks': offense_picks,
+                'offense_weights': offense_weights,
+                'defense_picks': defense_picks,
+                'defense_weights': defense_weights,
+                'risk_on': is_stock_risk_on,
+                'vt_prev_close': vt_prev,
+                'vt_sma10': vt_sma10_val,
             },
             'coin': {
-                'ideal_picks': sorted([t for t in c_port.keys() if t != 'Cash']),
-                'ideal_weights': {t: w for t, w in c_port.items() if t != 'Cash'},
-                'today_anchors': coin_anchors_due,
-                'risk_on': _plan_state.get('coin_risk_on', True),
-                'flipped': _plan_state.get('coin_signal_flipped', False),
+                'picks': sorted([t.replace('-USD', '') for t in c_port.keys() if t != 'Cash']),
+                'weights': {t.replace('-USD', ''): w for t, w in c_port.items()},
+                'risk_on': bool(not c_stat.startswith('Risk-Off')),
+                'guard_refs': coin_guard_refs,
             },
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+            'meta': {
+                'signal_date': str(target_date.date()) if hasattr(target_date, 'date') else str(target_date)[:10],
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+            },
         }
-        _save_signal_state(_plan_state)
+        _save_signal_state(new_signal)
     except Exception as e:
-        print(f"⚠️ Execution plan 생성 실패: {e}")
+        print(f"⚠️ signal_state 저장 실패: {e}")

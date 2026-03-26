@@ -1,0 +1,1 @@
+- [2026-03-25] 아키텍처 리팩토링 완료: executor 단일모드(run_once) + recommend 순수화 + 새 스키마(signal/coin_trade/kis_trade). AI 리뷰 3회 15개+서버3개 버그 수정. cron 교체 완료.
