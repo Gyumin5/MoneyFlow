@@ -19,8 +19,11 @@ from datetime import datetime, timezone, timedelta
 import pyupbit
 
 # ─── Telegram ─────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = "REDACTED_TOKEN"
-TELEGRAM_CHAT_ID = "REDACTED_CHAT_ID"
+try:
+    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+except ImportError:
+    TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
 def send_telegram(msg):
     """텔레그램 알림 전송. 실패해도 프로그램은 계속 진행."""
@@ -1240,20 +1243,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
                 resultEl.innerHTML = html;
 
-                // localStorage
-                if (rate > 0) try { localStorage.setItem('cap_defend_exchange_rate', String(rate)); } catch(e) {}
+                // 환율은 매번 API에서 조회 (localStorage 저장 안 함)
             }
-
-            // \\ud658\\uc728 localStorage \\ubcf5\\uc6d0
-            (function() {
-                try {
-                    const savedRate = localStorage.getItem('cap_defend_exchange_rate');
-                    if (savedRate) document.addEventListener('DOMContentLoaded', function() {
-                        const el = document.getElementById('exchangeRate');
-                        if (el && !el.value) el.value = savedRate;
-                    });
-                } catch(e) {}
-            })();
             </script>
     """
 

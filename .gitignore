@@ -39,3 +39,13 @@ strategies/cap_defend/signal_state.json
 
 # Intermediate experiment results
 strategies/cap_defend/results/
+
+# Security - API keys, config
+config.py
+config/upbit.py
+config/bithumb.py
+config_v12_upbit.py
+*.key
+*.pem
+.kis_token.json
+V17_OPERATION_MANUAL.md
