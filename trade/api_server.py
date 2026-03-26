@@ -16,7 +16,7 @@ app = Flask(__name__)
 TRADE_PIN = os.environ.get('TRADE_PIN', '')
 
 # CORS: 같은 서버에서만 허용 (포트 8080 = serve.py)
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://152.69.225.8:8080').split(',')
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '').split(',')  # 서버에서 환경변수로 설정
 
 @app.after_request
 def after_request(response):

@@ -596,4 +596,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
-    run_once(dry_run=args.dry_run)
+    try:
+        run_once(dry_run=args.dry_run)
+    except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        log(f'🚨 FATAL ERROR: {e}')
+        log(err)
+        send_telegram(f'🚨 [주식] executor 비정상 종료: {e}')
