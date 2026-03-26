@@ -12,15 +12,28 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# 4자리 PIN (서버 환경변수 TRADE_PIN 필수 설정)
+# 인증 토큰 (서버 환경변수 TRADE_PIN — 길고 랜덤한 값 권장)
 TRADE_PIN = os.environ.get('TRADE_PIN', '')
+
+# CORS: 같은 서버에서만 허용 (포트 8080 = serve.py)
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://152.69.225.8:8080').split(',')
 
 @app.after_request
 def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS or not origin:
+        response.headers.add('Access-Control-Allow-Origin', origin or ALLOWED_ORIGINS[0])
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     return response
+
+def require_auth():
+    """쓰기 API 인증 체크. PIN이 없거나 불일치하면 403."""
+    data = request.get_json(silent=True) or {}
+    pwd = data.get('password', request.args.get('password', ''))
+    if not TRADE_PIN or str(pwd) != TRADE_PIN:
+        return False
+    return True
 
 running_tasks = {}
 HOLDINGS_FILE = '/home/ubuntu/my_stock_holdings.json'
@@ -73,6 +86,8 @@ def get_holdings():
 
 @app.route('/api/holdings', methods=['POST'])
 def set_holdings():
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     data = request.get_json(silent=True) or {}
     tickers_str = data.get('tickers', '').strip().upper()
     if not tickers_str:
@@ -171,6 +186,8 @@ def get_snapshots():
 @app.route('/api/assets/snapshots', methods=['POST'])
 def save_snapshot():
     """스냅샷 저장 (upsert by date)."""
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     data = request.get_json() or {}
     date = data.get('month', data.get('snapshot_date'))  # 호환: month 또는 snapshot_date
     if not date:
