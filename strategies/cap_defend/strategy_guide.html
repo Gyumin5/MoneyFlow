@@ -1177,7 +1177,7 @@ for attempt in 1..5:
           <tr>
             <td>11</td>
             <td>DB 스키마 전환 (month &rarr; date 유니크, 일별 UPSERT)</td>
-            <td><span class="tag tag-pending">대기</span></td>
+            <td><span class="tag tag-auto">완료</span></td>
           </tr>
           <tr>
             <td>12</td>
@@ -1202,7 +1202,10 @@ for attempt in 1..5:
             <td>
               보안 강화: CORS 제한, PIN &rarr; 토큰, API 인증, 키 파일 권한
             </td>
-            <td><span class="tag tag-pending">대기</span></td>
+            <td>
+              <span class="tag tag-pending">대기</span>
+              <small>(키 권한 600 완료)</small>
+            </td>
           </tr>
           <tr>
             <td>16</td>
@@ -1211,8 +1214,8 @@ for attempt in 1..5:
           </tr>
           <tr>
             <td>17</td>
-            <td>watchdog 강화 (signal_state 타임스탬프 감시)</td>
-            <td><span class="tag tag-pending">대기</span></td>
+            <td>watchdog 강화 (signal_state 타임스탬프 감시 + 텔레그램)</td>
+            <td><span class="tag tag-auto">완료</span></td>
           </tr>
           <tr>
             <td>18</td>
@@ -1226,8 +1229,8 @@ for attempt in 1..5:
           </tr>
           <tr>
             <td>20</td>
-            <td>서버 state 파일 매일 자동 백업</td>
-            <td><span class="tag tag-pending">대기</span></td>
+            <td>서버 state 파일 매일 자동 백업 (14일 보관)</td>
+            <td><span class="tag tag-auto">완료</span></td>
           </tr>
         </table>
       </div>
