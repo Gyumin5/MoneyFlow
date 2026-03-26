@@ -1,0 +1,31 @@
+{
+  "tranches": {
+    "1": {
+      "picks": [],
+      "weights": {},
+      "anchor_month": "2026-03"
+    },
+    "11": {
+      "picks": [],
+      "weights": {},
+      "anchor_month": "2026-03"
+    },
+    "21": {
+      "picks": [],
+      "weights": {},
+      "anchor_month": "2026-03"
+    }
+  },
+  "rebalancing_needed": false,
+  "guard_state": {
+    "crash_active": false,
+    "crash_date": null,
+    "crash_cooldown_until": null,
+    "exclusions": {}
+  },
+  "prev_risk_on": false,
+  "flip_date": null,
+  "pfd_done": true,
+  "last_action": "migration",
+  "last_trade_date": "2026-03-25"
+}
