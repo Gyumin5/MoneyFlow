@@ -1340,44 +1340,13 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 </div>
             </div>
 
-            <!-- ===== 매일 확인 (기본 펼침) ===== -->
-            <div class="section-header" onclick="toggleSection('secDaily')">
-                <h2>\U0001f4cb \ub9e4\uc77c \ud655\uc778</h2>
-                <span class="arrow" id="secDaily_arrow">\u25bc</span>
-            </div>
-            <div class="section-body" id="secDaily">
-                <div class="card">
-                    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
-                        <div>\U0001f4c9 \uc8fc\uc2dd: <b>{s_stat}</b></div>
-                        <div>\U0001fa99 \ucf54\uc778: <b>{c_stat}</b></div>
-                    </div>
-                </div>
-
-                <!-- 주식 보유/추천 비교 -->
-                <div class="card">
-                    <label style="font-weight:600; color:#555;">\ud604\uc7ac \ubcf4\uc720 \uc8fc\uc2dd (\ub744\uc5b4\uc4f0\uae30\ub85c \uad6c\ubd84):</label>
-                    <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
-                        <input id="stockInput" type="text" placeholder="\uc608: SPY QQQ VEA"
-                            style="flex:1; min-width:200px; padding:10px; border:1px solid #ddd; border-radius:8px; font-size:1em; font-family:monospace;" />
-                        <button onclick="saveHoldings()" style="background:#1a73e8; color:white; border:none; padding:10px 20px; border-radius:8px; font-weight:600; cursor:pointer;">\uc800\uc7a5</button>
-                    </div>
-                    <div id="holdingsStatus" style="margin-top:8px; font-size:0.9em; color:#666;"></div>
-                    <div id="triggerResult"></div>
-                </div>
-
-                <!-- 코인 포트폴리오 -->
-                <div class="card">
-                    {integrated_html}
-                </div>
-            </div>
-
-            <!-- ===== 자산 관리 + 리밸런싱 (기본 접힘) ===== -->
+            <!-- ===== 자산 관리 + 리밸런싱 (기본 펼침) ===== -->
             <div class="section-header" onclick="toggleSection('secAsset')">
                 <h2>\U0001f9ee \uc790\uc0b0 \uad00\ub9ac / \ub9ac\ubc38\ub7f0\uc2f1</h2>
                 <span class="badge" id="secAsset_badge"></span>
-                <span class="arrow" id="secAsset_arrow">\u25b6</span>
+                <span class="arrow" id="secAsset_arrow">\u25bc</span>
             </div>
-            <div class="section-body collapsed" id="secAsset">
+            <div class="section-body" id="secAsset">
                 <div class="card">
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
                         <div>
