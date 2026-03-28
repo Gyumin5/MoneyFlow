@@ -20,7 +20,15 @@ UNIVERSE_FILE = os.path.join(BASE_DIR, '..', '..', 'backup_20260125',
 
 STABLECOINS = {'USDT','USDC','BUSD','DAI','UST','TUSD','PAX','GUSD',
                'FRAX','LUSD','MIM','USDN','FDUSD'}
-EXCLUDE = STABLECOINS | {'PAXG','XAUT','WBTC','USD1','USDE'}
+EXCLUDE = STABLECOINS | {'WBTC','USD1','USDE'}
+
+# ─── V18 방어자산 ────────────────────────────────────────────────
+DEFENSE_TICKERS = ['PAXG-USD']                    # 백테스트/시그널 유니버스
+DEFENSE_TICKER_MAP = {'PAXG-USD': 'XAUT'}         # 백테스트→실매매 매핑
+DEFENSE_SMA = 120            # SMA(120) — 장기 추세 필터
+DEFENSE_LOOKBACK = 126       # 6개월 (거래일)
+DEFENSE_MAX_PICKS = 3
+DEFENSE_CAP = 0.33
 
 
 # ─── Params ─────────────────────────────────────────────────────────

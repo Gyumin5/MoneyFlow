@@ -2,7 +2,7 @@
 Cap Defend V17 Recommendation Script (Personal Version)
 =====================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
-Coin V17: K:SMA(60)+1%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+Coin V17: K:SMA(50)+1.5%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
 
@@ -104,7 +104,7 @@ VERSION_HISTORY = [
 
 <b>▶ 코인 전략 (V14 동일)</b>
 • <b>유니버스:</b> CoinGecko Top 40 시총순 → Upbit KRW 필터
-• <b>Canary:</b> BTC > SMA(60) → 투자, 아니면 현금 (1% Hysteresis)
+• <b>Canary:</b> BTC > SMA(50) → 투자, 아니면 현금 (1.5% Hysteresis)
 • <b>Health Filter:</b> Mom(30)>0 AND Mom(90)>0 AND Vol(90)≤5%
 • <b>선정:</b> 시총순 Top 5, 균등배분 (EW)
 • <b>DD Exit:</b> 60일 고점 대비 -25% 하락 → 매도 (매일 체크)
@@ -117,8 +117,8 @@ VERSION_HISTORY = [
 • <span style='color:#d93025;'>Delta-based trading</span>: 변경된 비중만 거래 (TX 비용 61% 절감)"""),
 
     ("V14", "2026-03",
-     "SMA(60) canary, Mom+Mom+Vol5% health, EW, DD Exit, Blacklist, Crash Breaker",
-     """<b>▶ 코인:</b> K:SMA(60)+1%hyst, H:Mom30+Mom90+Vol5%, 시총순 Top 5 EW, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
+     "SMA(50) canary, Mom+Mom+Vol5% health, EW, DD Exit, Blacklist, Crash Breaker",
+     """<b>▶ 코인:</b> K:SMA(50)+1.5%hyst, H:Mom30+Mom90+Vol5%, 시총순 Top 5 EW, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
 <b>▶ 주식:</b> R6 (SPY,QQQ,VEA,EEM,GLD,PDBC), EEM>SMA200, Mom3+Sh3 union EW, Defense Top3"""),
 
     ("V13", "2026-03",
@@ -211,8 +211,8 @@ STOCK_CRASH_THRESHOLD = -0.03  # VT daily -3%
 STOCK_CRASH_COOL_DAYS = 3
 
 # Coin Configuration
-COIN_CANARY_MA_PERIOD = 60
-COIN_CANARY_HYST = 0.01  # 1% Hysteresis: enter Risk-On at SMA*1.01, exit at SMA*0.99
+COIN_CANARY_MA_PERIOD = 50
+COIN_CANARY_HYST = 0.015  # 1.5% Hysteresis: enter Risk-On at SMA*1.015, exit at SMA*0.985
 N_SELECTED_COINS = 5
 VOLATILITY_WINDOW = 90
 
@@ -1334,7 +1334,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 <div style="font-size:1.2em; font-weight:700;">{alert_icon} {alert_msg}</div>
                 <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; font-size:0.9em; color:#555;">
                     <span>📉 EEM: SMA200 {eem_dist_str}</span>
-                    <span>🪙 BTC: SMA60 {btc_dist_str}</span>
+                    <span>🪙 BTC: SMA50 {btc_dist_str}</span>
                     <span>📅 다음앵커: {next_anchor_str}</span>
                     <span>💰 Buffer: {cash_buffer_pct:.0%}</span>
                 </div>

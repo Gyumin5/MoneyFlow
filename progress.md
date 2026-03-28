@@ -1,42 +1,20 @@
-# 현재 작업: 모니터링 중 (안정화)
+# 현재 작업: V17 카나리 업데이트 완료
 
 ## 완료
 
-- [x] 아키텍처 리팩토링 (executor 통합, 5단계)
-- [x] 서버 배포 + cron 교체
-- [x] HTML 개선 (상단 배너, 접이식 히스토리, 억단위, 추천비중 삭제)
-- [x] 문서 최신화 (AI 리뷰 반영, 코드-문서 정합성 확인)
+- [x] 카나리 재최적화: SMA(50) + 1.5% hyst 확정
+  - 1차 넓은 그리드 + 2차 세밀 그리드 + 멀티SMA 투표 + anti-whipsaw
+  - 10-anchor, 3기간, plateau 확인, anchor MDD 10/10 개선
+- [x] 코드 업데이트:
+  - coin_helpers.py: B() vote_smas=(50,)
+  - recommend_personal.py: COIN_CANARY_MA_PERIOD=50, HYST=0.015
+  - recommend.py: CANARY_SMA_PERIOD=50, HYST=0.015
+  - backtest_official.py: V17 정의
+  - MEMORY.md 업데이트
 
-## TODO (신한 → 한투 자금 이전 시)
+## TODO
 
-- [ ] 이전 당일: 매매 정지 → 소액 테스트 → 체결 확인 → 재개
-- [ ] 한투 원화→달러 환전 + buying power 확인
-- [ ] 첫날 소액 매수 1건 + 잔고조회 + 체결조회 확인
-
-## TODO (자금 이전 후)
-
-- [ ] 자산관리 UI 변경
-  - 주식-신한 제거, 현금 입력 제거
-  - 한투+업비트 자동조회만
-- [ ] DB 스키마: month 유니크 → date 유니크 (일별 UPSERT용)
-- [ ] 기록/추이 자동화
-  - recommend에서 매일 09:15 UPSERT
-  - 주식=ETF평가, 코인=코인평가, 현금=나머지(한투USD×환율+한투원화+업비트KRW)
-  - fx_rate 별도 저장 (환율 변동 추적)
-- [ ] cash_buffer 80% → 2% (큰 금액 투입)
-- [ ] 잔고 대사: 목표 vs 실잔고 vs state 불일치 알림
-
-## TODO (보안)
-
-- [ ] CORS \* → IP 제한 또는 리버스프록시
-- [ ] PIN → 긴 토큰 또는 IP allowlist
-- [ ] 쓰기 API 전부 인증
-- [ ] API 키/토큰 파일 권한 600
-
-## TODO (나중에)
-
-- [ ] 60:40 밴드 이탈 텔레그램 (recommend 실행 직후 체크)
-- [ ] watchdog 강화 (signal_state 감시)
-- [ ] 실시간 웹소켓 (cron 10분 한계 개선)
-- [ ] 히스토리 수익률 % 컬럼
-- [ ] 서버 state 파일 매일 자동 백업
+- [ ] strategy_guide.html 업데이트
+- [ ] 서버 배포 (recommend 2개)
+- [ ] git commit
+- [ ] 방어자산: 유니버스 확장 후 재검토 (보류)

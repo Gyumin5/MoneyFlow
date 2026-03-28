@@ -8,8 +8,8 @@ Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 - Crash Breaker: VT daily -3% → 3 days cash
 
-Coin V17: K:SMA(60) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
-- Canary: BTC > SMA(60) + 1% hysteresis
+Coin V17: K:SMA(50) + H:Mom(30)+Mom(90)+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+- Canary: BTC > SMA(50) + 1.5% hysteresis
 - Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5%
 - Selection: 시총순 Top 5, Equal Weight
 - DD Exit: 60d peak -25% → sell warning
@@ -50,13 +50,13 @@ STOCK_CRASH_COOL_DAYS = 3
 VOLATILITY_WINDOW = 90
 VOL_CAP_FILTER = 0.05
 N_SELECTED_COINS = 5
-CANARY_SMA_PERIOD = 60
+CANARY_SMA_PERIOD = 50
 BL_THRESHOLD = -0.15
 BL_DAYS = 7
 DD_EXIT_LOOKBACK = 60
 DD_EXIT_THRESHOLD = -0.25
 CRASH_THRESHOLD = -0.10
-COIN_CANARY_HYST = 0.01  # 1% hysteresis band
+COIN_CANARY_HYST = 0.015  # 1.5% hysteresis band
 
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
@@ -461,7 +461,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
             log.append(f"<p class='error'><b>[CRASH BREAKER]</b> BTC worst {worst_crash:+.1%} in {CRASH_COOLDOWN}d — 현금 대기</p>")
             return {CASH_ASSET: 1.0}, "CRASH (BTC -10%)"
 
-    # --- Canary: BTC > SMA(60) with 1% Hysteresis ---
+    # --- Canary: BTC > SMA(50) with 1.5% Hysteresis ---
     sma = btc.rolling(CANARY_SMA_PERIOD).mean().iloc[-1]
     cur = btc.iloc[-1]
     dist = cur / sma - 1
@@ -472,7 +472,8 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
         import json as _json
         _state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_state.json')
         with open(_state_path, 'r') as _sf:
-            prev_coin_risk_on = _json.load(_sf).get('coin_risk_on')
+            _sig = _json.load(_sf)
+            prev_coin_risk_on = _sig.get('coin', {}).get('risk_on', _sig.get('coin_risk_on'))
     except Exception:
         pass
 
