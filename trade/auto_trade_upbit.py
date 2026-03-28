@@ -43,9 +43,9 @@ def get_cash_buffer():
         return CASH_BUFFER_PERCENT_DEFAULT
 MIN_ORDER_KRW = 5000
 
-# V15 Canary / Protection
-CANARY_SMA_PERIOD = 60           # V15: SMA(60) (was 50)
-CANARY_HYST = 0.01               # 1% hysteresis band
+# V17 Canary / Protection
+CANARY_SMA_PERIOD = 50           # V17: SMA(50)
+CANARY_HYST = 0.015              # 1.5% hysteresis band
 CRASH_THRESHOLD = -0.10          # BTC daily -10% → cash
 BL_THRESHOLD = -0.15             # -15% daily → 7d exclude
 BL_DAYS = 7
@@ -95,7 +95,7 @@ class V16UpbitTrader:
         if is_force: mode += " (FORCE MODE)"
         log("=" * 60)
         log(f"V16 Upbit Trader [{mode}]")
-        log("전략: SMA60+1%hyst, Mom30+Mom90+Vol5%, 시총순 Top5 EW+20%Cap, DD/BL/Crash")
+        log("전략: SMA50+1.5%hyst, Mom30+Mom90+Vol5%, 시총순 Top5 EW+20%Cap, DD/BL/Crash")
         log("=" * 60)
         
         try:
@@ -708,7 +708,7 @@ class V16UpbitTrader:
         trade_state.pop('btc_sma60', None)
         trade_state.pop('btc_prev_close', None)
         try:
-            # BTC SMA60 (USD) — Yahoo 데이터 기준
+            # BTC SMA50 (USD) — Yahoo 데이터 기준
             btc_data = self.all_prices.get('BTC', pd.Series())
             if len(btc_data) >= CANARY_SMA_PERIOD + 1:
                 sma_usd = float(btc_data.rolling(CANARY_SMA_PERIOD).mean().iloc[-1])
@@ -1314,7 +1314,7 @@ class V16UpbitTrader:
                 except Exception as e:
                     log(f"⚠️ Blacklist 장중 체크 실패: {e}")
 
-            # ── 카나리아 OFF: BTC USD < SMA60 USD * 0.99 ──
+            # ── 카나리아 OFF: BTC USD < SMA50 USD * 0.985 ──
             has_positions = any(t.get('picks') for t in trade_state.get('tranches', {}).values())
             if not emergency and btc_usd > 0:
                 # 하위호환: USD 키 없으면 KRW 키로 fallback
@@ -1327,7 +1327,7 @@ class V16UpbitTrader:
                     if trade_state.get('coin_risk_on', False) or has_positions:
                         if btc_usd < btc_sma60_usd * (1 - CANARY_HYST):
                             emergency = True
-                            emergency_reason = f"카나리아 OFF (BTC ${btc_usd:,.0f} < SMA60*0.99 ${btc_sma60_usd*0.99:,.0f})"
+                            emergency_reason = f"카나리아 OFF (BTC ${btc_usd:,.0f} < SMA50*{1-CANARY_HYST:.3f} ${btc_sma60_usd*(1-CANARY_HYST):,.0f})"
 
             # ── DD Exit: 보유코인 USD 60일 고점 대비 -25% → 해당 코인만 매도 ──
             dd_exit_coins = []

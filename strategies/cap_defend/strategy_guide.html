@@ -287,7 +287,7 @@
           <tr>
             <td>카나리 (추세 판단)</td>
             <td>EEM &gt; SMA(200), 0.5% Hysteresis(히스테리시스)</td>
-            <td>BTC &gt; SMA(60), 1% Hysteresis</td>
+            <td>BTC &gt; SMA(50), 1.5% Hysteresis</td>
           </tr>
           <tr>
             <td>헬스 필터</td>
@@ -595,7 +595,7 @@
         <p style="margin: 8px 0 4px"><b>2. 전략 신호 계산</b></p>
         <ul style="margin: 0; padding-left: 20px">
           <li>
-            카나리 판단: EEM &gt; SMA200 (주식), BTC &gt; SMA60 (코인),
+            카나리 판단: EEM &gt; SMA200 (주식), BTC &gt; SMA50 (코인),
             히스테리시스 포함
           </li>
           <li>공격 종목 선정: Z-score Top 3 (주식), 시총순 Top 5 (코인)</li>
@@ -843,7 +843,7 @@ for attempt in 1..5:
           </tr>
           <tr>
             <td>coin.risk_on</td>
-            <td>카나리 상태 (BTC &gt; SMA60)</td>
+            <td>카나리 상태 (BTC &gt; SMA50)</td>
           </tr>
           <tr>
             <td>coin.guard_refs</td>

@@ -13,7 +13,9 @@ from coin_engine import (
     get_universe_for_date, resolve_canary, get_healthy_coins,
     select_coins, compute_weights,
     execute_rebalance, _port_val, get_price,
-    calc_metrics, calc_yearly_metrics
+    calc_metrics, calc_yearly_metrics,
+    DEFENSE_TICKERS, DEFENSE_SMA, DEFENSE_LOOKBACK,
+    DEFENSE_MAX_PICKS, DEFENSE_CAP,
 )
 
 ANCHOR_DAYS = [1, 4, 7, 10, 13, 16, 19, 22, 25, 28]
@@ -21,7 +23,8 @@ ANCHOR_DAYS = [1, 4, 7, 10, 13, 16, 19, 22, 25, 28]
 
 def B(**kw):
     base = dict(
-        canary='K8', vote_smas=(60,), vote_moms=(), vote_threshold=1,
+        canary='K8', vote_smas=(50,), vote_moms=(), vote_threshold=1,
+        canary_band=1.5,
         health='HK', health_sma=2, health_mom_short=21,
         health_mom_long=90, vol_cap=0.05,
     )
@@ -354,6 +357,97 @@ def run_matrix_backtest(prices, universe_map, snapshot_days,
         'bl_trigger_count': bl_trigger_count,
         'pv': pvdf,
     }
+
+
+def select_defense_coins(prices, date, defense_tickers=None,
+                         sma_period=None, lookback=None,
+                         max_picks=None, cap=None,
+                         ief_gate=False, ief_prices=None, ief_sma=60):
+    """V18 방어자산 선정.
+
+    Filters: 6M return > 0 AND price > SMA(N)
+    Optional: IEF > SMA(ief_sma) gate (금리 하락 추세일 때만 진입)
+
+    Returns:
+        dict: {ticker: weight} or {'CASH': 1.0} if none pass.
+    """
+    if defense_tickers is None:
+        defense_tickers = DEFENSE_TICKERS
+    if sma_period is None:
+        sma_period = DEFENSE_SMA
+    if lookback is None:
+        lookback = DEFENSE_LOOKBACK
+    if max_picks is None:
+        max_picks = DEFENSE_MAX_PICKS
+    if cap is None:
+        cap = DEFENSE_CAP
+
+    # IEF gate: 금리 하락 추세(IEF > SMA)일 때만 방어자산 진입
+    if ief_gate and ief_prices is not None:
+        ief_idx = ief_prices.index.get_indexer([date], method='ffill')[0]
+        if ief_idx >= ief_sma:
+            ief_vals = ief_prices.values
+            ief_cur = float(ief_vals[ief_idx])
+            ief_avg = np.mean(ief_vals[ief_idx - ief_sma + 1:ief_idx + 1])
+            if ief_cur <= ief_avg:
+                return {'CASH': 1.0}  # 금리 상승 추세 → 금 비추
+        # ief_idx < ief_sma → 데이터 부족, gate 무시
+
+    candidates = {}
+    for ticker in defense_tickers:
+        df = prices.get(ticker)
+        if df is None or date not in df.index:
+            continue
+        loc = df.index.get_loc(date)
+        if loc < max(lookback, sma_period):
+            continue
+
+        close = df['Close'].values
+
+        # 6M return > 0
+        ret_6m = close[loc] / close[loc - lookback] - 1
+        if ret_6m <= 0:
+            continue
+
+        # price > SMA(N)
+        sma = np.mean(close[loc - sma_period + 1:loc + 1])
+        if close[loc] <= sma:
+            continue
+
+        candidates[ticker] = ret_6m
+
+    if not candidates:
+        return {'CASH': 1.0}
+
+    # Top N by 6M return
+    sorted_picks = sorted(candidates.items(), key=lambda x: x[1], reverse=True)[:max_picks]
+
+    # EW + soft cap
+    n = len(sorted_picks)
+    weights = {t: 1.0 / n for t, _ in sorted_picks}
+
+    if cap < 1.0:
+        capped = {}
+        excess = 0
+        for t, w in weights.items():
+            if w > cap:
+                excess += w - cap
+                capped[t] = cap
+            else:
+                capped[t] = w
+        uncapped = [t for t, w in capped.items() if w < cap]
+        if uncapped and excess > 0:
+            per = excess / len(uncapped)
+            for t in uncapped:
+                capped[t] = min(capped[t] + per, cap)
+        weights = capped
+
+    # 나머지를 CASH로 명시 (merge_snapshots 정규화 방지)
+    total_w = sum(weights.values())
+    if total_w < 0.999:
+        weights['CASH'] = 1.0 - total_w
+
+    return weights
 
 
 def compute_signal_weights_filtered(prices, universe_map, date, params, state, blacklist):

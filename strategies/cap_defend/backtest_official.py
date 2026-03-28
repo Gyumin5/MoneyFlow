@@ -26,7 +26,9 @@ from coin_engine import (
 from coin_helpers import (
     B, merge_snapshots, calc_current_weights, calc_half_turnover,
     compute_signal_weights_filtered, check_blacklist, update_blacklist,
+    select_defense_coins,
 )
+from coin_engine import DEFENSE_TICKERS
 from coin_dd_exit import check_coin_drawdown, _empty_ext
 
 # === Stock imports ===
@@ -46,8 +48,11 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
                       dd_lookback=0, dd_threshold=0,
                       bl_drop=0, bl_days=7,
                       drift_threshold=0, post_flip_delay=0,
-                      params_base=None):
-    """코인 백테스트 — t-1 시그널, t 체결."""
+                      params_base=None, defense=False,
+                      ief_gate=False, ief_prices=None,
+                      defense_gate_fn=None):
+    """코인 백테스트 — t-1 시그널, t 체결. defense=True: V18 Risk-Off 방어자산.
+    defense_gate_fn: callable(date) → bool. True면 방어자산 진입 허용."""
     if params_base is None:
         params_base = B()
 
@@ -78,6 +83,7 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
     snap_done = {}
     blacklist = {}
     portfolio_values = []
+    canary_history = []
     rebal_count = 0
     dd_exit_count = 0
     prev_date = None
@@ -167,13 +173,26 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
                             if total > 0:
                                 snapshots[si] = {t: v / total for t, v in snapshots[si].items()}
 
+        # V18 방어자산: Risk-Off 시 방어 선정 (defense=False면 기존 {'CASH': 1.0})
+        def _riskoff_w():
+            if not defense:
+                return {'CASH': 1.0}
+            # custom gate가 있으면 먼저 체크
+            if defense_gate_fn is not None and not defense_gate_fn(sig_date):
+                return {'CASH': 1.0}
+            return select_defense_coins(prices, sig_date,
+                                        ief_gate=ief_gate, ief_prices=ief_prices)
+
         if i == 0:
             for si in range(n_snap):
-                snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist)
+                if canary_on:
+                    snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist)
+                else:
+                    snapshots[si] = _riskoff_w()
             need_rebal = True
         elif canary_flipped:
             for si in range(n_snap):
-                snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist) if canary_on else {'CASH': 1.0}
+                snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist) if canary_on else _riskoff_w()
             need_rebal = True
         elif post_flip_delay > 0 and canary_on:
             fd = state.get('canary_on_date')
@@ -193,6 +212,17 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
                         snapshots[si] = new_w
                         need_rebal = True
 
+        # V18: Risk-Off 앵커일에 방어자산 재평가 (공격 전략과 동일 패턴)
+        if defense and not canary_on and not canary_flipped:
+            for si, anchor in enumerate(snapshot_days):
+                key = f"{cur_month}_def{si}"
+                if date.day >= anchor and key not in snap_done:
+                    snap_done[key] = True
+                    new_w = _riskoff_w()
+                    if new_w != snapshots[si]:
+                        snapshots[si] = new_w
+                        need_rebal = True
+
         if bl_drop < 0 and newly_bl:
             need_rebal = True
 
@@ -207,7 +237,7 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
         # Crash 쿨다운 종료 → 강제 재진입
         if crash_just_ended and not holdings:
             for si in range(n_snap):
-                snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist) if canary_on else {'CASH': 1.0}
+                snapshots[si] = compute_signal_weights_filtered(prices, universe_map, sig_date, params_base, state, blacklist) if canary_on else _riskoff_w()
             combined = merge_snapshots(snapshots)
             need_rebal = True
 
@@ -216,6 +246,7 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
             rebal_count += 1
 
         portfolio_values.append({'Date': date, 'Value': _port_val(holdings, cash, prices, date)})
+        canary_history.append({'Date': date, 'canary_on': canary_on})
         state['prev_canary'] = canary_on
         state['prev_month'] = cur_month
         prev_date = date
@@ -223,7 +254,8 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
     if not portfolio_values:
         return _empty_ext()
     pvdf = pd.DataFrame(portfolio_values).set_index('Date')
-    return {'metrics': calc_metrics(pvdf), 'rebal_count': rebal_count, 'dd_exit_count': dd_exit_count}
+    return {'metrics': calc_metrics(pvdf), 'rebal_count': rebal_count, 'dd_exit_count': dd_exit_count,
+            'equity_curve': pvdf['Value'], 'canary_history': canary_history}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -268,14 +300,22 @@ COIN_VERSIONS = {
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
-    # V17: Mom30 (V16과 동일, 정확한 키 기준 최적)
+    # V17: SMA(50)+1.5%hyst, Mom30 (카나리 업데이트: SMA60→50, Hyst 1%→1.5%)
     'V17': dict(
+        params=dict(sma_period=50, canary_band=1.5, vote_smas=(50,),
+                    health_sma=0, health_mom_short=30,
+                    selection='baseline', n_picks=5, weighting='WC', top_n=40,
+                    risk='G5'),
+        dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
+        drift_threshold=0.10, post_flip_delay=5),
+    # V18: V17 + Risk-Off 방어자산 (PAXG/XAUT, SMA60, soft cap 33%)
+    'V18': dict(
         params=dict(sma_period=60, canary_band=1.0, health_sma=0,
                     health_mom_short=30,
                     selection='baseline', n_picks=5, weighting='WC', top_n=40,
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
-        drift_threshold=0.10, post_flip_delay=5),
+        drift_threshold=0.10, post_flip_delay=5, defense=True),
 }
 
 OFF_R7 = ('SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ')
@@ -331,7 +371,7 @@ def main():
     parser.add_argument('--stock-only', action='store_true')
     args = parser.parse_args()
 
-    versions = args.version.upper().split(',') if args.version != 'all' else ['V12', 'V13', 'V14', 'V15', 'V16', 'V17']
+    versions = args.version.upper().split(',') if args.version != 'all' else ['V12', 'V13', 'V14', 'V15', 'V16', 'V17', 'V18']
 
     t0 = time.time()
     print("데이터 로딩...")
@@ -345,6 +385,7 @@ def main():
         for fm in coin_um.values():
             for ts in fm.values(): all_t.update(ts)
         all_t.update(['BTC-USD', 'ETH-USD'])
+        all_t.update(DEFENSE_TICKERS)  # V18 방어자산 가격 로드
         coin_prices = load_all_prices(list(all_t))
 
     # Stock data
@@ -383,7 +424,8 @@ def main():
                                       dd_lookback=cfg['dd_lookback'], dd_threshold=cfg['dd_threshold'],
                                       bl_drop=cfg['bl_drop'], bl_days=cfg['bl_days'],
                                       drift_threshold=cfg['drift_threshold'],
-                                      post_flip_delay=cfg['post_flip_delay'], params_base=p)
+                                      post_flip_delay=cfg['post_flip_delay'],
+                                      params_base=p, defense=cfg.get('defense', False))
                 m = r['metrics']
                 s, c, mdd = m['Sharpe'], m['CAGR'], m['MDD']
                 cal = c / abs(mdd) if mdd != 0 else 0
