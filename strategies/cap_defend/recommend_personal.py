@@ -717,14 +717,11 @@ def run_stock_strategy_v15(log, all_prices, target_date):
                 trigger_rebal = (n_changed >= 2 and not is_monthly)
 
                 if trigger_rebal:
-                    log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 TRIGGER REBALANCE: {n_changed}종목 변경</b> — 진입 {new_picks}, 퇴출 {exit_picks}</p>")
-
-                hold_str = ','.join(stock_holdings)
-                log.append(f"<p>보유: [{hold_str}] → 추천: <b>{picks}</b> (신규 {new_picks}, 퇴출 {exit_picks})</p>")
+                    log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 TRIGGER REBALANCE: {n_changed}종목 변경</b></p>")
             else:
-                log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정 — signal_state.json에 <code>\"stock_holdings\": [\"SPY\",\"QQQ\",...]</code> 입력 필요</p>")
+                log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정</p>")
 
-            log.append(f"<p>Z-score Top 3: <b>{picks}</b> (Equal Weight)</p>")
+            log.append(f"<p>공격 {len(picks)}종목 선정 (Equal Weight)</p>")
             # NOTE: signal_state 저장은 main()에서 새 스키마로 일괄 저장
             return {t: 1.0/len(picks) for t in picks}, "공격 모드", meta
 
@@ -1955,3 +1952,42 @@ if __name__ == "__main__":
         _save_signal_state(new_signal)
     except Exception as e:
         print(f"⚠️ signal_state 저장 실패: {e}")
+
+    # ─── 텔레그램 일간 리포트 ───
+    try:
+        # 요약 텍스트
+        btc_data = prices.get('BTC-USD')
+        btc_dist_pct = ""
+        if btc_data is not None and len(btc_data) >= COIN_CANARY_MA_PERIOD:
+            btc_cur = float(btc_data.iloc[-1])
+            btc_sma = float(btc_data.rolling(COIN_CANARY_MA_PERIOD).mean().iloc[-1])
+            btc_dist_pct = f"{(btc_cur/btc_sma-1)*100:+.1f}%"
+
+        coin_picks_str = ', '.join(t.replace('-USD','') for t in c_port.keys() if t != 'Cash')
+        coin_weights_str = ' / '.join(f"{t.replace('-USD','')} {w:.0%}" for t, w in c_port.items())
+
+        summary = (
+            f"📊 Daily Report ({target_date.strftime('%m/%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]})\n"
+            f"\n🪙 코인: {c_stat}\n"
+            f"  BTC vs SMA50: {btc_dist_pct}\n"
+            f"  선정: {coin_picks_str or '없음'}\n"
+            f"  비중: {coin_weights_str}\n"
+            f"\n📈 주식: {s_stat}\n"
+            f"  비중: {', '.join(f'{t} {w:.0%}' for t,w in s_port.items())}"
+        )
+        send_telegram(summary)
+
+        # HTML 파일 전송
+        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'portfolio_result_gmoh.html')
+        if os.path.exists(html_path):
+            import requests as _req
+            with open(html_path, 'rb') as f:
+                _req.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
+                    data={"chat_id": TELEGRAM_CHAT_ID},
+                    files={"document": (f"report_{target_date.strftime('%Y%m%d') if hasattr(target_date, 'strftime') else 'today'}.html", f)},
+                    timeout=30
+                )
+        print("✅ 텔레그램 일간 리포트 전송 완료")
+    except Exception as e:
+        print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
