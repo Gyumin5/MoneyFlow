@@ -308,14 +308,14 @@ COIN_VERSIONS = {
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
-    # V18: V17 + Risk-Off 방어자산 (PAXG/XAUT, SMA60, soft cap 33%)
+    # V18: 그리디 흡수 + Cap 33% (카나리 SMA50+1.5%hyst는 V17에 반영)
     'V18': dict(
-        params=dict(sma_period=60, canary_band=1.0, health_sma=0,
-                    health_mom_short=30,
-                    selection='baseline', n_picks=5, weighting='WC', top_n=40,
+        params=dict(sma_period=50, canary_band=1.5, vote_smas=(50,),
+                    health_sma=0, health_mom_short=30,
+                    selection='SG', n_picks=5, weighting='WG', top_n=40,
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
-        drift_threshold=0.10, post_flip_delay=5, defense=True),
+        drift_threshold=0.10, post_flip_delay=5),
 }
 
 OFF_R7 = ('SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ')
