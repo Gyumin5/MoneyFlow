@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cap Defend V17 - 전략 가이드</title>
+    <title>Cap Defend V18 - 전략 가이드</title>
     <style>
       body {
         font-family:
@@ -226,10 +226,10 @@
   </head>
   <body>
     <div class="container">
-      <h1>Cap Defend V17</h1>
+      <h1>Cap Defend V18</h1>
       <div class="meta">
         <span>문서 갱신: <time datetime="2026-03-26">2026-03-26</time></span>
-        <span>적용 버전: V17</span>
+        <span>적용 버전: V18</span>
         <span>시간 기준: KST (미국장은 현지 정규장)</span>
       </div>
 
@@ -297,12 +297,12 @@
           <tr>
             <td>종목 선정</td>
             <td>Z-score Top 3 (12개월 모멘텀 + 12개월 Sharpe)</td>
-            <td>시총순 Top 5</td>
+            <td>시총순 Top 5 → Greedy Absorption</td>
           </tr>
           <tr>
             <td>종목 내 비중</td>
             <td>EW(동일비중) 33%씩</td>
-            <td>EW + 20% Cap (한 종목 최대 20%)</td>
+            <td>EW + 33% Cap (그리디 흡수 후 남은 코인에 균등, 최대 33%)</td>
           </tr>
           <tr>
             <td>방어 모드 (Risk-Off)</td>
@@ -598,7 +598,10 @@
             카나리 판단: EEM &gt; SMA200 (주식), BTC &gt; SMA50 (코인),
             히스테리시스 포함
           </li>
-          <li>공격 종목 선정: Z-score Top 3 (주식), 시총순 Top 5 (코인)</li>
+          <li>
+            공격 종목 선정: Z-score Top 3 (주식), 시총순 Top 5 → Greedy
+            Absorption (코인)
+          </li>
           <li>방어 종목 선정: 6M return Top 3 (주식), 현금 (코인)</li>
           <li>헬스 필터: Mom30&gt;0, Mom90&gt;0, Vol90&le;5% (코인)</li>
         </ul>
