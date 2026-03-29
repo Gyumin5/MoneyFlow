@@ -1,1 +1,3 @@
+- [2026-03-29] V18: Greedy Absorption + Cap 33%. MDD -25.6% (V17 -30.0%), Calmar 2.70 (V17 2.34). ~50개 변형 테스트, AI 3자 협의.
+- [2026-03-28] V17 카나리 업데이트: SMA(60)+1%hyst → SMA(50)+1.5%hyst. MDD -35.2%→-30.8%, Calmar 2.02→2.17. 10-anchor/3기간/plateau 검증, Gemini+Codex 코드 리뷰 (3건 불일치 수정). 방어자산(PAXG) 연구 완료 (프레임워크 보류, 유니버스 확장 후 재검토).
 - [2026-03-25] 아키텍처 리팩토링 완료: executor 단일모드(run_once) + recommend 순수화 + 새 스키마(signal/coin_trade/kis_trade). AI 리뷰 3회 15개+서버3개 버그 수정. cron 교체 완료.
