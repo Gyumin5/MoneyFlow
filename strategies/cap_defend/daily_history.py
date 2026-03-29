@@ -15,8 +15,9 @@ from coin_engine import (
 def B(**kw):
     base = dict(
         canary='K8', vote_smas=(50,), vote_moms=(), vote_threshold=1, canary_band=1.5,
-        health='HK', health_sma=0, health_mom_short=21,
+        health='HK', health_sma=0, health_mom_short=30,
         health_mom_long=90, vol_cap=0.05, top_n=40,
+        selection='SG', n_picks=5, weighting='WG',
         risk='G5',
         dd_exit_lookback=60, dd_exit_threshold=-0.25,
         bl_threshold=-0.15, bl_days=7,

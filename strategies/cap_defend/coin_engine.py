@@ -37,8 +37,8 @@ DEFENSE_CAP = 0.33
 class Params:
     canary: str = 'baseline'       # baseline, K1..K5
     health: str = 'baseline'       # baseline, H1..H5
-    selection: str = 'baseline'    # baseline, S1..S5
-    weighting: str = 'baseline'    # baseline, W1..W5
+    selection: str = 'baseline'    # baseline, S1..S15
+    weighting: str = 'baseline'    # baseline, W1..W8
     rebalancing: str = 'baseline'  # baseline, R1..R5
     risk: str = 'baseline'         # baseline, G1..G5
     tx_cost: float = 0.004
@@ -161,6 +161,33 @@ def _calc_sharpe_score(s, d):
     if len(s) < d + 1: return 0
     ret = s.pct_change().iloc[-d:]
     return (ret.mean() / ret.std()) * np.sqrt(252) if ret.std() != 0 else 0
+
+
+def _cap_rank_norm(ticker, ordered_tickers):
+    """0=largest cap, 1=smallest cap. Universe order is market-cap order."""
+    if not ordered_tickers:
+        return 1.0
+    denom = max(1, len(ordered_tickers) - 1)
+    try:
+        return ordered_tickers.index(ticker) / denom
+    except ValueError:
+        return 1.0
+
+
+def _coin_selection_metrics(ticker, ordered_tickers, prices, date):
+    close = _close_to(ticker, prices, date)
+    mom30 = calc_ret(close, 30) if len(close) > 30 else -999
+    vol90 = get_vol(close, 90)
+    sharpe_like = mom30 / max(vol90, 1e-6)
+    cap_norm = _cap_rank_norm(ticker, ordered_tickers)
+    return {
+        'ticker': ticker,
+        'mom30': mom30,
+        'vol90': vol90,
+        'sharpe_like': sharpe_like,
+        'cap_norm': cap_norm,
+        'close': close,
+    }
 
 def get_price(ticker, prices, date):
     if ticker not in prices: return 0
@@ -476,6 +503,17 @@ def select_coins(healthy, prices, date, params, state):
     if s == 'baseline':
         return healthy[:n]
 
+    elif s == 'SG':  # V18 Greedy Absorption: 시총 큰 코인이 Mom30 높으면 작은 코인 제거
+        picks = list(healthy[:n])
+        for i in range(len(picks) - 1, 0, -1):
+            c_above = _close_to(picks[i-1], prices, date)
+            c_below = _close_to(picks[i], prices, date)
+            mom_above = calc_ret(c_above, 30) if len(c_above) > 30 else -999
+            mom_below = calc_ret(c_below, 30) if len(c_below) > 30 else -999
+            if mom_above >= mom_below:
+                picks.pop(i)
+        return picks
+
     elif s == 'S1':  # cap-constrained momentum
         pool = healthy[:15]
         scored = []
@@ -589,6 +627,64 @@ def select_coins(healthy, prices, date, params, state):
             keep.extend(fill)
         return keep[:n]
 
+    elif s == 'S11':  # flexible cap bonus: Mom30 × f(market cap)
+        scored = []
+        for t in healthy:
+            m = _coin_selection_metrics(t, healthy, prices, date)
+            cap_mult = 1.30 - 0.30 * m['cap_norm']  # large cap +30%, tail +0%
+            scored.append((t, m['mom30'] * cap_mult))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [t for t,_ in scored[:n]]
+
+    elif s == 'S12':  # blended rank: Mom30 rank + market-cap rank
+        metrics = [_coin_selection_metrics(t, healthy, prices, date) for t in healthy]
+        mom_sorted = sorted(metrics, key=lambda x: x['mom30'], reverse=True)
+        mom_rank = {m['ticker']: i for i, m in enumerate(mom_sorted)}
+        scored = []
+        for cap_rank, t in enumerate(healthy):
+            score = 0.70 * mom_rank[t] + 0.30 * cap_rank
+            scored.append((t, score))
+        scored.sort(key=lambda x: x[1])
+        return [t for t,_ in scored[:n]]
+
+    elif s == 'S13':  # Sharpe-like rank + market-cap rank blend
+        metrics = [_coin_selection_metrics(t, healthy, prices, date) for t in healthy]
+        sh_sorted = sorted(metrics, key=lambda x: x['sharpe_like'], reverse=True)
+        sh_rank = {m['ticker']: i for i, m in enumerate(sh_sorted)}
+        scored = []
+        for cap_rank, t in enumerate(healthy):
+            score = 0.65 * sh_rank[t] + 0.35 * cap_rank
+            scored.append((t, score))
+        scored.sort(key=lambda x: x[1])
+        return [t for t,_ in scored[:n]]
+
+    elif s == 'S14':  # full-pool Sharpe-like sort; weighting decides cap tilt
+        scored = []
+        for t in healthy:
+            m = _coin_selection_metrics(t, healthy, prices, date)
+            scored.append((t, m['sharpe_like']))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return [t for t,_ in scored[:n]]
+
+    elif s == 'S15':  # challenger replace: small caps must beat incumbents clearly
+        metrics = {t: _coin_selection_metrics(t, healthy, prices, date) for t in healthy}
+        picks = healthy[:n]
+        if not picks:
+            return []
+        margin = 1.15
+        for challenger in healthy[n:]:
+            weakest = min(picks, key=lambda t: metrics[t]['sharpe_like'])
+            c_score = metrics[challenger]['sharpe_like']
+            w_score = metrics[weakest]['sharpe_like']
+            if c_score > max(w_score * margin, w_score + 0.50):
+                picks[picks.index(weakest)] = challenger
+        picks = list(dict.fromkeys(picks))
+        picks.sort(key=lambda t: (
+            -metrics[t]['sharpe_like'],
+            metrics[t]['cap_norm'],
+        ))
+        return picks[:n]
+
     return healthy[:n]
 
 
@@ -608,6 +704,15 @@ def compute_weights(picks, prices, date, params, state):
         coin_pct = 1.0 / max_n  # always 20% per slot
         wts = {t: coin_pct for t in picks}
         cash_pct = (max_n - n) * coin_pct
+        if cash_pct > 0.001:
+            wts['CASH'] = cash_pct
+        return wts
+
+    elif w == 'WG':  # V18 Greedy: EW + Cap 33%
+        cap = 1.0 / 3  # 33%
+        coin_pct = min(1.0 / n, cap)
+        wts = {t: coin_pct for t in picks}
+        cash_pct = 1.0 - sum(wts.values())
         if cash_pct > 0.001:
             wts['CASH'] = cash_pct
         return wts
@@ -665,6 +770,15 @@ def compute_weights(picks, prices, date, params, state):
         if total <= 0:
             return {t: 1.0/n for t in picks}
         return {t: (mcaps[i]/total) for i,t in enumerate(picks)}
+
+    elif w == 'W8':  # score pick first, then tilt weights toward larger caps
+        ordered_universe = state.get('current_universe', picks)
+        cap_bonus = []
+        for t in picks:
+            cap_norm = _cap_rank_norm(t, ordered_universe)
+            cap_bonus.append(1.20 - 0.20 * cap_norm)  # top cap gets modest extra weight
+        total = sum(cap_bonus)
+        return {t: cap_bonus[i] / total for i, t in enumerate(picks)}
 
     elif w == 'W3':  # momentum tilt
         moms = []
