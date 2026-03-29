@@ -2,7 +2,7 @@
 Cap Defend V17 Recommendation Script (Personal Version)
 =====================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
-Coin V17: K:SMA(50)+1.5%hyst + H:Mom30+Mom90+Vol5% + G5 + EW+20%Cap + DD Exit + Blacklist
+Coin V18: K:SMA(50)+1.5%hyst + H:Mom30+Mom90+Vol5% + Greedy Absorption + EW+33%Cap + DD Exit + Blacklist
 - Generates 'portfolio_result_gmoh.html'
 """
 
@@ -118,7 +118,7 @@ VERSION_HISTORY = [
 
     ("V14", "2026-03",
      "SMA(50) canary, Mom+Mom+Vol5% health, EW, DD Exit, Blacklist, Crash Breaker",
-     """<b>▶ 코인:</b> K:SMA(50)+1.5%hyst, H:Mom30+Mom90+Vol5%, 시총순 Top 5 EW, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
+     """<b>▶ 코인:</b> K:SMA(50)+1.5%hyst, H:Mom30+Mom90+Vol5%, Greedy Absorption EW+33%Cap, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
 <b>▶ 주식:</b> R6 (SPY,QQQ,VEA,EEM,GLD,PDBC), EEM>SMA200, Mom3+Sh3 union EW, Defense Top3"""),
 
     ("V13", "2026-03",
@@ -878,13 +878,28 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     if not healthy:
         return {CASH_ASSET: 1.0}, "No Healthy", meta, log, []
 
-    # --- Selection: 시총순 Top 5 (universe order = market cap) ---
+    # --- Selection: V18 Greedy Absorption ---
     top5 = healthy[:N_SELECTED_COINS]
-    meta['next_candidates'] = healthy[N_SELECTED_COINS:N_SELECTED_COINS+5]
     log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
 
-    # --- Weighting: Equal Weight with 20% Cap ---
-    COIN_WEIGHT_CAP = 0.20
+    # Greedy: 시총 큰 코인이 Mom30 높으면 작은 코인 제거
+    picks = list(top5)
+    for i in range(len(picks) - 1, 0, -1):
+        p_above = all_prices.get(picks[i-1])
+        p_below = all_prices.get(picks[i])
+        if p_above is not None and p_below is not None and len(p_above) > 30 and len(p_below) > 30:
+            mom_above = float(p_above.iloc[-1]) / float(p_above.iloc[-31]) - 1
+            mom_below = float(p_below.iloc[-1]) / float(p_below.iloc[-31]) - 1
+            if mom_above >= mom_below:
+                absorbed = picks.pop(i)
+                log.append(f"<p>  ↑ {picks[i-1].replace('-USD','')}(Mom {mom_above:+.1%}) absorbs {absorbed.replace('-USD','')}(Mom {mom_below:+.1%})</p>")
+    meta['next_candidates'] = healthy[N_SELECTED_COINS:N_SELECTED_COINS+5]
+    log.append(f"<p><b>[Greedy]</b> 생존: {picks} ({len(picks)}개)</p>")
+
+    top5 = picks  # 이후 로직은 picks 사용
+
+    # --- Weighting: EW + Cap 33% ---
+    COIN_WEIGHT_CAP = 1.0 / 3  # 33%
     w = min(1.0 / len(top5), COIN_WEIGHT_CAP)
     weights = {t: w for t in top5}
     w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]
