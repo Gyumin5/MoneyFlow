@@ -1289,10 +1289,14 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     _today_day = date_today.day if hasattr(date_today, 'day') else 1
     _coin_anchors = [1, 11, 21]
     _stock_anchors = [1, 8, 15, 22]
-    _next_coin = min([a for a in _coin_anchors if a > _today_day] or [_coin_anchors[0] + 28], default=99)
-    _next_stock = min([a for a in _stock_anchors if a > _today_day] or [_stock_anchors[0] + 28], default=99)
-    _days_coin = _next_coin - _today_day if _next_coin > _today_day else _next_coin + 28 - _today_day
-    _days_stock = _next_stock - _today_day if _next_stock > _today_day else _next_stock + 28 - _today_day
+    import calendar
+    _year = date_today.year if hasattr(date_today, 'year') else 2026
+    _month = date_today.month if hasattr(date_today, 'month') else 1
+    _days_in_month = calendar.monthrange(_year, _month)[1]
+    _remaining = [a for a in _coin_anchors if a > _today_day]
+    _days_coin = (_remaining[0] - _today_day) if _remaining else (_days_in_month - _today_day + _coin_anchors[0])
+    _remaining_s = [a for a in _stock_anchors if a > _today_day]
+    _days_stock = (_remaining_s[0] - _today_day) if _remaining_s else (_days_in_month - _today_day + _stock_anchors[0])
     next_anchor_str = f"코인 {_days_coin}일후 / 주식 {_days_stock}일후"
 
     html = f"""
