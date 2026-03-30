@@ -1,5 +1,5 @@
 """
-Cap Defend V17 Recommendation Script (Standard Version)
+Cap Defend V18 Recommendation Script (Standard Version)
 =======================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
 - Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs)
@@ -61,7 +61,7 @@ COIN_CANARY_HYST = 0.015  # 1.5% hysteresis band
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V17: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V18: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -445,7 +445,7 @@ def run_stock_strategy_v15(log, all_prices):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
-    log.append("<h2>🪙 코인 포트폴리오 (V17)</h2>")
+    log.append("<h2>🪙 코인 포트폴리오 (V18)</h2>")
 
     btc = all_prices.get('BTC-USD')
     if len(btc) < CANARY_SMA_PERIOD: return {CASH_ASSET: 1.0}, "데이터 부족"
@@ -636,7 +636,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V17</h1>
+            <h1>🚀 Cap Defend V18</h1>
             <p>리포트 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 종가 기준일: {date_today.strftime('%Y-%m-%d')}</p>
 
             <div class="status-bar">
