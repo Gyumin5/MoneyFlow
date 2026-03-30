@@ -1,5 +1,5 @@
 """
-Cap Defend V17 Recommendation Script (Personal Version)
+Cap Defend V18 Recommendation Script (Personal Version)
 =====================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
 Coin V18: K:SMA(50)+1.5%hyst + H:Mom30+Mom90+Vol5% + Greedy Absorption + EW+33%Cap + DD Exit + Blacklist
@@ -66,8 +66,20 @@ def _save_signal_state(data):
     with open(tmp, 'w') as f:
         json.dump(data, f)
     os.replace(tmp, SIGNAL_STATE_FILE)
-STRATEGY_VERSION = "V17"
+STRATEGY_VERSION = "V18"
 VERSION_HISTORY = [
+    ("V18", "2026-03",
+     "코인: SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap",
+     """<b>▶ 코인 카나리 (V18)</b>
+• BTC > SMA(<span style='color:#d93025;'>50</span>) + <span style='color:#d93025;'>1.5%</span> Hysteresis
+• MDD 4.4%p 개선, Calmar 27% 개선
+
+<b>▶ 코인 선정 (V18)</b>
+• 시총순 Top 5 → <span style='color:#d93025;'>Greedy Absorption</span>
+• 시총 큰 코인이 Mom30 높으면 작은 코인 제거
+• 비중: EW + <span style='color:#d93025;'>33% Cap</span> (V17: 20%)
+• 통합 MDD -24.8% (V17: -29.0%)"""),
+
     ("V17", "2026-03",
      "주식: Zscore3+Sh252+VT Crash, 코인: 모니터 USD 전환",
      """<b>▶ 주식 변경 (V17)</b>
@@ -226,7 +238,7 @@ CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V17: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V18: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -751,7 +763,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=True):
     date_str = target_date.date()
-    log.append(f"<h3>🪙 코인 포트폴리오 (V17) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V18) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     btc = all_prices.get('BTC-USD')
