@@ -1977,17 +1977,8 @@ if __name__ == "__main__":
         )
         send_telegram(summary)
 
-        # HTML 파일 전송
-        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'portfolio_result_gmoh.html')
-        if os.path.exists(html_path):
-            import requests as _req
-            with open(html_path, 'rb') as f:
-                _req.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendDocument",
-                    data={"chat_id": TELEGRAM_CHAT_ID},
-                    files={"document": (f"report_{target_date.strftime('%Y%m%d') if hasattr(target_date, 'strftime') else 'today'}.html", f)},
-                    timeout=30
-                )
+        # HTML 링크 전송
+        send_telegram("📄 http://152.69.225.8:8080/portfolio_result_gmoh.html")
         print("✅ 텔레그램 일간 리포트 전송 완료")
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
