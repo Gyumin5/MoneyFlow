@@ -52,6 +52,7 @@ BL_THRESHOLD = 0.85          # prev_close × 0.85
 BL_EXCLUDE_DAYS = 7
 
 STALE_SIGNAL_HOURS = 24
+REBALANCE_TOLERANCE = 0.01  # 목표 달성 판정 허용 오차 ±1%
 
 
 # ═══ 유틸리티 ═══
@@ -495,9 +496,9 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI, state: dict):
                 continue
             current_w = balance.get(ticker, 0) / total
             max_diff = max(max_diff, abs(target_w - current_w))
-        if max_diff < 0.05:  # ±5% 이내
+        if max_diff < REBALANCE_TOLERANCE:
             state['rebalancing_needed'] = False
-            log('  ✅ 목표 달성 (±5% 이내)')
+            log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
             send_telegram(f'✅ [코인] 리밸런싱 완료')
         else:
             log(f'  ⏳ 미달 (max diff={max_diff:.1%}), 다음 실행에서 재시도')

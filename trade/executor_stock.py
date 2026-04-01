@@ -54,6 +54,7 @@ CASH_BUFFER = 0.02
 MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
 LIMIT_PRICE_SLIP = 0.003   # ±0.3%
+REBALANCE_TOLERANCE = 0.01  # 목표 달성 판정 허용 오차 ±1%
 
 # Crash 상수
 CRASH_THRESHOLD = 0.97      # vt_prev_close × 0.97
@@ -63,6 +64,22 @@ EXCHANGE_MAP = {
     'SPY': 'NASD', 'QQQ': 'NASD', 'VEA': 'NASD', 'EEM': 'NASD',
     'GLD': 'NASD', 'PDBC': 'NASD', 'VNQ': 'NASD',
     'IEF': 'NASD', 'BIL': 'NASD', 'BNDX': 'NASD', 'VT': 'NASD',
+}
+
+# KIS 시세 API(price-detail/dailyprice)는 주문용 EXCHANGE_MAP과 달리
+# 실제 상장 거래소 코드(NAS/NYS/AMS)가 정확해야 종목별 가격이 정상 응답된다.
+QUOTE_EXCD_MAP = {
+    'BIL': 'AMS',
+    'BNDX': 'NAS',
+    'EEM': 'AMS',
+    'GLD': 'AMS',
+    'IEF': 'NAS',
+    'PDBC': 'NAS',
+    'QQQ': 'NAS',
+    'SPY': 'AMS',
+    'VEA': 'AMS',
+    'VNQ': 'AMS',
+    'VT': 'AMS',
 }
 
 STALE_SIGNAL_HOURS = 24
@@ -178,6 +195,7 @@ def _post(path: str, tr_id: str, body: dict, retries=2) -> dict:
 class KISAPI:
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
+        self._balance_price_cache: Dict[str, float] = {}
 
     def get_balance(self) -> Tuple[Dict[str, int], float, float]:
         """잔고 → (holdings {ticker: qty}, total_usd, exchange_rate)."""
@@ -197,6 +215,12 @@ class KISAPI:
             if qty > 0 and ticker:
                 holdings[ticker] = qty
                 total_usd += eval_amt
+                try:
+                    cur_price = float(item.get('now_pric2', 0) or item.get('ovrs_now_pric1', 0) or 0)
+                    if cur_price > 0:
+                        self._balance_price_cache[ticker] = cur_price
+                except Exception:
+                    pass
 
         # 환율
         exrt = 1350.0  # fallback
@@ -227,14 +251,69 @@ class KISAPI:
         return holdings, total_usd, exrt
 
     def get_current_price(self, ticker: str) -> float:
-        """현재가 (USD)."""
-        data = _get('/uapi/overseas-price/v1/quotations/price-detail', 'HHDFS76200200', {
-            'AUTH': '', 'EXCD': EXCHANGE_MAP.get(ticker, 'NASD'), 'SYMB': ticker,
-        })
+        """현재가 (USD). 장중 시세 → 잔고 캐시 → 일봉 종가 순으로 fallback."""
+        excd = QUOTE_EXCD_MAP.get(ticker, 'NAS')
+
+        # 1차: 실시간 시세
         try:
-            return float(data.get('output', {}).get('last', 0))
+            data = _get('/uapi/overseas-price/v1/quotations/price-detail', 'HHDFS76200200', {
+                'AUTH': '', 'EXCD': excd, 'SYMB': ticker,
+            }, retries=1)
+            price = float(data.get('output', {}).get('last', 0))
+            if price > 0:
+                return price
         except Exception:
-            return 0
+            pass
+
+        # 2차: 잔고 조회에서 얻은 가격 캐시
+        cached = self._balance_price_cache.get(ticker, 0)
+        if cached > 0:
+            log(f'  {ticker}: 잔고 캐시 가격 사용 ${cached:.2f}')
+            return cached
+
+        # 3차: 잔고 재조회로 캐시 갱신
+        try:
+            self.get_balance()
+            cached = self._balance_price_cache.get(ticker, 0)
+            if cached > 0:
+                log(f'  {ticker}: 잔고 재조회 가격 사용 ${cached:.2f}')
+                return cached
+        except Exception:
+            pass
+
+        # 4차: KIS 기간별시세 종가
+        try:
+            bymd = datetime.now().strftime('%Y%m%d')
+            data = _get('/uapi/overseas-price/v1/quotations/dailyprice', 'HHDFS76240000', {
+                'AUTH': '', 'EXCD': excd, 'SYMB': ticker,
+                'GUBN': '0', 'BYMD': bymd, 'MODP': '0',
+            }, retries=1)
+            for item in data.get('output2', []):
+                if isinstance(item, dict):
+                    price = float(item.get('clos', 0))
+                    if price > 0:
+                        self._balance_price_cache[ticker] = price
+                        log(f'  {ticker}: KIS 일봉 종가 사용 ${price:.2f}')
+                        return price
+        except Exception:
+            pass
+
+        # 5차: Yahoo 종가 fallback (VT처럼 비보유 종목의 장외 확인용)
+        try:
+            import yfinance as yf
+            tk = yf.Ticker(ticker)
+            hist = tk.history(period='5d')
+            if not hist.empty:
+                price = float(hist['Close'].iloc[-1])
+                if price > 0:
+                    self._balance_price_cache[ticker] = price
+                    log(f'  {ticker}: Yahoo 종가 사용 ${price:.2f}')
+                    return price
+        except Exception:
+            pass
+
+        log(f'  ⚠️ {ticker} 가격 조회 실패')
+        return 0.0
 
     def get_vt_price(self) -> float:
         """VT 현재가."""
@@ -282,7 +361,7 @@ class KISAPI:
         if success:
             log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f}')
         else:
-            send_telegram(f'⚠️ [주식] 주문 실패: {side} {ticker} {qty}주')
+            send_telegram(f'⚠️ 주문 실패: {side} {ticker} {qty}주')
             log(f'  주문 실패 {side} {ticker}: {result}')
         return success
 
@@ -418,18 +497,28 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
     holdings, total_usd, exrt = api.get_balance()
     if total_usd <= 0:
         log('  잔고 없음')
-        return
+        return {
+            'holdings': {},
+            'total_usd': 0.0,
+            'exchange_rate': exrt,
+            'sells': [],
+            'buys': [],
+            'max_diff': None,
+            'completed': False,
+        }
 
     # 현재 비중 계산
     current_values = {}
     for ticker, qty in holdings.items():
         price = api.get_current_price(ticker)
         current_values[ticker] = qty * price if price else 0
+        log(f'    현재 {ticker}: ${current_values[ticker]:,.0f} ({(current_values[ticker] / total_usd):.1%})')
 
     # 매도/매수 리스트
     sells = []
     buys = []
     target_usd = total_usd * (1 - CASH_BUFFER)
+    log(f'    target_usd: ${target_usd:,.0f} (buffer={CASH_BUFFER:.2f})')
 
     for ticker, target_w in target.items():
         if ticker == 'Cash':
@@ -493,12 +582,31 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
             price = api.get_current_price(ticker)
             current_w = (holdings2.get(ticker, 0) * price / total2) if price > 0 else 0
             max_diff = max(max_diff, abs(target_w - current_w))
-        if max_diff < 0.05:
+        if max_diff < REBALANCE_TOLERANCE:
             state['rebalancing_needed'] = False
-            log('  ✅ 목표 달성 (±5% 이내)')
-            send_telegram(f'✅ [주식] 리밸런싱 완료')
+            log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
+            send_telegram('✅ 리밸런싱 완료')
         else:
             log(f'  ⏳ 미달 (max diff={max_diff:.1%}), 다음 실행에서 재시도')
+        return {
+            'holdings': holdings,
+            'total_usd': total_usd,
+            'exchange_rate': exrt,
+            'sells': sells,
+            'buys': buys,
+            'max_diff': max_diff,
+            'completed': max_diff < REBALANCE_TOLERANCE,
+        }
+
+    return {
+        'holdings': holdings,
+        'total_usd': total_usd,
+        'exchange_rate': exrt,
+        'sells': sells,
+        'buys': buys,
+        'max_diff': None,
+        'completed': False,
+    }
 
 
 # ═══ run_once ═══
@@ -552,12 +660,14 @@ def run_once(dry_run=False):
             target = {'Cash': 1.0}
             log('  Crash: target = 100% 현금')
             execute_delta(target, api, state)
-        save_json(TRADE_STATE_FILE, state)
+        if not dry_run:
+            save_json(TRADE_STATE_FILE, state)
         log('주식 executor 완료 (Crash)')
         return
 
     if not is_fresh:
-        save_json(TRADE_STATE_FILE, state)
+        if not dry_run:
+            save_json(TRADE_STATE_FILE, state)
         log('주식 executor 완료 (stale signal)')
         return
 
@@ -574,16 +684,42 @@ def run_once(dry_run=False):
         else:
             target = merge_tranches(state)
         log(f'  Target: {target}')
-        send_telegram(f'📊 [주식] 리밸런싱 시작: {target}')
+        mode = 'DRY-RUN' if dry_run else 'LIVE'
+        summary_lines = [f'📊 리밸런싱 시작 ({mode})']
+        summary_lines.append(f"Risk: {'ON' if signal.get('stock', {}).get('risk_on', True) else 'OFF'}")
+        summary_lines.append(
+            '목표: ' + ', '.join(f'{k}:{v:.1%}' for k, v in target.items())
+        )
         # 디버그: 현재 잔고 상세
         _bal = api.get_balance() if hasattr(api, 'get_balance') else {}
         log(f'  Balance: {_bal}')
-        execute_delta(target, api, state)
+        result = execute_delta(target, api, state)
+        holdings = result.get('holdings', {})
+        if holdings:
+            summary_lines.append(
+                '현재 보유: ' + ', '.join(f'{k}:{v}주' for k, v in holdings.items())
+            )
+        else:
+            summary_lines.append('현재 보유: 없음')
+        sells = result.get('sells', [])
+        buys = result.get('buys', [])
+        if not sells and not buys:
+            summary_lines.append('주문 계산: 없음')
+        else:
+            if sells:
+                summary_lines.append('매도 예정: ' + ', '.join(f'{t} {q}주' for t, q, _ in sells))
+            if buys:
+                summary_lines.append('매수 예정: ' + ', '.join(f'{t} {q}주' for t, q, _ in buys))
+        max_diff = result.get('max_diff')
+        if max_diff is not None:
+            summary_lines.append(f'잔여 편차: {max_diff:.1%}')
+        send_telegram('\n'.join(summary_lines))
 
     # 6. 저장
     state['last_action'] = 'executor'
     state['last_trade_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-    save_json(TRADE_STATE_FILE, state)
+    if not dry_run:
+        save_json(TRADE_STATE_FILE, state)
     try:
         _h, _t, _e = api.get_balance()
         _elapsed = time.time() - _t0
