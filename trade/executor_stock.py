@@ -61,9 +61,17 @@ CRASH_THRESHOLD = 0.97      # vt_prev_close × 0.97
 CRASH_COOL_DAYS = 3
 
 EXCHANGE_MAP = {
-    'SPY': 'NASD', 'QQQ': 'NASD', 'VEA': 'NASD', 'EEM': 'NASD',
-    'GLD': 'NASD', 'PDBC': 'NASD', 'VNQ': 'NASD',
-    'IEF': 'NASD', 'BIL': 'NASD', 'BNDX': 'NASD', 'VT': 'NASD',
+    'BIL': 'AMEX',
+    'BNDX': 'NASD',
+    'EEM': 'AMEX',
+    'GLD': 'AMEX',
+    'IEF': 'NASD',
+    'PDBC': 'NASD',
+    'QQQ': 'NASD',
+    'SPY': 'AMEX',
+    'VEA': 'AMEX',
+    'VNQ': 'AMEX',
+    'VT': 'AMEX',
 }
 
 # KIS 시세 API(price-detail/dailyprice)는 주문용 EXCHANGE_MAP과 달리
@@ -178,18 +186,30 @@ def _get(path: str, tr_id: str, params: dict, retries=3) -> dict:
 
 
 def _post(path: str, tr_id: str, body: dict, retries=2) -> dict:
+    last_error = None
     for i in range(retries):
         try:
             resp = requests.post(f'{BASE_URL}{path}', headers=_headers(tr_id), json=body, timeout=15)
             data = resp.json()
             if data.get('rt_cd') == '0':
                 return data
+            last_error = {
+                'status_code': resp.status_code,
+                'body': data,
+                'path': path,
+                'tr_id': tr_id,
+            }
             if i < retries - 1:
                 time.sleep(1)
-        except Exception:
+        except Exception as e:
+            last_error = {
+                'exception': repr(e),
+                'path': path,
+                'tr_id': tr_id,
+            }
             if i < retries - 1:
                 time.sleep(1)
-    return {}
+    return {'_error': last_error} if last_error else {}
 
 
 class KISAPI:
@@ -207,14 +227,14 @@ class KISAPI:
             'CTX_AREA_FK200': '', 'CTX_AREA_NK200': '',
         })
         holdings = {}
-        total_usd = 0
+        holdings_usd = 0.0
         for item in data.get('output1', []):
             ticker = item.get('ovrs_pdno', '')
             qty = int(float(item.get('ovrs_cblc_qty', 0)))
             eval_amt = float(item.get('ovrs_stck_evlu_amt', 0))
             if qty > 0 and ticker:
                 holdings[ticker] = qty
-                total_usd += eval_amt
+                holdings_usd += eval_amt
                 try:
                     cur_price = float(item.get('now_pric2', 0) or item.get('ovrs_now_pric1', 0) or 0)
                     if cur_price > 0:
@@ -234,20 +254,39 @@ class KISAPI:
             except Exception:
                 pass
 
-        # USD 현금
-        cash_usd = 0
+        # 계좌 전체 자산(KRW 기준) + USD 예수금 fallback
+        total_usd = 0.0
+        cash_usd = 0.0
         bp_data = _get('/uapi/overseas-stock/v1/trading/inquire-present-balance', 'CTRP6504R', {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-            'WCRC_FRCR_DVSN_CD': '02', 'INQR_DVSN_CD': '00',
+            'WCRC_FRCR_DVSN_CD': '02', 'NATN_CD': '840',
+            'TR_MKET_CD': '00', 'INQR_DVSN_CD': '00',
         })
-        for item in bp_data.get('output3', []):
-            if item.get('crcy_cd') == 'USD':
+        try:
+            output2 = bp_data.get('output2', [])
+            if output2 and isinstance(output2[0], dict):
+                exrt2 = float(output2[0].get('frst_bltn_exrt', 0))
+                if exrt2 > 0:
+                    exrt = exrt2
+        except Exception:
+            pass
+        output2 = bp_data.get('output2', [])
+        for item in output2:
+            if isinstance(item, dict) and item.get('crcy_cd') == 'USD':
                 try:
-                    cash_usd = float(item.get('frcr_evlu_amt2', 0))
+                    cash_usd = float(item.get('frcr_evlu_amt2', 0)) / exrt if exrt > 0 else 0.0
                 except Exception:
                     pass
 
-        total_usd += cash_usd
+        try:
+            total_krw = float(bp_data.get('output3', {}).get('tot_asst_amt', 0))
+            if total_krw > 0 and exrt > 0:
+                total_usd = total_krw / exrt
+        except Exception:
+            total_usd = 0.0
+
+        if total_usd <= 0:
+            total_usd = holdings_usd + cash_usd
         return holdings, total_usd, exrt
 
     def get_current_price(self, ticker: str) -> float:
@@ -334,12 +373,14 @@ class KISAPI:
             if order_no and qty > 0:
                 log(f'  미체결 취소: {ticker} {side} {qty}주')
                 if not self.dry_run:
-                    _post('/uapi/overseas-stock/v1/trading/order-rvsecncl', 'JTTT1004U', {
+                    _post('/uapi/overseas-stock/v1/trading/order-rvsecncl', 'TTTT1004U', {
                         'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
                         'OVRS_EXCG_CD': EXCHANGE_MAP.get(ticker, 'NASD'),
                         'PDNO': ticker, 'ORGN_ODNO': order_no,
                         'RVSE_CNCL_DVSN_CD': '02',
                         'ORD_QTY': str(qty), 'OVRS_ORD_UNPR': '0',
+                        'CTAC_TLNO': '', 'MGCO_APTM_ODNO': '',
+                        'ORD_SVR_DVSN_CD': '0',
                     })
 
     def place_order(self, ticker: str, qty: int, price: float, side: str = 'buy') -> bool:
@@ -347,13 +388,14 @@ class KISAPI:
         if self.dry_run:
             log(f'  [DRY] {side} {ticker} {qty}주 @ ${price:.2f}')
             return True
-        tr_id = 'JTTT1002U' if side == 'buy' else 'JTTT1006U'
+        tr_id = 'TTTT1002U' if side == 'buy' else 'TTTT1006U'
         result = _post('/uapi/overseas-stock/v1/trading/order', tr_id, {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
             'OVRS_EXCG_CD': EXCHANGE_MAP.get(ticker, 'NASD'),
             'PDNO': ticker,
             'ORD_QTY': str(qty),
             'OVRS_ORD_UNPR': f'{price:.2f}',
+            'CTAC_TLNO': '', 'MGCO_APTM_ODNO': '',
             'ORD_SVR_DVSN_CD': '0',
             'ORD_DVSN': '00',
         })
@@ -361,7 +403,6 @@ class KISAPI:
         if success:
             log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f}')
         else:
-            send_telegram(f'⚠️ 주문 실패: {side} {ticker} {qty}주')
             log(f'  주문 실패 {side} {ticker}: {result}')
         return success
 
@@ -517,6 +558,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
     # 매도/매수 리스트
     sells = []
     buys = []
+    failed_orders = []
     target_usd = total_usd * (1 - CASH_BUFFER)
     log(f'    target_usd: ${target_usd:,.0f} (buffer={CASH_BUFFER:.2f})')
 
@@ -548,11 +590,15 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
     for ticker, qty, price in sells:
         sell_price = price * (1 - LIMIT_PRICE_SLIP)
         log(f'  매도: {ticker} {qty}주 @ ${sell_price:.2f}')
+        success = False
         for attempt in range(MAX_ORDER_ATTEMPTS):
             success = api.place_order(ticker, qty, sell_price, 'sell')
             if success:
                 break
             time.sleep(ORDER_WAIT_SEC)
+        if not success:
+            failed_orders.append(('sell', ticker, qty))
+            send_telegram(f'⚠️ 주문 실패: sell {ticker} {qty}주')
 
     if sells:
         time.sleep(ORDER_WAIT_SEC)
@@ -562,11 +608,15 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
     for ticker, qty, price in buys:
         buy_price = price * (1 + LIMIT_PRICE_SLIP)
         log(f'  매수: {ticker} {qty}주 @ ${buy_price:.2f}')
+        success = False
         for attempt in range(MAX_ORDER_ATTEMPTS):
             success = api.place_order(ticker, qty, buy_price, 'buy')
             if success:
                 break
             time.sleep(ORDER_WAIT_SEC)
+        if not success:
+            failed_orders.append(('buy', ticker, qty))
+            send_telegram(f'⚠️ 주문 실패: buy {ticker} {qty}주')
 
     if buys:
         time.sleep(ORDER_WAIT_SEC)
@@ -582,11 +632,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
             price = api.get_current_price(ticker)
             current_w = (holdings2.get(ticker, 0) * price / total2) if price > 0 else 0
             max_diff = max(max_diff, abs(target_w - current_w))
-        if max_diff < REBALANCE_TOLERANCE:
+        if max_diff < REBALANCE_TOLERANCE and not failed_orders:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
             send_telegram('✅ 리밸런싱 완료')
         else:
+            state['rebalancing_needed'] = True
             log(f'  ⏳ 미달 (max diff={max_diff:.1%}), 다음 실행에서 재시도')
         return {
             'holdings': holdings,
@@ -594,8 +645,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
             'exchange_rate': exrt,
             'sells': sells,
             'buys': buys,
+            'failed_orders': failed_orders,
             'max_diff': max_diff,
-            'completed': max_diff < REBALANCE_TOLERANCE,
+            'completed': max_diff < REBALANCE_TOLERANCE and not failed_orders,
         }
 
     return {
@@ -604,6 +656,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
         'exchange_rate': exrt,
         'sells': sells,
         'buys': buys,
+        'failed_orders': failed_orders,
         'max_diff': None,
         'completed': False,
     }
@@ -693,27 +746,34 @@ def run_once(dry_run=False):
         # 디버그: 현재 잔고 상세
         _bal = api.get_balance() if hasattr(api, 'get_balance') else {}
         log(f'  Balance: {_bal}')
-        result = execute_delta(target, api, state)
-        holdings = result.get('holdings', {})
+        holdings = _bal[0] if isinstance(_bal, tuple) and len(_bal) >= 1 else {}
         if holdings:
             summary_lines.append(
                 '현재 보유: ' + ', '.join(f'{k}:{v}주' for k, v in holdings.items())
             )
         else:
             summary_lines.append('현재 보유: 없음')
+        send_telegram('\n'.join(summary_lines))
+        result = execute_delta(target, api, state)
         sells = result.get('sells', [])
         buys = result.get('buys', [])
+        max_diff = result.get('max_diff')
+        failed_orders = result.get('failed_orders', [])
+        finish_lines = ['✅ 리밸런싱 완료' if result.get('completed') else '⏳ 리밸런싱 미완료']
         if not sells and not buys:
-            summary_lines.append('주문 계산: 없음')
+            finish_lines.append('주문 계산: 없음')
         else:
             if sells:
-                summary_lines.append('매도 예정: ' + ', '.join(f'{t} {q}주' for t, q, _ in sells))
+                finish_lines.append('매도 계획: ' + ', '.join(f'{t} {q}주' for t, q, _ in sells))
             if buys:
-                summary_lines.append('매수 예정: ' + ', '.join(f'{t} {q}주' for t, q, _ in buys))
-        max_diff = result.get('max_diff')
+                finish_lines.append('매수 계획: ' + ', '.join(f'{t} {q}주' for t, q, _ in buys))
+        if failed_orders:
+            finish_lines.append(
+                '실패 주문: ' + ', '.join(f'{side} {ticker} {qty}주' for side, ticker, qty in failed_orders)
+            )
         if max_diff is not None:
-            summary_lines.append(f'잔여 편차: {max_diff:.1%}')
-        send_telegram('\n'.join(summary_lines))
+            finish_lines.append(f'잔여 편차: {max_diff:.1%}')
+        send_telegram('\n'.join(finish_lines))
 
     # 6. 저장
     state['last_action'] = 'executor'
