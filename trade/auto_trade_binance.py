@@ -101,7 +101,7 @@ UNIVERSE = [
 UNIVERSE_SIZE = 5
 CAP = 1/3  # EW + 33% cap
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
-DELTA_THRESHOLD = 0.05  # 5% 이상 변동분만 매매
+DELTA_THRESHOLD = 0.02  # 선물은 LOT_SIZE/최소 notional 영향이 커서 ±2% 허용
 ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
 
@@ -154,11 +154,14 @@ def load_state() -> dict:
     """상태 파일 로드."""
     if os.path.exists(STATE_PATH):
         with open(STATE_PATH) as f:
-            return json.load(f)
+            state = json.load(f)
+            state.setdefault('rebalancing_needed', False)
+            return state
     return {
         'strategies': {},  # 각 전략별 상태 (canary, snapshots, bar_counter 등)
         'last_target': {},  # 마지막 합산 목표 비중
         'last_run': None,
+        'rebalancing_needed': False,
     }
 
 
@@ -510,6 +513,7 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
         for si in range(n_snap):
             snapshots[si] = compute_weights()
         need_update = True
+        log.info(f"  {strat_name} EVENT: canary_flipped -> rebalancing_needed=true")
     elif canary_on:
         for si in range(n_snap):
             offset = int(si * snap_iv / n_snap)
@@ -518,6 +522,7 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
                 if new_w != snapshots[si]:
                     snapshots[si] = new_w
                     need_update = True
+                    log.info(f"  {strat_name} EVENT: tranche_refresh[{si}] -> rebalancing_needed=true")
 
     # 스냅샷 합산
     combined = {}
@@ -540,6 +545,8 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
     if 'strategies' not in state:
         state['strategies'] = {}
     state['strategies'][strat_name] = ss_new
+    if need_update:
+        state['rebalancing_needed'] = True
 
     return combined
 
@@ -747,6 +754,10 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
     log.info(f"REBALANCE target={target}")
     log.info(f"REBALANCE target_lev_map={target_lev_map}")
 
+    # 리밸런싱 전에 기존 closePosition 스탑/TP 주문을 정리한다.
+    # 그렇지 않으면 leverage/margin 변경이나 새 스탑 등록이 막힐 수 있다.
+    cancel_stop_orders(client, list(UNIVERSE))
+
     # 매도/청산 (보유 중이지만 target에 없거나 줄어야)
     for coin, pos in current_positions.items():
         target_w = target.get(coin, 0)
@@ -881,24 +892,74 @@ def set_margin_type(client: Client, symbol: str, margin_type: str = 'ISOLATED'):
 
 
 def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):
-    """봇이 관리하는 STOP_MARKET 주문 정리."""
+    """봇이 관리하는 일반/알고리즘 조건부 주문 정리."""
     symbol_set = set(symbols or UNIVERSE)
+
+    # 1) 일반 open orders 에 노출되는 조건부 주문 정리
     try:
         orders = client.futures_get_open_orders()
     except Exception as e:
         log.warning(f"open_orders fetch failed: {e}")
-        return
-    for order in orders:
-        symbol = order.get('symbol')
-        if symbol not in symbol_set:
-            continue
-        if order.get('type') != 'STOP_MARKET':
-            continue
+    else:
+        for order in orders:
+            symbol = order.get('symbol')
+            if symbol not in symbol_set:
+                continue
+            order_type = str(order.get('type') or '')
+            is_close_position = str(order.get('closePosition')).lower() == 'true'
+            is_conditional = order_type in {'STOP_MARKET', 'TAKE_PROFIT_MARKET', 'STOP', 'TAKE_PROFIT'}
+            if not (is_close_position or is_conditional):
+                continue
+            try:
+                client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
+                log.info(
+                    f"CANCEL CONDITIONAL {symbol} orderId={order['orderId']} "
+                    f"type={order_type} closePosition={order.get('closePosition')}"
+                )
+            except Exception as e:
+                log.warning(f"cancel conditional {symbol} orderId={order.get('orderId')}: {e}")
+
+    # 2) 별도 algo/conditional 저장소에 있는 조건부 주문 정리
+    try:
+        algo_orders = client.futures_get_open_algo_orders()
+    except Exception as e:
+        log.warning(f"open_algo_orders fetch failed: {e}")
+    else:
+        for order in algo_orders:
+            symbol = order.get('symbol')
+            if symbol not in symbol_set:
+                continue
+            algo_id = order.get('algoId')
+            if not algo_id:
+                continue
+            try:
+                client.futures_cancel_algo_order(symbol=symbol, algoId=algo_id)
+                log.info(
+                    f"CANCEL ALGO {symbol} algoId={algo_id} "
+                    f"reduceOnly={order.get('reduceOnly')} closePosition={order.get('closePosition')}"
+                )
+            except Exception as e:
+                log.warning(f"cancel algo {symbol} algoId={algo_id}: {e}")
+
+
+def force_cancel_all_orders(client: Client, symbols: Optional[List[str]] = None):
+    """심볼별 모든 열린 주문 강제 정리.
+
+    Binance가 조건부 closePosition 주문을 open_orders 목록에 노출하지 않는 경우가 있어,
+    -4130 충돌 회피용으로 사용한다.
+    """
+    symbol_set = set(symbols or UNIVERSE)
+    for symbol in symbol_set:
         try:
-            client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
-            log.info(f"CANCEL STOP {symbol} orderId={order['orderId']}")
+            client.futures_cancel_all_open_orders(symbol=symbol)
+            log.info(f"CANCEL ALL OPEN ORDERS {symbol}")
         except Exception as e:
-            log.warning(f"cancel stop {symbol}: {e}")
+            log.warning(f"cancel all open orders {symbol}: {e}")
+        try:
+            client.futures_cancel_all_algo_open_orders(symbol=symbol)
+            log.info(f"CANCEL ALL ALGO OPEN ORDERS {symbol}")
+        except Exception as e:
+            log.warning(f"cancel all algo open orders {symbol}: {e}")
 
 
 def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[str, pd.DataFrame],
@@ -927,6 +988,7 @@ def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[s
         stop_price = prev_close * (1.0 - STOP_PCT)
         symbol = pos['symbol']
         stop_str = format_price(client, symbol, stop_price)
+        qty_str = format_quantity(client, symbol, qty)
         log.info(
             f"STOP PLAN {symbol}: qty={qty:.6f} prev_close={prev_close:.4f} "
             f"stop_pct={STOP_PCT:.1%} stop={stop_str}"
@@ -937,13 +999,32 @@ def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[s
                 side='SELL',
                 type='STOP_MARKET',
                 stopPrice=stop_str,
-                closePosition='true',
+                quantity=qty_str,
+                reduceOnly='true',
                 workingType='CONTRACT_PRICE',
             ))
             log.info(f"STOP SELL {symbol} stop={stop_str}: {order.get('status', 'OK')}")
             if order_alerts is not None:
                 order_alerts.append(f"STOP {symbol} {stop_str}")
         except BinanceAPIException as e:
+            if 'code=-4130' in str(e) or 'closeposition in the direction is existing' in str(e).lower():
+                try:
+                    force_cancel_all_orders(client, [symbol])
+                    order = create_order_with_retry(client, dict(
+                        symbol=symbol,
+                        side='SELL',
+                        type='STOP_MARKET',
+                        stopPrice=stop_str,
+                        quantity=qty_str,
+                        reduceOnly='true',
+                        workingType='CONTRACT_PRICE',
+                    ))
+                    log.info(f"STOP SELL {symbol} stop={stop_str}: {order.get('status', 'OK')} (retry after cancel_all)")
+                    if order_alerts is not None:
+                        order_alerts.append(f"STOP {symbol} {stop_str}")
+                    continue
+                except Exception as e2:
+                    e = e2
             log.error(f"STOP FAILED {symbol} stop={stop_str}: {e}")
             if error_alerts is not None:
                 error_alerts.append(f"STOP FAILED {symbol} {stop_str}: {e}")
@@ -1124,17 +1205,22 @@ def main():
         log.info(f"합산: {coins_combined or 'CASH 100%'}")
 
         # 5. 리밸런싱
-        prev_target = state.get('last_target', {})
         target_lev_map = get_coin_leverage_map(combined, data['1h'])
-        rebalance_needed = needs_rebalance(combined, positions_before, pv_before, target_lev_map)
-        if combined == prev_target and not rebalance_needed:
-            log.info("비중 변경 없음")
+        rebalance_needed = state.get('rebalancing_needed', False)
+        if not rebalance_needed:
+            log.info("매매 스킵: rebalancing_needed=false")
             positions_after, pv_after = positions_before, pv_before
         elif args.trade:
+            # leverage / margin 변경 전에 기존 조건부 주문을 정리한다.
+            prep_symbols = sorted({
+                *(coin + 'USDT' for coin in target_lev_map.keys()),
+                *(pos['symbol'] for pos in positions_before.values()),
+            })
+            force_cancel_all_orders(client, prep_symbols)
             for coin, lev in target_lev_map.items():
                 sym = coin + 'USDT'
                 set_leverage(client, sym, lev)
-                set_margin_type(client, sym, 'CROSSED')
+                set_margin_type(client, sym, 'ISOLATED')
 
             execute_rebalance(
                 client, combined, pv_before, target_lev_map,
@@ -1148,11 +1234,15 @@ def main():
                 for coin, pos in positions_after.items():
                     pnl = pos.get('pnl', 0.0)
                     log.info(f"  보유: {coin} ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
-        else:
-            if rebalance_needed:
-                log.info(f"DRY-RUN REBALANCE: {coins_combined or 'CASH'}")
+            # 이벤트가 발생해서 시작한 리밸런싱은 목표에 근접하면 종료, 아니면 다음 실행에서 재시도.
+            if needs_rebalance(combined, positions_after, pv_after, target_lev_map):
+                state['rebalancing_needed'] = True
+                log.info("  ⏳ 미달, rebalancing_needed 유지")
             else:
-                log.info(f"DRY-RUN: {coins_combined or 'CASH'}")
+                state['rebalancing_needed'] = False
+                log.info("  ✅ 목표 달성, rebalancing_needed=false")
+        else:
+            log.info(f"DRY-RUN REBALANCE: {coins_combined or 'CASH'}")
             positions_after, pv_after = positions_before, pv_before
 
         if args.trade:

@@ -56,6 +56,21 @@ EXCHANGE_MAP = {
     'IEF': 'NASD', 'BIL': 'NASD', 'BNDX': 'NASD', 'VT': 'NASD',
 }
 
+# KIS 시세 API(price-detail/dailyprice)용 정확 거래소 코드
+QUOTE_EXCD_MAP = {
+    'BIL': 'AMS',
+    'BNDX': 'NAS',
+    'EEM': 'AMS',
+    'GLD': 'AMS',
+    'IEF': 'NAS',
+    'PDBC': 'NAS',
+    'QQQ': 'NAS',
+    'SPY': 'AMS',
+    'VEA': 'AMS',
+    'VNQ': 'AMS',
+    'VT': 'AMS',
+}
+
 
 # ─── Telegram ────────────────────────────────────────────
 def send_telegram(msg):
@@ -225,9 +240,7 @@ _balance_price_cache = {}
 
 def get_current_price(ticker: str) -> float:
     """현재가 조회. 장중: 시세API, 장외: 잔고 종가 fallback."""
-    exchange = EXCHANGE_MAP.get(ticker, 'NASD')
-    excd_map = {'NASD': 'NAS', 'AMEX': 'AMS', 'NYSE': 'NYS'}
-    excd = excd_map.get(exchange, 'NAS')
+    excd = QUOTE_EXCD_MAP.get(ticker, 'NAS')
 
     # 1차: 시세 API (올바른 경로: overseas-price)
     try:
