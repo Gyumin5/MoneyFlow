@@ -1,0 +1,1226 @@
+#!/usr/bin/env python3
+"""
+바이낸스 선물 자동매매 — 최종 앙상블 전략
+========================================
+확정 신호 조합:
+- 4h1: 4h_01  (SMA=240, Mom=10/30, mom1vol, daily vol, Snap=120)
+- 4h2: 4h_09  (SMA=120, Mom=20/120, mom2vol, bar vol,   Snap=21)
+- 1h1: 1h_09  (SMA=168, Mom=36/720, mom2vol, bar vol,   Snap=27)
+
+실행층:
+- 종목별 동적 레버리지: cap+mom blend 5/4/3x
+- 스탑: prev_close 15%
+- 게이트: cash_guard(34%)
+
+실행: 매 1시간 크론
+1. 바이낸스에서 1h/4h OHLCV 수집
+2. 3전략 각각 목표 비중 계산
+3. 가중 합산 → 단일 포트폴리오
+4. 종목별 5/4/3x 레버리지 매핑
+5. 현재 포지션과 비교 → delta 리밸런싱
+6. 필요 시 reduce-only STOP_MARKET 주문 동기화
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import requests
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
+
+# ─── 설정 ───
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.py')
+STATE_PATH = os.path.join(SCRIPT_DIR, 'binance_state.json')
+LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
+
+# 전략/실행 파라미터
+LEVERAGE_FLOOR = 3
+LEVERAGE_MID = 4
+LEVERAGE_CEILING = 5
+STOP_PCT = 0.15
+STOP_GATE_CASH_THRESHOLD = 0.34
+LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30
+ENSEMBLE_WEIGHTS = {'4h1': 1/3, '4h2': 1/3, '1h1': 1/3}
+
+STRATEGIES = {
+    '4h1': {
+        'interval': '4h',
+        'sma_bars': 240,
+        'mom_short_bars': 10,
+        'mom_long_bars': 30,   # mom1vol이라 long 안 씀
+        'health_mode': 'mom1vol',
+        'vol_mode': 'daily',
+        'vol_threshold': 0.05,
+        'snap_interval_bars': 120,
+        'canary_hyst': 0.015,
+        'n_snapshots': 3,
+    },
+    '4h2': {
+        'interval': '4h',
+        'sma_bars': 120,
+        'mom_short_bars': 20,
+        'mom_long_bars': 120,
+        'health_mode': 'mom2vol',
+        'vol_mode': 'bar',
+        'vol_threshold': 0.60,
+        'snap_interval_bars': 21,
+        'canary_hyst': 0.015,
+        'n_snapshots': 3,
+    },
+    '1h1': {
+        'interval': '1h',
+        'sma_bars': 168,
+        'mom_short_bars': 36,
+        'mom_long_bars': 720,
+        'health_mode': 'mom2vol',
+        'vol_mode': 'bar',
+        'vol_threshold': 0.80,
+        'snap_interval_bars': 27,
+        'canary_hyst': 0.015,
+        'n_snapshots': 3,
+    },
+}
+
+# 유니버스 (시총순, 바이낸스 선물)
+UNIVERSE = [
+    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
+    'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'TRXUSDT', 'LINKUSDT',
+    'DOTUSDT', 'UNIUSDT', 'NEARUSDT', 'LTCUSDT', 'BCHUSDT',
+    'APTUSDT', 'ICPUSDT', 'FILUSDT', 'ATOMUSDT', 'ARBUSDT',
+]
+
+UNIVERSE_SIZE = 5
+CAP = 1/3  # EW + 33% cap
+MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
+DELTA_THRESHOLD = 0.05  # 5% 이상 변동분만 매매
+ORDER_MAX_RETRIES = 3
+ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
+
+# 텔레그램
+TELEGRAM_BOT_TOKEN = None
+TELEGRAM_CHAT_ID = None
+
+log = logging.getLogger('binance_trader')
+log.setLevel(logging.INFO)
+_fmt = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+_fh = logging.FileHandler(LOG_PATH)
+_fh.setFormatter(_fmt)
+log.addHandler(_fh)
+# 터미널에서 실행 시에만 콘솔 출력
+if sys.stderr.isatty():
+    _sh = logging.StreamHandler()
+    _sh.setFormatter(_fmt)
+    log.addHandler(_sh)
+
+
+# ─── 유틸리티 ───
+def load_config():
+    """config.py에서 API 키 로드."""
+    global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+    try:
+        sys.path.insert(0, SCRIPT_DIR)
+        import config
+        api_key = getattr(config, 'BINANCE_API_KEY', '')
+        api_secret = getattr(config, 'BINANCE_API_SECRET', '')
+        TELEGRAM_BOT_TOKEN = getattr(config, 'TELEGRAM_BOT_TOKEN', None)
+        TELEGRAM_CHAT_ID = getattr(config, 'TELEGRAM_CHAT_ID', None)
+        return api_key, api_secret
+    except ImportError:
+        log.error("config.py not found")
+        return '', ''
+
+
+def send_telegram(msg: str):
+    """텔레그램 알림."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': msg}, timeout=10)
+    except Exception as e:
+        log.warning(f"Telegram error: {e}")
+
+
+def load_state() -> dict:
+    """상태 파일 로드."""
+    if os.path.exists(STATE_PATH):
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    return {
+        'strategies': {},  # 각 전략별 상태 (canary, snapshots, bar_counter 등)
+        'last_target': {},  # 마지막 합산 목표 비중
+        'last_run': None,
+    }
+
+
+def save_state(state: dict):
+    """상태 파일 원자적 저장."""
+    tmp = STATE_PATH + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(state, f, indent=2, default=str)
+    os.replace(tmp, STATE_PATH)
+
+
+# ─── 데이터 수집 ───
+def fetch_klines(client: Client, symbol: str, interval: str, limit: int = 1500) -> pd.DataFrame:
+    """바이낸스에서 OHLCV 가져오기.
+
+    선물 klines는 한 번에 큰 limit를 받지 못하므로 1500봉 이하로 나눠서 뒤에서부터 이어붙인다.
+    """
+    max_batch = 1500
+    remaining = max(1, int(limit))
+    end_time = None
+    chunks = []
+
+    try:
+        while remaining > 0:
+            batch_limit = min(remaining, max_batch)
+            params = {'symbol': symbol, 'interval': interval, 'limit': batch_limit}
+            if end_time is not None:
+                params['endTime'] = end_time
+            klines = client.futures_klines(**params)
+            if not klines:
+                break
+            chunks.extend(klines)
+            remaining -= len(klines)
+            if len(klines) < batch_limit:
+                break
+            oldest_open_ms = int(klines[0][0])
+            end_time = oldest_open_ms - 1
+            time.sleep(0.05)
+
+        if not chunks:
+            return pd.DataFrame()
+
+        # 중복 제거 후 시간순 정렬
+        dedup = {}
+        for row in chunks:
+            dedup[int(row[0])] = row
+        rows = [dedup[k] for k in sorted(dedup.keys())]
+
+        df = pd.DataFrame(rows, columns=[
+            'Date', 'Open', 'High', 'Low', 'Close', 'Volume',
+            'CloseTime', 'QuoteVol', 'Trades', 'TakerBuy', 'TakerQuote', 'Ignore'
+        ])
+        df['Date'] = pd.to_datetime(df['Date'], unit='ms')
+        for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            df[c] = df[c].astype(float)
+        df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].set_index('Date')
+        return df.sort_index()
+    except Exception as e:
+        log.error(f"fetch_klines {symbol} {interval}: {e}")
+        return pd.DataFrame()
+
+
+def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
+    """모든 심볼의 1h, 4h OHLCV 수집."""
+    data = {'1h': {}, '4h': {}}
+    for sym in UNIVERSE:
+        for iv in ['1h', '4h']:
+            # 1h1은 vol 90d = 2160 bars, mom_long 1200 bars가 필요하다.
+            # 전략별 최대 lookback을 안전하게 덮도록 1h는 넉넉히 받고,
+            # 4h도 4h1/4h2의 SMA/vol 계산 여유를 둔다.
+            limit = 2500 if iv == '1h' else 1800
+            df = fetch_klines(client, sym, iv, limit)
+            if not df.empty:
+                coin = sym.replace('USDT', '')
+                data[iv][coin] = df
+            time.sleep(0.05)  # rate limit
+    return data
+
+
+# ─── 시그널 계산 ───
+def calc_sma(arr, period):
+    if len(arr) < period:
+        return 0
+    return float(np.mean(arr[-period:]))
+
+
+def calc_mom(arr, period):
+    if len(arr) < period + 1:
+        return -999
+    return arr[-1] / arr[-period - 1] - 1
+
+
+def calc_vol_daily(arr, bpd, lookback_bars):
+    """일봉 리샘플 변동성."""
+    if len(arr) < lookback_bars + 1:
+        return 999
+    daily = arr[-lookback_bars::bpd]
+    if len(daily) < 10:
+        return 999
+    return float(np.std(np.diff(np.log(daily))))
+
+
+def calc_vol_bars(arr, lookback_bars, bars_per_year):
+    """순수 봉 기반 연환산 변동성."""
+    if len(arr) < lookback_bars + 1:
+        return 999
+    rets = np.diff(np.log(arr[-lookback_bars - 1:]))
+    return float(np.std(rets) * np.sqrt(bars_per_year))
+
+
+def get_target_coins(target: Dict[str, float]) -> List[str]:
+    return [coin for coin, w in target.items() if coin != 'CASH' and w > 0]
+
+
+def rank_coins_capmom(target: Dict[str, float], data_1h: Dict[str, pd.DataFrame]) -> List[str]:
+    """실거래용 cap+momentum 순위.
+
+    백테스트의 get_mcap(date)는 과거 시총 순위를 사용하지만,
+    라이브에서는 현재 유니버스 순서(시총순)를 cap rank 대용으로 사용한다.
+    """
+    coins = get_target_coins(target)
+    scored = []
+    for coin in coins:
+        df = data_1h.get(coin)
+        if df is None or df.empty:
+            continue
+        close = df['Close'].values[:-1]  # 마지막 진행중 봉 제외
+        if len(close) <= LEVERAGE_MOM_LOOKBACK_BARS:
+            mom = -999.0
+        else:
+            mom = close[-1] / close[-LEVERAGE_MOM_LOOKBACK_BARS - 1] - 1.0
+        try:
+            cap_rank = UNIVERSE.index(coin + 'USDT')
+        except ValueError:
+            cap_rank = len(UNIVERSE)
+        score = mom - cap_rank * 1e-4
+        scored.append((coin, score))
+    scored.sort(key=lambda x: (-x[1], x[0]))
+    ranked = [coin for coin, _ in scored]
+    for coin in coins:
+        if coin not in ranked:
+            ranked.append(coin)
+    return ranked
+
+
+def score_coins_capmom(target: Dict[str, float], data_1h: Dict[str, pd.DataFrame]):
+    """디버그용 cap+mom 점수 상세."""
+    coins = get_target_coins(target)
+    rows = []
+    for coin in coins:
+        df = data_1h.get(coin)
+        if df is None or df.empty:
+            rows.append((coin, -999.0, None, None))
+            continue
+        close = df['Close'].values[:-1]
+        if len(close) <= LEVERAGE_MOM_LOOKBACK_BARS:
+            mom = -999.0
+        else:
+            mom = close[-1] / close[-LEVERAGE_MOM_LOOKBACK_BARS - 1] - 1.0
+        try:
+            cap_rank = UNIVERSE.index(coin + 'USDT')
+        except ValueError:
+            cap_rank = len(UNIVERSE)
+        score = mom - cap_rank * 1e-4
+        rows.append((coin, score, mom, cap_rank))
+    rows.sort(key=lambda x: (-x[1], x[0]))
+    return rows
+
+
+def apply_cash_degrade(lev: int, cash_w: float) -> int:
+    if cash_w < STOP_GATE_CASH_THRESHOLD:
+        return lev
+    if lev >= LEVERAGE_CEILING:
+        return LEVERAGE_MID
+    if lev >= LEVERAGE_MID:
+        return LEVERAGE_FLOOR
+    return LEVERAGE_FLOOR
+
+
+def get_coin_leverage_map(target: Dict[str, float], data_1h: Dict[str, pd.DataFrame]) -> Dict[str, int]:
+    coins = get_target_coins(target)
+    if not coins:
+        return {}
+    ranked = rank_coins_capmom(target, data_1h)
+    cash_w = target.get('CASH', 0.0)
+    lev_map = {}
+    for idx, coin in enumerate(ranked):
+        if idx == 0:
+            lev = LEVERAGE_CEILING
+        elif idx <= 2:
+            lev = LEVERAGE_MID
+        else:
+            lev = LEVERAGE_FLOOR
+        lev_map[coin] = apply_cash_degrade(lev, cash_w)
+    return lev_map
+
+
+def compute_strategy_target(strat_name: str, strat_params: dict,
+                             data: dict, state: dict,
+                             alerts: Optional[List[str]] = None) -> Dict[str, float]:
+    """단일 전략의 목표 비중 계산."""
+    iv = strat_params['interval']
+    bpd = 6 if iv == '4h' else 24
+    bars_per_year = bpd * 365
+    bars = data[iv]
+
+    if 'BTC' not in bars or bars['BTC'].empty:
+        return {'CASH': 1.0}
+
+    btc_close = bars['BTC']['Close'].values
+    sma_p = strat_params['sma_bars']
+
+    if len(btc_close) < sma_p + 1:
+        return {'CASH': 1.0}
+
+    # 전략 상태 로드/초기화
+    ss = state.get('strategies', {}).get(strat_name, {})
+    prev_canary = ss.get('canary_on', False)
+    last_bar_ts = ss.get('last_bar_ts', None)  # 마지막 처리된 봉 타임스탬프
+    snapshots = ss.get('snapshots', [{'CASH': 1.0}] * strat_params['n_snapshots'])
+    bar_counter = ss.get('bar_counter', 0)
+
+    # 새 봉 확인: 마지막 완성봉의 타임스탬프
+    btc_df = bars['BTC']
+    latest_bar_ts = str(btc_df.index[-2])  # -1은 진행중, -2가 마지막 완성봉
+    if latest_bar_ts == last_bar_ts:
+        # 같은 봉 — 이미 처리됨, 이전 target 유지
+        combined = ss.get('last_combined', {'CASH': 1.0})
+        return combined
+
+    # 카나리 (t-1 기준: 마지막 완성봉)
+    c_prev = btc_close[:-1]  # 진행중 봉 제외
+    sma_val = calc_sma(c_prev, sma_p)
+    hyst = strat_params['canary_hyst']
+
+    if prev_canary:
+        canary_on = not (c_prev[-1] < sma_val * (1 - hyst))
+    else:
+        canary_on = c_prev[-1] > sma_val * (1 + hyst)
+
+    canary_flipped = canary_on != prev_canary
+
+    # 카나리 상세 로깅
+    ratio = c_prev[-1] / sma_val if sma_val > 0 else 0
+    log.info(f"  {strat_name} BTC=${c_prev[-1]:,.0f} SMA({sma_p})=${sma_val:,.0f}"
+             f" ratio={ratio:.4f} canary={'ON' if canary_on else 'OFF'}"
+             f"{'  *** FLIPPED ***' if canary_flipped else ''}")
+
+    # 카나리 플립 텔레그램 알림
+    if canary_flipped and alerts is not None:
+        direction = "ON" if canary_on else "OFF"
+        alerts.append(
+            f"{strat_name} 카나리 {direction} | BTC ${c_prev[-1]:,.0f} / SMA ${sma_val:,.0f} ({ratio:.3f})"
+        )
+
+    # 헬스체크 + 종목 선정
+    def compute_weights():
+        if not canary_on:
+            log.info(f"  {strat_name} weights: canary OFF -> CASH 100%")
+            return {'CASH': 1.0}
+
+        mom_s = strat_params['mom_short_bars']
+        mom_l = strat_params['mom_long_bars']
+        hmode = strat_params['health_mode']
+        vol_mode = strat_params['vol_mode']
+        vol_th = strat_params['vol_threshold']
+
+        healthy = []
+        debug_rows = []
+        for sym in UNIVERSE:
+            coin = sym.replace('USDT', '')
+            df = bars.get(coin)
+            if df is None or df.empty:
+                debug_rows.append((coin, 'no_data', None, None, None))
+                continue
+            c = df['Close'].values[:-1]  # t-1
+            min_bars = max(mom_s, mom_l, sma_p, 90 * bpd)
+            if len(c) < min_bars:
+                debug_rows.append((coin, 'short_data', None, None, None))
+                continue
+
+            m_short = calc_mom(c, mom_s)
+            m_long = calc_mom(c, mom_l) if 'mom2' in hmode else 999
+            if vol_mode == 'bar':
+                vol = calc_vol_bars(c, 90 * bpd, bars_per_year)
+            else:
+                vol = calc_vol_daily(c, bpd, 90 * bpd)
+
+            if hmode == 'mom2vol':
+                ok = m_short > 0 and m_long > 0 and vol <= vol_th
+            elif hmode == 'mom1vol':
+                ok = m_short > 0 and vol <= vol_th
+            elif hmode == 'mom1':
+                ok = m_short > 0
+            else:
+                ok = True
+
+            debug_rows.append((coin, 'ok' if ok else 'fail', m_short, m_long, vol))
+            if ok:
+                healthy.append(coin)
+
+        if debug_rows:
+            preview = []
+            for coin, status, m_short, m_long, vol in debug_rows[:10]:
+                if status in ('no_data', 'short_data'):
+                    preview.append(f"{coin}:{status}")
+                else:
+                    long_str = f"{m_long:+.3f}" if m_long is not None and m_long != 999 else "-"
+                    vol_str = f"{vol:.3f}" if vol is not None else "-"
+                    preview.append(f"{coin}:{status}(m1={m_short:+.3f},m2={long_str},v={vol_str})")
+            log.info(f"  {strat_name} health preview: {' | '.join(preview)}")
+        log.info(f"  {strat_name} healthy_count={len(healthy)} healthy={healthy[:UNIVERSE_SIZE]}")
+
+        # Greedy absorption
+        picks = healthy[:UNIVERSE_SIZE]
+        if len(picks) > 1:
+            for i in range(len(picks) - 1, 0, -1):
+                df_a = bars.get(picks[i-1])
+                df_b = bars.get(picks[i])
+                if df_a is None or df_b is None:
+                    continue
+                ca = df_a['Close'].values[:-1]
+                cb = df_b['Close'].values[:-1]
+                ma = calc_mom(ca, mom_s)
+                mb = calc_mom(cb, mom_s)
+                if ma >= mb:
+                    picks.pop(i)
+
+        log.info(f"  {strat_name} initial_top={healthy[:UNIVERSE_SIZE]} final_picks={picks}")
+
+        if not picks:
+            log.info(f"  {strat_name} picks empty -> CASH 100%")
+            return {'CASH': 1.0}
+
+        w = min(1.0 / len(picks), CAP)
+        weights = {coin: w for coin in picks}
+        total = sum(weights.values())
+        if total < 0.999:
+            weights['CASH'] = 1.0 - total
+        log.info(f"  {strat_name} weights={weights}")
+        return weights
+
+    # 스냅샷 갱신
+    need_update = False
+    n_snap = strat_params['n_snapshots']
+    snap_iv = strat_params['snap_interval_bars']
+
+    if canary_flipped:
+        for si in range(n_snap):
+            snapshots[si] = compute_weights()
+        need_update = True
+    elif canary_on:
+        for si in range(n_snap):
+            offset = int(si * snap_iv / n_snap)
+            if bar_counter % snap_iv == offset:
+                new_w = compute_weights()
+                if new_w != snapshots[si]:
+                    snapshots[si] = new_w
+                    need_update = True
+
+    # 스냅샷 합산
+    combined = {}
+    for snap in snapshots:
+        for t, w in snap.items():
+            combined[t] = combined.get(t, 0) + w / n_snap
+    total = sum(combined.values())
+    if total > 0:
+        combined = {t: w / total for t, w in combined.items()}
+
+    # 상태 저장 (봉 단위 카운터 — 새 봉일 때만 증가)
+    bar_counter += 1
+    ss_new = {
+        'canary_on': canary_on,
+        'bar_counter': bar_counter,
+        'last_bar_ts': latest_bar_ts,
+        'snapshots': snapshots,
+        'last_combined': combined,
+    }
+    if 'strategies' not in state:
+        state['strategies'] = {}
+    state['strategies'][strat_name] = ss_new
+
+    return combined
+
+
+def combine_ensemble(targets: Dict[str, Dict[str, float]],
+                     weights: Dict[str, float]) -> Dict[str, float]:
+    """여러 전략의 목표 비중을 가중 합산."""
+    merged = {}
+    for strat_name, w in weights.items():
+        if strat_name not in targets:
+            continue
+        for coin, cw in targets[strat_name].items():
+            merged[coin] = merged.get(coin, 0) + cw * w
+    return merged
+
+
+# ─── 주문 실행 ───
+def _safe_float(value, default: float = 0.0) -> float:
+    """None/빈문자열에도 안전한 float 변환."""
+    try:
+        if value in (None, ''):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def get_current_positions(client: Client):
+    """현재 선물 포지션 + PV 조회. returns (positions_dict, total_pv)."""
+    positions = {}
+    try:
+        info = client.futures_account()
+        balance = _safe_float(info.get('totalWalletBalance'))
+        unrealized = _safe_float(info.get('totalUnrealizedProfit'))
+        total_pv = balance + unrealized
+
+        # futures_account()['positions']는 markPrice/unRealizedProfit이 null로 오는 경우가 있어
+        # 포지션 상세는 futures_position_information() 기준으로 읽는다.
+        pos_rows = client.futures_position_information()
+        tickers = {}
+        for row in client.futures_symbol_ticker():
+            sym = row.get('symbol')
+            if sym:
+                tickers[sym] = _safe_float(row.get('price'))
+
+        for p in pos_rows:
+            amt = _safe_float(p.get('positionAmt'))
+            if amt != 0:
+                sym = p.get('symbol')
+                if not sym:
+                    continue
+                coin = sym.replace('USDT', '')
+                mark = _safe_float(p.get('markPrice'))
+                if mark <= 0:
+                    mark = tickers.get(sym, 0.0)
+                notional = abs(_safe_float(p.get('notional')))
+                if notional <= 0 and mark > 0:
+                    notional = abs(amt * mark)
+                positions[coin] = {
+                    'qty': amt,
+                    'symbol': sym,
+                    'entry_price': _safe_float(p.get('entryPrice')),
+                    'mark_price': mark,
+                    'pnl': _safe_float(p.get('unRealizedProfit')),
+                    'liquidation_price': _safe_float(p.get('liquidationPrice')),
+                    'notional': notional,
+                    'weight': notional / total_pv if total_pv > 0 else 0,
+                }
+
+        return positions, total_pv
+    except Exception as e:
+        log.error(f"get_positions error: {e}")
+        return {}, 0
+
+
+_exchange_info_cache = None
+
+def get_exchange_info(client: Client):
+    """exchange_info 캐싱 (API 호출 최소화)."""
+    global _exchange_info_cache
+    if _exchange_info_cache is None:
+        _exchange_info_cache = client.futures_exchange_info()
+    return _exchange_info_cache
+
+
+def format_quantity(client: Client, symbol: str, qty: float) -> str:
+    """심볼별 수량 정밀도 맞추기."""
+    try:
+        info = get_exchange_info(client)
+        for s in info['symbols']:
+            if s['symbol'] == symbol:
+                for f in s['filters']:
+                    if f['filterType'] == 'LOT_SIZE':
+                        step = float(f['stepSize'])
+                        precision = len(f['stepSize'].rstrip('0').split('.')[-1]) if '.' in f['stepSize'] else 0
+                        adjusted = int(qty / step) * step
+                        return f"{adjusted:.{precision}f}"
+        return f"{qty:.8f}"
+    except:
+        return f"{qty:.8f}"
+
+
+def format_price(client: Client, symbol: str, price: float) -> str:
+    """심볼별 가격 정밀도 맞추기."""
+    try:
+        info = get_exchange_info(client)
+        for s in info['symbols']:
+            if s['symbol'] == symbol:
+                for f in s['filters']:
+                    if f['filterType'] == 'PRICE_FILTER':
+                        tick = float(f['tickSize'])
+                        precision = len(f['tickSize'].rstrip('0').split('.')[-1]) if '.' in f['tickSize'] else 0
+                        adjusted = int(price / tick) * tick
+                        return f"{adjusted:.{precision}f}"
+        return f"{price:.8f}"
+    except Exception:
+        return f"{price:.8f}"
+
+
+def _is_retryable_order_error(exc: Exception) -> bool:
+    """일시적 주문 오류만 재시도한다."""
+    msg = str(exc).lower()
+
+    non_retry_markers = [
+        'insufficient margin',
+        'margin is insufficient',
+        'reduceonly order is rejected',
+        'reduceonly',
+        'precision is over the maximum',
+        'mandatory parameter',
+        'invalid quantity',
+        'min notional',
+        'quantity less than or equal to zero',
+        'order would immediately trigger',
+        'unknown symbol',
+        'invalid symbol',
+        'parameter',
+    ]
+    if any(marker in msg for marker in non_retry_markers):
+        return False
+
+    retry_markers = [
+        'timeout',
+        'timed out',
+        'internal error',
+        'server busy',
+        'service unavailable',
+        'too many requests',
+        'recvwindow',
+        'connection',
+        'temporarily unavailable',
+        'try again',
+    ]
+    if any(marker in msg for marker in retry_markers):
+        return True
+
+    if isinstance(exc, requests.exceptions.RequestException):
+        return True
+
+    return False
+
+
+def create_order_with_retry(client: Client, order_params: dict):
+    """주문 실행. 일시 오류만 제한 횟수 재시도."""
+    last_exc = None
+    for attempt in range(1, ORDER_MAX_RETRIES + 1):
+        try:
+            return client.futures_create_order(**order_params)
+        except BinanceAPIException as e:
+            last_exc = e
+            if not _is_retryable_order_error(e) or attempt >= ORDER_MAX_RETRIES:
+                raise
+            delay = ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)]
+            log.warning(
+                f"ORDER RETRY {attempt}/{ORDER_MAX_RETRIES} {order_params.get('side')} "
+                f"{order_params.get('symbol')} after Binance error: {e}"
+            )
+            time.sleep(delay)
+        except Exception as e:
+            last_exc = e
+            if not _is_retryable_order_error(e) or attempt >= ORDER_MAX_RETRIES:
+                raise
+            delay = ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)]
+            log.warning(
+                f"ORDER RETRY {attempt}/{ORDER_MAX_RETRIES} {order_params.get('side')} "
+                f"{order_params.get('symbol')} after error: {e}"
+            )
+            time.sleep(delay)
+    if last_exc is not None:
+        raise last_exc
+
+
+def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
+                      target_lev_map: Dict[str, int],
+                      order_alerts: Optional[List[str]] = None,
+                      error_alerts: Optional[List[str]] = None):
+    """목표 비중으로 delta 리밸런싱. 매도 먼저, 매수 나중."""
+    if total_pv <= 0:
+        log.warning("PV <= 0, skip rebalance")
+        return
+
+    # 현재 포지션
+    current_positions, _ = get_current_positions(client)
+    trades = []
+    log.info(f"REBALANCE target={target}")
+    log.info(f"REBALANCE target_lev_map={target_lev_map}")
+
+    # 매도/청산 (보유 중이지만 target에 없거나 줄어야)
+    for coin, pos in current_positions.items():
+        target_w = target.get(coin, 0)
+        target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
+        target_notional = total_pv * target_w * 0.95 * target_lev
+        current_notional = pos['notional']
+        delta_pct = (target_notional - current_notional) / current_notional if current_notional > 0 else 999
+        log.info(
+            f"REBALANCE sell_check {coin}: current=${current_notional:.2f} "
+            f"target_w={target_w:.1%} target_lev={target_lev}x target=${target_notional:.2f} "
+            f"delta={delta_pct:+.1%}"
+        )
+
+        if target_w <= 0:
+            # 전량 청산 (reduceOnly)
+            trades.append(('SELL', pos['symbol'], abs(pos['qty']), True))
+        elif delta_pct < -DELTA_THRESHOLD:
+            sell_qty = abs(pos['qty']) * abs(delta_pct)
+            trades.append(('SELL', pos['symbol'], sell_qty, True))
+
+    # 매수 (target에 있지만 미보유거나 늘어야)
+    for coin, w in target.items():
+        if coin == 'CASH' or w <= 0:
+            continue
+        sym = coin + 'USDT'
+        target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
+        target_notional = total_pv * w * 0.95 * target_lev
+
+        current_notional = current_positions[coin]['notional'] if coin in current_positions else 0
+        if current_notional > 0:
+            delta_pct = (target_notional - current_notional) / current_notional
+            log.info(
+                f"REBALANCE buy_check {coin}: current=${current_notional:.2f} "
+                f"target_w={w:.1%} target_lev={target_lev}x target=${target_notional:.2f} "
+                f"delta={delta_pct:+.1%}"
+            )
+            if delta_pct <= DELTA_THRESHOLD:
+                continue
+        buy_notional = target_notional - current_notional
+        if buy_notional > MIN_NOTIONAL:
+            try:
+                price = float(client.futures_symbol_ticker(symbol=sym)['price'])
+                buy_qty = buy_notional / price
+                log.info(f"REBALANCE buy_plan {coin}: buy_notional=${buy_notional:.2f} price=${price:.2f} qty={buy_qty:.6f}")
+                trades.append(('BUY', sym, buy_qty, False))
+            except Exception as e:
+                log.error(f"price fetch {sym}: {e}")
+
+    log.info(f"REBALANCE planned_trades={trades}")
+
+    # 매도 먼저 실행, 매수 나중
+    for side, symbol, qty, reduce_only in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
+        try:
+            qty_str = format_quantity(client, symbol, qty)
+            if float(qty_str) <= 0:
+                continue
+
+            order_params = dict(
+                symbol=symbol,
+                side=side,
+                type='MARKET',
+                quantity=qty_str,
+            )
+            if reduce_only:
+                order_params['reduceOnly'] = 'true'
+
+            order = create_order_with_retry(client, order_params)
+            log.info(f"ORDER {side} {symbol} qty={qty_str}: {order.get('status', 'OK')}")
+            if order_alerts is not None:
+                order_alerts.append(f"{side} {symbol} {qty_str}")
+            time.sleep(0.1)
+        except BinanceAPIException as e:
+            log.error(f"ORDER FAILED {side} {symbol} qty={qty_str}: {e}")
+            if error_alerts is not None:
+                error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
+
+
+def needs_rebalance(target: Dict[str, float], current_positions: Dict[str, dict],
+                    total_pv: float, target_lev_map: Dict[str, int]) -> bool:
+    """현재 포지션이 목표와 충분히 다르면 리밸런싱 필요."""
+    if total_pv <= 0:
+        return False
+
+    # 보유 중인데 목표에 없거나 많이 줄어야 하는 경우
+    for coin, pos in current_positions.items():
+        target_w = target.get(coin, 0.0)
+        target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
+        target_notional = total_pv * target_w * 0.95 * target_lev
+        current_notional = pos.get('notional', 0.0)
+        if target_w <= 0 and current_notional > MIN_NOTIONAL:
+            log.info(f"REBALANCE_NEEDED {coin}: target_w=0 but current=${current_notional:.2f}")
+            return True
+        if current_notional > 0:
+            delta_pct = (target_notional - current_notional) / current_notional
+            if abs(delta_pct) > DELTA_THRESHOLD:
+                log.info(
+                    f"REBALANCE_NEEDED {coin}: current=${current_notional:.2f} "
+                    f"target=${target_notional:.2f} delta={delta_pct:+.1%}"
+                )
+                return True
+
+    # 목표에 있는데 미보유/증액 필요
+    for coin, w in target.items():
+        if coin == 'CASH' or w <= 0:
+            continue
+        target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
+        target_notional = total_pv * w * 0.95 * target_lev
+        current_notional = current_positions.get(coin, {}).get('notional', 0.0)
+        if current_notional <= 0 and target_notional > MIN_NOTIONAL:
+            log.info(f"REBALANCE_NEEDED {coin}: no position and target=${target_notional:.2f}")
+            return True
+
+    return False
+
+
+def set_leverage(client: Client, symbol: str, leverage: int):
+    """레버리지 설정."""
+    try:
+        client.futures_change_leverage(symbol=symbol, leverage=leverage)
+    except BinanceAPIException as e:
+        if 'No need to change' not in str(e):
+            log.warning(f"set_leverage {symbol}: {e}")
+
+
+def set_margin_type(client: Client, symbol: str, margin_type: str = 'ISOLATED'):
+    """마진 모드 설정."""
+    try:
+        client.futures_change_margin_type(symbol=symbol, marginType=margin_type)
+    except BinanceAPIException as e:
+        if 'No need to change' not in str(e):
+            log.warning(f"set_margin {symbol}: {e}")
+
+
+def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):
+    """봇이 관리하는 STOP_MARKET 주문 정리."""
+    symbol_set = set(symbols or UNIVERSE)
+    try:
+        orders = client.futures_get_open_orders()
+    except Exception as e:
+        log.warning(f"open_orders fetch failed: {e}")
+        return
+    for order in orders:
+        symbol = order.get('symbol')
+        if symbol not in symbol_set:
+            continue
+        if order.get('type') != 'STOP_MARKET':
+            continue
+        try:
+            client.futures_cancel_order(symbol=symbol, orderId=order['orderId'])
+            log.info(f"CANCEL STOP {symbol} orderId={order['orderId']}")
+        except Exception as e:
+            log.warning(f"cancel stop {symbol}: {e}")
+
+
+def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[str, pd.DataFrame],
+                     target: Dict[str, float], order_alerts: Optional[List[str]] = None,
+                     error_alerts: Optional[List[str]] = None):
+    """cash_guard 조건에 따라 reduce-only STOP_MARKET 주문 재등록."""
+    cancel_stop_orders(client, list(UNIVERSE))
+
+    cash_w = target.get('CASH', 0.0) if target else 0.0
+    if cash_w < STOP_GATE_CASH_THRESHOLD:
+        log.info(f"STOP OFF (cash={cash_w:.1%} < {STOP_GATE_CASH_THRESHOLD:.0%})")
+        return
+
+    log.info(f"STOP ON (cash={cash_w:.1%} >= {STOP_GATE_CASH_THRESHOLD:.0%}) positions={list(positions.keys())}")
+
+    for coin, pos in positions.items():
+        qty = abs(pos.get('qty', 0.0))
+        if qty <= 0:
+            continue
+        df = data_1h.get(coin)
+        if df is None or len(df) < 2:
+            continue
+        prev_close = float(df['Close'].iloc[-2])
+        if prev_close <= 0:
+            continue
+        stop_price = prev_close * (1.0 - STOP_PCT)
+        symbol = pos['symbol']
+        stop_str = format_price(client, symbol, stop_price)
+        log.info(
+            f"STOP PLAN {symbol}: qty={qty:.6f} prev_close={prev_close:.4f} "
+            f"stop_pct={STOP_PCT:.1%} stop={stop_str}"
+        )
+        try:
+            order = create_order_with_retry(client, dict(
+                symbol=symbol,
+                side='SELL',
+                type='STOP_MARKET',
+                stopPrice=stop_str,
+                closePosition='true',
+                workingType='CONTRACT_PRICE',
+            ))
+            log.info(f"STOP SELL {symbol} stop={stop_str}: {order.get('status', 'OK')}")
+            if order_alerts is not None:
+                order_alerts.append(f"STOP {symbol} {stop_str}")
+        except BinanceAPIException as e:
+            log.error(f"STOP FAILED {symbol} stop={stop_str}: {e}")
+            if error_alerts is not None:
+                error_alerts.append(f"STOP FAILED {symbol} {stop_str}: {e}")
+
+
+# ─── SQLite 자산 기록 ───
+DB_PATH = os.path.join(SCRIPT_DIR, 'binance_history.db')
+
+def _record_equity(pv: float, positions: dict, target: dict):
+    """매 실행마다 SQLite에 자산 기록."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute('''CREATE TABLE IF NOT EXISTS equity_history (
+            ts TEXT PRIMARY KEY, pv REAL, n_positions INTEGER, target TEXT)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS position_history (
+            ts TEXT, coin TEXT, notional REAL, weight REAL)''')
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute('INSERT OR REPLACE INTO equity_history VALUES (?,?,?,?)',
+                      (now, pv, len(positions), json.dumps(target)))
+        for coin, pos in positions.items():
+            conn.execute('INSERT INTO position_history VALUES (?,?,?,?)',
+                          (now, coin, pos['notional'], pos['weight']))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log.warning(f"SQLite record error: {e}")
+
+
+# ─── 메인 ───
+def main():
+    parser = argparse.ArgumentParser(description='바이낸스 선물 자동매매')
+    parser.add_argument('--trade', action='store_true', help='실제 매매 실행')
+    parser.add_argument('--dry-run', action='store_true', help='시뮬레이션 (매매 안 함)')
+    parser.add_argument('--status', action='store_true', help='현재 상태 조회')
+    parser.add_argument('--report', action='store_true', help='일일 리포트 (텔레그램)')
+
+    args = parser.parse_args()
+
+    api_key, api_secret = load_config()
+    if not api_key:
+        log.error("API key not configured")
+        return
+
+    client = Client(api_key, api_secret)
+    state = load_state()
+
+    if args.status:
+        positions, pv = get_current_positions(client)
+        print(f"총 자산: ${pv:.2f}")
+        print(f"포지션: {positions}")
+        print(f"마지막 실행: {state.get('last_run', 'N/A')}")
+        return
+
+    if args.report:
+        positions, pv = get_current_positions(client)
+        initial = state.get('initial_capital', pv)
+        if 'initial_capital' not in state:
+            state['initial_capital'] = pv
+            save_state(state)
+        pnl_pct = (pv / initial - 1) * 100 if initial > 0 else 0
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+
+        lines = [f"📊 바이낸스 선물 일일 리포트 ({now})"]
+        lines.append(f"총 자산: ${pv:.2f} ({pnl_pct:+.1f}%)")
+        lines.append(f"레버리지: capmom 5/4/3x")
+
+        if positions:
+            lines.append("\n포지션:")
+            for coin, pos in positions.items():
+                pnl = pos.get('pnl', 0.0)
+                lines.append(f"  {coin}: ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
+        else:
+            lines.append("포지션: 없음 (현금)")
+
+        # 전략 상태
+        for sname in STRATEGIES:
+            ss = state.get('strategies', {}).get(sname, {})
+            canary = "ON" if ss.get('canary_on', False) else "OFF"
+            lines.append(f"{sname} 카나리: {canary}")
+
+        lines.append(f"\n마지막 매매: {state.get('last_run', 'N/A')}")
+        msg = "\n".join(lines)
+        print(msg)
+        send_telegram(msg)
+
+        # 자산 기록 (히스토리)
+        history = state.get('daily_history', [])
+        history.append({'date': now, 'pv': pv, 'positions': len(positions)})
+        state['daily_history'] = history[-90:]  # 최근 90일만 보관
+        save_state(state)
+        return
+
+    # 파일 락 (동시 실행 방지)
+    import fcntl
+    lock_path = STATE_PATH + '.lock'
+    lock_fd = open(lock_path, 'w')
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except IOError:
+        log.warning("다른 인스턴스 실행 중, 종료")
+        return
+
+    try:
+        t_start = time.time()
+        run_id = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')
+        canary_alerts: List[str] = []
+        order_alerts: List[str] = []
+        error_alerts: List[str] = []
+        log.info(f"=== 바이낸스 선물 매매 시작 (run_id={run_id}) ===")
+
+        # 1. 데이터 수집
+        log.info("데이터 수집...")
+        data = fetch_all_data(client)
+        n_1h = len(data['1h'])
+        n_4h = len(data['4h'])
+        log.info(f"수집 완료: 1h {n_1h}개, 4h {n_4h}개 ({time.time()-t_start:.1f}s)")
+
+        # 데이터 장애 방어
+        if 'BTC' not in data['1h'] or 'BTC' not in data['4h']:
+            log.error("BTC 데이터 누락! 매매 중단. 이전 포지션 유지.")
+            send_telegram("⚠️ BTC 데이터 누락 — 매매 중단")
+            return
+        if n_1h < len(UNIVERSE) // 2 or n_4h < len(UNIVERSE) // 2:
+            log.error(f"데이터 부족 ({n_1h}/{n_4h}). 매매 중단.")
+            send_telegram(f"⚠️ 데이터 부족 ({n_1h}/{n_4h}) — 매매 중단")
+            return
+
+        # 2. 현재 포지션 (리밸런싱 전)
+        positions_before, pv_before = get_current_positions(client)
+        log.info(f"현재 PV: ${pv_before:.2f}")
+        if positions_before:
+            for coin, pos in positions_before.items():
+                log.info(f"  보유: {coin} ${pos['notional']:.0f} ({pos['weight']:.1%})")
+
+        # Kill-switch: 일일 손실 체크
+        prev_pv = state.get('prev_pv', pv_before)
+        if prev_pv > 0:
+            daily_pnl = (pv_before / prev_pv - 1)
+            if daily_pnl < -0.15:  # -15% 일일 손실
+                log.error(f"KILL-SWITCH: 일일 손실 {daily_pnl:.1%} < -15%!")
+                send_telegram(f"🚨 KILL-SWITCH 발동!\n일일 손실: {daily_pnl:.1%}\nPV: ${pv_before:.2f}\n전포지션 청산 + 봇 중단")
+                if args.trade:
+                    # 전포지션 청산
+                    for coin, pos in positions_before.items():
+                        try:
+                            qty_str = format_quantity(client, pos['symbol'], abs(pos['qty']))
+                            client.futures_create_order(
+                                symbol=pos['symbol'], side='SELL',
+                                type='MARKET', quantity=qty_str, reduceOnly='true')
+                            log.info(f"KILL-SWITCH 청산: {pos['symbol']} {qty_str}")
+                        except Exception as e:
+                            log.error(f"KILL-SWITCH 청산 실패: {pos['symbol']}: {e}")
+                state['kill_switch'] = True
+                state['kill_switch_reason'] = f"daily_loss={daily_pnl:.1%}"
+                state['kill_switch_time'] = datetime.now(timezone.utc).isoformat()
+                save_state(state)
+                return
+
+        # Kill-switch가 이전에 발동된 경우 중단
+        if state.get('kill_switch', False):
+            log.warning(f"Kill-switch 활성 상태. 수동 해제 필요. (사유: {state.get('kill_switch_reason')})")
+            return
+
+        # 3. 각 전략 시그널 계산
+        targets = {}
+        for strat_name, params in STRATEGIES.items():
+            target = compute_strategy_target(strat_name, params, data, state, alerts=canary_alerts)
+            targets[strat_name] = target
+            # 종목 비중만 로깅 (CASH 제외)
+            coins_only = {k: f"{v:.1%}" for k, v in target.items() if k != 'CASH' and v > 0}
+            cash_pct = target.get('CASH', 0)
+            log.info(f"  {strat_name} → {coins_only or 'CASH 100%'} (cash={cash_pct:.0%})")
+
+        # 4. 앙상블 합산
+        combined = combine_ensemble(targets, ENSEMBLE_WEIGHTS)
+        coins_combined = {k: f"{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0}
+        log.info(f"합산: {coins_combined or 'CASH 100%'}")
+
+        # 5. 리밸런싱
+        prev_target = state.get('last_target', {})
+        target_lev_map = get_coin_leverage_map(combined, data['1h'])
+        rebalance_needed = needs_rebalance(combined, positions_before, pv_before, target_lev_map)
+        if combined == prev_target and not rebalance_needed:
+            log.info("비중 변경 없음")
+            positions_after, pv_after = positions_before, pv_before
+        elif args.trade:
+            for coin, lev in target_lev_map.items():
+                sym = coin + 'USDT'
+                set_leverage(client, sym, lev)
+                set_margin_type(client, sym, 'CROSSED')
+
+            execute_rebalance(
+                client, combined, pv_before, target_lev_map,
+                order_alerts=order_alerts, error_alerts=error_alerts,
+            )
+
+            # 리밸런싱 후 포지션
+            positions_after, pv_after = get_current_positions(client)
+            log.info(f"리밸런싱 완료: PV ${pv_before:.2f} → ${pv_after:.2f}")
+            if positions_after:
+                for coin, pos in positions_after.items():
+                    pnl = pos.get('pnl', 0.0)
+                    log.info(f"  보유: {coin} ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
+        else:
+            if rebalance_needed:
+                log.info(f"DRY-RUN REBALANCE: {coins_combined or 'CASH'}")
+            else:
+                log.info(f"DRY-RUN: {coins_combined or 'CASH'}")
+            positions_after, pv_after = positions_before, pv_before
+
+        if args.trade:
+            # 매 실거래 실행마다 직전 완성봉 기준으로 스탑을 재동기화한다.
+            sync_stop_orders(
+                client, positions_after, data['1h'], combined,
+                order_alerts=order_alerts, error_alerts=error_alerts,
+            )
+
+        # 6. 상태 저장
+        if args.trade:
+            state['last_target'] = combined
+        state['prev_pv'] = pv_after
+        state['last_run'] = datetime.now(timezone.utc).isoformat()
+        save_state(state)
+
+        # 7. SQLite 자산 기록
+        _record_equity(pv_after, positions_after, combined)
+
+        elapsed = time.time() - t_start
+        if args.trade:
+            strat_lines = []
+            for strat_name in STRATEGIES:
+                target = targets.get(strat_name, {})
+                if not target or target.get('CASH', 0.0) >= 0.999:
+                    strat_lines.append(f"{strat_name}: CASH")
+                else:
+                    coins = ', '.join(f"{k}:{v:.1%}" for k, v in target.items() if k != 'CASH' and v > 0)
+                    cash_w = target.get('CASH', 0.0)
+                    if cash_w > 0:
+                        coins = f"{coins}, CASH:{cash_w:.1%}"
+                    strat_lines.append(f"{strat_name}: {coins}")
+
+            summary = [
+                f"📘 바이낸스 선물 실행 ({datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')})",
+                *strat_lines,
+                "",
+                f"합산 목표: {', '.join(f'{k}:{v:.1%}' for k, v in combined.items() if v > 0) if combined else '없음'}",
+            ]
+            if canary_alerts:
+                summary.append("")
+                summary.append("카나리:")
+                summary.extend(f"  - {msg}" for msg in canary_alerts)
+            if order_alerts:
+                summary.append("")
+                summary.append("주문:")
+                summary.extend(f"  - {msg}" for msg in order_alerts)
+            else:
+                summary.append("")
+                summary.append("주문: 없음")
+            if positions_after:
+                summary.append("")
+                summary.append("현재 포지션:")
+                for coin, pos in positions_after.items():
+                    summary.append(f"  - {coin}: ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pos.get('pnl', 0.0):+.2f})")
+            else:
+                summary.append("")
+                summary.append("현재 포지션: 없음 (현금)")
+            if error_alerts:
+                summary.append("")
+                summary.append("오류:")
+                summary.extend(f"  - {msg}" for msg in error_alerts[:10])
+            send_telegram("\n".join(summary))
+        log.info(f"=== 완료 ({elapsed:.1f}s) ===")
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+
+if __name__ == '__main__':
+    main()

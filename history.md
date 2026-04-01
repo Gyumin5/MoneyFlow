@@ -1,3 +1,6 @@
+- [2026-04-01] 선물 전략 재탐색 완료 후 실거래 전략 교체. 최종: `1h_09(snap=27) + 4h_01(snap=120) + 4h_09(snap=21)` + `cap_mom_blend_543_cash` + `prev_close 15% + cash_guard(34%)`. 기존 `4h1+4h2+1h1` 대비 Cal `4.30 -> 4.98`, MDD `-58.2% -> -44.4%`, Liq `7 -> 4`. 라이브 코드 버그 수정(포지션 조회, OHLCV pagination, 주문 재시도, 매 실행 stop 재동기화, 텔레그램 정리) 및 서버 배포 완료.
+- [2026-03-31] 선물 전략 확정 + 실매매 배포. 순수 봉 기반 엔진, 38코인, 2282조합 최적화, 63개 앙상블 조합 검증. 확정: 4h1+4h2+1h1 앙상블 2x (Cal 3.39, WF Cal 3.19). AI 코드 리뷰 8개 버그 수정. 바이낸스 API 연동, 서버 배포, 크론 설정 완료. $942 운용 시작.
+- [2026-03-30] 선물 시간봉 엔진 완성 + 최적화. backtest_futures_full.py 8개 버그 수정 (인덱싱, leverage 이중적용, 격리마진, look-ahead 등). AI 코드 리뷰 (Gemini+Codex). D/4h/1h 576조합 최적화: D(SMA40 Mom15/90) Cal 2.54가 최적, 혼합보다 D 단독 우위. Codex 권고: D 1.5x 시작, SMA plateau 검증 필요.
 - [2026-03-29] V18: Greedy Absorption + Cap 33%. MDD -25.6% (V17 -30.0%), Calmar 2.70 (V17 2.34). ~50개 변형 테스트, AI 3자 협의.
 - [2026-03-28] V17 카나리 업데이트: SMA(60)+1%hyst → SMA(50)+1.5%hyst. MDD -35.2%→-30.8%, Calmar 2.02→2.17. 10-anchor/3기간/plateau 검증, Gemini+Codex 코드 리뷰 (3건 불일치 수정). 방어자산(PAXG) 연구 완료 (프레임워크 보류, 유니버스 확장 후 재검토).
 - [2026-03-25] 아키텍처 리팩토링 완료: executor 단일모드(run_once) + recommend 순수화 + 새 스키마(signal/coin_trade/kis_trade). AI 리뷰 3회 15개+서버3개 버그 수정. cron 교체 완료.
