@@ -36,9 +36,17 @@ portfolio_result*.html
 
 # Runtime state files
 strategies/cap_defend/signal_state.json
+trade/binance_state.json
+trade/binance_state.json.lock
+trade/binance_history.db
+trade/binance_trade.log
 
 # Intermediate experiment results
 strategies/cap_defend/results/
+
+# Local tool metadata
+.codex/
+.claude/
 
 # Security - API keys, config
 config.py
