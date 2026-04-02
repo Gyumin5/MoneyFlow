@@ -1246,6 +1246,7 @@ def main():
         if not ok:
             log.error("리포트 생성 중 포지션 조회 실패")
             return
+        data = fetch_all_data(client)
         initial = state.get('initial_capital', pv)
         if 'initial_capital' not in state:
             state['initial_capital'] = pv
@@ -1277,11 +1278,22 @@ def main():
         lines.append(f"  포지션 수: {visible_positions}")
         lines.append(f"  활성 스탑 수: {stop_count}")
 
-        # 전략 상태
+        # 전략 상태는 state에 저장된 과거값이 아니라 현재 봉 기준으로 다시 계산한다.
+        report_state = json.loads(json.dumps(state))
         for sname in STRATEGIES:
-            ss = state.get('strategies', {}).get(sname, {})
-            canary = "ON" if ss.get('canary_on', False) else "OFF"
+            report_state.setdefault('strategies', {}).setdefault(sname, {})
+            report_state['strategies'][sname]['last_bar_ts'] = None
+            target_now = compute_strategy_target(sname, STRATEGIES[sname], data, report_state, alerts=None)
+            canary = "ON" if report_state.get('strategies', {}).get(sname, {}).get('canary_on', False) else "OFF"
             lines.append(f"{sname} 카나리: {canary}")
+            if target_now and target_now.get('CASH', 0.0) < 0.999:
+                coins = ', '.join(f"{k}:{v:.1%}" for k, v in target_now.items() if k != 'CASH' and v > 0)
+                cash_w = target_now.get('CASH', 0.0)
+                if cash_w > 0:
+                    coins = f"{coins}, CASH:{cash_w:.1%}"
+                lines.append(f"  목표: {coins}")
+            else:
+                lines.append("  목표: CASH")
 
         lines.append(f"\n마지막 매매: {state.get('last_run', 'N/A')}")
         msg = "\n".join(lines)
