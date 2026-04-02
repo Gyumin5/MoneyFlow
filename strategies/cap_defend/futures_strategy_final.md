@@ -157,3 +157,4 @@
 - 최종 비교 스크립트: `strategies/cap_defend/run_final_signal_compare.py`
 - 트랜치 robustness 결과: `strategies/cap_defend/snap_robustness_results.csv`
 - 연구 히스토리: `strategies/cap_defend/futures_research_history.md`
+- 실행 가이드: `strategies/cap_defend/futures_backtest_howto.md`
