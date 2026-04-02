@@ -26,12 +26,22 @@ except ImportError:
     TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
     TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 
-def send_telegram(msg):
+try:
+    from config import PORTFOLIO_PUBLIC_URL as CONFIG_PORTFOLIO_PUBLIC_URL
+except Exception:
+    CONFIG_PORTFOLIO_PUBLIC_URL = ""
+
+def send_telegram(msg, button_text=None, button_url=None):
     """텔레그램 알림 전송. 실패해도 프로그램은 계속 진행."""
     try:
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
+        if button_text and button_url:
+            payload["reply_markup"] = {
+                "inline_keyboard": [[{"text": button_text, "url": button_url}]]
+            }
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
+            json=payload,
             timeout=10
         )
     except Exception:
@@ -63,7 +73,7 @@ SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 APP_HOME = os.environ.get("MONEYFLOW_APP_HOME", os.getcwd())
 ASSETS_DB = os.environ.get("ASSETS_DB", os.path.join(APP_HOME, "assets.db"))
 PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME", "portfolio_result.html")
-PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "")
+PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORTFOLIO_PUBLIC_URL
 STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
 COIN_ANCHOR_DAYS = (1, 11, 21)
 FUTURES_TRANCHE_META = {
@@ -2342,11 +2352,10 @@ if __name__ == "__main__":
             f"\n📈 주식: {s_stat}\n"
             f"  비중: {', '.join(f'{t} {w:.0%}' for t,w in s_port.items())}"
         )
-        send_telegram(summary)
-
-        # HTML 링크 전송
         if PORTFOLIO_PUBLIC_URL:
-            send_telegram(f"📄 {PORTFOLIO_PUBLIC_URL}")
+            send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)
+        else:
+            send_telegram(summary)
         print("✅ 텔레그램 일간 리포트 전송 완료")
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
