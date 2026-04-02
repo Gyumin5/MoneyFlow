@@ -155,11 +155,35 @@ def send_telegram(msg: str):
         log.warning(f"Telegram error: {e}")
 
 
+def _as_bool(value) -> bool:
+    """state 파일의 문자열 True/False도 안전하게 bool로 정규화."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {'true', '1', 'yes', 'on'}:
+            return True
+        if v in {'false', '0', 'no', 'off', ''}:
+            return False
+    return bool(value)
+
+
+def _normalize_state(state: dict) -> dict:
+    strategies = state.get('strategies', {})
+    if isinstance(strategies, dict):
+        for _, ss in strategies.items():
+            if isinstance(ss, dict) and 'canary_on' in ss:
+                ss['canary_on'] = _as_bool(ss.get('canary_on'))
+    state['rebalancing_needed'] = _as_bool(state.get('rebalancing_needed', False))
+    state['kill_switch'] = _as_bool(state.get('kill_switch', False))
+    return state
+
+
 def load_state() -> dict:
     """상태 파일 로드."""
     if os.path.exists(STATE_PATH):
         with open(STATE_PATH) as f:
-            state = json.load(f)
+            state = _normalize_state(json.load(f))
             state.setdefault('rebalancing_needed', False)
             return state
     return {
@@ -384,7 +408,7 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
 
     # 전략 상태 로드/초기화
     ss = state.get('strategies', {}).get(strat_name, {})
-    prev_canary = ss.get('canary_on', False)
+    prev_canary = _as_bool(ss.get('canary_on', False))
     last_bar_ts = ss.get('last_bar_ts', None)  # 마지막 처리된 봉 타임스탬프
     snapshots = ss.get('snapshots', [{'CASH': 1.0}] * strat_params['n_snapshots'])
     bar_counter = ss.get('bar_counter', 0)
