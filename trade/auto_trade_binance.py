@@ -103,6 +103,7 @@ UNIVERSE_SIZE = 5
 CAP = 1/3  # EW + 33% cap
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
 DELTA_THRESHOLD = 0.02  # 선물은 LOT_SIZE/최소 notional 영향이 커서 ±2% 허용
+DISPLAY_DUST_NOTIONAL = 1.0  # 알림/대시보드에서 숨길 최소 포지션 금액
 ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
 POSITION_FETCH_MAX_RETRIES = 3
@@ -631,6 +632,7 @@ def get_current_positions(client: Client):
                         notional = abs(amt * mark)
                     positions[coin] = {
                         'qty': amt,
+                        'qty_raw': str(p.get('positionAmt') or ''),
                         'symbol': sym,
                         'entry_price': _safe_float(p.get('entryPrice')),
                         'mark_price': mark,
@@ -841,10 +843,13 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
 
         if target_w <= 0:
             # 전량 청산 (reduceOnly)
-            trades.append(('SELL', pos['symbol'], abs(pos['qty']), True))
+            qty_raw = str(pos.get('qty_raw') or '').strip()
+            if qty_raw.startswith('-'):
+                qty_raw = qty_raw[1:]
+            trades.append(('SELL', pos['symbol'], qty_raw if qty_raw else abs(pos['qty']), True, True))
         elif delta_pct < -DELTA_THRESHOLD:
             sell_qty = abs(pos['qty']) * abs(delta_pct)
-            trades.append(('SELL', pos['symbol'], sell_qty, True))
+            trades.append(('SELL', pos['symbol'], sell_qty, True, False))
 
     # 매수 (target에 있지만 미보유거나 늘어야)
     for coin, w in target.items():
@@ -884,16 +889,16 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                         f"min_notional=${constraints['min_notional']:.2f}"
                     )
                     continue
-                trades.append(('BUY', sym, buy_qty, False))
+                trades.append(('BUY', sym, buy_qty, False, False))
             except Exception as e:
                 log.error(f"price fetch {sym}: {e}")
 
     log.info(f"REBALANCE planned_trades={trades}")
 
     # 매도 먼저 실행, 매수 나중
-    for side, symbol, qty, reduce_only in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
+    for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
         try:
-            qty_str = format_quantity(client, symbol, qty)
+            qty_str = str(qty) if is_full_close else format_quantity(client, symbol, qty)
             if float(qty_str) <= 0:
                 continue
 
@@ -933,7 +938,10 @@ def needs_rebalance(client: Client, target: Dict[str, float], current_positions:
         current_qty = abs(pos.get('qty', 0.0))
         constraints = get_symbol_constraints(client, symbol)
         if target_w <= 0 and current_notional > MIN_NOTIONAL:
-            qty_str = format_quantity(client, symbol, current_qty)
+            qty_raw = str(pos.get('qty_raw') or '').strip()
+            if qty_raw.startswith('-'):
+                qty_raw = qty_raw[1:]
+            qty_str = qty_raw or format_quantity(client, symbol, current_qty)
             exec_qty = float(qty_str)
             if exec_qty > 0 and exec_qty >= constraints['min_qty']:
                 log.info(f"REBALANCE_NEEDED {coin}: target_w=0 but current=${current_notional:.2f}")
@@ -1431,8 +1439,14 @@ def main():
             if positions_after:
                 summary.append("")
                 summary.append("현재 포지션:")
+                shown = 0
                 for coin, pos in positions_after.items():
+                    if pos.get('notional', 0.0) < DISPLAY_DUST_NOTIONAL:
+                        continue
+                    shown += 1
                     summary.append(f"  - {coin}: ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pos.get('pnl', 0.0):+.2f})")
+                if shown == 0:
+                    summary[-1] = "현재 포지션: 없음 (현금)"
             else:
                 summary.append("")
                 summary.append("현재 포지션: 없음 (현금)")
