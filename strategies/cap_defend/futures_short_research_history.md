@@ -381,7 +381,6 @@
 ## 아직 안 한 것
 
 - 현재 롱 전략과의 실제 결합형 백테스트
-- 현물(일봉) 롱 + 선물 숏 오버레이 백테스트
 - 숏 sleeve에 stop-loss까지 포함한 검증
 
 현재 단계의 의미는:
@@ -389,6 +388,104 @@
 - “붙는다면 어떤 전략별 OFF 구간에서 어떤 공개 규칙이 나은가?”
 
 를 찾는 탐색 단계다.
+
+### 9. 현물 롱(일봉 Risk-On) + 선물 all OFF 오버레이 예비 실험
+
+스크립트:
+- [run_short_spot_on_all_futures_off_overlay_test.py](./run_short_spot_on_all_futures_off_overlay_test.py)
+
+목적:
+- 현물 일봉 전략이 `Risk-On`인 동안
+- 선물 `4h1`, `4h2`, `1h1`이 모두 `OFF`일 때만
+- 선물 숏 sleeve를 켜는 것이 의미가 있는지 예비 확인
+
+주의:
+- 이 단계는 오버레이 숏 sleeve 자체를 본 것이고,
+- 현물 포트폴리오 수익률과 최종 합산한 총 포트폴리오 백테스트는 아니다.
+
+비교 후보:
+- `BTC short 25%`
+- `BTC short 50%`
+- `top3 dynamic / donchian50 short 25%`
+- `top3 dynamic / donchian50 short 50%`
+- `top5 dynamic / sma200 short 25%`
+- `top5 dynamic / sma200 short 50%`
+
+결과:
+- `top3_donchian50_50`
+  - Cal `1.10`
+  - CAGR `+0.5%`
+  - MDD `-0.5%`
+- `top3_donchian50_25`
+  - Cal `1.08`
+  - CAGR `+0.3%`
+  - MDD `-0.2%`
+- `BTC short 25%`
+  - Cal `-0.14`
+  - CAGR `-1.0%`
+  - MDD `-7.0%`
+- `BTC short 50%`
+  - Cal `-0.14`
+  - CAGR `-2.0%`
+  - MDD `-13.6%`
+
+해석:
+- “현물 롱 + 선물 all OFF” 조건에선 단순 BTC 헤지보다
+  `top3 dynamic / donchian50` 쪽이 훨씬 더 나았다.
+- 다만 절대 수익 기여는 매우 작았고, 이 단계만으로 바로 채택하기엔 아직 부족하다.
+- 다음 단계가 있다면, 이 `top3_donchian50_25/50`을 현물 롱 수익률과 실제 합산한 총 포트폴리오 기준으로 다시 봐야 한다.
+
+### 10. 현재 선물 최종 전략에 실제로 붙인 결합형 테스트
+
+스크립트:
+- [run_futures_spot_on_all_off_overlay_combo_test.py](./run_futures_spot_on_all_off_overlay_combo_test.py)
+
+목적:
+- 현재 실거래 선물 최종 전략(`1h_09 + 4h_01 + 4h_09`)을 baseline으로 두고,
+- 현물 일봉 `Risk-On`이며 선물 `4h1/4h2/1h1`가 모두 `OFF`일 때만
+- 숏 오버레이를 실제로 붙였을 때 개선이 있는지 확인
+
+비교 후보:
+- baseline
+- `BTC short 25%`
+- `BTC short 50%`
+- `top3 dynamic / donchian50 short 25%`
+- `top3 dynamic / donchian50 short 50%`
+- `top5 dynamic / sma200 short 25%`
+- `top5 dynamic / sma200 short 50%`
+
+결과:
+- `baseline`
+  - Cal `4.88`
+  - CAGR `+225.2%`
+  - MDD `-46.1%`
+- `top3_donchian50_50`
+  - Cal `4.93`
+  - CAGR `+225.6%`
+  - MDD `-45.8%`
+- `top3_donchian50_25`
+  - Cal `4.90`
+  - CAGR `+225.4%`
+  - MDD `-46.0%`
+- `top5_sma200_25`
+  - Cal `4.64`
+  - CAGR `+213.6%`
+  - MDD `-46.0%`
+- `BTC short 25%`
+  - Cal `4.03`
+  - CAGR `+201.3%`
+  - MDD `-49.9%`
+- `BTC short 50%`
+  - Cal `3.26`
+  - CAGR `+178.4%`
+  - MDD `-54.8%`
+
+해석:
+- 단순 BTC 숏을 붙이는 건 확실히 나빴다.
+- `top3 dynamic / donchian50`만 baseline을 아주 근소하게 개선했다.
+- 개선 폭은 크지 않지만,
+  현재까지 “실제로 붙여도 baseline보다 나쁘지 않은” 유일한 오버레이 후보는
+  `top3_donchian50_25/50`이었다.
 
 ## 관련 파일
 
@@ -399,3 +496,5 @@
 - 4h1 메이저 바스켓 숏: [run_short_4h1_major_basket_test.py](./run_short_4h1_major_basket_test.py)
 - 공개 전략 benchmark: [run_short_public_benchmark_test.py](./run_short_public_benchmark_test.py)
 - 공개 전략 dynamic universe: [run_short_public_dynamic_universe_test.py](./run_short_public_dynamic_universe_test.py)
+- 현물 ON + 선물 all OFF 오버레이: [run_short_spot_on_all_futures_off_overlay_test.py](./run_short_spot_on_all_futures_off_overlay_test.py)
+- 최종 전략 결합형 오버레이: [run_futures_spot_on_all_off_overlay_combo_test.py](./run_futures_spot_on_all_off_overlay_combo_test.py)
