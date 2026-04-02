@@ -108,6 +108,7 @@
 
 - 엔진: [backtest_futures_full.py](./backtest_futures_full.py)
 - 최종 전략 문서: [futures_strategy_final.md](./futures_strategy_final.md)
+- 실행 가이드: [futures_backtest_howto.md](./futures_backtest_howto.md)
 - 스탑 연구 요약: [stoploss_summary.md](./stoploss_summary.md)
 - 조합 탐색: [run_signal_combo_search.py](./run_signal_combo_search.py)
 - 트랜치 미세조정: [run_snap_finetune.py](./run_snap_finetune.py)
