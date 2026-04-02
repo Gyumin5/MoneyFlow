@@ -20,6 +20,10 @@
 3. 종목별로 `5x / 4x / 3x` 레버리지를 다르게 부여
 4. 위험 상태(`CASH >= 34%`)일 때만 스탑을 활성화
 
+중요:
+- 이 전략의 트랜치 검증과 실거래 반영은 `snap_interval_bars` 기반의 bar-based tranche를 기준으로 했다.
+- [backtest_futures_full.py](./backtest_futures_full.py)에는 구방식 달력 앵커 `1/10/19일` fallback도 남아 있지만, 최종 채택 전략은 그 fallback을 사용하지 않는다.
+
 ## 최종 신호 전략
 
 ### 1h_09
@@ -152,3 +156,4 @@
 - 스탑 연구 요약: `strategies/cap_defend/stoploss_summary.md`
 - 최종 비교 스크립트: `strategies/cap_defend/run_final_signal_compare.py`
 - 트랜치 robustness 결과: `strategies/cap_defend/snap_robustness_results.csv`
+- 연구 히스토리: `strategies/cap_defend/futures_research_history.md`
