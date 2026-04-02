@@ -24,6 +24,7 @@
 import argparse
 import json
 import os
+import random
 import sys
 import time
 import logging
@@ -104,6 +105,9 @@ MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
 DELTA_THRESHOLD = 0.02  # 선물은 LOT_SIZE/최소 notional 영향이 커서 ±2% 허용
 ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
+POSITION_FETCH_MAX_RETRIES = 3
+POSITION_FETCH_RETRY_DELAYS = [1.0, 2.0]
+CRON_START_JITTER_SECONDS = (3, 17)
 
 # 텔레그램
 TELEGRAM_BOT_TOKEN = None
@@ -574,52 +578,82 @@ def _safe_float(value, default: float = 0.0) -> float:
         return default
 
 
+def _is_retryable_fetch_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    retry_markers = [
+        'timeout',
+        'timed out',
+        'backend server',
+        'service unavailable',
+        'internal error',
+        'server busy',
+        'temporarily unavailable',
+        'connection',
+        'recvwindow',
+        'too many requests',
+        '-1007',
+    ]
+    return any(marker in msg for marker in retry_markers) or isinstance(exc, requests.exceptions.RequestException)
+
+
 def get_current_positions(client: Client):
-    """현재 선물 포지션 + PV 조회. returns (positions_dict, total_pv)."""
-    positions = {}
-    try:
-        info = client.futures_account()
-        balance = _safe_float(info.get('totalWalletBalance'))
-        unrealized = _safe_float(info.get('totalUnrealizedProfit'))
-        total_pv = balance + unrealized
+    """현재 선물 포지션 + PV 조회. returns (positions_dict, total_pv, ok)."""
+    last_exc = None
+    for attempt in range(1, POSITION_FETCH_MAX_RETRIES + 1):
+        positions = {}
+        try:
+            info = client.futures_account()
+            balance = _safe_float(info.get('totalWalletBalance'))
+            unrealized = _safe_float(info.get('totalUnrealizedProfit'))
+            total_pv = balance + unrealized
 
-        # futures_account()['positions']는 markPrice/unRealizedProfit이 null로 오는 경우가 있어
-        # 포지션 상세는 futures_position_information() 기준으로 읽는다.
-        pos_rows = client.futures_position_information()
-        tickers = {}
-        for row in client.futures_symbol_ticker():
-            sym = row.get('symbol')
-            if sym:
-                tickers[sym] = _safe_float(row.get('price'))
+            # futures_account()['positions']는 markPrice/unRealizedProfit이 null로 오는 경우가 있어
+            # 포지션 상세는 futures_position_information() 기준으로 읽는다.
+            pos_rows = client.futures_position_information()
+            tickers = {}
+            for row in client.futures_symbol_ticker():
+                sym = row.get('symbol')
+                if sym:
+                    tickers[sym] = _safe_float(row.get('price'))
 
-        for p in pos_rows:
-            amt = _safe_float(p.get('positionAmt'))
-            if amt != 0:
-                sym = p.get('symbol')
-                if not sym:
-                    continue
-                coin = sym.replace('USDT', '')
-                mark = _safe_float(p.get('markPrice'))
-                if mark <= 0:
-                    mark = tickers.get(sym, 0.0)
-                notional = abs(_safe_float(p.get('notional')))
-                if notional <= 0 and mark > 0:
-                    notional = abs(amt * mark)
-                positions[coin] = {
-                    'qty': amt,
-                    'symbol': sym,
-                    'entry_price': _safe_float(p.get('entryPrice')),
-                    'mark_price': mark,
-                    'pnl': _safe_float(p.get('unRealizedProfit')),
-                    'liquidation_price': _safe_float(p.get('liquidationPrice')),
-                    'notional': notional,
-                    'weight': notional / total_pv if total_pv > 0 else 0,
-                }
+            for p in pos_rows:
+                amt = _safe_float(p.get('positionAmt'))
+                if amt != 0:
+                    sym = p.get('symbol')
+                    if not sym:
+                        continue
+                    coin = sym.replace('USDT', '')
+                    mark = _safe_float(p.get('markPrice'))
+                    if mark <= 0:
+                        mark = tickers.get(sym, 0.0)
+                    notional = abs(_safe_float(p.get('notional')))
+                    if notional <= 0 and mark > 0:
+                        notional = abs(amt * mark)
+                    positions[coin] = {
+                        'qty': amt,
+                        'symbol': sym,
+                        'entry_price': _safe_float(p.get('entryPrice')),
+                        'mark_price': mark,
+                        'pnl': _safe_float(p.get('unRealizedProfit')),
+                        'liquidation_price': _safe_float(p.get('liquidationPrice')),
+                        'notional': notional,
+                        'weight': notional / total_pv if total_pv > 0 else 0,
+                    }
 
-        return positions, total_pv
-    except Exception as e:
-        log.error(f"get_positions error: {e}")
-        return {}, 0
+            return positions, total_pv, True
+        except Exception as e:
+            last_exc = e
+            if attempt < POSITION_FETCH_MAX_RETRIES and _is_retryable_fetch_error(e):
+                delay = POSITION_FETCH_RETRY_DELAYS[min(attempt - 1, len(POSITION_FETCH_RETRY_DELAYS) - 1)]
+                log.warning(
+                    f"get_positions retry {attempt}/{POSITION_FETCH_MAX_RETRIES} after error: {e}"
+                )
+                time.sleep(delay)
+                continue
+            log.error(f"get_positions error: {e}")
+            return {}, 0.0, False
+    log.error(f"get_positions error: {last_exc}")
+    return {}, 0.0, False
 
 
 _exchange_info_cache = None
@@ -780,7 +814,10 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
         return
 
     # 현재 포지션
-    current_positions, _ = get_current_positions(client)
+    current_positions, _, current_ok = get_current_positions(client)
+    if not current_ok:
+        log.warning("REBALANCE skip: current positions fetch failed")
+        return
     trades = []
     log.info(f"REBALANCE target={target}")
     log.info(f"REBALANCE target_lev_map={target_lev_map}")
@@ -1152,14 +1189,20 @@ def main():
     state = load_state()
 
     if args.status:
-        positions, pv = get_current_positions(client)
+        positions, pv, ok = get_current_positions(client)
+        if not ok:
+            print("포지션 조회 실패")
+            return
         print(f"총 자산: ${pv:.2f}")
         print(f"포지션: {positions}")
         print(f"마지막 실행: {state.get('last_run', 'N/A')}")
         return
 
     if args.report:
-        positions, pv = get_current_positions(client)
+        positions, pv, ok = get_current_positions(client)
+        if not ok:
+            log.error("리포트 생성 중 포지션 조회 실패")
+            return
         initial = state.get('initial_capital', pv)
         if 'initial_capital' not in state:
             state['initial_capital'] = pv
@@ -1215,6 +1258,11 @@ def main():
         error_alerts: List[str] = []
         log.info(f"=== 바이낸스 선물 매매 시작 (run_id={run_id}) ===")
 
+        if args.trade:
+            jitter = random.randint(*CRON_START_JITTER_SECONDS)
+            log.info(f"시작 지연: {jitter}s (크론 동시충돌 완화)")
+            time.sleep(jitter)
+
         # 1. 데이터 수집
         log.info("데이터 수집...")
         data = fetch_all_data(client)
@@ -1233,7 +1281,11 @@ def main():
             return
 
         # 2. 현재 포지션 (리밸런싱 전)
-        positions_before, pv_before = get_current_positions(client)
+        positions_before, pv_before, pos_ok = get_current_positions(client)
+        if not pos_ok:
+            log.error("현재 포지션/PV 조회 실패. 이번 실행은 거래 없이 스킵.")
+            send_telegram("⚠️ 바이낸스 포지션 조회 실패 — 이번 크론은 거래를 건너뜁니다.")
+            return
         log.info(f"현재 PV: ${pv_before:.2f}")
         if positions_before:
             for coin, pos in positions_before.items():
@@ -1307,7 +1359,11 @@ def main():
             )
 
             # 리밸런싱 후 포지션
-            positions_after, pv_after = get_current_positions(client)
+            positions_after, pv_after, pos_after_ok = get_current_positions(client)
+            if not pos_after_ok:
+                log.error("리밸런싱 후 포지션 조회 실패. kill-switch/미달 판정 없이 종료.")
+                send_telegram("⚠️ 바이낸스 포지션 조회 실패 — 리밸런싱 후 상태 확인을 건너뜁니다.")
+                return
             log.info(f"리밸런싱 완료: PV ${pv_before:.2f} → ${pv_after:.2f}")
             if positions_after:
                 for coin, pos in positions_after.items():

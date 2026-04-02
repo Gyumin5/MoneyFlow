@@ -14,8 +14,10 @@ import pandas as pd
 import numpy as np
 import time
 import json
+import sqlite3
 import requests
 from datetime import datetime, timezone, timedelta
+from typing import Tuple
 import pyupbit
 
 # ─── Telegram ─────────────────────────────────────────────
@@ -59,6 +61,14 @@ except Exception:
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
+ASSETS_DB = os.environ.get("ASSETS_DB", "/home/ubuntu/assets.db")
+STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
+COIN_ANCHOR_DAYS = (1, 11, 21)
+FUTURES_TRANCHE_META = {
+    "4h1": {"interval_hours": 4, "snap_interval_bars": 120, "n_snapshots": 3},
+    "4h2": {"interval_hours": 4, "snap_interval_bars": 21, "n_snapshots": 3},
+    "1h1": {"interval_hours": 1, "snap_interval_bars": 27, "n_snapshots": 3},
+}
 
 def _save_signal_state(data):
     """signal_state.json 원자적 저장."""
@@ -66,6 +76,90 @@ def _save_signal_state(data):
     with open(tmp, 'w') as f:
         json.dump(data, f)
     os.replace(tmp, SIGNAL_STATE_FILE)
+
+
+def save_daily_live_snapshot():
+    """실계좌 기준 일간 스냅샷 저장. 하루 1건 upsert."""
+    api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
+    r = requests.get(f"{api}/api/assets/live_overview", timeout=60)
+    r.raise_for_status()
+    data = r.json()
+
+    accounts = data.get("accounts", {})
+    stock = accounts.get("stock_kis", {}) or {}
+    upbit = accounts.get("coin_upbit", {}) or {}
+    binance = accounts.get("coin_binance", {}) or {}
+
+    stock_krw = float(stock.get("stock_eval_usd", 0.0)) * float(stock.get("exchange_rate", 0.0))
+    upbit_coin_krw = sum(float(row.get("value", 0.0)) for row in (upbit.get("holdings") or []))
+    binance_coin_krw = sum(float(row.get("value_krw", 0.0)) for row in (binance.get("holdings") or []))
+    coin_krw = upbit_coin_krw + binance_coin_krw
+    cash_krw = (
+        float(stock.get("cash_krw", 0.0))
+        + float(upbit.get("krw_balance", 0.0))
+        + float(binance.get("cash_krw", 0.0))
+    )
+    total_krw = stock_krw + coin_krw + cash_krw
+    fx_rate = float(stock.get("exchange_rate", 0.0) or binance.get("exchange_rate", 0.0) or 0.0)
+    usd_cash = float(stock.get("cash_usd", 0.0))
+    snapshot_date = datetime.now().strftime("%Y-%m-%d")
+    accounts_json = json.dumps(accounts, ensure_ascii=False)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    db_path = ASSETS_DB if os.path.isdir(os.path.dirname(ASSETS_DB)) else os.path.join(".", "assets.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_date TEXT UNIQUE NOT NULL,
+            stock_krw REAL DEFAULT 0,
+            coin_krw REAL DEFAULT 0,
+            cash_krw REAL DEFAULT 0,
+            total_krw REAL DEFAULT 0,
+            fx_rate REAL DEFAULT 0,
+            usd_cash REAL DEFAULT 0,
+            memo TEXT DEFAULT '',
+            accounts_json TEXT DEFAULT '{}',
+            created_at TEXT
+        )"""
+    )
+    conn.execute(
+        """INSERT INTO snapshots
+           (snapshot_date, stock_krw, coin_krw, cash_krw, total_krw, fx_rate, usd_cash, memo, accounts_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(snapshot_date) DO UPDATE SET
+             stock_krw=excluded.stock_krw,
+             coin_krw=excluded.coin_krw,
+             cash_krw=excluded.cash_krw,
+             total_krw=excluded.total_krw,
+             fx_rate=excluded.fx_rate,
+             usd_cash=excluded.usd_cash,
+             memo=excluded.memo,
+             accounts_json=excluded.accounts_json,
+             created_at=excluded.created_at
+        """,
+        (
+            snapshot_date,
+            stock_krw,
+            coin_krw,
+            cash_krw,
+            total_krw,
+            fx_rate,
+            usd_cash,
+            "Auto daily snapshot",
+            accounts_json,
+            created_at,
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "snapshot_date": snapshot_date,
+        "stock_krw": stock_krw,
+        "coin_krw": coin_krw,
+        "cash_krw": cash_krw,
+        "total_krw": total_krw,
+    }
 STRATEGY_VERSION = "V18"
 VERSION_HISTORY = [
     ("V18", "2026-03",
@@ -1272,6 +1366,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             </script>
     """
 
+    # 자산관리 UI는 실계좌 조회 전용으로 교체
+    stock_holdings_js = ""
+
     # 긴급 여부 판단
     is_alert = ('CRASH' in s_stat or 'CRASH' in c_stat or 'Risk-Off' in s_stat
                 or 'FLIP' in s_stat.upper() or signal_flipped)
@@ -1280,24 +1377,295 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     alert_icon = '\U0001f6a8' if is_alert else '\u2705'
     alert_msg = f'{s_stat} / {c_stat}'
 
-    # 배너 추가 정보: 카나리 거리, 다음 앵커
-    eem_dist_str = s_meta.get('signal_dist', {}).get('EEM', 0) if isinstance(s_meta, dict) else 0
-    eem_dist_str = f"{eem_dist_str:+.1%}" if isinstance(eem_dist_str, (int, float)) else "N/A"
-    btc_dist_str = c_meta.get('signal_dist', {}).get('BTC', 0) if isinstance(c_meta, dict) else 0
-    btc_dist_str = f"{btc_dist_str:+.1%}" if isinstance(btc_dist_str, (int, float)) else "N/A"
-    # 다음 앵커일 계산
-    _today_day = date_today.day if hasattr(date_today, 'day') else 1
-    _coin_anchors = [1, 11, 21]
-    _stock_anchors = [1, 8, 15, 22]
-    import calendar
-    _year = date_today.year if hasattr(date_today, 'year') else 2026
-    _month = date_today.month if hasattr(date_today, 'month') else 1
-    _days_in_month = calendar.monthrange(_year, _month)[1]
-    _remaining = [a for a in _coin_anchors if a > _today_day]
-    _days_coin = (_remaining[0] - _today_day) if _remaining else (_days_in_month - _today_day + _coin_anchors[0])
-    _remaining_s = [a for a in _stock_anchors if a > _today_day]
-    _days_stock = (_remaining_s[0] - _today_day) if _remaining_s else (_days_in_month - _today_day + _stock_anchors[0])
-    next_anchor_str = f"코인 {_days_coin}일후 / 주식 {_days_stock}일후"
+    # 실행 상태 요약 (상세 로그용) — 주식/현물/선물 공통 템플릿
+    def _fmt_alloc(d: dict) -> str:
+        if not isinstance(d, dict) or not d:
+            return "없음"
+        return ", ".join(
+            f"{k}:{float(v):.1%}"
+            for k, v in sorted(d.items(), key=lambda kv: float(kv[1]), reverse=True)
+        )
+
+    def _fmt_alloc_lines(d: dict) -> str:
+        if not isinstance(d, dict) or not d:
+            return "없음"
+        return "<br>".join(
+            f"{k}: {float(v):.1%}"
+            for k, v in sorted(d.items(), key=lambda kv: float(kv[1]), reverse=True)
+        )
+
+    def _fmt_bool(v) -> str:
+        return "예" if bool(v) else "아니오"
+
+    def _load_first_json(candidates):
+        for cand in candidates:
+            if cand and os.path.exists(cand):
+                try:
+                    with open(cand, "r", encoding="utf-8") as f:
+                        return json.load(f), cand
+                except Exception:
+                    continue
+        return {}, ""
+
+    def _card_list_html(rows, columns=None):
+        if not rows:
+            return "<p>기록 없음</p>"
+        try:
+            if columns:
+                use_cols = columns
+            else:
+                use_cols = list(rows[0].keys())
+            cards = []
+            for row in rows:
+                parts = []
+                for col in use_cols:
+                    val = row.get(col, "-")
+                    parts.append(
+                        "<div class='state-row'>"
+                        f"<div class='state-label'>{col}</div>"
+                        f"<div class='state-value'>{val}</div>"
+                        "</div>"
+                    )
+                cards.append("<div class='state-card'>" + "".join(parts) + "</div>")
+            return "<div class='state-cards'>" + "".join(cards) + "</div>"
+        except Exception:
+            return "<p>표 생성 실패</p>"
+
+    def _strategy_block(title: str, summary_rows: list, tranche_rows: list, extra_html: str = "") -> str:
+        parts = [f"<h2>{title}</h2>"]
+        if summary_rows:
+            parts.append("<div class='summary-list'>")
+            for row in summary_rows:
+                parts.append(f"<div class='summary-item'>{row}</div>")
+            parts.append("</div>")
+        if tranche_rows:
+            parts.append("<h3>트랜치 상태</h3>")
+            parts.append(_card_list_html(tranche_rows))
+        if extra_html:
+            parts.append(extra_html)
+        return "".join(parts)
+
+    def _merge_tranches(tranches: dict) -> dict:
+        merged = {}
+        if not isinstance(tranches, dict) or not tranches:
+            return merged
+        n = len(tranches)
+        for tr in tranches.values():
+            for ticker, weight in (tr.get('weights', {}) or {}).items():
+                merged[ticker] = merged.get(ticker, 0.0) + float(weight) / n
+        return {k: v for k, v in merged.items() if v > 0}
+
+    def _next_anchor_str(anchor_days) -> str:
+        now = datetime.now()
+        year, month = now.year, now.month
+        candidates = []
+        for day in anchor_days:
+            try:
+                candidates.append(datetime(year, month, day))
+            except ValueError:
+                continue
+        future = [dt for dt in candidates if dt.date() >= now.date()]
+        if future:
+            nxt = min(future)
+        else:
+            if month == 12:
+                nxt = datetime(year + 1, 1, anchor_days[0])
+            else:
+                nxt = datetime(year, month + 1, anchor_days[0])
+        return nxt.strftime('%Y-%m-%d')
+
+    _this_month = datetime.now().strftime('%Y-%m')
+
+    def _tranche_status(anchor_month: str, weights: dict, picks: list) -> Tuple[str, str, str]:
+        has_alloc = isinstance(weights, dict) and len(weights) > 0
+        has_picks = isinstance(picks, list) and len(picks) > 0
+        if has_alloc or has_picks:
+            if has_alloc and set(weights.keys()) == {'Cash'} and float(weights.get('Cash', 0)) >= 0.999:
+                return "현금 유지", "없음", _fmt_alloc(weights)
+            return "활성", ", ".join(picks or []) or "없음", _fmt_alloc(weights)
+        if anchor_month and anchor_month < _this_month:
+            return "미초기화", "다음 앵커 대기", "다음 앵커 대기"
+        return "대기", "없음", "없음"
+
+    def _next_tranche_refresh_str(last_bar_ts: str, interval_hours: int, bar_counter, snap_iv: int, n_snap: int) -> str:
+        if not last_bar_ts or last_bar_ts == "-" or snap_iv <= 0 or n_snap <= 0:
+            return "-"
+        try:
+            dt = pd.to_datetime(last_bar_ts)
+            # Futures state stores bar timestamps as naive UTC strings.
+            if getattr(dt, 'tzinfo', None) is None:
+                dt = dt.tz_localize("UTC")
+            c = int(bar_counter)
+            offsets = [int(si * snap_iv / n_snap) for si in range(n_snap)]
+            # state['bar_counter'] is incremented after the latest completed bar is processed.
+            # The next refresh happens on the first future bar where the pre-increment counter
+            # matches one of the tranche offsets.
+            next_n = None
+            for n in range(0, snap_iv + 1):
+                if ((c + n) % snap_iv) in offsets:
+                    next_n = n
+                    break
+            if next_n is None:
+                next_n = 0
+            nxt = dt + pd.Timedelta(hours=interval_hours * (next_n + 1))
+            nxt = pd.Timestamp(nxt).tz_convert("Asia/Seoul")
+            return nxt.strftime('%Y-%m-%d %H:%M:%S KST')
+        except Exception:
+            return "-"
+
+    def _fmt_run_ts(ts: str) -> str:
+        if not ts or ts == "-":
+            return "-"
+        try:
+            dt = pd.to_datetime(ts)
+            if getattr(dt, "tzinfo", None) is None:
+                return pd.Timestamp(dt).strftime('%Y-%m-%d %H:%M:%S')
+            dt = dt.tz_convert("Asia/Seoul")
+            return pd.Timestamp(dt).strftime('%Y-%m-%d %H:%M:%S KST')
+        except Exception:
+            return str(ts)
+
+    _base_dir = globals().get("BASE_DIR", os.getcwd())
+    state_sections = []
+
+    # ── 주식 실행 상태 ──
+    try:
+        _stock_state, _stock_path = _load_first_json([
+            "/home/ubuntu/kis_trade_state.json",
+            os.path.join(_base_dir, "trade", "kis_trade_state.json"),
+            "kis_trade_state.json",
+        ])
+        _stock_signal, _ = _load_first_json([
+            SIGNAL_STATE_FILE,
+            os.path.join(_base_dir, SIGNAL_STATE_FILE),
+        ])
+        _stk = _stock_signal.get("stock", {}) or {}
+        _stock_exec_target = _merge_tranches(_stock_state.get("tranches", {}) or {})
+        _stock_summary = [
+            f"<b>리스크 상태:</b> {'Risk-On' if _stk.get('risk_on', True) else 'Risk-Off'}",
+            f"<b>리밸런싱 대기:</b> {_fmt_bool(_stock_state.get('rebalancing_needed'))}",
+            f"<b>마지막 실행일:</b> {_stock_state.get('last_trade_date', '-')}",
+            f"<b>실행 목표:</b> {_fmt_alloc(_stock_exec_target)}",
+            f"<b>다음 앵커:</b> {_next_anchor_str(STOCK_ANCHOR_DAYS)}",
+        ]
+        if s_meta.get('signal_dist'):
+            _dist = s_meta['signal_dist']
+            _stock_summary.append(
+                "<b>카나리 거리:</b> " + ", ".join(f"{k}:{float(v):+.2%}" for k, v in _dist.items())
+            )
+        _stock_tr_rows = []
+        for _anchor in sorted((_stock_state.get("tranches", {}) or {}).keys(), key=lambda x: int(x)):
+            _tr = (_stock_state.get("tranches", {}) or {}).get(_anchor, {}) or {}
+            _status, _picks_text, _weights_text = _tranche_status(
+                _tr.get("anchor_month", "-"),
+                _tr.get("weights", {}),
+                _tr.get("picks", []),
+            )
+            _stock_tr_rows.append({
+                "트랜치": f"D{_anchor}",
+                "상태": _status,
+                "기준월": _tr.get("anchor_month", "-"),
+                "종목": _picks_text,
+                "비중": _weights_text,
+            })
+        state_sections.append(_strategy_block("📘 주식 실행 상태", _stock_summary, _stock_tr_rows))
+    except Exception as _e:
+        state_sections.append(f"<h2>📘 주식 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
+
+    # ── 현물 코인 실행 상태 ──
+    try:
+        _coin_state, _coin_path = _load_first_json([
+            "/home/ubuntu/coin_trade_state.json",
+            os.path.join(_base_dir, "trade", "coin_trade_state.json"),
+            "coin_trade_state.json",
+        ])
+        _coin_signal = _stock_signal if '_stock_signal' in locals() else load_json(SIGNAL_STATE_FILE)
+        _coin_sig = _coin_signal.get("coin", {}) or {}
+        _coin_risk_on = bool(_coin_sig.get('risk_on', True))
+        _coin_exec_target_text = "Cash:100.0%" if not _coin_risk_on else _fmt_alloc(_merge_tranches(_coin_state.get("tranches", {}) or {}))
+        _coin_summary = [
+            f"<b>리스크 상태:</b> {'Risk-On' if _coin_risk_on else 'Risk-Off'}",
+            f"<b>리밸런싱 대기:</b> {_fmt_bool(_coin_state.get('rebalancing_needed'))}",
+            f"<b>PFD 완료:</b> {_fmt_bool(_coin_state.get('pfd_done', False))}",
+            f"<b>마지막 실행일:</b> {_coin_state.get('last_trade_date', '-')}",
+            f"<b>실행 목표:</b> {_coin_exec_target_text}",
+            f"<b>다음 앵커:</b> {_next_anchor_str(COIN_ANCHOR_DAYS)}",
+        ]
+        if c_meta.get('signal_dist'):
+            _dist = c_meta['signal_dist']
+            _coin_summary.append(
+                "<b>카나리 거리:</b> " + ", ".join(f"{k}:{float(v):+.2%}" for k, v in _dist.items())
+            )
+        _coin_exclusions = ((_coin_state.get("guard_state", {}) or {}).get("exclusions", {}) or {})
+        if _coin_exclusions:
+            _coin_summary.append(
+                "<b>가드 제외:</b> " + ", ".join(
+                    f"{k}({v.get('reason','-')}, until={v.get('until_date') or '-'})"
+                    for k, v in _coin_exclusions.items()
+                )
+            )
+        _coin_tr_rows = []
+        for _anchor in sorted((_coin_state.get("tranches", {}) or {}).keys(), key=lambda x: int(x)):
+            _tr = (_coin_state.get("tranches", {}) or {}).get(_anchor, {}) or {}
+            _status, _picks_text, _weights_text = _tranche_status(
+                _tr.get("anchor_month", "-"),
+                _tr.get("weights", {}),
+                _tr.get("picks", []),
+            )
+            if not _coin_risk_on and not (_tr.get("weights", {}) or {}):
+                _status, _picks_text, _weights_text = ("현금 유지", "없음", "Cash:100.0%")
+            _coin_tr_rows.append({
+                "트랜치": f"D{_anchor}",
+                "상태": _status,
+                "기준월": _tr.get("anchor_month", "-"),
+                "종목": _picks_text,
+                "비중": _weights_text,
+            })
+        state_sections.append(_strategy_block("📘 현물 코인 실행 상태", _coin_summary, _coin_tr_rows))
+    except Exception as _e:
+        state_sections.append(f"<h2>📘 현물 코인 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
+
+    # ── 선물 실행 상태 ──
+    try:
+        _fut, _fut_path = _load_first_json([
+            "/home/ubuntu/binance_state.json",
+            os.path.join(_base_dir, "trade", "binance_state.json"),
+            "binance_state.json",
+        ])
+        _strategies = _fut.get("strategies", {}) or {}
+        _last_target = _fut.get("last_target", {}) or {}
+        _fut_summary = [
+            f"<b>리밸런싱 대기:</b> {_fmt_bool(_fut.get('rebalancing_needed'))}",
+            f"<b>마지막 실행:</b> {_fmt_run_ts(_fut.get('last_run', '-'))}",
+            f"<b>비상 정지:</b> {_fmt_bool(_fut.get('kill_switch'))}" + (f" ({_fut.get('kill_switch_reason')})" if _fut.get('kill_switch') else ""),
+            f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_last_target)}",
+        ]
+        _fut_tr_rows = []
+        for _name in ["4h1", "4h2", "1h1"]:
+            _st = _strategies.get(_name, {}) or {}
+            _meta = FUTURES_TRANCHE_META.get(_name, {})
+            _snapshots_text = "<br><br>".join(
+                f"<b>S{idx}</b><br>{_fmt_alloc_lines(snap)}"
+                for idx, snap in enumerate((_st.get("snapshots", []) or []), start=1)
+            ) or "없음"
+            _fut_tr_rows.append({
+                "전략": _name,
+                "Canary": "ON" if _st.get("canary_on") else "OFF",
+                "다음 트랜치 일정": _next_tranche_refresh_str(
+                    _st.get("last_bar_ts", "-"),
+                    _meta.get("interval_hours", 1),
+                    _st.get("bar_counter", 0),
+                    _meta.get("snap_interval_bars", 0),
+                    _meta.get("n_snapshots", 0),
+                ),
+                "현재 합산": _fmt_alloc_lines(_st.get("last_combined", {})),
+                "트랜치": _snapshots_text,
+            })
+        state_sections.append(_strategy_block("📘 선물 실행 상태", _fut_summary, _fut_tr_rows))
+    except Exception as _e:
+        state_sections.append(f"<h2>📘 선물 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
+
+    execution_state_html = "".join(state_sections)
 
     html = f"""
     <!DOCTYPE html>
@@ -1319,6 +1687,14 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             .dataframe tr:nth-child(even) {{ background-color: #f2f2f2; }}
             .small-table {{ font-size: 0.9em; }}
             .table-wrap {{ overflow-x: auto; }}
+            .summary-list {{ display: grid; gap: 6px; margin-bottom: 12px; }}
+            .summary-item {{ padding: 8px 10px; background: #f8f9fa; border-radius: 8px; line-height: 1.45; font-size: 0.95em; }}
+            .state-cards {{ display: grid; gap: 10px; margin-bottom: 12px; }}
+            .state-card {{ border: 1px solid #e6e8eb; border-radius: 10px; padding: 10px 12px; background: #fff; }}
+            .state-row {{ display: grid; grid-template-columns: 110px 1fr; gap: 10px; align-items: start; padding: 6px 0; border-bottom: 1px solid #f1f3f4; }}
+            .state-row:last-child {{ border-bottom: none; }}
+            .state-label {{ color: #5f6368; font-weight: 600; font-size: 0.9em; }}
+            .state-value {{ color: #202124; line-height: 1.45; word-break: keep-all; overflow-wrap: anywhere; }}
 
             /* Collapsible sections */
             .section-header {{
@@ -1339,17 +1715,31 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 .container {{ padding: 12px; border-radius: 10px; }}
                 .mobile-card-table thead {{ display: none; }}
                 .mobile-card-table tr {{ display: block; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 8px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
-                .mobile-card-table td {{ display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #eee; text-align: right; }}
+                .mobile-card-table td {{ display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #eee; text-align: right; font-size: 0.9em; }}
                 .mobile-card-table td:last-child {{ border-bottom: none; }}
-                .mobile-card-table td::before {{ content: attr(data-label); font-weight: 600; color: #555; text-align: left; }}
+                .mobile-card-table td::before {{ content: attr(data-label); font-weight: 600; color: #555; text-align: left; flex: 0 0 38%; }}
                 .mobile-card-table td:first-child {{ background: #f8f9fa; font-weight: bold; color: #1a73e8; border-radius: 8px 8px 0 0; }}
                 .chart-container {{ height: 180px !important; }}
                 /* 2열 그리드 → 1열 */
                 div[style*="grid-template-columns:1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
                 div[style*="grid-template-columns: 1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
                 .section-header h2 {{ font-size: 1em; }}
+                .summary-item {{ font-size: 0.9em; padding: 7px 9px; }}
+                .table-wrap {{ overflow-x: visible; }}
+                .state-card {{ padding: 8px 10px; }}
+                .state-row {{ grid-template-columns: 92px 1fr; gap: 8px; padding: 5px 0; }}
+                .state-label, .state-value {{ font-size: 0.88em; }}
+                #historyTable th, #historyTable td {{ white-space: nowrap; font-size: 0.82em; padding: 8px 6px; }}
+                .weights-table tr {{ display: table-row; margin-bottom: 0; border: none; border-radius: 0; background: transparent; box-shadow: none; }}
+                .weights-table td {{ display: table-cell; padding: 10px 6px; border-bottom: 1px solid #eee; text-align: left; font-size: 0.88em; white-space: nowrap; }}
+                .weights-table td::before {{ content: none; }}
+                .weights-table td:first-child {{ background: transparent; font-weight: 600; color: #202124; border-radius: 0; }}
+                .weights-table td:last-child {{ text-align: right; font-variant-numeric: tabular-nums; }}
             }}
             .chart-container {{ height: 250px; position: relative; }}
+            .weights-table {{ table-layout: fixed; width: 100%; }}
+            .weights-table th:first-child, .weights-table td:first-child {{ width: 62%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+            .weights-table th:last-child, .weights-table td:last-child {{ width: 38%; text-align: right; white-space: nowrap; }}
         </style>
     </head>
     <body>
@@ -1357,108 +1747,22 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             <h1>\U0001f680 Cap Defend {STRATEGY_VERSION}</h1>
             <p style="color:#666; font-size:0.9em;">{datetime.now().strftime('%Y-%m-%d %H:%M')} | \uc885\uac00 {date_today.strftime('%Y-%m-%d')}</p>
 
-            <!-- ===== 오늘 요약 (항상 보임) ===== -->
-            <div style="background:{alert_bg}; border:2px solid {alert_border}; padding:16px; border-radius:12px; margin:12px 0;">
-                <div style="font-size:1.2em; font-weight:700;">{alert_icon} {alert_msg}</div>
-                <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; font-size:0.9em; color:#555;">
-                    <span>📉 EEM: SMA200 {eem_dist_str}</span>
-                    <span>🪙 BTC: SMA50 {btc_dist_str}</span>
-                    <span>📅 다음앵커: {next_anchor_str}</span>
-                    <span>💰 Buffer: {cash_buffer_pct:.0%}</span>
-                </div>
-            </div>
-
-            <!-- ===== 자산 관리 + 리밸런싱 (기본 펼침) ===== -->
+            <!-- ===== 실계좌 현황 (기본 펼침) ===== -->
             <div class="section-header" onclick="toggleSection('secAsset')">
-                <h2>\U0001f9ee \uc790\uc0b0 \uad00\ub9ac / \ub9ac\ubc38\ub7f0\uc2f1</h2>
+                <h2>\U0001f4bc \uc2e4\uacc4\uc88c \ud604\ud669</h2>
                 <span class="badge" id="secAsset_badge"></span>
                 <span class="arrow" id="secAsset_arrow">\u25bc</span>
             </div>
             <div class="section-body" id="secAsset">
                 <div class="card">
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
-                        <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uc8fc\uc2dd - \uc2e0\ud55c (\uc6d0, \uc218\ub3d9)</label>
-                            <input id="stockShinhan" type="text" placeholder="0"
-                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
-                        </div>
-                        <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uc8fc\uc2dd - \ud55c\ud22c (\uc6d0, \uc790\ub3d9)</label>
-                            <div style="display:flex; gap:6px; margin-top:4px;">
-                                <input id="stockKIS" type="text" readonly placeholder="\uc870\ud68c \ud544\uc694"
-                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px; background:#f8f9fa;" />
-                                <button onclick="fetchStockBalance()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
-                            </div>
-                        </div>
-                        <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ucf54\uc778 (\uc6d0, \uc790\ub3d9)</label>
-                            <div style="display:flex; gap:6px; margin-top:4px;">
-                                <input id="snapCoin" type="text" readonly placeholder="\uc870\ud68c \ud544\uc694"
-                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px; background:#f8f9fa;" />
-                                <button onclick="fetchCoinForSnap()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
-                            </div>
-                        </div>
-                        <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ud604\uae08 (\uc6d0)</label>
-                            <input id="snapBankCash" type="text" placeholder="0"
-                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
-                        </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
-                        <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\ud658\uc728 (\uc6d0/\ub2ec\ub7ec, \uc790\ub3d9)</label>
-                            <div style="display:flex; gap:6px; margin-top:4px;">
-                                <input id="exchangeRate" type="text" readonly placeholder="\uc870\ud68c \ud544\uc694"
-                                    style="flex:1; padding:8px; border:1px solid #ddd; border-radius:8px; background:#f8f9fa;" />
-                                <button onclick="fetchExchangeRate()" style="background:#1a73e8; color:white; border:none; padding:6px 12px; border-radius:8px; font-size:0.85em; cursor:pointer; white-space:nowrap;">\uc870\ud68c</button>
-                            </div>
-                        </div>
-                        <div>
-                            <label style="font-weight:600; color:#555; font-size:0.9em;">\uba54\ubaa8 (\uc120\ud0dd)</label>
-                            <input id="snapMemo" type="text" placeholder=""
-                                style="width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; margin-top:4px;" />
-                        </div>
-                    </div>
-                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                        <button onclick="calcRebalance()" style="
-                            flex:1; background:linear-gradient(135deg,#0d904f 0%,#1a73e8 100%);
+                    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:12px;">
+                        <button onclick="fetchLiveOverview()" style="
+                            background:linear-gradient(135deg,#0d904f 0%,#1a73e8 100%);
                             color:white; border:none; padding:12px 24px; border-radius:8px;
-                            font-weight:600; font-size:1em; cursor:pointer;">\uacc4\uc0b0</button>
-                        <button onclick="saveSnapshot()" style="
-                            flex:1; background:linear-gradient(135deg,#7627bb 0%,#1a73e8 100%);
-                            color:white; border:none; padding:12px 24px; border-radius:8px;
-                            font-weight:600; font-size:1em; cursor:pointer;">\U0001f4be \uc2a4\ub0c5\uc0f7 \uc800\uc7a5</button>
+                            font-weight:600; font-size:1em; cursor:pointer;">\uc870\ud68c</button>
+                        <span id="liveFetchStatus" style="font-size:0.9em; color:#666;"></span>
                     </div>
-                    <div id="stockFetchStatus" style="font-size:0.85em; margin-top:4px; color:#666;"></div>
-                    <div id="coinFetchStatus" style="font-size:0.85em; margin-top:4px; color:#666;"></div>
-                    <div id="rebalResult" style="margin-top:12px;"></div>
-                    <div id="snapStatus" style="margin-top:8px; font-size:0.9em;"></div>
-                </div>
-
-                <!-- 코인 Force Trade / Buffer -->
-                <div class="card">
-                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
-                        <span style="font-weight:600; color:#555;">\U0001f4b0 Cash Buffer:</span>
-                        <span id="bufferDisplay" style="font-size:1.1em; font-weight:700; color:#1a73e8;">{cash_buffer_pct:.0%}</span>
-                        <select id="bufferSelect" style="padding:6px 10px; border:1px solid #ddd; border-radius:8px; font-size:0.9em;">
-                            <option value="0.80" {'selected' if cash_buffer_pct >= 0.75 else ''}>80%</option>
-                            <option value="0.60" {'selected' if 0.55 <= cash_buffer_pct < 0.75 else ''}>60%</option>
-                            <option value="0.40" {'selected' if 0.35 <= cash_buffer_pct < 0.55 else ''}>40%</option>
-                            <option value="0.20" {'selected' if 0.15 <= cash_buffer_pct < 0.35 else ''}>20%</option>
-                            <option value="0.02" {'selected' if cash_buffer_pct < 0.15 else ''}>2%</option>
-                        </select>
-                        <button onclick="updateBuffer()" style="background:#1a73e8; color:white; border:none; padding:6px 14px; border-radius:8px; font-weight:600; cursor:pointer; font-size:0.9em;">\ubcc0\uacbd</button>
-                        <span id="bufferStatus" style="font-size:0.85em;"></span>
-                    </div>
-                    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                        <button id="forceTradeUpbitBtn" onclick="forceTrade('upbit')" style="
-                            background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);
-                            color:white; border:none; padding:10px 20px; border-radius:8px;
-                            font-size:0.95em; font-weight:600; cursor:pointer;">
-                            \u26a1 Force Trade (Upbit)
-                        </button>
-                        <span id="tradeStatus" style="font-size:0.9em; font-weight:500;"></span>
-                    </div>
+                    <div id="liveOverviewResult"></div>
                 </div>
             </div>
 
@@ -1474,7 +1778,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 </div>
                 <div class="card" style="overflow-x:auto;">
                     <table id="historyTable">
-                        <thead><tr><th>\ub0a0\uc9dc</th><th>\uc8fc\uc2dd</th><th>\ucf54\uc778</th><th>\ud604\uae08</th><th>\ucd1d\uc790\uc0b0</th><th>\uba54\ubaa8</th></tr></thead>
+                        <thead><tr><th>\ub0a0\uc9dc</th><th>\uc8fc\uc2dd</th><th>\ucf54\uc778</th><th>\ud604\uae08</th><th>\ucd1d\uc790\uc0b0</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
@@ -1488,14 +1792,14 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 <span class="arrow" id="secLog_arrow">\u25b6</span>
             </div>
             <div class="section-body collapsed" id="secLog">
-                {''.join(log_global)}
+                {execution_state_html}
             </div>
 
             {stock_holdings_js}
 
             <script>
             const API = 'http://' + window.location.hostname + ':5000';
-            const fmt = n => (n/1e8).toFixed(3)+'\uc5b5';
+            const fmt = n => (n/1e8).toFixed(2)+'\uc5b5';
 
             // === Section toggle ===
             function toggleSection(id) {{
@@ -1547,88 +1851,129 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 setTimeout(()=>{{btn.disabled=false; btn.style.opacity='1';}}, 5000);
             }}
 
-            // === Snapshot ===
-            function sumText(id) {{
-                const v = document.getElementById(id).value.trim();
-                if (!v) return 0;
-                return v.split(/\\s+/).reduce((s,x) => s+(parseFloat(x)||0), 0);
+            function fmtKrwFull(n) {{
+                return Math.round(Number(n || 0)).toLocaleString() + '\uc6d0';
             }}
 
-            async function fetchCoinForSnap() {{
-                try {{
-                    const r = await fetch(API + '/api/assets/coin_balance');
-                    const d = await r.json();
-                    if (d.total_krw) document.getElementById('snapCoin').value = Math.round(d.total_krw);
-                }} catch(e) {{ alert('\ucf54\uc778 \uc870\ud68c \uc2e4\ud328'); }}
+            function fmtUsdFull(n) {{
+                return '$' + Number(n || 0).toLocaleString(undefined, {{maximumFractionDigits: 2}});
             }}
 
-            let kisHoldings = {{}};  // {{ticker: qty}} 한투 보유
-
-            async function fetchStockBalance() {{
-                const statusEl = document.getElementById('stockFetchStatus');
-                try {{
-                    if (statusEl) {{ statusEl.innerHTML = '\u23f3 \ud55c\ud22c \uc794\uace0 \uc870\ud68c \uc911...'; statusEl.style.color = '#1967d2'; }}
-                    const r = await fetch(API + '/api/assets/stock_balance');
-                    const d = await r.json();
-                    if (d.error) {{ if (statusEl) {{ statusEl.innerHTML = '\u26a0\ufe0f ' + d.error; statusEl.style.color = '#d93025'; }} return; }}
-                    document.getElementById('stockKIS').value = Math.round(d.total_krw);
-                    if (d.exchange_rate > 0) document.getElementById('exchangeRate').value = d.exchange_rate;
-                    // 보유 종목 저장
-                    kisHoldings = {{}};
-                    if (d.holdings) d.holdings.forEach(h => {{ kisHoldings[h.ticker] = h.qty; }});
-                    let info = '\u2705 $' + d.total_usd.toFixed(0) + ' (\u00d7' + d.exchange_rate.toFixed(0) + ') = ' + Math.round(d.total_krw).toLocaleString() + '\uc6d0';
-                    if (d.holdings && d.holdings.length > 0) {{
-                        info += ' | ';
-                        d.holdings.forEach(h => {{ info += h.ticker + ':' + h.qty + '\uc8fc '; }});
-                    }}
-                    info += ' (\uac00\uc6a9 $' + d.buying_power_usd.toFixed(0) + ')';
-                    if (statusEl) {{ statusEl.innerHTML = info; statusEl.style.color = '#0d904f'; }}
-                }} catch(e) {{ if (statusEl) {{ statusEl.innerHTML = '\u274c \ud55c\ud22c \uc870\ud68c \uc2e4\ud328'; statusEl.style.color = '#d93025'; }} }}
+            function fmtQty(n) {{
+                return Number(n || 0).toLocaleString(undefined, {{maximumFractionDigits: 6}});
             }}
 
-            async function fetchExchangeRate() {{
-                try {{
-                    const r = await fetch(API + '/api/assets/stock_balance');
-                    const d = await r.json();
-                    if (d.exchange_rate > 0) {{
-                        document.getElementById('exchangeRate').value = d.exchange_rate;
-                    }}
-                }} catch(e) {{}}
+            function renderWeightsTable(title, weights) {{
+                const parts = Object.entries(weights || {{}}).map(([ticker, weight]) => ({{
+                    ticker,
+                    weight: Number(weight || 0) * 100
+                }}));
+                if (!parts.length) {{
+                    return '<div class="card"><h3 style="margin-top:0;">' + title + '</h3><div style="color:#777;">표시할 구성 없음</div></div>';
+                }}
+                const body = parts
+                    .sort((a, b) => {{
+                        const aCash = a.ticker === '현금' || a.ticker.toUpperCase() === 'CASH';
+                        const bCash = b.ticker === '현금' || b.ticker.toUpperCase() === 'CASH';
+                        if (aCash && !bCash) return 1;
+                        if (!aCash && bCash) return -1;
+                        return b.weight - a.weight;
+                    }})
+                    .map(row =>
+                        '<tr>'
+                        + '<td data-label="구성">' + row.ticker + '</td>'
+                        + '<td data-label="비중">' + row.weight.toFixed(1) + '%</td>'
+                        + '</tr>'
+                    )
+                    .join('');
+                const head = '<tr><th>구성</th><th>계좌 내 비중</th></tr>';
+                return '<div class="card"><h3 style="margin-top:0;">' + title + '</h3>'
+                    + '<table class="mobile-card-table weights-table"><colgroup><col style="width:62%"><col style="width:38%"></colgroup><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>';
             }}
 
-            function getStockTotal() {{
-                const shinhan = parseFloat((document.getElementById('stockShinhan').value || '0').replace(/,/g,'')) || 0;
-                const kis = parseFloat((document.getElementById('stockKIS').value || '0').replace(/,/g,'')) || 0;
-                return shinhan + kis;
+            function renderHoldingsTable(title, rows) {{
+                if (!rows || !rows.length) {{
+                    return '<div class="card"><h3 style="margin-top:0;">' + title + '</h3><div style="color:#777;">\ubcf4\uc720 \uc885\ubaa9 \uc5c6\uc74c</div></div>';
+                }}
+                let body = '';
+                rows.forEach(row => {{
+                    const price = row.price_krw || row.price || 0;
+                    body += '<tr>'
+                        + '<td data-label="종목">' + row.ticker + '</td>'
+                        + '<td data-label="수량">' + fmtQty(row.qty) + '</td>'
+                        + '<td data-label="현재가">' + fmtKrwFull(price) + '</td>'
+                        + '</tr>';
+                }});
+                const head = '<tr><th>종목</th><th>수량</th><th>현재가(원화)</th></tr>';
+                return '<div class="card"><h3 style="margin-top:0;">' + title + '</h3>'
+                    + '<table class="mobile-card-table"><thead>' + head + '</thead><tbody>' + body + '</tbody></table></div>';
             }}
 
-            async function saveSnapshot() {{
-                const now = new Date();
-                const month = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
-                const stock = getStockTotal();
-                const coin = parseFloat(document.getElementById('snapCoin').value) || 0;
-                const bankCash = sumText('snapBankCash');
-                const cash = bankCash;
-                const rate = parseFloat(document.getElementById('exchangeRate').value) || 0;
-                const data = {{
-                    month: month,
-                    stock_krw: stock, coin_krw: coin, cash_krw: cash,
-                    memo: document.getElementById('snapMemo').value,
-                    accounts: {{
-                        fx_rate: rate, bank_cash: bankCash,
-                        fx_rate: rate
-                    }}
+            function renderLiveOverview(data) {{
+                const root = document.getElementById('liveOverviewResult');
+                const badge = document.getElementById('secAsset_badge');
+                const accounts = (data && data.accounts) ? data.accounts : {{}};
+                const stock = accounts.stock_kis || {{}};
+                const upbit = accounts.coin_upbit || {{}};
+                const binance = accounts.coin_binance || {{}};
+                const totalKrw = Number(data.total_krw || 0);
+                if (badge) {{
+                    badge.textContent = '실시간 총액: ' + fmt(Math.round(totalKrw));
+                }}
+
+                const shareText = (amount) => {{
+                    if (!totalKrw) return '비중 -';
+                    return '비중 ' + (Number(amount || 0) / totalKrw * 100).toFixed(1) + '%';
                 }};
+
+                const card = (title, total, cash, subline, error) => {{
+                    if (error) {{
+                        return '<div class="card"><div style="font-size:0.9em;color:#666;">' + title + '</div>'
+                            + '<div style="margin-top:8px;color:#d93025;">조회 실패: ' + error + '</div></div>';
+                    }}
+                    return '<div class="card" style="margin-bottom:0;">'
+                        + '<div style="font-size:0.9em;color:#666;">' + title + '</div>'
+                        + '<div style="font-size:1.35em;font-weight:700;margin-top:6px;">' + total + '</div>'
+                        + '<div style="margin-top:6px;color:#555;">남은 현금: <b>' + cash + '</b></div>'
+                        + '<div style="margin-top:4px;font-size:0.85em;color:#777;">' + subline + '</div>'
+                        + '</div>';
+                }};
+
+                let html = '<div class="card" style="background:#f8f9fa;">'
+                    + '<div style="font-size:0.95em;color:#666;">전체 실시간 자산</div>'
+                    + '<div style="font-size:1.55em;font-weight:700;margin-top:6px;">' + fmtKrwFull(data.total_krw || 0) + '</div>'
+                    + '<div style="margin-top:4px;font-size:0.85em;color:#777;">업데이트: ' + (data.updated || '-') + '</div>'
+                    + '</div>';
+
+                html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px;">';
+                html += card('주식 - 한투', fmtKrwFull(stock.total_krw), fmtKrwFull(stock.cash_krw), shareText(stock.total_krw) + ' / 보유 ' + ((stock.holdings || []).length) + '종목', stock.error);
+                html += card('코인 - 업비트', fmtKrwFull(upbit.total_krw), fmtKrwFull(upbit.krw_balance), shareText(upbit.total_krw) + ' / 보유 ' + ((upbit.holdings || []).length) + '종목', upbit.error);
+                html += card('코인 - 바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
+                html += '</div>';
+
+                html += '<div style="margin-top:16px;">';
+                html += renderWeightsTable('한투 구성 비중', stock.weights || {{}});
+                html += renderWeightsTable('업비트 구성 비중', upbit.weights || {{}});
+                html += renderWeightsTable('바이낸스 구성 비중', binance.weights || {{}});
+                html += '</div>';
+                root.innerHTML = html;
+            }}
+
+            async function fetchLiveOverview() {{
+                const statusEl = document.getElementById('liveFetchStatus');
                 try {{
-                    const r = await fetch(API + '/api/assets/snapshots', {{
-                        method: 'POST', headers: {{'Content-Type':'application/json'}},
-                        body: JSON.stringify(data)
-                    }});
-                    const d = await r.json();
-                    document.getElementById('snapStatus').innerHTML = '\u2705 ' + (d.message || d.error);
-                    document.getElementById('snapStatus').style.color = r.ok ? '#0d904f' : '#d93025';
-                    loadHistory();
-                }} catch(e) {{ document.getElementById('snapStatus').innerHTML = '\u274c \uc800\uc7a5 \uc2e4\ud328'; }}
+                    statusEl.innerHTML = '\u23f3 \uc2e4\uacc4\uc88c \uc870\ud68c \uc911...';
+                    statusEl.style.color = '#1967d2';
+                    const r = await fetch(API + '/api/assets/live_overview');
+                    const data = await r.json();
+                    if (!r.ok) throw new Error(data.error || 'API error');
+                    renderLiveOverview(data);
+                    statusEl.innerHTML = '\u2705 \uc870\ud68c \uc644\ub8cc (' + (data.updated || '-') + ')';
+                    statusEl.style.color = '#0d904f';
+                }} catch (e) {{
+                    statusEl.innerHTML = '\u274c \uc870\ud68c \uc2e4\ud328: ' + e.message;
+                    statusEl.style.color = '#d93025';
+                }}
             }}
 
             // === History ===
@@ -1640,10 +1985,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     if (!rows.length) return;
 
                     // Badge
-                    const last = rows[rows.length - 1];
-                    const badge1 = document.getElementById('secAsset_badge');
                     const badge2 = document.getElementById('secHistory_badge');
-                    if (badge1) badge1.textContent = '\ucd5c\uadfc: ' + (last.snapshot_date||last.month) + ' / ' + fmt(last.total_krw);
                     if (badge2) badge2.textContent = rows.length + '\uac74';
 
                     // Table: 월말 요약 항상 표시 + 클릭하면 일별 펼침
@@ -1671,8 +2013,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         tbody.innerHTML += '<tr '+clickAttr+'>'
                             +'<td style="font-weight:600;">'+arrow+(lastItem.snapshot_date||lastItem.month)+'</td>'
                             +'<td>'+fmt(lastItem.stock_krw)+'</td><td>'+fmt(lastItem.coin_krw)+'</td>'
-                            +'<td>'+fmt(lastItem.cash_krw)+'</td><td style="font-weight:700;">'+fmt(lastItem.total_krw)+'</td>'
-                            +'<td>'+(lastItem.memo||'')+'</td></tr>';
+                            +'<td>'+fmt(lastItem.cash_krw)+'</td><td style="font-weight:700;">'+fmt(lastItem.total_krw)+'</td></tr>';
 
                         // 나머지 일별 행 (숨김, 클릭 시 펼침)
                         for (let j = 1; j < items.length; j++) {{
@@ -1680,8 +2021,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             tbody.innerHTML += '<tr class="mr_'+monthId+'" style="display:none;">'
                                 +'<td style="padding-left:20px;color:#666;">'+(s.snapshot_date||s.month)+'</td>'
                                 +'<td>'+fmt(s.stock_krw)+'</td><td>'+fmt(s.coin_krw)+'</td>'
-                                +'<td>'+fmt(s.cash_krw)+'</td><td>'+fmt(s.total_krw)+'</td>'
-                                +'<td style="color:#999;">'+(s.memo||'')+'</td></tr>';
+                                +'<td>'+fmt(s.cash_krw)+'</td><td>'+fmt(s.total_krw)+'</td></tr>';
                         }}
                     }}
 
@@ -1874,6 +2214,15 @@ if __name__ == "__main__":
     # Pass my_holdings_krw, integrated_rows for unified display
     coin_total_krw = sum(my_holdings_krw.values()) + my_cash
     save_html(log, final_port, s_port, c_port, s_stat, c_stat, turnover, [], [], target_date, krw_prices, s_meta, c_meta, {}, my_holdings_krw, action_guide, integrated_rows, coin_total_krw=coin_total_krw)
+
+    try:
+        snap = save_daily_live_snapshot()
+        print(
+            f"✅ Daily snapshot saved: {snap['snapshot_date']} "
+            f"(stock={snap['stock_krw']:,.0f}, coin={snap['coin_krw']:,.0f}, cash={snap['cash_krw']:,.0f}, total={snap['total_krw']:,.0f})"
+        )
+    except Exception as e:
+        print(f"⚠️ daily snapshot 저장 실패: {e}")
 
     # ─── 새 스키마 signal_state.json 저장 ───
     try:
