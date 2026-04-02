@@ -16,13 +16,15 @@ app = Flask(__name__)
 TRADE_PIN = os.environ.get('TRADE_PIN', '')
 
 # CORS: 같은 서버에서만 허용 (포트 8080 = serve.py)
-ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', '').split(',')  # 서버에서 환경변수로 설정
+ALLOWED_ORIGINS = [o for o in os.environ.get('ALLOWED_ORIGINS', '').split(',') if o]  # 서버에서 환경변수로 설정
 
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS or not origin:
-        response.headers.add('Access-Control-Allow-Origin', origin or ALLOWED_ORIGINS[0])
+    if not ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = '*'
+    elif origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     return response
@@ -214,85 +216,250 @@ def save_snapshot():
                   stock, coin, cash, total, fx_rate, usd_cash, memo, accounts, now))
     conn.commit()
     conn.close()
-    return jsonify({"message": f"{month} 저장 완료", "total_krw": total})
+    return jsonify({"message": f"{date} 저장 완료", "total_krw": total})
+
+def _get_coin_balance_data() -> dict:
+    """업비트 코인 잔고 자동 조회."""
+    import pyupbit
+    from config import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY
+    upbit = pyupbit.Upbit(UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY)
+    balances = upbit.get_balances()
+    total_krw = 0.0
+    krw_balance = 0.0
+    holdings = []
+    for b in balances:
+        if not isinstance(b, dict):
+            continue
+        currency = b.get('currency', '')
+        bal = float(b.get('balance', 0)) + float(b.get('locked', 0))
+        if currency == 'KRW':
+            krw_balance = bal
+            continue
+        if bal <= 0:
+            continue
+        try:
+            price = pyupbit.get_current_price(f"KRW-{currency}") or 0
+        except Exception:
+            price = 0
+        val = bal * price
+        if val >= 1000:
+            holdings.append({
+                'ticker': currency,
+                'qty': bal,
+                'price': price,
+                'value': val,
+                'weight_value_krw': val,
+            })
+            total_krw += val
+    total_krw += krw_balance
+    weights = {}
+    if total_krw > 0:
+        for h in holdings:
+            weights[h['ticker']] = float(h.get('weight_value_krw', 0.0)) / total_krw
+        weights['현금'] = krw_balance / total_krw
+    return {
+        "total_krw": total_krw,
+        "krw_balance": krw_balance,
+        "holdings": holdings,
+        "weights": weights,
+        "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
+    }
+
 
 @app.route('/api/assets/coin_balance', methods=['GET'])
 def get_coin_balance():
-    """업비트 코인 잔고 자동 조회."""
     try:
-        import pyupbit
-        from config import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY
-        upbit = pyupbit.Upbit(UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY)
-        balances = upbit.get_balances()
-        total_krw = 0
-        krw_balance = 0
-        holdings = []
-        for b in balances:
-            if not isinstance(b, dict): continue
-            currency = b.get('currency', '')
-            bal = float(b.get('balance', 0)) + float(b.get('locked', 0))
-            if currency == 'KRW':
-                krw_balance = bal
-                continue
-            if bal <= 0: continue
-            try:
-                price = pyupbit.get_current_price(f"KRW-{currency}") or 0
-            except Exception:
-                price = 0
-            val = bal * price
-            if val >= 1000:
-                holdings.append({'ticker': currency, 'qty': bal, 'price': price, 'value': val})
-                total_krw += val
-        total_krw += krw_balance
-        return jsonify({
-            "total_krw": total_krw,
-            "krw_balance": krw_balance,
-            "holdings": holdings,
-            "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
-        })
+        return jsonify(_get_coin_balance_data())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def _get_usdkrw_rate() -> float:
+    """KIS 기준 USD/KRW 환율."""
+    rate = 1500.0
+    try:
+        from auto_trade_kis import _get, KIS_ACCOUNT, KIS_ACCOUNT_PROD
+        data = _get("/uapi/overseas-stock/v1/trading/foreign-margin", "TTTC2101R", {
+            "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+        }, retries=1)
+        for item in data.get('output', []):
+            if isinstance(item, dict) and item.get('natn_name') == '미국' and item.get('crcy_cd') == 'USD':
+                rate = float(item.get('bass_exrt', 1500))
+                break
+    except Exception:
+        pass
+    return rate
+
+
+def _get_upbit_usdt_krw_rate() -> float:
+    """업비트 KRW-USDT 가격 기반 환율. 김프 반영 목적."""
+    rate = 0.0
+    try:
+        import pyupbit
+        price = pyupbit.get_current_price("KRW-USDT")
+        if price and float(price) > 0:
+            rate = float(price)
+    except Exception:
+        pass
+    return rate
+
+
+def _get_stock_balance_data() -> dict:
+    """한투 해외주식 잔고 자동 조회."""
+    from auto_trade_kis import get_balance, get_buying_power_usd
+
+    holdings_raw, _ = get_balance()
+    stock_eval = sum(h['eval_amt'] for h in holdings_raw)
+    buying_power = get_buying_power_usd()
+    rate = _get_usdkrw_rate()
+    total_usd = stock_eval + buying_power
+    total_krw = total_usd * rate
+    holdings = []
+    for h in holdings_raw:
+        holdings.append({
+            **h,
+            "price_krw": float(h.get("current_price", 0.0)) * rate,
+            "value_krw": float(h.get("eval_amt", 0.0)) * rate,
+            "weight_value_krw": float(h.get("eval_amt", 0.0)) * rate,
+        })
+    weights = {}
+    if total_krw > 0:
+        for h in holdings:
+            weights[h['ticker']] = float(h.get('weight_value_krw', 0.0)) / total_krw
+        weights['현금'] = (buying_power * rate) / total_krw
+    return {
+        "total_krw": total_krw,
+        "total_usd": total_usd,
+        "stock_eval_usd": stock_eval,
+        "buying_power_usd": buying_power,
+        "cash_usd": buying_power,
+        "cash_krw": buying_power * rate,
+        "exchange_rate": rate,
+        "holdings": holdings,
+        "weights": weights,
+        "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
+    }
+
 
 @app.route('/api/assets/stock_balance', methods=['GET'])
 def get_stock_balance():
-    """한투 해외주식 잔고 자동 조회."""
     try:
-        from auto_trade_kis import get_balance, get_buying_power_usd, _get, KIS_ACCOUNT, KIS_ACCOUNT_PROD
-
-        # 보유 종목
-        holdings_raw, _ = get_balance()
-        stock_eval = sum(h['eval_amt'] for h in holdings_raw)
-
-        # 매수가능 (통합증거금)
-        buying_power = get_buying_power_usd()
-
-        # 환율
-        rate = 1500.0
-        try:
-            data = _get("/uapi/overseas-stock/v1/trading/foreign-margin", "TTTC2101R", {
-                "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
-            }, retries=1)
-            for item in data.get('output', []):
-                if isinstance(item, dict) and item.get('natn_name') == '미국' and item.get('crcy_cd') == 'USD':
-                    rate = float(item.get('bass_exrt', 1500))
-                    break
-        except Exception:
-            pass
-
-        total_usd = stock_eval + buying_power
-        total_krw = total_usd * rate
-
-        return jsonify({
-            "total_krw": total_krw,
-            "total_usd": total_usd,
-            "stock_eval_usd": stock_eval,
-            "buying_power_usd": buying_power,
-            "exchange_rate": rate,
-            "holdings": holdings_raw,
-            "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
-        })
+        return jsonify(_get_stock_balance_data())
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
+    """바이낸스 USDT-M 선물 잔고/포지션 조회."""
+    from binance.client import Client
+    import config
+
+    rate = exchange_rate or _get_upbit_usdt_krw_rate() or _get_usdkrw_rate()
+    api_key = getattr(config, 'BINANCE_API_KEY', '')
+    api_secret = getattr(config, 'BINANCE_API_SECRET', '')
+    client = Client(api_key, api_secret)
+
+    account = client.futures_account()
+    total_usdt = float(account.get('totalMarginBalance') or account.get('totalWalletBalance') or 0.0)
+    available_usdt = float(account.get('availableBalance') or 0.0)
+    unrealized_usdt = float(account.get('totalUnrealizedProfit') or 0.0)
+
+    holdings = []
+    for p in client.futures_position_information():
+        qty = float(p.get('positionAmt') or 0.0)
+        if abs(qty) <= 1e-12:
+            continue
+        symbol = p.get('symbol', '')
+        mark = float(p.get('markPrice') or 0.0)
+        entry = float(p.get('entryPrice') or 0.0)
+        notional = abs(float(p.get('notional') or (qty * mark)))
+        pnl = float(p.get('unRealizedProfit') or 0.0)
+        margin_usdt = float(
+            p.get('positionInitialMargin')
+            or p.get('initialMargin')
+            or p.get('isolatedMargin')
+            or 0.0
+        )
+        holdings.append({
+            "ticker": symbol.replace("USDT", ""),
+            "symbol": symbol,
+            "qty": qty,
+            "entry_price": entry,
+            "price": mark,
+            "price_krw": mark * rate,
+            "value_usdt": notional,
+            "value_krw": notional * rate,
+            "weight_value_krw": margin_usdt * rate,
+            "pnl_usdt": pnl,
+            "pnl_krw": pnl * rate,
+        })
+    weights = {}
+    try:
+        with open('/home/ubuntu/binance_state.json', 'r') as f:
+            state = json.load(f)
+        last_target = state.get('last_target') or {}
+        total_target = sum(float(v) for v in last_target.values() if isinstance(v, (int, float)))
+        if total_target > 0:
+            for k, v in last_target.items():
+                if isinstance(v, (int, float)):
+                    weights['현금' if str(k).upper() == 'CASH' else str(k)] = float(v) / total_target
+    except Exception:
+        pass
+    if not weights and total_usdt > 0:
+        total_krw = total_usdt * rate
+        for h in holdings:
+            weights[h['ticker']] = float(h.get('weight_value_krw', 0.0)) / total_krw
+        weights['현금'] = (available_usdt * rate) / total_krw
+    return {
+        "total_krw": total_usdt * rate,
+        "total_usdt": total_usdt,
+        "cash_usdt": available_usdt,
+        "cash_krw": available_usdt * rate,
+        "unrealized_usdt": unrealized_usdt,
+        "exchange_rate": rate,
+        "holdings": holdings,
+        "weights": weights,
+        "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
+    }
+
+
+@app.route('/api/assets/binance_balance', methods=['GET'])
+def get_binance_balance():
+    try:
+        return jsonify(_get_binance_balance_data())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/assets/live_overview', methods=['GET'])
+def get_live_overview():
+    """한 번에 한투/업비트/바이낸스 실계좌 현황 조회."""
+    result = {"updated": datetime.now().strftime('%Y-%m-%d %H:%M'), "accounts": {}}
+    total_krw = 0.0
+
+    try:
+        stock = _get_stock_balance_data()
+        result["accounts"]["stock_kis"] = stock
+        total_krw += float(stock.get("total_krw", 0.0))
+    except Exception as e:
+        result["accounts"]["stock_kis"] = {"error": str(e)}
+
+    try:
+        coin_data = _get_coin_balance_data()
+        result["accounts"]["coin_upbit"] = coin_data
+        total_krw += float(coin_data.get("total_krw", 0.0))
+    except Exception as e:
+        result["accounts"]["coin_upbit"] = {"error": str(e)}
+
+    try:
+        rate = _get_upbit_usdt_krw_rate()
+        fut = _get_binance_balance_data(rate)
+        result["accounts"]["coin_binance"] = fut
+        total_krw += float(fut.get("total_krw", 0.0))
+    except Exception as e:
+        result["accounts"]["coin_binance"] = {"error": str(e)}
+
+    result["total_krw"] = total_krw
+    return jsonify(result)
 
 
 @app.route('/api/assets/rebalance', methods=['POST'])
