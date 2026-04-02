@@ -632,18 +632,49 @@ def get_exchange_info(client: Client):
     return _exchange_info_cache
 
 
+def get_symbol_constraints(client: Client, symbol: str) -> Dict[str, float]:
+    """심볼별 주문 제약(step/minQty/minNotional/tick) 조회."""
+    info = get_exchange_info(client)
+    for s in info['symbols']:
+        if s['symbol'] != symbol:
+            continue
+        out = {
+            'step_size': 0.0,
+            'min_qty': 0.0,
+            'min_notional': MIN_NOTIONAL,
+            'tick_size': 0.0,
+            'qty_precision': 8,
+        }
+        for f in s.get('filters', []):
+            ftype = f.get('filterType')
+            if ftype == 'LOT_SIZE':
+                step_str = f.get('stepSize', '0')
+                out['step_size'] = float(step_str)
+                out['min_qty'] = float(f.get('minQty', 0))
+                out['qty_precision'] = len(step_str.rstrip('0').split('.')[-1]) if '.' in step_str else 0
+            elif ftype == 'PRICE_FILTER':
+                out['tick_size'] = float(f.get('tickSize', 0))
+            elif ftype in {'MIN_NOTIONAL', 'NOTIONAL'}:
+                out['min_notional'] = float(f.get('notional', f.get('minNotional', MIN_NOTIONAL)))
+        return out
+    return {
+        'step_size': 0.0,
+        'min_qty': 0.0,
+        'min_notional': MIN_NOTIONAL,
+        'tick_size': 0.0,
+        'qty_precision': 8,
+    }
+
+
 def format_quantity(client: Client, symbol: str, qty: float) -> str:
     """심볼별 수량 정밀도 맞추기."""
     try:
-        info = get_exchange_info(client)
-        for s in info['symbols']:
-            if s['symbol'] == symbol:
-                for f in s['filters']:
-                    if f['filterType'] == 'LOT_SIZE':
-                        step = float(f['stepSize'])
-                        precision = len(f['stepSize'].rstrip('0').split('.')[-1]) if '.' in f['stepSize'] else 0
-                        adjusted = int(qty / step) * step
-                        return f"{adjusted:.{precision}f}"
+        c = get_symbol_constraints(client, symbol)
+        step = c['step_size']
+        precision = int(c['qty_precision'])
+        if step > 0:
+            adjusted = int(qty / step) * step
+            return f"{adjusted:.{precision}f}"
         return f"{qty:.8f}"
     except:
         return f"{qty:.8f}"
@@ -801,7 +832,21 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             try:
                 price = float(client.futures_symbol_ticker(symbol=sym)['price'])
                 buy_qty = buy_notional / price
-                log.info(f"REBALANCE buy_plan {coin}: buy_notional=${buy_notional:.2f} price=${price:.2f} qty={buy_qty:.6f}")
+                qty_str = format_quantity(client, sym, buy_qty)
+                exec_qty = float(qty_str)
+                constraints = get_symbol_constraints(client, sym)
+                exec_notional = exec_qty * price
+                log.info(
+                    f"REBALANCE buy_plan {coin}: buy_notional=${buy_notional:.2f} "
+                    f"price=${price:.2f} qty={buy_qty:.6f} exec_qty={exec_qty:.6f}"
+                )
+                if exec_qty <= 0 or exec_qty < constraints['min_qty'] or exec_notional < constraints['min_notional']:
+                    log.info(
+                        f"REBALANCE skip_small_buy {coin}: exec_qty={exec_qty:.6f} "
+                        f"min_qty={constraints['min_qty']:.6f} exec_notional=${exec_notional:.2f} "
+                        f"min_notional=${constraints['min_notional']:.2f}"
+                    )
+                    continue
                 trades.append(('BUY', sym, buy_qty, False))
             except Exception as e:
                 log.error(f"price fetch {sym}: {e}")
@@ -835,7 +880,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                 error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
 
 
-def needs_rebalance(target: Dict[str, float], current_positions: Dict[str, dict],
+def needs_rebalance(client: Client, target: Dict[str, float], current_positions: Dict[str, dict],
                     total_pv: float, target_lev_map: Dict[str, int]) -> bool:
     """현재 포지션이 목표와 충분히 다르면 리밸런싱 필요."""
     if total_pv <= 0:
@@ -847,12 +892,30 @@ def needs_rebalance(target: Dict[str, float], current_positions: Dict[str, dict]
         target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
         target_notional = total_pv * target_w * 0.95 * target_lev
         current_notional = pos.get('notional', 0.0)
+        symbol = pos.get('symbol', coin + 'USDT')
+        current_qty = abs(pos.get('qty', 0.0))
+        constraints = get_symbol_constraints(client, symbol)
         if target_w <= 0 and current_notional > MIN_NOTIONAL:
-            log.info(f"REBALANCE_NEEDED {coin}: target_w=0 but current=${current_notional:.2f}")
-            return True
+            qty_str = format_quantity(client, symbol, current_qty)
+            exec_qty = float(qty_str)
+            if exec_qty > 0 and exec_qty >= constraints['min_qty']:
+                log.info(f"REBALANCE_NEEDED {coin}: target_w=0 but current=${current_notional:.2f}")
+                return True
+            continue
         if current_notional > 0:
             delta_pct = (target_notional - current_notional) / current_notional
             if abs(delta_pct) > DELTA_THRESHOLD:
+                delta_qty = current_qty * abs(delta_pct)
+                qty_str = format_quantity(client, symbol, delta_qty)
+                exec_qty = float(qty_str)
+                price = current_notional / current_qty if current_qty > 0 else 0.0
+                exec_notional = exec_qty * price
+                if exec_qty <= 0 or exec_qty < constraints['min_qty'] or exec_notional < constraints['min_notional']:
+                    log.info(
+                        f"REBALANCE_TOLERATED {coin}: delta={delta_pct:+.1%} but "
+                        f"exec_qty={exec_qty:.6f} exec_notional=${exec_notional:.2f} below exchange minimum"
+                    )
+                    continue
                 log.info(
                     f"REBALANCE_NEEDED {coin}: current=${current_notional:.2f} "
                     f"target=${target_notional:.2f} delta={delta_pct:+.1%}"
@@ -867,6 +930,22 @@ def needs_rebalance(target: Dict[str, float], current_positions: Dict[str, dict]
         target_notional = total_pv * w * 0.95 * target_lev
         current_notional = current_positions.get(coin, {}).get('notional', 0.0)
         if current_notional <= 0 and target_notional > MIN_NOTIONAL:
+            symbol = coin + 'USDT'
+            constraints = get_symbol_constraints(client, symbol)
+            try:
+                price = float(client.futures_symbol_ticker(symbol=symbol)['price'])
+            except Exception:
+                price = 0.0
+            qty = (target_notional / price) if price > 0 else 0.0
+            qty_str = format_quantity(client, symbol, qty)
+            exec_qty = float(qty_str)
+            exec_notional = exec_qty * price
+            if exec_qty <= 0 or exec_qty < constraints['min_qty'] or exec_notional < constraints['min_notional']:
+                log.info(
+                    f"REBALANCE_TOLERATED {coin}: no position but exec_qty={exec_qty:.6f} "
+                    f"exec_notional=${exec_notional:.2f} below exchange minimum"
+                )
+                continue
             log.info(f"REBALANCE_NEEDED {coin}: no position and target=${target_notional:.2f}")
             return True
 
@@ -1235,7 +1314,7 @@ def main():
                     pnl = pos.get('pnl', 0.0)
                     log.info(f"  보유: {coin} ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
             # 이벤트가 발생해서 시작한 리밸런싱은 목표에 근접하면 종료, 아니면 다음 실행에서 재시도.
-            if needs_rebalance(combined, positions_after, pv_after, target_lev_map):
+            if needs_rebalance(client, combined, positions_after, pv_after, target_lev_map):
                 state['rebalancing_needed'] = True
                 log.info("  ⏳ 미달, rebalancing_needed 유지")
             else:
