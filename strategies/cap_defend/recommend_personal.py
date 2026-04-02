@@ -1,9 +1,8 @@
 """
-Cap Defend V18 Recommendation Script (Personal Version)
-=====================================================
+Cap Defend V18 Recommendation Script
+===================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
 Coin V18: K:SMA(50)+1.5%hyst + H:Mom30+Mom90+Vol5% + Greedy Absorption + EW+33%Cap + DD Exit + Blacklist
-- Generates 'portfolio_result_gmoh.html'
 """
 
 import os
@@ -61,7 +60,10 @@ except Exception:
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
-ASSETS_DB = os.environ.get("ASSETS_DB", "/home/ubuntu/assets.db")
+APP_HOME = os.environ.get("MONEYFLOW_APP_HOME", os.getcwd())
+ASSETS_DB = os.environ.get("ASSETS_DB", os.path.join(APP_HOME, "assets.db"))
+PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME", "portfolio_result.html")
+PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "")
 STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
 COIN_ANCHOR_DAYS = (1, 11, 21)
 FUTURES_TRANCHE_META = {
@@ -1041,7 +1043,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     return weights, stat, meta, log, healthy
 
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None, coin_total_krw=0):
-    filepath = "portfolio_result_gmoh.html"
+    filepath = PORTFOLIO_HTML_NAME
 
     # 현금 버퍼 (coin_trade_state에서 읽기)
     cash_buffer_pct = get_cash_buffer()
@@ -1531,7 +1533,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # ── 주식 실행 상태 ──
     try:
         _stock_state, _stock_path = _load_first_json([
-            "/home/ubuntu/kis_trade_state.json",
+            os.path.join(APP_HOME, "kis_trade_state.json"),
             os.path.join(_base_dir, "trade", "kis_trade_state.json"),
             "kis_trade_state.json",
         ])
@@ -1575,7 +1577,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # ── 현물 코인 실행 상태 ──
     try:
         _coin_state, _coin_path = _load_first_json([
-            "/home/ubuntu/coin_trade_state.json",
+            os.path.join(APP_HOME, "coin_trade_state.json"),
             os.path.join(_base_dir, "trade", "coin_trade_state.json"),
             "coin_trade_state.json",
         ])
@@ -1628,7 +1630,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # ── 선물 실행 상태 ──
     try:
         _fut, _fut_path = _load_first_json([
-            "/home/ubuntu/binance_state.json",
+            os.path.join(APP_HOME, "binance_state.json"),
             os.path.join(_base_dir, "trade", "binance_state.json"),
             "binance_state.json",
         ])
@@ -2343,7 +2345,8 @@ if __name__ == "__main__":
         send_telegram(summary)
 
         # HTML 링크 전송
-        send_telegram("📄 http://[REDACTED_SERVER]:8080/portfolio_result_gmoh.html")
+        if PORTFOLIO_PUBLIC_URL:
+            send_telegram(f"📄 {PORTFOLIO_PUBLIC_URL}")
         print("✅ 텔레그램 일간 리포트 전송 완료")
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")

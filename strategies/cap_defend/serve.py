@@ -9,7 +9,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Only these files are accessible
 ALLOWED_FILES = {
-    '/portfolio_result_gmoh.html',
     '/portfolio_result.html',
     '/strategy.html',
 }

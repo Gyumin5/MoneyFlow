@@ -11,6 +11,7 @@ import sqlite3
 from datetime import datetime
 
 app = Flask(__name__)
+APP_HOME = os.environ.get('MONEYFLOW_APP_HOME', os.getcwd())
 
 # 인증 토큰 (서버 환경변수 TRADE_PIN — 길고 랜덤한 값 권장)
 TRADE_PIN = os.environ.get('TRADE_PIN', '')
@@ -38,18 +39,18 @@ def require_auth():
     return True
 
 running_tasks = {}
-HOLDINGS_FILE = '/home/ubuntu/my_stock_holdings.json'
+HOLDINGS_FILE = os.environ.get('HOLDINGS_FILE', os.path.join(APP_HOME, 'my_stock_holdings.json'))
 
 def run_trade_async(exchange: str, force: bool = False, trade: bool = True, target_amount: int = 0):
     task_id = f"{exchange}_{int(os.times().elapsed)}"
     running_tasks[task_id] = {"status": "running", "output": ""}
     try:
         # run_trade.sh 경유: flock 보호 일관 적용
-        cmd = [f"/home/ubuntu/run_trade.sh", exchange]
+        cmd = [os.environ.get('RUN_TRADE_SCRIPT', os.path.join(APP_HOME, 'run_trade.sh')), exchange]
         if trade: cmd.append("--trade")
         if force: cmd.append("--force")
         if target_amount > 0: cmd.extend(["--amount", str(target_amount)])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd="/home/ubuntu")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=APP_HOME)
         running_tasks[task_id] = {"status": "completed", "output": result.stdout + result.stderr, "returncode": result.returncode}
     except subprocess.TimeoutExpired:
         running_tasks[task_id] = {"status": "timeout", "output": "Script timed out after 5 minutes"}
@@ -105,7 +106,7 @@ def set_holdings():
 def get_status():
     return jsonify(running_tasks)
 
-TRADE_STATE_FILE = '/home/ubuntu/coin_trade_state.json'
+TRADE_STATE_FILE = os.environ.get('COIN_TRADE_STATE_FILE', os.path.join(APP_HOME, 'coin_trade_state.json'))
 
 @app.route('/api/cash_buffer', methods=['POST'])
 def update_cash_buffer():
@@ -153,7 +154,7 @@ def health():
     return jsonify({"status": "ok"})
 
 # ─── Asset Dashboard ────────────────────────────────────────────
-ASSETS_DB = '/home/ubuntu/assets.db'
+ASSETS_DB = os.environ.get('ASSETS_DB', os.path.join(APP_HOME, 'assets.db'))
 
 def init_assets_db():
     """SQLite 초기화 (v2: snapshot_date 유니크)."""
@@ -394,7 +395,7 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
         })
     weights = {}
     try:
-        with open('/home/ubuntu/binance_state.json', 'r') as f:
+        with open(os.environ.get('BINANCE_STATE_FILE', os.path.join(APP_HOME, 'binance_state.json')), 'r') as f:
             state = json.load(f)
         last_target = state.get('last_target') or {}
         total_target = sum(float(v) for v in last_target.values() if isinstance(v, (int, float)))
