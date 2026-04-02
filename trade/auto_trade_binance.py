@@ -1086,6 +1086,38 @@ def force_cancel_all_orders(client: Client, symbols: Optional[List[str]] = None)
             log.warning(f"cancel all algo open orders {symbol}: {e}")
 
 
+def count_stop_orders(client: Client, symbols: Optional[List[str]] = None) -> int:
+    """현재 봇 대상 심볼의 활성 조건부 스탑 주문 개수."""
+    symbol_set = set(symbols or UNIVERSE)
+    count = 0
+
+    try:
+        orders = client.futures_get_open_orders()
+    except Exception as e:
+        log.warning(f"open_orders count failed: {e}")
+    else:
+        for order in orders:
+            symbol = order.get('symbol')
+            if symbol not in symbol_set:
+                continue
+            order_type = str(order.get('type') or '')
+            is_close_position = str(order.get('closePosition')).lower() == 'true'
+            is_conditional = order_type in {'STOP_MARKET', 'TAKE_PROFIT_MARKET', 'STOP', 'TAKE_PROFIT'}
+            if is_close_position or is_conditional:
+                count += 1
+
+    try:
+        algo_orders = client.futures_get_open_algo_orders()
+    except Exception as e:
+        log.warning(f"open_algo_orders count failed: {e}")
+    else:
+        for order in algo_orders:
+            if order.get('symbol') in symbol_set:
+                count += 1
+
+    return count
+
+
 def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[str, pd.DataFrame],
                      target: Dict[str, float], order_alerts: Optional[List[str]] = None,
                      error_alerts: Optional[List[str]] = None):
@@ -1109,13 +1141,16 @@ def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[s
         prev_close = float(df['Close'].iloc[-2])
         if prev_close <= 0:
             continue
-        stop_price = prev_close * (1.0 - STOP_PCT)
+        entry_price = float(pos.get('entry_price') or 0.0)
+        entry_stop = entry_price * (1.0 - STOP_PCT) if entry_price > 0 else 0.0
+        prev_close_stop = prev_close * (1.0 - STOP_PCT)
+        stop_price = max(prev_close_stop, entry_stop)
         symbol = pos['symbol']
         stop_str = format_price(client, symbol, stop_price)
         qty_str = format_quantity(client, symbol, qty)
         log.info(
-            f"STOP PLAN {symbol}: qty={qty:.6f} prev_close={prev_close:.4f} "
-            f"stop_pct={STOP_PCT:.1%} stop={stop_str}"
+            f"STOP PLAN {symbol}: qty={qty:.6f} entry={entry_price:.4f} prev_close={prev_close:.4f} "
+            f"entry_stop={entry_stop:.4f} prev_close_stop={prev_close_stop:.4f} stop={stop_str}"
         )
         try:
             order = create_order_with_retry(client, dict(
@@ -1225,10 +1260,22 @@ def main():
         if positions:
             lines.append("\n포지션:")
             for coin, pos in positions.items():
+                if pos.get('notional', 0.0) < DISPLAY_DUST_NOTIONAL:
+                    continue
                 pnl = pos.get('pnl', 0.0)
                 lines.append(f"  {coin}: ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
         else:
             lines.append("포지션: 없음 (현금)")
+
+        stop_count = count_stop_orders(client, list(UNIVERSE))
+        visible_positions = sum(1 for pos in positions.values() if pos.get('notional', 0.0) >= DISPLAY_DUST_NOTIONAL)
+        last_run = state.get('last_run')
+        last_run_str = last_run if not last_run else datetime.fromisoformat(last_run).astimezone(timezone(timedelta(hours=9))).strftime('%Y-%m-%d %H:%M:%S KST')
+        lines.append("\n헬스:")
+        lines.append(f"  마지막 실행: {last_run_str or '없음'}")
+        lines.append(f"  리밸런싱 대기: {'예' if state.get('rebalancing_needed', False) else '아니오'}")
+        lines.append(f"  포지션 수: {visible_positions}")
+        lines.append(f"  활성 스탑 수: {stop_count}")
 
         # 전략 상태
         for sname in STRATEGIES:
@@ -1298,35 +1345,6 @@ def main():
         if positions_before:
             for coin, pos in positions_before.items():
                 log.info(f"  보유: {coin} ${pos['notional']:.0f} ({pos['weight']:.1%})")
-
-        # Kill-switch: 일일 손실 체크
-        prev_pv = state.get('prev_pv', pv_before)
-        if prev_pv > 0:
-            daily_pnl = (pv_before / prev_pv - 1)
-            if daily_pnl < -0.15:  # -15% 일일 손실
-                log.error(f"KILL-SWITCH: 일일 손실 {daily_pnl:.1%} < -15%!")
-                send_telegram(f"🚨 KILL-SWITCH 발동!\n일일 손실: {daily_pnl:.1%}\nPV: ${pv_before:.2f}\n전포지션 청산 + 봇 중단")
-                if args.trade:
-                    # 전포지션 청산
-                    for coin, pos in positions_before.items():
-                        try:
-                            qty_str = format_quantity(client, pos['symbol'], abs(pos['qty']))
-                            client.futures_create_order(
-                                symbol=pos['symbol'], side='SELL',
-                                type='MARKET', quantity=qty_str, reduceOnly='true')
-                            log.info(f"KILL-SWITCH 청산: {pos['symbol']} {qty_str}")
-                        except Exception as e:
-                            log.error(f"KILL-SWITCH 청산 실패: {pos['symbol']}: {e}")
-                state['kill_switch'] = True
-                state['kill_switch_reason'] = f"daily_loss={daily_pnl:.1%}"
-                state['kill_switch_time'] = datetime.now(timezone.utc).isoformat()
-                save_state(state)
-                return
-
-        # Kill-switch가 이전에 발동된 경우 중단
-        if state.get('kill_switch', False):
-            log.warning(f"Kill-switch 활성 상태. 수동 해제 필요. (사유: {state.get('kill_switch_reason')})")
-            return
 
         # 3. 각 전략 시그널 계산
         targets = {}
@@ -1399,6 +1417,9 @@ def main():
         if args.trade:
             state['last_target'] = combined
         state['prev_pv'] = pv_after
+        state['kill_switch'] = False
+        state.pop('kill_switch_reason', None)
+        state.pop('kill_switch_time', None)
         state['last_run'] = datetime.now(timezone.utc).isoformat()
         save_state(state)
 
@@ -1454,6 +1475,13 @@ def main():
                 summary.append("")
                 summary.append("오류:")
                 summary.extend(f"  - {msg}" for msg in error_alerts[:10])
+            stop_count = count_stop_orders(client, list(UNIVERSE))
+            visible_positions = sum(1 for pos in positions_after.values() if pos.get('notional', 0.0) >= DISPLAY_DUST_NOTIONAL)
+            summary.append("")
+            summary.append("헬스:")
+            summary.append(f"  - 리밸런싱 대기: {'예' if state.get('rebalancing_needed', False) else '아니오'}")
+            summary.append(f"  - 포지션 수: {visible_positions}")
+            summary.append(f"  - 활성 스탑 수: {stop_count}")
             send_telegram("\n".join(summary))
         log.info(f"=== 완료 ({elapsed:.1f}s) ===")
     finally:
