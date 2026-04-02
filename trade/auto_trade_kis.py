@@ -8,9 +8,9 @@ Cap Defend V17 — 한국투자증권 해외주식 자동매매
 --test    : API 연결 테스트
 
 cron 예시:
-  25 23 * * 1-5  cd /home/ubuntu && python3 auto_trade_kis.py --trade >> kis_trade.log 2>&1
-  35 23 * * 1-5  cd /home/ubuntu && python3 auto_trade_kis.py --monitor >> kis_trade.log 2>&1
-  05 0-5 * * 2-6 cd /home/ubuntu && python3 auto_trade_kis.py --monitor >> kis_trade.log 2>&1
+  25 23 * * 1-5  cd $APP_HOME && python3 auto_trade_kis.py --trade >> kis_trade.log 2>&1
+  35 23 * * 1-5  cd $APP_HOME && python3 auto_trade_kis.py --monitor >> kis_trade.log 2>&1
+  05 0-5 * * 2-6 cd $APP_HOME && python3 auto_trade_kis.py --monitor >> kis_trade.log 2>&1
 """
 
 import os
