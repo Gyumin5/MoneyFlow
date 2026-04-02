@@ -2,7 +2,7 @@
 # 첫 주식 자동매매 테스트 — 장 열릴 때까지 대기 후 실행
 # nohup bash kis_first_trade.sh >> kis_first_trade.log 2>&1 &
 
-cd /home/ubuntu
+cd "${APP_HOME:-$HOME}"
 
 echo "$(date) 장 개시 대기 중 (23:35 KST)..."
 

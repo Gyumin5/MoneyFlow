@@ -3,18 +3,18 @@
 # Usage: ./run_recommend.sh [general|personal]
 #
 # Example crontab entries:
-# 00 09 * * * /home/ubuntu/run_recommend.sh general
-# 00 09 * * * /home/ubuntu/run_recommend.sh personal
+# 00 09 * * * $APP_HOME/run_recommend.sh general
+# 00 09 * * * $APP_HOME/run_recommend.sh personal
 
 set -e
 
 TYPE="${1:-general}"
 
 if [ "$TYPE" = "personal" ]; then
-    SCRIPT="/home/ubuntu/recommend_personal.py"
+    SCRIPT="${APP_HOME:-$HOME}/recommend_personal.py"
     LOCK_FILE="/tmp/recommend_personal.lock"
 else
-    SCRIPT="/home/ubuntu/recommend.py"
+    SCRIPT="${APP_HOME:-$HOME}/recommend.py"
     LOCK_FILE="/tmp/recommend_general.lock"
 fi
 
@@ -33,6 +33,6 @@ fi
 
 # Run the script
 echo "[$(date)] Starting recommend ($TYPE)..."
-cd /home/ubuntu
+cd "${APP_HOME:-$HOME}"
 python3 "$SCRIPT"
 echo "[$(date)] Recommend ($TYPE) finished."

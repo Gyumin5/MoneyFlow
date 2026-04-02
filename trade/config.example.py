@@ -2,7 +2,7 @@
 
 실제 운영 시:
 - 이 파일을 `trade/config.py`로 복사해서 사용
-- 실제 비밀값은 코드 레포가 아니라 private 설정 레포(`moneyflow-config`)에서 관리
+- 실제 비밀값은 코드 레포가 아니라 private 설정 저장소에서 관리
 """
 
 # ─── Binance USDT-M Futures ─────────────────────────────────────

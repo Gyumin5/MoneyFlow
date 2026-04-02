@@ -85,13 +85,13 @@
 ## 관련 문서
 
 - 최종 전략 설명:
-  - [strategies/cap_defend/futures_strategy_final.md](/home/gmoh/mon/251229/strategies/cap_defend/futures_strategy_final.md)
+  - `strategies/cap_defend/futures_strategy_final.md`
 - 스탑 연구 요약:
-  - [strategies/cap_defend/stoploss_summary.md](/home/gmoh/mon/251229/strategies/cap_defend/stoploss_summary.md)
+  - `strategies/cap_defend/stoploss_summary.md`
 
 ## 다음 작업
 
 - [ ] 다음 크론 로그/텔레그램 확인
-- [ ] moneyflow-config에 바이낸스 키 반영
+- [ ] private 설정 저장소에 바이낸스 키 반영
 - [ ] 문서/실험 러너 정리 후 git push
 - [ ] Kill-switch 봉 기반 개선

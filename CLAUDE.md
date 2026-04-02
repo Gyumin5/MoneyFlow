@@ -192,10 +192,10 @@
 
 ### 서버 파일 매핑
 
-- `strategies/cap_defend/recommend.py` → `/home/ubuntu/recommend.py`
-- `strategies/cap_defend/recommend_personal.py` → `/home/ubuntu/recommend_personal.py`
-- `trade/auto_trade_upbit.py` → `/home/ubuntu/auto_trade_upbit.py`
-- `trade/api_server.py` → `/home/ubuntu/trade_api_server.py`
+- `strategies/cap_defend/recommend.py` → `$APP_HOME/recommend.py`
+- `strategies/cap_defend/recommend_personal.py` → `$APP_HOME/recommend_personal.py`
+- `trade/auto_trade_upbit.py` → `$APP_HOME/auto_trade_upbit.py`
+- `trade/api_server.py` → `$APP_HOME/trade_api_server.py`
 
 ## 데이터 품질
 
