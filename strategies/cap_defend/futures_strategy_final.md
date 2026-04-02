@@ -148,7 +148,7 @@
 
 ## 관련 파일
 
-- 실거래 코드: [auto_trade_binance.py](/home/gmoh/mon/251229/trade/auto_trade_binance.py)
-- 스탑 연구 요약: [stoploss_summary.md](/home/gmoh/mon/251229/strategies/cap_defend/stoploss_summary.md)
-- 최종 비교 스크립트: [run_final_signal_compare.py](/home/gmoh/mon/251229/strategies/cap_defend/run_final_signal_compare.py)
-- 트랜치 robustness 결과: [snap_robustness_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/snap_robustness_results.csv)
+- 실거래 코드: `trade/auto_trade_binance.py`
+- 스탑 연구 요약: `strategies/cap_defend/stoploss_summary.md`
+- 최종 비교 스크립트: `strategies/cap_defend/run_final_signal_compare.py`
+- 트랜치 robustness 결과: `strategies/cap_defend/snap_robustness_results.csv`

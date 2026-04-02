@@ -7,7 +7,7 @@
 
 ## 1차 스탑로스 스캔
 
-파일: [stoploss_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/stoploss_results.csv)
+파일: `strategies/cap_defend/stoploss_results.csv`
 
 비교 범위:
 - 배수: `2x`, `3x`, `4x`, `5x`
@@ -48,7 +48,7 @@
 
 ## 2차: 재진입 쿨다운
 
-파일: [stoploss_cooldown_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/stoploss_cooldown_results.csv)
+파일: `strategies/cap_defend/stoploss_cooldown_results.csv`
 
 비교 범위:
 - 상위 스탑 후보
@@ -60,7 +60,7 @@
 
 ## 3차: 긴 롤링 룩백
 
-파일: [stoploss_long_lookback_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/stoploss_long_lookback_results.csv)
+파일: `strategies/cap_defend/stoploss_long_lookback_results.csv`
 
 비교 범위:
 - rolling 계열 상위 후보
@@ -72,7 +72,7 @@
 
 ## 4차: 조건부 스탑 + ATR 스탑
 
-파일: [conditional_atr_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/conditional_atr_results.csv)
+파일: `strategies/cap_defend/conditional_atr_results.csv`
 
 비교 범위:
 - `none`
@@ -124,7 +124,7 @@
 
 ## 5차: Top5 EW 비교
 
-파일: [top5ew_compare_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/top5ew_compare_results.csv)
+파일: `strategies/cap_defend/top5ew_compare_results.csv`
 
 비교 대상:
 - 기존 Greedy 대신 `selection='baseline'`, `cap=1.0`
@@ -162,7 +162,7 @@
 
 ## 6차: 동적 레버리지
 
-파일: [dynamic_leverage_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/dynamic_leverage_results.csv)
+파일: `strategies/cap_defend/dynamic_leverage_results.csv`
 
 비교 대상:
 - 고정 `3x`, `4x`, `5x`
@@ -221,11 +221,11 @@ Top 5:
 ## 7차: 최종 신호 조합 재탐색
 
 파일:
-- [signal_screen_1h.csv](/home/gmoh/mon/251229/strategies/cap_defend/signal_screen_1h.csv)
-- [signal_screen_4h.csv](/home/gmoh/mon/251229/strategies/cap_defend/signal_screen_4h.csv)
-- [signal_combo_search.csv](/home/gmoh/mon/251229/strategies/cap_defend/signal_combo_search.csv)
-- [snap_finetune_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/snap_finetune_results.csv)
-- [snap_robustness_results.csv](/home/gmoh/mon/251229/strategies/cap_defend/snap_robustness_results.csv)
+- `strategies/cap_defend/signal_screen_1h.csv`
+- `strategies/cap_defend/signal_screen_4h.csv`
+- `strategies/cap_defend/signal_combo_search.csv`
+- `strategies/cap_defend/snap_finetune_results.csv`
+- `strategies/cap_defend/snap_robustness_results.csv`
 
 비교 범위:
 - 기존 `4h1 + 4h2 + 1h1`를 고정 정답으로 두지 않고
@@ -269,7 +269,7 @@ Top 5:
 - 실거래 운영 기준으로는 최종 교체 가치가 충분하다고 판단
 
 최종 전략 설명:
-- [futures_strategy_final.md](/home/gmoh/mon/251229/strategies/cap_defend/futures_strategy_final.md)
+- `strategies/cap_defend/futures_strategy_final.md`
 
 - 실매매 코드에 조건부 스탑 반영 여부 결정
 - 실거래에서 stop order 체결 정책 구체화
