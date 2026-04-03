@@ -12,6 +12,7 @@
   - 최종 채택 경로: `snap_interval_bars`
 - 월별 시총 기반 유니버스 재현에는 [../../data/historical_universe.json](../../data/historical_universe.json)이 필요하다.
 - 이 파일이 없으면 엔진은 동일한 월별 시총 히스토리를 재현할 수 없고, 결과가 달라질 수 있다.
+- OHLCV 원본은 `1h` 기준으로 관리하고, `4h`는 항상 `1h`에서 리샘플링한다.
 
 즉 최종 전략 재현을 하려면 `snap_interval_bars`가 들어간 러너를 봐야 한다.
 
@@ -25,6 +26,9 @@
 - [../../data/historical_universe.json](../../data/historical_universe.json)
   - 월별 시총 히스토리 유니버스 입력
   - `get_mcap()`가 읽는 재현성 핵심 파일
+- `data/futures/*_1h.csv`
+  - 선물 OHLCV 원본 데이터
+  - `4h`는 이 파일에서 다시 만든다
 
 ### 조합 탐색
 
