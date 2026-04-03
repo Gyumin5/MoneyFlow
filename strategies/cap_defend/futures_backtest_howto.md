@@ -16,6 +16,20 @@
 
 즉 최종 전략 재현을 하려면 `snap_interval_bars`가 들어간 러너를 봐야 한다.
 
+## 표준 데이터 갱신
+
+선물 데이터는 다음 명령으로 갱신한다.
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target futures
+```
+
+최신성은 다음 명령으로 확인한다.
+
+```bash
+python3 strategies/cap_defend/check_data_freshness.py
+```
+
 ## 파일 역할
 
 ### 엔진
@@ -159,5 +173,6 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 
 최종 선물 전략을 재현하려면:
 - `futures_strategy_final.md`로 파라미터를 보고
+- `refresh_backtest_data.py --target futures`로 데이터를 갱신하고
 - `run_final_signal_compare.py`로 결과를 확인하고
 - 필요하면 `run_signal_combo_search.py`, `run_snap_finetune.py`로 탐색 과정을 다시 밟으면 된다.

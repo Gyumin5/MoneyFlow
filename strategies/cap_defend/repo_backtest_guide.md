@@ -15,11 +15,27 @@
 
 ### 현물 코인
 
+데이터 갱신:
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target coin
+```
+
+백테스트:
+
 ```bash
 python3 strategies/cap_defend/backtest_official.py --coin-only --version v18
 ```
 
 ### 주식
+
+데이터 갱신:
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target stock
+```
+
+백테스트:
 
 ```bash
 python3 strategies/cap_defend/backtest_official.py --stock-only --version v17
@@ -30,7 +46,7 @@ python3 strategies/cap_defend/backtest_official.py --stock-only --version v17
 데이터 갱신:
 
 ```bash
-python3 strategies/cap_defend/download_futures_data.py
+python3 strategies/cap_defend/refresh_backtest_data.py --target futures
 ```
 
 최종 비교:
@@ -56,6 +72,14 @@ python3 strategies/cap_defend/run_final_signal_compare.py
 - 선물:
   - `1h` 원본 + funding
   - `4h`는 `1h`에서 리샘플
+
+표준 갱신 명령은 다음으로 통일한다.
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target stock
+python3 strategies/cap_defend/refresh_backtest_data.py --target coin
+python3 strategies/cap_defend/refresh_backtest_data.py --target futures
+```
 
 ## 최소 확인 체크리스트
 
