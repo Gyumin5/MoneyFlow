@@ -61,7 +61,7 @@ python3 strategies/cap_defend/check_data_freshness.py
 ### 최종 비교
 
 - [run_final_signal_compare.py](./run_final_signal_compare.py)
-  - 기존 실거래 조합 vs 최종 후보 조합 직접 비교
+  - 이전 실거래 조합 vs 현재 실거래 조합 직접 비교
 
 ### 실거래 코드
 
@@ -84,15 +84,15 @@ python3 strategies/cap_defend/check_data_freshness.py
 
 ### 2. 최종 직접 비교 실행
 
-가장 빠르게 “현재 최종 전략이 왜 채택됐는지” 재현하려면 이 스크립트를 실행하면 된다.
+가장 빠르게 “현재 실거래 전략이 왜 채택됐는지” 재현하려면 이 스크립트를 실행하면 된다.
 
 ```bash
 python3 strategies/cap_defend/run_final_signal_compare.py
 ```
 
 이 스크립트는:
-- 기존 조합 `4h1 + 4h2 + 1h1`
-- 최종 조합 `1h_09 + 4h_01 + 4h_09`
+- 이전 실거래 조합 `4h1 + 4h2 + 1h1`
+- 현재 실거래 조합 `1h_09 + 4h_01 + 4h_09`
 를 같은 실행층에서 직접 비교한다.
 - 이때 월별 시총 유니버스는 `data/historical_universe.json` 기준으로 고정된다.
 
