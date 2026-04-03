@@ -525,24 +525,45 @@ def select_offensive(params, ind, date, candidates):
 
 # ─── Extended Selection (for rank buffer) ────────────────────────
 def select_offensive_extended(params, ind, date, candidates, n):
-    """Select top-N offensive ETFs (extended range for rank buffer)."""
+    """Return set of top-N tickers using same method as select_offensive."""
     if not candidates:
-        return {}
+        return set()
+
+    wmom_col = 'wmom' if params.mom_style == 'default' else f'wmom_{params.mom_style}'
+    sh_col = f'sharpe{params.sharpe_lookback}'
+
     scores = []
     for t in candidates:
-        wmom = get_val(ind, t, date, 'wmom')
-        sh = get_val(ind, t, date, 'sharpe126')
+        wmom = get_val(ind, t, date, wmom_col)
+        sh = get_val(ind, t, date, sh_col)
         if np.isnan(wmom) or np.isnan(sh):
             continue
         scores.append({'t': t, 'wmom': wmom, 'sh': sh})
     if not scores:
-        return {}
+        return set()
     df = pd.DataFrame(scores).set_index('t')
-    df['r_m'] = df['wmom'].rank(ascending=False)
-    df['r_s'] = df['sh'].rank(ascending=False)
-    df['score'] = df['r_m'] + df['r_s']
-    picks = df.nsmallest(n, 'score').index.tolist()
-    return {t: 1.0/len(picks) for t in picks}
+
+    sel = params.select
+    if sel.startswith('zscore'):
+        m_std = df['wmom'].std()
+        s_std = df['sh'].std()
+        df['z_m'] = (df['wmom'] - df['wmom'].mean()) / m_std if m_std > 0 else 0
+        df['z_s'] = (df['sh'] - df['sh'].mean()) / s_std if s_std > 0 else 0
+        df['zscore'] = df['z_m'] + df['z_s']
+        picks = df.nlargest(n, 'zscore').index.tolist()
+    elif sel.startswith('comp'):
+        df['r_m'] = df['wmom'].rank(ascending=False)
+        df['r_s'] = df['sh'].rank(ascending=False)
+        df['score'] = df['r_m'] + df['r_s']
+        picks = df.nsmallest(n, 'score').index.tolist()
+    elif sel.startswith('mom'):
+        picks = df.nlargest(n, 'wmom').index.tolist()
+    elif sel.startswith('sh'):
+        picks = df.nlargest(n, 'sh').index.tolist()
+    else:
+        picks = df.nlargest(n, 'wmom').index.tolist()
+
+    return set(picks)
 
 
 # ─── Defensive Selection ─────────────────────────────────────────
@@ -1018,21 +1039,26 @@ def run_bt(prices_dict, ind, params):
             if not weights:
                 weights = {'Cash': 1.0}
 
-            # Rank buffer: keep existing holdings if still in top (N + buffer)
+            # Rank buffer: keep held tickers if still in extended top-(N+buffer)
             if params.rank_buffer > 0 and risk_on and holdings:
-                held_tickers = set(holdings.keys())
-                new_tickers = set(weights.keys()) - {'Cash'}
-                if held_tickers != new_tickers:
-                    # Check if old holdings are still in extended top
+                held_off = {t for t in holdings if t not in params.defensive and t != 'Cash'}
+                new_off = {t for t in weights if t not in params.defensive and t != 'Cash'}
+                if held_off != new_off and held_off:
                     all_candidates = filter_healthy(params, ind, sig_date, params.offensive)
                     if all_candidates:
-                        ext_weights = select_offensive_extended(
+                        # zscore3 → n_picks=3 from select string
+                        n_picks = int(''.join(c for c in params.select if c.isdigit()) or params.n_mom)
+                        ext_set = select_offensive_extended(
                             params, ind, sig_date, all_candidates,
-                            params.n_mom + params.rank_buffer)
-                        ext_tickers = set(ext_weights.keys()) - {'Cash'}
-                        # Keep old if all still in extended range
-                        if held_tickers <= ext_tickers:
-                            weights = {t: 1.0/len(held_tickers) for t in held_tickers}
+                            n_picks + params.rank_buffer)
+                        # Per-ticker: keep held if in extended, swap out if not
+                        kept = held_off & ext_set
+                        dropped = held_off - ext_set
+                        # Fill dropped slots from new picks (not already kept)
+                        new_adds = [t for t in new_off if t not in kept]
+                        final = kept | set(new_adds[:len(dropped)])
+                        if final:
+                            weights = {t: 1.0/len(final) for t in final}
 
             # Sell all
             if holdings:
