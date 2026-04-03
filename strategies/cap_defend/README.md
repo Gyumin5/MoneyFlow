@@ -61,6 +61,9 @@
 - 추천/리포트 생성:
   - [recommend.py](./recommend.py)
   - [recommend_personal.py](./recommend_personal.py)
+- 전략 설명 UI:
+  - [strategy.html](./strategy.html) — 전략 요약 페이지
+  - [strategy_guide.html](./strategy_guide.html) — 상세 전략 가이드
 - 보조 스크립트:
   - [daily_history.py](./daily_history.py)
   - [serve.py](./serve.py)
