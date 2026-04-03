@@ -49,20 +49,10 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target coin
 python3 strategies/cap_defend/check_data_freshness.py
 ```
 
-예시:
+최신성 확인은 통합 스크립트를 쓰면 된다.
 
 ```bash
-python3 - <<'PY'
-from pathlib import Path
-import pandas as pd
-
-base = Path('/home/gmoh/mon/251229/data')
-for name in ['BTC-USD.csv', 'ETH-USD.csv', 'XRP-USD.csv']:
-    p = base / name
-    if p.exists():
-        df = pd.read_csv(p)
-        print(name, df.iloc[-1, 0])
-PY
+python3 strategies/cap_defend/check_data_freshness.py
 ```
 
 검증 포인트:
@@ -87,7 +77,7 @@ PY
 - 전략 확정 직전:
   - `data/*.csv`
   - `data/historical_universe.json`
-  을 함께 백업
+    을 함께 백업
 
 ## 정리
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 
 
-ROOT = Path("/home/gmoh/mon/251229")
+ROOT = Path(__file__).resolve().parent.parent.parent
 SPOT_DIR = ROOT / "data"
 STOCK_CACHE_DIR = ROOT / "strategies" / "cap_defend" / "data" / "stock_cache"
 FUTURES_DIR = ROOT / "data" / "futures"
