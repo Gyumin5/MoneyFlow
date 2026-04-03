@@ -27,6 +27,12 @@
 python3 strategies/cap_defend/backtest_official.py --stock-only --version v17
 ```
 
+데이터를 먼저 갱신하려면:
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target stock
+```
+
 출력에는 기본적으로 다음 구간이 포함된다.
 
 - `2017-01-01 ~ 2025-12-31`
@@ -36,6 +42,13 @@ python3 strategies/cap_defend/backtest_official.py --stock-only --version v17
 ## 데이터 최신성 확인
 
 가장 중요한 것은 `stock_cache`의 마지막 날짜다.
+
+현재 표준 확인 순서는 다음과 같다.
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target stock
+python3 strategies/cap_defend/check_data_freshness.py
+```
 
 예시:
 
