@@ -38,6 +38,7 @@ v12_chart_data.json
 portfolio_result*.html
 
 # Runtime state files
+signal_state.json
 strategies/cap_defend/signal_state.json
 strategies/cap_defend/coin_trade_state.json
 trade/binance_state.json
@@ -47,8 +48,32 @@ trade/binance_trade.log
 
 # Intermediate experiment results
 strategies/cap_defend/results/
+strategies/cap_defend/data/
+strategies/cap_defend/ensemble_*.txt
+strategies/cap_defend/optimize_*.txt
+strategies/cap_defend/validation_results.txt
+strategies/cap_defend/optimize_summary.md
+
+# Local experiment scripts not included in public reproducibility path
+strategies/cap_defend/backtest_coin_flexible_selection.py
+strategies/cap_defend/backtest_futures.py
+strategies/cap_defend/backtest_futures_mix.py
+strategies/cap_defend/backtest_futures_optimize.py
+strategies/cap_defend/backtest_futures_v3.py
+strategies/cap_defend/backtest_futures_v4.py
+strategies/cap_defend/run_cash_reserve.py
+strategies/cap_defend/run_lev_test.py
+strategies/cap_defend/run_liq_analysis.py
+strategies/cap_defend/run_multi_lev.py
+strategies/cap_defend/run_optimize_all.py
+strategies/cap_defend/run_optimize_bars.py
+strategies/cap_defend/run_optimize_final.py
+strategies/cap_defend/run_optimize_v2.py
+strategies/cap_defend/run_spot_futures_allocation.py
+strategies/cap_defend/run_validation.py
 
 # Local tool metadata
+.codex
 .codex/
 .claude/
 
