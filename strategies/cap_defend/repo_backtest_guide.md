@@ -52,7 +52,7 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target futures
 최종 비교:
 
 ```bash
-python3 strategies/cap_defend/run_final_signal_compare.py
+python3 strategies/cap_defend/run_current_futures_backtest.py
 ```
 
 ## 데이터 기준

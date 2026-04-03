@@ -21,12 +21,12 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from backtest_futures_full import load_data, run, SLIPPAGE_MAP
+from futures_live_config import CURRENT_LIVE_COMBO, CURRENT_STRATEGIES
 from run_ensemble import SingleAccountEngine, combine_targets
-from run_final_signal_compare import STRATEGIES
 from run_stoploss_test import START, END
 
 
-LONG_COMBO = {'new_1h_09': 1 / 3, 'new_4h_01': 1 / 3, 'new_4h_09': 1 / 3}
+LONG_COMBO = dict(CURRENT_LIVE_COMBO)
 
 SHORT_CASES = [
     dict(
@@ -417,7 +417,7 @@ def generate_trace(data, cfg):
 
 
 def build_long_combined(data):
-    traces = {name: generate_trace(data, STRATEGIES[name]) for name in LONG_COMBO}
+    traces = {name: generate_trace(data, CURRENT_STRATEGIES[name]) for name in LONG_COMBO}
     bars_1h, _ = data['1h']
     all_dates_1h = bars_1h['BTC'].index[(bars_1h['BTC'].index >= START) & (bars_1h['BTC'].index <= END)]
     combined = combine_targets(traces, LONG_COMBO, all_dates_1h)
