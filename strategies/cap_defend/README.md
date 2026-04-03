@@ -15,7 +15,7 @@
 - 설명:
   - [coin_backtest_howto.md](./coin_backtest_howto.md)
 - 실행:
-  - [backtest_official.py](./backtest_official.py)
+  - [run_current_coin_backtest.py](./run_current_coin_backtest.py)
 - 엔진:
   - [coin_engine.py](./coin_engine.py)
   - [coin_helpers.py](./coin_helpers.py)
@@ -26,7 +26,7 @@
 - 설명:
   - [stock_backtest_howto.md](./stock_backtest_howto.md)
 - 실행:
-  - [backtest_official.py](./backtest_official.py)
+  - [run_current_stock_backtest.py](./run_current_stock_backtest.py)
 - 엔진:
   - [stock_engine.py](./stock_engine.py)
 
