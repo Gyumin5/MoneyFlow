@@ -39,6 +39,7 @@ portfolio_result*.html
 
 # Runtime state files
 strategies/cap_defend/signal_state.json
+strategies/cap_defend/coin_trade_state.json
 trade/binance_state.json
 trade/binance_state.json.lock
 trade/binance_history.db
