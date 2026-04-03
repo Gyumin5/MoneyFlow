@@ -76,6 +76,7 @@ python3 strategies/cap_defend/check_data_freshness.py
 먼저 [futures_strategy_final.md](./futures_strategy_final.md)를 읽는다.
 
 핵심 파라미터:
+
 - `1h_09 snap=27`
 - `4h_01 snap=120`
 - `4h_09 snap=21`
@@ -91,8 +92,9 @@ python3 strategies/cap_defend/run_current_futures_backtest.py
 ```
 
 이 스크립트는 현재 실거래 조합
+
 - `1h_09 + 4h_01 + 4h_09`
-를 현재 실행층 그대로 단독 백테스트한다.
+  를 현재 실행층 그대로 단독 백테스트한다.
 - 이때 월별 시총 유니버스는 `data/historical_universe.json` 기준으로 고정된다.
 
 ## 탐색 과정을 다시 밟고 싶을 때
@@ -100,39 +102,43 @@ python3 strategies/cap_defend/run_current_futures_backtest.py
 ### 1. 후보 단독 스크리닝
 
 ```bash
-python3 strategies/cap_defend/run_signal_screen.py --stage 1h --workers 8
-python3 strategies/cap_defend/run_signal_screen.py --stage 4h --workers 8
+python3 strategies/cap_defend/research/run_signal_screen.py --stage 1h --workers 8
+python3 strategies/cap_defend/research/run_signal_screen.py --stage 4h --workers 8
 ```
 
 출력:
+
 - `signal_screen_1h.csv`
 - `signal_screen_4h.csv`
 
 ### 2. 조합 탐색
 
 ```bash
-python3 strategies/cap_defend/run_signal_combo_search.py --workers 8
+python3 strategies/cap_defend/research/run_signal_combo_search.py --workers 8
 ```
 
 출력:
+
 - `signal_combo_search.csv`
 
 ### 3. 트랜치 간격 미세조정
 
 ```bash
-python3 strategies/cap_defend/run_snap_finetune.py --workers 8
+python3 strategies/cap_defend/research/run_snap_finetune.py --workers 8
 ```
 
 출력:
+
 - `snap_finetune_results.csv`
 
 ### 4. robustness 확인
 
 ```bash
-python3 strategies/cap_defend/run_snap_robustness.py --workers 8
+python3 strategies/cap_defend/research/run_snap_robustness.py --workers 8
 ```
 
 출력:
+
 - `snap_robustness_results.csv`
 
 ## 코드 읽을 때 주의할 점
@@ -140,11 +146,13 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 ### 1. `backtest_futures_full.py`만 보면 헷갈릴 수 있음
 
 이 파일에는 여전히 다음 fallback이 남아 있다.
+
 - `snap_days = [1, 10, 19][:n_snapshots]`
 
 하지만 이것만 보고 “최종 선물 전략도 달력 앵커”라고 이해하면 틀린다.
 
 최종 전략은:
+
 - `snap_interval_bars`를 명시적으로 주고
 - bar index 기준으로 트랜치를 갱신한다
 
@@ -153,6 +161,7 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 최종적으로 지금 뭐가 실거래에 들어가 있는지는 [auto_trade_binance.py](../../trade/auto_trade_binance.py)를 보면 된다.
 
 즉:
+
 - 연구 과정: `run_*` + `backtest_futures_full.py`
 - 최종 채택안: `futures_strategy_final.md`
 - 실제 라이브 반영값: `auto_trade_binance.py`
@@ -161,7 +170,7 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 
 다른 사람이 처음 repo를 읽는다면 이 순서를 추천한다.
 
-1. [futures_research_history.md](./futures_research_history.md)
+1. [futures_research_history.md](./research/futures_research_history.md)
 2. [futures_strategy_final.md](./futures_strategy_final.md)
 3. [futures_backtest_howto.md](./futures_backtest_howto.md)
 4. [run_current_futures_backtest.py](./run_current_futures_backtest.py)
@@ -171,6 +180,7 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 ## 한 줄 요약
 
 최종 선물 전략을 재현하려면:
+
 - `futures_strategy_final.md`로 파라미터를 보고
 - `refresh_backtest_data.py --target futures`로 데이터를 갱신하고
 - `run_current_futures_backtest.py`로 결과를 확인하고
