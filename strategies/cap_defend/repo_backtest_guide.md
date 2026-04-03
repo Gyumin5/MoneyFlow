@@ -24,7 +24,7 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target coin
 백테스트:
 
 ```bash
-python3 strategies/cap_defend/backtest_official.py --coin-only --version v18
+python3 strategies/cap_defend/run_current_coin_backtest.py
 ```
 
 ### 주식
@@ -38,7 +38,7 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target stock
 백테스트:
 
 ```bash
-python3 strategies/cap_defend/backtest_official.py --stock-only --version v17
+python3 strategies/cap_defend/run_current_stock_backtest.py
 ```
 
 ### 선물
