@@ -1,0 +1,7 @@
+numpy
+pandas
+yfinance
+requests
+python-binance
+pyupbit
+flask

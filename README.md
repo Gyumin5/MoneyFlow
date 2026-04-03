@@ -8,6 +8,15 @@
 
 처음 받았을 때는 아래 순서만 따르면 된다.
 
+## 0. 의존성 설치
+
+```bash
+pip install -r requirements.txt
+```
+
+백테스트만 돌릴 경우 `numpy`, `pandas`, `yfinance`, `requests`면 충분하다.
+`python-binance`, `pyupbit`, `flask`는 실거래/서버 운영용이다.
+
 ## 1. 먼저 볼 문서
 
 - 전체 안내:
