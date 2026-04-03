@@ -103,24 +103,31 @@ def _resample_to_4h(df):
 
 def load_data(interval='1h'):
     """바이낸스 OHLCV + 펀딩 로드. 키는 심볼('BTC' 등).
-    D/4h: 네이티브 파일 우선, 없으면 1h에서 리샘플링."""
+
+    원본 데이터는 1h를 기준으로 관리한다.
+    - 1h: 네이티브 CSV 직접 로드
+    - 4h: 항상 1h에서 리샘플링
+    - D: 네이티브 파일이 있으면 사용, 없으면 1h에서 리샘플링
+
+    이렇게 해야 1h가 최신이면 4h도 자동으로 최신이 된다.
+    """
     bars = {}
     funding = {}
     for coin, sym in TICKER_MAP.items():
-        # 네이티브 파일 우선
         fpath = os.path.join(DATA_DIR, f'{sym}_{interval}.csv')
-        if os.path.exists(fpath) and os.path.getsize(fpath) > 1000:
-            df = pd.read_csv(fpath, parse_dates=['Date'], index_col='Date')
-            bars[coin] = df
-        elif interval in ('D', '4h'):
-            # 1h에서 리샘플링 fallback
-            fpath_1h = os.path.join(DATA_DIR, f'{sym}_1h.csv')
+        fpath_1h = os.path.join(DATA_DIR, f'{sym}_1h.csv')
+
+        if interval == '4h':
             if os.path.exists(fpath_1h):
                 df_1h = pd.read_csv(fpath_1h, parse_dates=['Date'], index_col='Date')
-                if interval == 'D':
-                    bars[coin] = _resample_to_daily(df_1h)
-                else:
-                    bars[coin] = _resample_to_4h(df_1h)
+                bars[coin] = _resample_to_4h(df_1h)
+        elif os.path.exists(fpath) and os.path.getsize(fpath) > 1000:
+            df = pd.read_csv(fpath, parse_dates=['Date'], index_col='Date')
+            bars[coin] = df
+        elif interval == 'D':
+            if os.path.exists(fpath_1h):
+                df_1h = pd.read_csv(fpath_1h, parse_dates=['Date'], index_col='Date')
+                bars[coin] = _resample_to_daily(df_1h)
         fpath_f = os.path.join(DATA_DIR, f'{sym}_funding.csv')
         if os.path.exists(fpath_f):
             funding[coin] = pd.read_csv(fpath_f, parse_dates=['Date'], index_col='Date')['fundingRate']
