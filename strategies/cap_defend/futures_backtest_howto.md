@@ -10,6 +10,8 @@
 - 엔진 파일 [backtest_futures_full.py](./backtest_futures_full.py)는 두 방식을 모두 지원한다.
   - fallback: 달력 앵커 `1/10/19일`
   - 최종 채택 경로: `snap_interval_bars`
+- 월별 시총 기반 유니버스 재현에는 [../../data/historical_universe.json](../../data/historical_universe.json)이 필요하다.
+- 이 파일이 없으면 엔진은 동일한 월별 시총 히스토리를 재현할 수 없고, 결과가 달라질 수 있다.
 
 즉 최종 전략 재현을 하려면 `snap_interval_bars`가 들어간 러너를 봐야 한다.
 
@@ -20,6 +22,9 @@
 - [backtest_futures_full.py](./backtest_futures_full.py)
   - 선물 백테스트 엔진 본체
   - 카나리, health, 트랜치, 스탑, 동적 레버리지까지 포함
+- [../../data/historical_universe.json](../../data/historical_universe.json)
+  - 월별 시총 히스토리 유니버스 입력
+  - `get_mcap()`가 읽는 재현성 핵심 파일
 
 ### 조합 탐색
 
@@ -71,6 +76,7 @@ python3 strategies/cap_defend/run_final_signal_compare.py
 - 기존 조합 `4h1 + 4h2 + 1h1`
 - 최종 조합 `1h_09 + 4h_01 + 4h_09`
 를 같은 실행층에서 직접 비교한다.
+- 이때 월별 시총 유니버스는 `data/historical_universe.json` 기준으로 고정된다.
 
 ## 탐색 과정을 다시 밟고 싶을 때
 

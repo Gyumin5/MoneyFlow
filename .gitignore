@@ -16,6 +16,9 @@ V12_Server_Operation_Manual.md
 
 # Data files
 data/
+!data/
+data/*
+!data/historical_universe.json
 
 # Python
 __pycache__/
