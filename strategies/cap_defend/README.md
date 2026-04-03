@@ -35,12 +35,13 @@
 - 설명:
   - [futures_backtest_howto.md](./futures_backtest_howto.md)
   - [futures_strategy_final.md](./futures_strategy_final.md)
-  - [futures_research_history.md](./futures_research_history.md)
 - 실행:
   - [download_futures_data.py](./download_futures_data.py)
   - [run_current_futures_backtest.py](./run_current_futures_backtest.py)
 - 엔진:
   - [backtest_futures_full.py](./backtest_futures_full.py)
+  - [futures_ensemble_engine.py](./futures_ensemble_engine.py)
+  - [futures_live_config.py](./futures_live_config.py)
 
 ## 2. 공통 유틸리티
 
@@ -51,51 +52,9 @@
 
 ## 3. 연구 / 탐색 파일
 
-아래 파일들은 현재 공식 실행 경로가 아니라, 전략 탐색이나 중간 연구 기록용이다.
+[research/](./research/) 디렉터리에 모아두었다. 공식 재현에는 필요 없다.
 
-### 선물 조합 탐색
-
-- [run_signal_screen.py](./run_signal_screen.py)
-- [run_signal_combo_search.py](./run_signal_combo_search.py)
-- [run_snap_finetune.py](./run_snap_finetune.py)
-- [run_snap_robustness.py](./run_snap_robustness.py)
-- [run_ensemble.py](./run_ensemble.py)
-
-### 선물 리스크 / 스탑 / 레버리지 연구
-
-- [run_stoploss_test.py](./run_stoploss_test.py)
-- [run_stoploss_cooldown_test.py](./run_stoploss_cooldown_test.py)
-- [run_stoploss_long_lookback_test.py](./run_stoploss_long_lookback_test.py)
-- [run_dynamic_leverage_test.py](./run_dynamic_leverage_test.py)
-- [run_conditional_atr_test.py](./run_conditional_atr_test.py)
-- [run_pfd_tuning_test.py](./run_pfd_tuning_test.py)
-- [run_top5ew_compare.py](./run_top5ew_compare.py)
-
-### 선물 숏 연구
-
-- [futures_short_research_history.md](./futures_short_research_history.md)
-- [run_short_off_sleeve_test.py](./run_short_off_sleeve_test.py)
-- [run_short_cash_gate_test.py](./run_short_cash_gate_test.py)
-- [run_short_per_canary_off_test.py](./run_short_per_canary_off_test.py)
-- [run_short_per_canary_off_universe_test.py](./run_short_per_canary_off_universe_test.py)
-- [run_short_4h1_major_basket_test.py](./run_short_4h1_major_basket_test.py)
-- [run_short_public_benchmark_test.py](./run_short_public_benchmark_test.py)
-- [run_short_public_dynamic_universe_test.py](./run_short_public_dynamic_universe_test.py)
-- [run_short_public_extended_dynamic_test.py](./run_short_public_extended_dynamic_test.py)
-- [run_short_spot_on_all_futures_off_overlay_test.py](./run_short_spot_on_all_futures_off_overlay_test.py)
-- [run_futures_spot_on_all_off_overlay_combo_test.py](./run_futures_spot_on_all_off_overlay_combo_test.py)
-- [run_futures_spot_on_all_off_overlay_sweep.py](./run_futures_spot_on_all_off_overlay_sweep.py)
-
-### 기타 과거 연구 / 통합 실험
-
-- [backtest_coin_tranche.py](./backtest_coin_tranche.py)
-- [backtest_stock_variants.py](./backtest_stock_variants.py)
-- [backtest_integrated_60_40.py](./backtest_integrated_60_40.py)
-- [backtest_rebal_sweep.py](./backtest_rebal_sweep.py)
-- [backtest_rwa_defense.py](./backtest_rwa_defense.py)
-- [backtest_rwa_gold.py](./backtest_rwa_gold.py)
-- [backtest_rwa_gold_2.py](./backtest_rwa_gold_2.py)
-- [backtest_rwa_v2.py](./backtest_rwa_v2.py)
+자세한 목록은 [research/README.md](./research/README.md) 참조.
 
 ## 4. 운영 관련
 
@@ -110,9 +69,8 @@
 
 바로 백테스트하려면:
 
-1. [repo_backtest_guide.md](./repo_backtest_guide.md)
+1. `check_data_freshness.py`
 2. `refresh_backtest_data.py`
-3. `check_data_freshness.py`
-4. 각 전략의 공식 실행 스크립트
+3. 각 전략의 공식 실행 스크립트
 
 만 보면 된다.

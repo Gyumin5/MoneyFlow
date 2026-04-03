@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """현재 실거래 선물 전략 설정."""
 
+START = '2020-10-01'
+END = '2026-03-28'
+
 CURRENT_STRATEGIES = {
     "live_1h1": dict(
         interval="1h",
