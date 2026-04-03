@@ -42,6 +42,10 @@
 - 엔진:
   - [backtest_futures_full.py](./backtest_futures_full.py)
 
+참고:
+- `run_final_signal_compare.py`의 `current_live`가 현재 실제 실거래 조합이다.
+- `old_live`는 과거 비교 기준이다.
+
 ## 2. 공통 유틸리티
 
 - 데이터 최신성 확인:
