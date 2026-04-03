@@ -7,13 +7,16 @@ import argparse
 
 
 def refresh_stock() -> None:
-    from stock_engine import load_prices
+    import pandas as pd
+    import yfinance as yf
+    from pathlib import Path
     from recommend import (
         OFFENSIVE_STOCK_UNIVERSE,
         DEFENSIVE_STOCK_UNIVERSE,
         CANARY_ASSETS,
         STOCK_CRASH_TICKER,
     )
+    from stock_engine import CACHE_DIR
 
     needed = sorted(
         set(OFFENSIVE_STOCK_UNIVERSE)
@@ -22,8 +25,55 @@ def refresh_stock() -> None:
         | {STOCK_CRASH_TICKER}
     )
     print(f"[stock] refresh {len(needed)} tickers")
-    prices = load_prices(needed, start="2014-01-01")
-    print(f"[stock] loaded {len(prices)} series")
+    cache_dir = Path(CACHE_DIR)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    updated = 0
+    skipped = 0
+    for ticker in needed:
+        if ticker == "VIX":
+            skipped += 1
+            continue
+
+        fp = cache_dir / f"{ticker}.csv"
+        existing = None
+        start = "2014-01-01"
+        if fp.exists():
+            try:
+                existing = pd.read_csv(fp, parse_dates=["Date"])
+                if not existing.empty:
+                    last_date = pd.to_datetime(existing["Date"]).iloc[-1]
+                    start = (last_date - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
+            except Exception:
+                existing = None
+
+        try:
+            df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
+            if df is None or len(df) == 0:
+                skipped += 1
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                series = df["Close"][ticker]
+            else:
+                series = df["Close"]
+            series = series.dropna()
+            new_df = series.rename(ticker).reset_index()
+            new_df.columns = ["Date", ticker]
+
+            if existing is not None and not existing.empty:
+                merged = pd.concat([existing, new_df], ignore_index=True)
+                merged["Date"] = pd.to_datetime(merged["Date"])
+                merged = merged.drop_duplicates("Date", keep="last").sort_values("Date")
+            else:
+                merged = new_df
+
+            merged.to_csv(fp, index=False)
+            updated += 1
+        except Exception as exc:
+            print(f"[stock] {ticker} failed: {exc}")
+            skipped += 1
+
+    print(f"[stock] updated={updated} skipped={skipped}")
 
 
 def refresh_coin() -> None:

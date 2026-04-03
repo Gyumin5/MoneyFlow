@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""기존 실거래 조합 vs 최종 후보 조합 직접 비교.
+"""이전 실거래 조합 vs 현재 실거래 조합 직접 비교.
 
 실행층 고정:
 - per_coin_leverage_mode = cap_mom_blend_543_cash
@@ -56,8 +56,8 @@ STRATEGIES = {
 }
 
 COMBOS = [
-    ('current_live', {'old_4h1': 1 / 3, 'old_4h2': 1 / 3, 'old_1h1': 1 / 3}),
-    ('final_candidate', {'new_1h_09': 1 / 3, 'new_4h_01': 1 / 3, 'new_4h_09': 1 / 3}),
+    ('old_live', {'old_4h1': 1 / 3, 'old_4h2': 1 / 3, 'old_1h1': 1 / 3}),
+    ('current_live', {'new_1h_09': 1 / 3, 'new_4h_01': 1 / 3, 'new_4h_09': 1 / 3}),
 ]
 
 
