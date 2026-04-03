@@ -69,6 +69,12 @@ python3 strategies/cap_defend/run_final_signal_compare.py
 - 선물:
   - 주요 `1h` / `funding` 마지막 시점
 
+한 번에 확인하려면:
+
+```bash
+python3 strategies/cap_defend/check_data_freshness.py
+```
+
 ## 현재 공식 버전
 
 - 현물: `V18`
