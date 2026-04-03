@@ -28,6 +28,12 @@
 python3 strategies/cap_defend/backtest_official.py --coin-only --version v18
 ```
 
+데이터를 먼저 갱신하려면:
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target coin
+```
+
 출력에는 기본적으로 다음 구간이 포함된다.
 
 - `2018-01-01 ~ 2025-06-30`
@@ -36,7 +42,12 @@ python3 strategies/cap_defend/backtest_official.py --coin-only --version v18
 
 ## 데이터 최신성 확인
 
-현물 코인은 별도 다운로드 스크립트가 현재 공개 레포에 정리되어 있지 않으므로, 먼저 로컬 CSV의 마지막 날짜를 확인해야 한다.
+현물 코인은 현재 표준 갱신 진입점을 다음으로 통일했다.
+
+```bash
+python3 strategies/cap_defend/refresh_backtest_data.py --target coin
+python3 strategies/cap_defend/check_data_freshness.py
+```
 
 예시:
 
@@ -58,6 +69,13 @@ PY
 
 - 주요 코인 CSV의 마지막 날짜가 동일한지
 - `historical_universe.json`이 존재하는지
+
+## 월별 유니버스 히스토리
+
+`historical_universe.json`은 현재 공개 레포에서 재현용 canonical 입력으로 관리한다.
+
+- 정상 백테스트/재현 workflow에서는 이 파일을 그대로 사용한다.
+- 일반적인 데이터 갱신은 가격 CSV를 갱신하고, 월별 시총 히스토리는 git에 포함된 파일을 기준으로 고정한다.
 
 ## 백업 원칙
 
