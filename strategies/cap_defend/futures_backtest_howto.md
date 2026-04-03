@@ -58,10 +58,10 @@ python3 strategies/cap_defend/check_data_freshness.py
 - [run_snap_robustness.py](./run_snap_robustness.py)
   - `21/27/33` 같은 비정렬 구간 robustness 확인
 
-### 최종 비교
+### 현재 실거래 전략 백테스트
 
-- [run_final_signal_compare.py](./run_final_signal_compare.py)
-  - 이전 실거래 조합 vs 현재 실거래 조합 직접 비교
+- [run_current_futures_backtest.py](./run_current_futures_backtest.py)
+  - 현재 실거래 조합 단독 백테스트
 
 ### 실거래 코드
 
@@ -84,16 +84,15 @@ python3 strategies/cap_defend/check_data_freshness.py
 
 ### 2. 최종 직접 비교 실행
 
-가장 빠르게 “현재 실거래 전략이 왜 채택됐는지” 재현하려면 이 스크립트를 실행하면 된다.
+가장 빠르게 현재 실거래 전략을 재현하려면 이 스크립트를 실행하면 된다.
 
 ```bash
-python3 strategies/cap_defend/run_final_signal_compare.py
+python3 strategies/cap_defend/run_current_futures_backtest.py
 ```
 
-이 스크립트는:
-- 이전 실거래 조합 `4h1 + 4h2 + 1h1`
-- 현재 실거래 조합 `1h_09 + 4h_01 + 4h_09`
-를 같은 실행층에서 직접 비교한다.
+이 스크립트는 현재 실거래 조합
+- `1h_09 + 4h_01 + 4h_09`
+를 현재 실행층 그대로 단독 백테스트한다.
 - 이때 월별 시총 유니버스는 `data/historical_universe.json` 기준으로 고정된다.
 
 ## 탐색 과정을 다시 밟고 싶을 때
@@ -165,7 +164,7 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 1. [futures_research_history.md](./futures_research_history.md)
 2. [futures_strategy_final.md](./futures_strategy_final.md)
 3. [futures_backtest_howto.md](./futures_backtest_howto.md)
-4. [run_final_signal_compare.py](./run_final_signal_compare.py)
+4. [run_current_futures_backtest.py](./run_current_futures_backtest.py)
 5. [backtest_futures_full.py](./backtest_futures_full.py)
 6. [auto_trade_binance.py](../../trade/auto_trade_binance.py)
 
@@ -174,5 +173,5 @@ python3 strategies/cap_defend/run_snap_robustness.py --workers 8
 최종 선물 전략을 재현하려면:
 - `futures_strategy_final.md`로 파라미터를 보고
 - `refresh_backtest_data.py --target futures`로 데이터를 갱신하고
-- `run_final_signal_compare.py`로 결과를 확인하고
+- `run_current_futures_backtest.py`로 결과를 확인하고
 - 필요하면 `run_signal_combo_search.py`, `run_snap_finetune.py`로 탐색 과정을 다시 밟으면 된다.

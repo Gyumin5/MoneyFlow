@@ -154,7 +154,7 @@
 
 - 실거래 코드: `trade/auto_trade_binance.py`
 - 스탑 연구 요약: `strategies/cap_defend/stoploss_summary.md`
-- 최종 비교 스크립트: `strategies/cap_defend/run_final_signal_compare.py`
+- 현재 실거래 단독 백테스트: `strategies/cap_defend/run_current_futures_backtest.py`
 - 트랜치 robustness 결과: `strategies/cap_defend/snap_robustness_results.csv`
 - 연구 히스토리: `strategies/cap_defend/futures_research_history.md`
 - 실행 가이드: `strategies/cap_defend/futures_backtest_howto.md`
