@@ -50,9 +50,9 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
                       drift_threshold=0, post_flip_delay=0,
                       params_base=None, defense=False,
                       ief_gate=False, ief_prices=None,
-                      defense_gate_fn=None):
-    """코인 백테스트 — t-1 시그널, t 체결. defense=True: V18 Risk-Off 방어자산.
-    defense_gate_fn: callable(date) → bool. True면 방어자산 진입 허용."""
+                      defense_gate_fn=None, _trace=None):
+    """코인 백테스트 — t-1 시그널, t 체결.
+    _trace: list를 전달하면 매일 target_weights/rebal 기록 (선물 비교용)."""
     if params_base is None:
         params_base = B()
 
@@ -247,6 +247,9 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
 
         portfolio_values.append({'Date': date, 'Value': _port_val(holdings, cash, prices, date)})
         canary_history.append({'Date': date, 'canary_on': canary_on})
+        # 선물 비교용 trace: 매일 target weights + rebal 여부
+        if _trace is not None:
+            _trace.append({'date': date, 'target': dict(combined), 'rebal': need_rebal, 'canary_on': canary_on})
         state['prev_canary'] = canary_on
         state['prev_month'] = cur_month
         prev_date = date
@@ -254,8 +257,11 @@ def run_coin_backtest(prices, universe_map, snapshot_days=(1, 10, 19),
     if not portfolio_values:
         return _empty_ext()
     pvdf = pd.DataFrame(portfolio_values).set_index('Date')
-    return {'metrics': calc_metrics(pvdf), 'rebal_count': rebal_count, 'dd_exit_count': dd_exit_count,
+    result = {'metrics': calc_metrics(pvdf), 'rebal_count': rebal_count, 'dd_exit_count': dd_exit_count,
             'equity_curve': pvdf['Value'], 'canary_history': canary_history}
+    if _trace is not None:
+        result['trace'] = _trace
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════
