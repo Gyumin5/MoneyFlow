@@ -1788,12 +1788,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 <div class="card">
                     <div class="chart-container"><canvas id="chartTotal"></canvas></div>
                 </div>
-                <div class="card" style="overflow-x:auto;">
-                    <table id="historyTable">
-                        <thead><tr><th>\ub0a0\uc9dc</th><th>\uc8fc\uc2dd</th><th>\ucf54\uc778</th><th>\ud604\uae08</th><th>\ucd1d\uc790\uc0b0</th></tr></thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
+                <div id="historyContainer"></div>
             </div>
 
 <!-- 추천 비중: 매일 확인에 통합됨 -->
@@ -2000,11 +1995,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     const badge2 = document.getElementById('secHistory_badge');
                     if (badge2) badge2.textContent = rows.length + '\uac74';
 
-                    // Table: 월말 요약 항상 표시 + 클릭하면 일별 펼침
-                    const tbody = document.querySelector('#historyTable tbody');
-                    tbody.innerHTML = '';
+                    // 카드형 히스토리: 월별 접기/펼치기, 가로 넘침 없음
+                    const container = document.getElementById('historyContainer');
+                    container.innerHTML = '';
                     const sorted = [...rows].reverse();
-                    // 월별 그룹핑
                     let monthRows = {{}};
                     for (const s of sorted) {{
                         const ym = (s.snapshot_date||s.month).substring(0, 7);
@@ -2013,28 +2007,44 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     }}
                     const months = Object.keys(monthRows).sort().reverse();
 
+                    function histItem(s, bold) {{
+                        const dt = s.snapshot_date||s.month;
+                        const fw = bold ? 'font-weight:700;' : 'color:#555;';
+                        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;'+fw+'">'
+                            +'<span>'+dt.substring(5)+'</span>'
+                            +'<span>'+fmt(s.total_krw)+'</span></div>'
+                            +'<div style="display:flex;gap:8px;padding:0 0 4px 0;font-size:0.82em;color:#888;">'
+                            +'<span>\uc8fc\uc2dd '+fmt(s.stock_krw)+'</span>'
+                            +'<span>\ucf54\uc778 '+fmt(s.coin_krw)+'</span>'
+                            +'<span>\ud604\uae08 '+fmt(s.cash_krw)+'</span></div>';
+                    }}
+
                     for (const ym of months) {{
                         const items = monthRows[ym];
-                        const lastItem = items[0]; // 최신 = 월말 또는 최근일
+                        const last = items[0];
                         const monthId = 'hm_'+ym.replace('-','');
                         const hasMore = items.length > 1;
+                        const arrow = hasMore ? ' <span style="color:#aaa;font-size:0.8em;">(\u25b6 '+items.length+'\uac74)</span>' : '';
 
-                        // 월말 요약 행 (항상 표시, 클릭 가능)
-                        const clickAttr = hasMore ? 'onclick="document.querySelectorAll(\\'.mr_'+monthId+'\\').forEach(r=>r.style.display=r.style.display===\\'none\\'?\\'\\':\\'none\\')" style="cursor:pointer;background:#f8f9fa;"' : 'style="background:#f8f9fa;"';
-                        const arrow = hasMore ? '<span style="color:#999;font-size:0.8em;">\u25b6 '+items.length+'\uac74</span> ' : '';
-                        tbody.innerHTML += '<tr '+clickAttr+'>'
-                            +'<td style="font-weight:600;">'+arrow+(lastItem.snapshot_date||lastItem.month)+'</td>'
-                            +'<td>'+fmt(lastItem.stock_krw)+'</td><td>'+fmt(lastItem.coin_krw)+'</td>'
-                            +'<td>'+fmt(lastItem.cash_krw)+'</td><td style="font-weight:700;">'+fmt(lastItem.total_krw)+'</td></tr>';
+                        let card = '<div class="card" style="margin-bottom:8px;padding:10px 12px;">';
+                        card += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'+(hasMore?'cursor:pointer;':'')+ '"'
+                            +(hasMore?' onclick="const el=document.getElementById(\\''+monthId+'\\');el.style.display=el.style.display===\\'none\\'?\\'\\':\\'none\\'"':'')+'>'
+                            +'<span style="font-weight:700;font-size:1.05em;">'+ym+arrow+'</span>'
+                            +'<span style="font-weight:700;font-size:1.05em;">'+fmt(last.total_krw)+'</span></div>';
+                        card += '<div style="display:flex;gap:8px;font-size:0.82em;color:#888;">'
+                            +'<span>\uc8fc\uc2dd '+fmt(last.stock_krw)+'</span>'
+                            +'<span>\ucf54\uc778 '+fmt(last.coin_krw)+'</span>'
+                            +'<span>\ud604\uae08 '+fmt(last.cash_krw)+'</span></div>';
 
-                        // 나머지 일별 행 (숨김, 클릭 시 펼침)
-                        for (let j = 1; j < items.length; j++) {{
-                            const s = items[j];
-                            tbody.innerHTML += '<tr class="mr_'+monthId+'" style="display:none;">'
-                                +'<td style="padding-left:20px;color:#666;">'+(s.snapshot_date||s.month)+'</td>'
-                                +'<td>'+fmt(s.stock_krw)+'</td><td>'+fmt(s.coin_krw)+'</td>'
-                                +'<td>'+fmt(s.cash_krw)+'</td><td>'+fmt(s.total_krw)+'</td></tr>';
+                        if (hasMore) {{
+                            card += '<div id="'+monthId+'" style="display:none;margin-top:6px;border-top:1px solid #eee;padding-top:6px;">';
+                            for (let j = 1; j < items.length; j++) {{
+                                card += histItem(items[j], false);
+                            }}
+                            card += '</div>';
                         }}
+                        card += '</div>';
+                        container.innerHTML += card;
                     }}
 
                     // Chart

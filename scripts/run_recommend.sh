@@ -12,6 +12,7 @@ TYPE="${1:-general}"
 
 if [ "$TYPE" = "personal" ]; then
     SCRIPT="${APP_HOME:-$HOME}/recommend_personal.py"
+    export PORTFOLIO_HTML_NAME=portfolio_result_gmoh.html
     LOCK_FILE="/tmp/recommend_personal.lock"
 else
     SCRIPT="${APP_HOME:-$HOME}/recommend.py"
