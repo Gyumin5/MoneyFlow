@@ -77,9 +77,10 @@ PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORT
 STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
 COIN_ANCHOR_DAYS = (1, 11, 21)
 FUTURES_TRANCHE_META = {
-    "4h1": {"interval_hours": 4, "snap_interval_bars": 120, "n_snapshots": 3},
-    "4h2": {"interval_hours": 4, "snap_interval_bars": 21, "n_snapshots": 3},
-    "1h1": {"interval_hours": 1, "snap_interval_bars": 27, "n_snapshots": 3},
+    "4h_d005": {"interval_hours": 4, "snap_interval_bars": 60, "n_snapshots": 3},
+    "2h_S240": {"interval_hours": 2, "snap_interval_bars": 120, "n_snapshots": 3},
+    "2h_S120": {"interval_hours": 2, "snap_interval_bars": 120, "n_snapshots": 3},
+    "4h_M20":  {"interval_hours": 4, "snap_interval_bars": 21, "n_snapshots": 3},
 }
 
 def _save_signal_state(data):
@@ -305,9 +306,10 @@ VERSION_HISTORY = [
 \u2022 \uc6d4\uac04 \uc2a4\ucf00\uc904 \uae30\ubc18"""),
 ]
 
-STOCK_RATIO, COIN_RATIO = 0.60, 0.40
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
+REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
 
 def get_cash_buffer():
     """현금 버퍼 비율. coin_trade_state에서 읽기 (HTML 표시용)."""
@@ -1123,9 +1125,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
-            const TARGET_STOCK_RATIO = 0.588;
-            const TARGET_COIN_RATIO = 0.392;
-            const REBAL_BAND = 0.05;  // ±5%p
+            const TARGET_STOCK_RATIO = 0.60;
+            const TARGET_COIN_RATIO = 0.25;
+            const TARGET_FUTURES_RATIO = 0.15;
+            const REBAL_BAND = 0.08;  // ±8%p
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1232,8 +1235,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 }
             }
 
-            // === 통합 리밸런싱 계산기 ===
-            let liveCoinKRW = COIN_TOTAL_KRW;  // 초기값: HTML 생성 시점
+            // === 통합 리밸런싱 계산기 (3자산: 주식/현물/선물) ===
+            let liveCoinKRW = COIN_TOTAL_KRW;
+            let liveFuturesKRW = 0;
             let coinFetchTime = '리포트 생성 시점';
 
             async function fetchCoinBalance() {
@@ -1256,76 +1260,95 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 }
             }
 
+            async function fetchFuturesBalance() {
+                try {
+                    const resp = await fetch('http://' + window.location.hostname + ':5000/api/assets/binance_balance');
+                    if (!resp.ok) throw new Error('API error');
+                    const data = await resp.json();
+                    liveFuturesKRW = data.total_krw || 0;
+                    return true;
+                } catch(e) {
+                    return false;
+                }
+            }
+
             async function calcRebalance() {
-                // 코인 + 주식 + 환율 동시 조회
-                await Promise.all([fetchCoinBalance(), fetchStockBalance()]);
+                // 주식 + 현물코인 + 선물 + 환율 동시 조회
+                await Promise.all([fetchCoinBalance(), fetchFuturesBalance(), fetchStockBalance()]);
 
                 const stockInput = String(getStockTotal());
                 const resultEl = document.getElementById('rebalResult');
 
                 const stockKRW = parseFloat(stockInput);
                 const coinKRW = parseFloat(document.getElementById('snapCoin').value) || liveCoinKRW;
-                const extraCash = sumText('snapBankCash');
+                const futuresKRW = parseFloat(document.getElementById('snapFutures').value) || liveFuturesKRW;
                 const rate = parseFloat(document.getElementById('exchangeRate').value) || 0;
-                // 코인 입력 필드에 조회값 반영
                 if (!document.getElementById('snapCoin').value) document.getElementById('snapCoin').value = Math.round(coinKRW);
+                if (!document.getElementById('snapFutures').value && liveFuturesKRW > 0) document.getElementById('snapFutures').value = Math.round(liveFuturesKRW);
 
                 if (!stockKRW && stockKRW !== 0) { resultEl.innerHTML = '\\u274c \\uc8fc\\uc2dd \\ucd1d\\uc561\\uc744 \\uc785\\ub825\\ud574\\uc8fc\\uc138\\uc694'; return; }
 
-                // 1. 현재 비중 계산
-                const totalAsset = stockKRW + coinKRW + extraCash;
+                // 1. 3자산 비중 계산
+                const totalAsset = stockKRW + coinKRW + futuresKRW;
                 if (totalAsset <= 0) { resultEl.innerHTML = '\\u274c \\uc790\\uc0b0\\uc774 0\\uc785\\ub2c8\\ub2e4'; return; }
 
                 const curStockPct = stockKRW / totalAsset;
                 const curCoinPct = coinKRW / totalAsset;
-                const curCashPct = extraCash / totalAsset;
-                const drift = Math.abs(curStockPct - TARGET_STOCK_RATIO);
-                const needRebal = drift >= REBAL_BAND;
+                const curFuturesPct = futuresKRW / totalAsset;
 
-                // 2. 목표 금액 계산 (현금 2%는 코인 쪽 자연 잔여로 처리)
+                const driftStock = Math.abs(curStockPct - TARGET_STOCK_RATIO);
+                const driftCoin = Math.abs(curCoinPct - TARGET_COIN_RATIO);
+                const driftFutures = Math.abs(curFuturesPct - TARGET_FUTURES_RATIO);
+                const maxDrift = Math.max(driftStock, driftCoin, driftFutures);
+                const needRebal = maxDrift >= REBAL_BAND;
+
+                // 2. 목표 금액
                 const targetStockKRW = totalAsset * TARGET_STOCK_RATIO;
                 const targetCoinKRW = totalAsset * TARGET_COIN_RATIO;
-                const moveAmount = targetStockKRW - stockKRW;  // +면 코인→주식, -면 주식→코인
+                const targetFuturesKRW = totalAsset * TARGET_FUTURES_RATIO;
 
-                // 3. 비중 상태 표시
-                const shinhanVal = parseFloat((document.getElementById('stockShinhan').value || '0').replace(/,/g,'')) || 0;
-                const kisVal = parseFloat((document.getElementById('stockKIS').value || '0').replace(/,/g,'')) || 0;
-                let stockDetail = Math.round(stockKRW).toLocaleString() + '\\uc6d0';
-                if (shinhanVal > 0 && kisVal > 0) {
-                    stockDetail += '<div style="font-size:0.75em; color:#888; margin-top:2px;">\\uc2e0\\ud55c ' + Math.round(shinhanVal).toLocaleString() + ' + \\ud55c\\ud22c ' + Math.round(kisVal).toLocaleString() + '</div>';
+                // 3. 비중 카드 (3열)
+                function pctColor(cur, target) {
+                    return Math.abs(cur - target) >= REBAL_BAND ? '#d93025' : '#0d904f';
+                }
+                function assetCard(label, krw, cur, target) {
+                    return '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
+                        + '<div style="font-size:0.85em; color:#666;">' + label + '</div>'
+                        + '<div style="font-size:1.25em; font-weight:700;">' + Math.round(krw).toLocaleString() + '\\uc6d0</div>'
+                        + '<div style="color:' + pctColor(cur, target) + '; font-weight:600;">'
+                        + (cur * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (target * 100).toFixed(0) + '%)</div></div>';
                 }
 
-                let html = '<div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px;">';
-                html += '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
-                    + '<div style="font-size:0.85em; color:#666;">\\uc8fc\\uc2dd</div>'
-                    + '<div style="font-size:1.4em; font-weight:700;">' + stockDetail + '</div>'
-                    + '<div style="color:' + (curStockPct > TARGET_STOCK_RATIO + REBAL_BAND ? '#d93025' : curStockPct < TARGET_STOCK_RATIO - REBAL_BAND ? '#d93025' : '#0d904f') + '; font-weight:600;">'
-                    + (curStockPct * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (TARGET_STOCK_RATIO * 100).toFixed(1) + '%)</div></div>';
-                html += '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
-                    + '<div style="font-size:0.85em; color:#666;">\\ucf54\\uc778 (\\uc790\\ub3d9\\uc870\\ud68c)</div>'
-                    + '<div style="font-size:1.4em; font-weight:700;">' + Math.round(coinKRW).toLocaleString() + '\\uc6d0</div>'
-                    + '<div style="color:' + (curCoinPct > TARGET_COIN_RATIO + REBAL_BAND ? '#d93025' : curCoinPct < TARGET_COIN_RATIO - REBAL_BAND ? '#d93025' : '#0d904f') + '; font-weight:600;">'
-                    + (curCoinPct * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (TARGET_COIN_RATIO * 100).toFixed(1) + '%)</div></div>';
+                let html = '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:16px;">';
+                html += assetCard('\\uc8fc\\uc2dd', stockKRW, curStockPct, TARGET_STOCK_RATIO);
+                html += assetCard('\\ud604\\ubb3c\\ucf54\\uc778', coinKRW, curCoinPct, TARGET_COIN_RATIO);
+                html += assetCard('\\uc120\\ubb3c', futuresKRW, curFuturesPct, TARGET_FUTURES_RATIO);
                 html += '</div>';
 
-                if (extraCash > 0) {
-                    html += '<div style="padding:8px 14px; background:#fff8e1; border-radius:8px; margin-bottom:12px; font-size:0.9em;">'
-                        + '\\uae30\\ud0c0 \\ud604\\uae08: ' + Math.round(extraCash).toLocaleString() + '\\uc6d0 (' + (curCashPct * 100).toFixed(1) + '%)</div>';
-                }
                 html += '<div style="padding:8px 14px; background:#e8eaf6; border-radius:8px; margin-bottom:12px;">'
                     + '<b>\\ucd1d \\uc790\\uc0b0:</b> ' + Math.round(totalAsset).toLocaleString() + '\\uc6d0</div>';
 
                 // 4. 리밸런싱 판단
                 if (needRebal) {
-                    const direction = moveAmount > 0 ? '\\ucf54\\uc778 \\u2192 \\uc8fc\\uc2dd' : '\\uc8fc\\uc2dd \\u2192 \\ucf54\\uc778';
-                    const absMove = Math.abs(moveAmount);
+                    let moves = [];
+                    const deltas = [
+                        {name: '\\uc8fc\\uc2dd', delta: targetStockKRW - stockKRW},
+                        {name: '\\ud604\\ubb3c', delta: targetCoinKRW - coinKRW},
+                        {name: '\\uc120\\ubb3c', delta: targetFuturesKRW - futuresKRW},
+                    ];
+                    deltas.forEach(d => {
+                        if (Math.abs(d.delta) > 10000) {
+                            const sign = d.delta > 0 ? '+' : '';
+                            moves.push(d.name + ' ' + sign + Math.round(d.delta).toLocaleString() + '\\uc6d0');
+                        }
+                    });
                     html += '<div style="padding:14px; background:#fce8e6; border:2px solid #d93025; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 (\\ud3b8\\ucc28 ' + (drift * 100).toFixed(1) + '%p > \\u00b1' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
-                        + '<div style="font-size:1.2em;"><b>' + direction + '</b> <span style="font-size:1.3em; color:#d93025; font-weight:700;">' + Math.round(absMove).toLocaleString() + '\\uc6d0</span></div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 (\\ucd5c\\ub300\\ud3b8\\ucc28 ' + (maxDrift * 100).toFixed(1) + '%p \\u2265 ' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
+                        + '<div style="font-size:1.05em;">' + moves.join('<br>') + '</div>'
                         + '</div>';
                 } else {
                     html += '<div style="padding:14px; background:#e8f5e9; border:1px solid #0d904f; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (\\ud3b8\\ucc28 ' + (drift * 100).toFixed(1) + '%p < \\u00b1' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (\\ucd5c\\ub300\\ud3b8\\ucc28 ' + (maxDrift * 100).toFixed(1) + '%p < ' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
                         + '</div>';
                 }
 
@@ -1372,8 +1395,6 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 }
 
                 resultEl.innerHTML = html;
-
-                // 환율은 매번 API에서 조회 (localStorage 저장 안 함)
             }
             </script>
     """
@@ -1653,7 +1674,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_last_target)}",
         ]
         _fut_tr_rows = []
-        for _name in ["4h1", "4h2", "1h1"]:
+        for _name in list(FUTURES_TRANCHE_META.keys()):
             _st = _strategies.get(_name, {}) or {}
             _meta = FUTURES_TRANCHE_META.get(_name, {})
             _snapshots_text = "<br><br>".join(
@@ -1732,9 +1753,11 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 .mobile-card-table td::before {{ content: attr(data-label); font-weight: 600; color: #555; text-align: left; flex: 0 0 38%; }}
                 .mobile-card-table td:first-child {{ background: #f8f9fa; font-weight: bold; color: #1a73e8; border-radius: 8px 8px 0 0; }}
                 .chart-container {{ height: 180px !important; }}
-                /* 2열 그리드 → 1열 */
+                /* 2열/3열 그리드 → 1열 */
                 div[style*="grid-template-columns:1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
                 div[style*="grid-template-columns: 1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
+                div[style*="grid-template-columns:1fr 1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
+                div[style*="grid-template-columns: 1fr 1fr 1fr"] {{ grid-template-columns: 1fr !important; }}
                 .section-header h2 {{ font-size: 1em; }}
                 .summary-item {{ font-size: 0.9em; padding: 7px 9px; }}
                 .table-wrap {{ overflow-x: visible; }}
@@ -1954,9 +1977,63 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
                 html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px;">';
                 html += card('주식 - 한투', fmtKrwFull(stock.total_krw), fmtKrwFull(stock.cash_krw), shareText(stock.total_krw) + ' / 보유 ' + ((stock.holdings || []).length) + '종목', stock.error);
-                html += card('코인 - 업비트', fmtKrwFull(upbit.total_krw), fmtKrwFull(upbit.krw_balance), shareText(upbit.total_krw) + ' / 보유 ' + ((upbit.holdings || []).length) + '종목', upbit.error);
-                html += card('코인 - 바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
+                html += card('현물코인 - 업비트', fmtKrwFull(upbit.total_krw), fmtKrwFull(upbit.krw_balance), shareText(upbit.total_krw) + ' / 보유 ' + ((upbit.holdings || []).length) + '종목', upbit.error);
+                html += card('선물 - 바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
+
+                // === 3자산 배분 체크 (60/25/15, ±8pp 밴드) ===
+                const stockKrw = Number(stock.total_krw || 0);
+                const spotKrw = Number(upbit.total_krw || 0);
+                const futKrw = Number(binance.total_krw || 0);
+                const allocTotal = stockKrw + spotKrw + futKrw;
+                if (allocTotal > 0) {{
+                    const T_STOCK = 0.60, T_SPOT = 0.25, T_FUT = 0.15, BAND = 0.08;
+                    const pStock = stockKrw / allocTotal;
+                    const pSpot = spotKrw / allocTotal;
+                    const pFut = futKrw / allocTotal;
+                    const dStock = Math.abs(pStock - T_STOCK);
+                    const dSpot = Math.abs(pSpot - T_SPOT);
+                    const dFut = Math.abs(pFut - T_FUT);
+                    const maxD = Math.max(dStock, dSpot, dFut);
+                    const need = maxD >= BAND;
+
+                    const pctColor = (d) => d >= BAND ? '#d93025' : '#0d904f';
+                    const pctBar = (label, cur, target, drift) => {{
+                        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;">'
+                            + '<span>' + label + '</span>'
+                            + '<span style="color:' + pctColor(drift) + ';font-weight:600;">'
+                            + (cur * 100).toFixed(1) + '% (목표 ' + (target * 100).toFixed(0) + '%'
+                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p)</span></div>';
+                    }};
+
+                    html += '<div class="card" style="margin-top:12px;border:2px solid ' + (need ? '#d93025' : '#0d904f') + ';">';
+                    html += '<div style="font-weight:700;font-size:1.05em;color:' + (need ? '#d93025' : '#0d904f') + ';margin-bottom:8px;">'
+                        + (need ? '⚠️ 리밸런싱 필요' : '✅ 리밸런싱 불필요')
+                        + ' (최대편차 ' + (maxD * 100).toFixed(1) + '%p ' + (need ? '≥' : '<') + ' ±8%p)</div>';
+                    html += pctBar('주식', pStock, T_STOCK, dStock);
+                    html += pctBar('현물코인', pSpot, T_SPOT, dSpot);
+                    html += pctBar('선물', pFut, T_FUT, dFut);
+
+                    if (need) {{
+                        const tgtStock = allocTotal * T_STOCK;
+                        const tgtSpot = allocTotal * T_SPOT;
+                        const tgtFut = allocTotal * T_FUT;
+                        html += '<div style="margin-top:10px;padding:10px;background:#fce8e6;border-radius:8px;font-size:0.95em;">';
+                        const moves = [
+                            ['주식', tgtStock - stockKrw],
+                            ['현물코인', tgtSpot - spotKrw],
+                            ['선물', tgtFut - futKrw],
+                        ];
+                        moves.forEach(m => {{
+                            if (Math.abs(m[1]) > 10000) {{
+                                const sign = m[1] > 0 ? '+' : '';
+                                html += '<div>' + m[0] + ': <b>' + sign + Math.round(m[1]).toLocaleString() + '원</b></div>';
+                            }}
+                        }});
+                        html += '</div>';
+                    }}
+                    html += '</div>';
+                }}
 
                 html += '<div style="margin-top:16px;">';
                 html += renderWeightsTable('한투 구성 비중', stock.weights || {{}});
@@ -2221,14 +2298,16 @@ if __name__ == "__main__":
 
     integrated_rows.sort(key=lambda x: x['Target'], reverse=True)
         
-    # [Restored] Final Portfolio (Stock + Coin) for Report Table
+    # [Restored] Final Portfolio (Stock + Spot Coin + Futures) for Report Table
     final_port = {CASH_ASSET: 0}
-    for t, w in s_port.items(): 
+    for t, w in s_port.items():
         key = t if t!=CASH_ASSET else CASH_ASSET
         final_port[key] = final_port.get(key, 0) + w * STOCK_RATIO
     for t, w in c_port_buffered.items():
         key = t if t!=CASH_ASSET else CASH_ASSET
         final_port[key] = final_port.get(key, 0) + w * COIN_RATIO
+    # 선물 15%는 바이낸스 자동매매에서 별도 관리 (여기서는 표시만)
+    final_port['FUTURES'] = FUTURES_RATIO
     
     # Get KRW Prices (생략 가능, 위에서 integrated_rows에 다 넣음)
     krw_prices = {}
@@ -2369,3 +2448,51 @@ if __name__ == "__main__":
         print("✅ 텔레그램 일간 리포트 전송 완료")
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
+
+    # ─── 3자산 배분 체크 (60/25/15, ±8pp 밴드) ───
+    try:
+        api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
+        ov = requests.get(f"{api}/api/assets/live_overview", timeout=60).json()
+        accts = ov.get("accounts", {})
+        stock_krw = float((accts.get("stock_kis") or {}).get("total_krw", 0))
+        spot_krw = float((accts.get("coin_upbit") or {}).get("total_krw", 0))
+        fut_krw = float((accts.get("coin_binance") or {}).get("total_krw", 0))
+        alloc_total = stock_krw + spot_krw + fut_krw
+
+        if alloc_total > 0:
+            p_stock = stock_krw / alloc_total
+            p_spot = spot_krw / alloc_total
+            p_fut = fut_krw / alloc_total
+            d_stock = abs(p_stock - STOCK_RATIO)
+            d_spot = abs(p_spot - COIN_RATIO)
+            d_fut = abs(p_fut - FUTURES_RATIO)
+            max_drift = max(d_stock, d_spot, d_fut)
+
+            alloc_line = (
+                f"⚖️ 자산배분: 주식 {p_stock:.1%} / 현물 {p_spot:.1%} / 선물 {p_fut:.1%}"
+                f" (목표 60/25/15, 최대편차 {max_drift:.1%})"
+            )
+            print(alloc_line)
+
+            if max_drift >= REBAL_BAND_PP:
+                moves = []
+                for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
+                                        ("현물", spot_krw, alloc_total * COIN_RATIO),
+                                        ("선물", fut_krw, alloc_total * FUTURES_RATIO)]:
+                    delta = tgt - cur
+                    if abs(delta) > 10000:
+                        moves.append(f"  {name}: {delta:+,.0f}원")
+                alert_msg = (
+                    f"⚠️ 자산배분 리밸런싱 필요!\n"
+                    f"최대편차 {max_drift:.1%} ≥ ±8%p\n\n"
+                    f"주식 {p_stock:.1%} (목표 60%)\n"
+                    f"현물코인 {p_spot:.1%} (목표 25%)\n"
+                    f"선물 {p_fut:.1%} (목표 15%)\n\n"
+                    f"조정 필요:\n" + "\n".join(moves)
+                )
+                send_telegram(alert_msg)
+                print("🚨 자산배분 리밸런싱 알림 전송")
+            else:
+                print("✅ 자산배분 밴드 내 (리밸런싱 불필요)")
+    except Exception as e:
+        print(f"⚠️ 자산배분 체크 실패: {e}")
