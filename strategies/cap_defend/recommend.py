@@ -31,7 +31,7 @@ import json
 
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
-STOCK_RATIO, COIN_RATIO = 0.60, 0.40
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15
 CASH_ASSET = 'Cash'
 # No Cash Buffer for standard report
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
@@ -682,13 +682,14 @@ if __name__ == "__main__":
     s_port, s_stat = run_stock_strategy_v15(log, prices)
     c_port, c_stat = run_coin_strategy_v15(c_univ, prices, target_date, log)
     
-    # 4. Final Port
+    # 4. Final Port (Stock 60% + Spot Coin 25% + Futures 15%)
     final_port = {CASH_ASSET: 0}
-    for t, w in s_port.items(): 
+    for t, w in s_port.items():
         key = t if t!=CASH_ASSET else CASH_ASSET
         final_port[key] = final_port.get(key, 0) + w * STOCK_RATIO
-    for t, w in c_port.items(): 
+    for t, w in c_port.items():
         key = t if t!=CASH_ASSET else CASH_ASSET
         final_port[key] = final_port.get(key, 0) + w * COIN_RATIO
+    final_port['FUTURES'] = FUTURES_RATIO
         
     save_html(log, final_port, s_port, c_port, s_stat, c_stat, target_date)

@@ -101,33 +101,56 @@ def _resample_to_4h(df):
     }).dropna(subset=['Close'])
 
 
+def _resample_to_2h(df):
+    """1h OHLCV → 2h OHLCV 리샘플링."""
+    return df.resample('2h').agg({
+        'Open': 'first', 'High': 'max', 'Low': 'min',
+        'Close': 'last', 'Volume': 'sum'
+    }).dropna(subset=['Close'])
+
+
+def _resample_to_30m(df):
+    """15m OHLCV → 30m OHLCV 리샘플링."""
+    return df.resample('30min').agg({
+        'Open': 'first', 'High': 'max', 'Low': 'min',
+        'Close': 'last', 'Volume': 'sum'
+    }).dropna(subset=['Close'])
+
+
 def load_data(interval='1h'):
     """바이낸스 OHLCV + 펀딩 로드. 키는 심볼('BTC' 등).
 
-    원본 데이터는 1h를 기준으로 관리한다.
+    원본 데이터는 1h(또는 15m)를 기준으로 관리한다.
     - 1h: 네이티브 CSV 직접 로드
-    - 4h: 항상 1h에서 리샘플링
-    - D: 네이티브 파일이 있으면 사용, 없으면 1h에서 리샘플링
-
-    이렇게 해야 1h가 최신이면 4h도 자동으로 최신이 된다.
+    - 4h: 1h에서 리샘플링
+    - 2h: 1h에서 리샘플링
+    - D: 1h에서 리샘플링
+    - 15m: 네이티브 CSV 직접 로드
+    - 30m: 15m에서 리샘플링
     """
+    _RESAMPLE = {
+        '4h': ('1h', _resample_to_4h),
+        '2h': ('1h', _resample_to_2h),
+        'D':  ('1h', _resample_to_daily),
+        '30m': ('15m', _resample_to_30m),
+    }
+
     bars = {}
     funding = {}
     for coin, sym in TICKER_MAP.items():
         fpath = os.path.join(DATA_DIR, f'{sym}_{interval}.csv')
-        fpath_1h = os.path.join(DATA_DIR, f'{sym}_1h.csv')
 
-        if interval == '4h':
-            if os.path.exists(fpath_1h):
-                df_1h = pd.read_csv(fpath_1h, parse_dates=['Date'], index_col='Date')
-                bars[coin] = _resample_to_4h(df_1h)
-        elif os.path.exists(fpath) and os.path.getsize(fpath) > 1000:
+        if os.path.exists(fpath) and os.path.getsize(fpath) > 1000:
+            # CSV가 이미 있으면 직접 로드 (리샘플 불필요)
             df = pd.read_csv(fpath, parse_dates=['Date'], index_col='Date')
             bars[coin] = df
-        elif interval == 'D':
-            if os.path.exists(fpath_1h):
-                df_1h = pd.read_csv(fpath_1h, parse_dates=['Date'], index_col='Date')
-                bars[coin] = _resample_to_daily(df_1h)
+        elif interval in _RESAMPLE:
+            src_iv, resample_fn = _RESAMPLE[interval]
+            fpath_src = os.path.join(DATA_DIR, f'{sym}_{src_iv}.csv')
+            if os.path.exists(fpath_src):
+                df_src = pd.read_csv(fpath_src, parse_dates=['Date'], index_col='Date')
+                bars[coin] = resample_fn(df_src)
+
         fpath_f = os.path.join(DATA_DIR, f'{sym}_funding.csv')
         if os.path.exists(fpath_f):
             funding[coin] = pd.read_csv(fpath_f, parse_dates=['Date'], index_col='Date')['fundingRate']
@@ -214,7 +237,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
     """시간봉 완전 선물 백테스트. 봉 단위 파라미터 지원."""
 
-    bpd = {'D': 1, '4h': 6, '1h': 24, '15m': 96}[interval]
+    bpd = {'D': 1, '4h': 6, '2h': 12, '1h': 24, '30m': 48, '15m': 96}[interval]
     bars_per_year = bpd * 365
 
     btc_df = bars.get('BTC')
