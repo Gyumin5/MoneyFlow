@@ -1,14 +1,31 @@
 #!/usr/bin/env python3
-"""현재 실거래 선물 전략 설정."""
+"""현재 실거래 선물 전략 설정 (2026-04-05 확정)."""
 
 START = '2020-10-01'
 END = '2026-03-28'
 
 CURRENT_STRATEGIES = {
-    "live_1h1": dict(
-        interval="1h",
-        sma_bars=168,
-        mom_short_bars=36,
+    "4h_d005": dict(
+        interval="4h",
+        sma_bars=240,
+        mom_short_bars=20,
+        mom_long_bars=720,
+        canary_hyst=0.015,
+        drift_threshold=0.0,
+        dd_threshold=0,
+        dd_lookback=0,
+        bl_drop=0,
+        bl_days=0,
+        health_mode="mom2vol",
+        vol_mode="daily",
+        vol_threshold=0.05,
+        n_snapshots=3,
+        snap_interval_bars=60,
+    ),
+    "2h_S240": dict(
+        interval="2h",
+        sma_bars=240,
+        mom_short_bars=20,
         mom_long_bars=720,
         canary_hyst=0.015,
         drift_threshold=0.0,
@@ -18,30 +35,30 @@ CURRENT_STRATEGIES = {
         bl_days=0,
         health_mode="mom2vol",
         vol_mode="bar",
-        vol_threshold=0.80,
+        vol_threshold=0.60,
         n_snapshots=3,
-        snap_interval_bars=27,
+        snap_interval_bars=120,
     ),
-    "live_4h1": dict(
-        interval="4h",
-        sma_bars=240,
-        mom_short_bars=10,
-        mom_long_bars=30,
+    "2h_S120": dict(
+        interval="2h",
+        sma_bars=120,
+        mom_short_bars=20,
+        mom_long_bars=720,
         canary_hyst=0.015,
         drift_threshold=0.0,
         dd_threshold=0,
         dd_lookback=0,
         bl_drop=0,
         bl_days=0,
-        health_mode="mom1vol",
-        vol_mode="daily",
-        vol_threshold=0.05,
+        health_mode="mom2vol",
+        vol_mode="bar",
+        vol_threshold=0.60,
         n_snapshots=3,
         snap_interval_bars=120,
     ),
-    "live_4h2": dict(
+    "4h_M20": dict(
         interval="4h",
-        sma_bars=120,
+        sma_bars=240,
         mom_short_bars=20,
         mom_long_bars=120,
         canary_hyst=0.015,
@@ -58,8 +75,4 @@ CURRENT_STRATEGIES = {
     ),
 }
 
-CURRENT_LIVE_COMBO = {
-    "live_1h1": 1 / 3,
-    "live_4h1": 1 / 3,
-    "live_4h2": 1 / 3,
-}
+CURRENT_LIVE_COMBO = {k: 1 / 4 for k in CURRENT_STRATEGIES}
