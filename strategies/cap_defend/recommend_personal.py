@@ -173,8 +173,23 @@ def save_daily_live_snapshot():
         "cash_krw": cash_krw,
         "total_krw": total_krw,
     }
-STRATEGY_VERSION = "V18"
+STRATEGY_VERSION = "V19"
 VERSION_HISTORY = [
+    ("V19", "2026-04",
+     "선물 추가 + 자산배분 60/25/15 + 밴드 8pp",
+     """<b>▶ 자산배분 (V19)</b>
+• 주식 <span style='color:#d93025;'>60%</span> / 현물코인 <span style='color:#d93025;'>25%</span> / 선물 <span style='color:#d93025;'>15%</span>
+• 밴드 리밸런싱: 편차 <span style='color:#d93025;'>±8%p</span> 초과 시만 (매일 자동체크)
+• 포트폴리오: Sharpe 2.12, CAGR +39%, MDD -12.2%
+
+<b>▶ 선물 (V19 신규)</b>
+• d005 4전략 앙상블 (EW 25%씩)
+• 4h_d005 / 2h_S240 / 2h_S120 / 4h_M20
+• 5x 동적 레버리지 (cap_mom_blend_543_cash)
+• 단독: Sharpe 2.08, CAGR +227%, MDD -34%
+
+<b>▶ 주식/코인: V18 동일</b>"""),
+
     ("V18", "2026-03",
      "코인: SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap",
      """<b>▶ 코인 카나리 (V18)</b>
