@@ -1700,6 +1700,66 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
     execution_state_html = "".join(state_sections)
 
+    # ── 선물 신호 요약 (메인 뷰) ──
+    futures_summary_html = ""
+    try:
+        _fut2, _ = _load_first_json([
+            os.path.join(APP_HOME, "binance_state.json"),
+            os.path.join(_base_dir, "trade", "binance_state.json"),
+            "binance_state.json",
+        ])
+        _strats2 = _fut2.get("strategies", {}) or {}
+        _target2 = _fut2.get("last_target", {}) or {}
+        _last_run2 = _fut2.get("last_run", "-")
+
+        # 카나리 상태
+        canary_items = []
+        for _sn in FUTURES_TRANCHE_META:
+            _ss = _strats2.get(_sn, {}) or {}
+            _con = "ON" if _ss.get("canary_on") else "OFF"
+            _color = "#0d904f" if _ss.get("canary_on") else "#d93025"
+            canary_items.append(f'<span style="color:{_color};font-weight:600;">{_sn}: {_con}</span>')
+
+        # 포지션 요약
+        coin_targets = {k: v for k, v in _target2.items()
+                        if k.upper() != 'CASH' and isinstance(v, (int, float)) and v > 0.001}
+        if coin_targets:
+            pos_text = ", ".join(f"{k} {v:.0%}" for k, v in
+                                sorted(coin_targets.items(), key=lambda x: x[1], reverse=True))
+            cash_pct = _target2.get('CASH', 0)
+            pos_text += f", CASH {cash_pct:.0%}" if cash_pct > 0.001 else ""
+            pos_color = "#1a73e8"
+        else:
+            pos_text = "현금 100% (카나리 OFF)"
+            pos_color = "#666"
+
+        # 실행 시각
+        run_str = ""
+        if _last_run2 and _last_run2 != "-":
+            try:
+                from datetime import timezone
+                _dt = datetime.fromisoformat(str(_last_run2).replace('Z', '+00:00'))
+                run_str = _dt.astimezone(timezone(timedelta(hours=9))).strftime('%m/%d %H:%M')
+            except Exception:
+                run_str = str(_last_run2)[:16]
+
+        futures_summary_html = f"""
+            <div class="card" style="border-left:4px solid #7627bb;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <span style="font-weight:700;font-size:1.05em;">📡 선물 (d005 앙상블)</span>
+                    <span style="font-size:0.8em;color:#888;">{run_str}</span>
+                </div>
+                <div style="margin-bottom:6px;font-size:0.95em;">
+                    {' &nbsp;|&nbsp; '.join(canary_items)}
+                </div>
+                <div style="color:{pos_color};font-weight:600;">
+                    {pos_text}
+                </div>
+            </div>
+        """
+    except Exception:
+        futures_summary_html = ""
+
     html = f"""
     <!DOCTYPE html>
     <html lang="ko">
@@ -1799,6 +1859,14 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     </div>
                     <div id="liveOverviewResult"></div>
                 </div>
+            </div>
+
+            <!-- ===== 신호 요약 ===== -->
+            <div style="margin-top:8px;">
+                <div class="card" style="background:{alert_bg};border:2px solid {alert_border};margin-bottom:8px;">
+                    <span style="font-weight:700;">{alert_icon} {alert_msg}</span>
+                </div>
+                {futures_summary_html}
             </div>
 
             <!-- ===== 히스토리 (기본 접힘) ===== -->
