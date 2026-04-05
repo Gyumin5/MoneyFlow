@@ -32,8 +32,42 @@
   - `signal_state.json` 사용 규칙
   - `V17_OPERATION_MANUAL.md`
   - `CLAUDE.md`
+- 선물 전략 변경 시 최소 동기화 대상:
+  - `strategies/cap_defend/futures_live_config.py`
+  - `strategies/cap_defend/futures_ensemble_engine.py`
+  - `strategies/cap_defend/backtest_futures_full.py`
+  - `trade/auto_trade_binance.py` (구현 예정)
+  - `strategies/cap_defend/recommend_personal.py`
+  - `CLAUDE.md`
 - 앵커일, 버퍼, 상태키, 모니터 기준통화가 다르면 "같은 전략"이라고 쓰지 않는다.
 - 현재 저장소에는 `1/10/19`와 `1/11/21` 표기가 혼재할 수 있으므로, 변경 시 관련 파일을 반드시 함께 정리한다.
+
+## 선물 전략 규칙
+
+### 앙상블 구성 (확정 2026-04-05)
+
+- d005 4전략 EW(25%씩), 단일 계정에서 합산 비중 실행
+- 4h_d005: SMA240, Mom20/720, daily vol 5%, snap60
+- 2h_b60_S240: SMA240, Mom20/720, bar vol 60%, snap120
+- 2h_b60_S120: SMA120, Mom20/720, bar vol 60%, snap120
+- 4h_b60_M20_120: SMA240, Mom20/120, bar vol 60%, snap21
+- 공통: canary_hyst=0.015, n_snapshots=3, drift/dd/bl 없음
+
+### 실행 파라미터
+
+- 레버리지: 5x 동적 (cap_mom_blend_543_cash)
+  - floor=3x (CASH≥34% 또는 신호 약할 때)
+  - mid=4x, ceiling=5x
+- 스탑: prev_close_pct -15%, cash_guard(CASH≥34%일 때만 활성)
+- 거래비용: 0.04% (바이낸스 maker)
+- 유지증거금: 0.4%
+
+### 자산배분 (확정 2026-04-05)
+
+- 주식 60% / 현물코인 25% / 선물 15%
+- 밴드 리밸런싱: 8pp drift 초과 시만 (매일 cron 체크, 텔레그램 알림)
+- 자산간 강제 이동(카나리 레짐 전환) 없음 — 각 자산 내부 방어에 맡김
+- 리밸 시 전 자산 목표 비중으로 복원
 
 ## 백테스트 필수 규칙
 
