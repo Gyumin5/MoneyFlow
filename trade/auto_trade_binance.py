@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-바이낸스 선물 자동매매 — 최종 앙상블 전략
+바이낸스 선물 자동매매 — d005 앙상블 전략 (2026-04-05 확정)
 ========================================
 확정 신호 조합:
-- 4h1: 4h_01  (SMA=240, Mom=10/30, mom1vol, daily vol, Snap=120)
-- 4h2: 4h_09  (SMA=120, Mom=20/120, mom2vol, bar vol,   Snap=21)
-- 1h1: 1h_09  (SMA=168, Mom=36/720, mom2vol, bar vol,   Snap=27)
+- 4h_d005:      (SMA=240, Mom=20/720, mom2vol, daily vol 5%,  Snap=60)
+- 2h_b60_S240:  (SMA=240, Mom=20/720, mom2vol, bar vol 60%,   Snap=120)
+- 2h_b60_S120:  (SMA=120, Mom=20/720, mom2vol, bar vol 60%,   Snap=120)
+- 4h_b60_M20:   (SMA=240, Mom=20/120, mom2vol, bar vol 60%,   Snap=21)
 
 실행층:
 - 종목별 동적 레버리지: cap+mom blend 5/4/3x
@@ -13,8 +14,8 @@
 - 게이트: cash_guard(34%)
 
 실행: 매 1시간 크론
-1. 바이낸스에서 1h/4h OHLCV 수집
-2. 3전략 각각 목표 비중 계산
+1. 바이낸스에서 1h/2h/4h OHLCV 수집
+2. 4전략 각각 목표 비중 계산
 3. 가중 합산 → 단일 포트폴리오
 4. 종목별 5/4/3x 레버리지 매핑
 5. 현재 포지션과 비교 → delta 리밸런싱
@@ -50,42 +51,54 @@ LEVERAGE_CEILING = 5
 STOP_PCT = 0.15
 STOP_GATE_CASH_THRESHOLD = 0.34
 LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30
-ENSEMBLE_WEIGHTS = {'4h1': 1/3, '4h2': 1/3, '1h1': 1/3}
+ENSEMBLE_WEIGHTS = {'4h_d005': 1/4, '2h_S240': 1/4, '2h_S120': 1/4, '4h_M20': 1/4}
 
 STRATEGIES = {
-    '4h1': {
+    '4h_d005': {
         'interval': '4h',
         'sma_bars': 240,
-        'mom_short_bars': 10,
-        'mom_long_bars': 30,   # mom1vol이라 long 안 씀
-        'health_mode': 'mom1vol',
+        'mom_short_bars': 20,
+        'mom_long_bars': 720,
+        'health_mode': 'mom2vol',
         'vol_mode': 'daily',
         'vol_threshold': 0.05,
+        'snap_interval_bars': 60,
+        'canary_hyst': 0.015,
+        'n_snapshots': 3,
+    },
+    '2h_S240': {
+        'interval': '2h',
+        'sma_bars': 240,
+        'mom_short_bars': 20,
+        'mom_long_bars': 720,
+        'health_mode': 'mom2vol',
+        'vol_mode': 'bar',
+        'vol_threshold': 0.60,
         'snap_interval_bars': 120,
         'canary_hyst': 0.015,
         'n_snapshots': 3,
     },
-    '4h2': {
-        'interval': '4h',
+    '2h_S120': {
+        'interval': '2h',
         'sma_bars': 120,
+        'mom_short_bars': 20,
+        'mom_long_bars': 720,
+        'health_mode': 'mom2vol',
+        'vol_mode': 'bar',
+        'vol_threshold': 0.60,
+        'snap_interval_bars': 120,
+        'canary_hyst': 0.015,
+        'n_snapshots': 3,
+    },
+    '4h_M20': {
+        'interval': '4h',
+        'sma_bars': 240,
         'mom_short_bars': 20,
         'mom_long_bars': 120,
         'health_mode': 'mom2vol',
         'vol_mode': 'bar',
         'vol_threshold': 0.60,
         'snap_interval_bars': 21,
-        'canary_hyst': 0.015,
-        'n_snapshots': 3,
-    },
-    '1h1': {
-        'interval': '1h',
-        'sma_bars': 168,
-        'mom_short_bars': 36,
-        'mom_long_bars': 720,
-        'health_mode': 'mom2vol',
-        'vol_mode': 'bar',
-        'vol_threshold': 0.80,
-        'snap_interval_bars': 27,
         'canary_hyst': 0.015,
         'n_snapshots': 3,
     },
@@ -254,14 +267,14 @@ def fetch_klines(client: Client, symbol: str, interval: str, limit: int = 1500) 
 
 
 def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
-    """모든 심볼의 1h, 4h OHLCV 수집."""
-    data = {'1h': {}, '4h': {}}
+    """모든 심볼의 1h, 2h, 4h OHLCV 수집."""
+    data = {'1h': {}, '2h': {}, '4h': {}}
     for sym in UNIVERSE:
-        for iv in ['1h', '4h']:
-            # 1h1은 vol 90d = 2160 bars, mom_long 1200 bars가 필요하다.
-            # 전략별 최대 lookback을 안전하게 덮도록 1h는 넉넉히 받고,
-            # 4h도 4h1/4h2의 SMA/vol 계산 여유를 둔다.
-            limit = 2500 if iv == '1h' else 1800
+        for iv in ['1h', '2h', '4h']:
+            # 2h 전략은 SMA240+mom720+vol90d가 필요 → 2h bars = 720+@
+            # 4h 전략도 SMA240+mom720 → 4h bars = 1800
+            # 1h는 레버리지 계산용 (mom 30d = 720 bars)
+            limit = {'1h': 2500, '2h': 2000, '4h': 1800}[iv]
             df = fetch_klines(client, sym, iv, limit)
             if not df.empty:
                 coin = sym.replace('USDT', '')
@@ -393,7 +406,7 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
                              alerts: Optional[List[str]] = None) -> Dict[str, float]:
     """단일 전략의 목표 비중 계산."""
     iv = strat_params['interval']
-    bpd = 6 if iv == '4h' else 24
+    bpd = {'4h': 6, '2h': 12, '1h': 24}[iv]
     bars_per_year = bpd * 365
     bars = data[iv]
 
@@ -1358,17 +1371,18 @@ def main():
         log.info("데이터 수집...")
         data = fetch_all_data(client)
         n_1h = len(data['1h'])
+        n_2h = len(data['2h'])
         n_4h = len(data['4h'])
-        log.info(f"수집 완료: 1h {n_1h}개, 4h {n_4h}개 ({time.time()-t_start:.1f}s)")
+        log.info(f"수집 완료: 1h {n_1h}개, 2h {n_2h}개, 4h {n_4h}개 ({time.time()-t_start:.1f}s)")
 
         # 데이터 장애 방어
-        if 'BTC' not in data['1h'] or 'BTC' not in data['4h']:
+        if 'BTC' not in data['1h'] or 'BTC' not in data['2h'] or 'BTC' not in data['4h']:
             log.error("BTC 데이터 누락! 매매 중단. 이전 포지션 유지.")
             send_telegram("⚠️ BTC 데이터 누락 — 매매 중단")
             return
-        if n_1h < len(UNIVERSE) // 2 or n_4h < len(UNIVERSE) // 2:
-            log.error(f"데이터 부족 ({n_1h}/{n_4h}). 매매 중단.")
-            send_telegram(f"⚠️ 데이터 부족 ({n_1h}/{n_4h}) — 매매 중단")
+        if n_1h < len(UNIVERSE) // 2 or n_2h < len(UNIVERSE) // 2 or n_4h < len(UNIVERSE) // 2:
+            log.error(f"데이터 부족 ({n_1h}/{n_2h}/{n_4h}). 매매 중단.")
+            send_telegram(f"⚠️ 데이터 부족 ({n_1h}/{n_2h}/{n_4h}) — 매매 중단")
             return
 
         # 2. 현재 포지션 (리밸런싱 전)
