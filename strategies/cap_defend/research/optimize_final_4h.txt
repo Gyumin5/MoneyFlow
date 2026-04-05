@@ -1,0 +1,143 @@
+CPU: 28 cores, workers: 27
+
+
+=====================================================================================
+  4h | 38 coins | 756 configs | 27 workers
+=====================================================================================
+
+  4h: 756 유효 / 756 (401s)
+
+  ── 4h Top 20 by Calmar (1x) ──
+   SMA      Mom  Health  Vol Snap |    Sh     CAGR      MDD    Cal    Rb
+  -----------------------------------------------------------------
+   240       10 mom1vol    D  120 |  1.70   +68.4%   -27.6%   2.48   264
+   120   20/120 mom2vol    B   18 |  1.61   +51.6%   -21.1%   2.45   969
+   240 200/1200 mom2vol    B   18 |  1.56   +46.1%   -20.8%   2.22   578
+   120 200/1200 mom2vol    B   18 |  1.62   +46.9%   -21.5%   2.18   648
+   120  200/600 mom2vol    B  120 |  1.52   +43.1%   -19.8%   2.17   314
+    60   50/150 mom2vol    B   18 |  1.56   +46.2%   -21.9%   2.11   936
+   240    10/30 mom2vol    D  120 |  1.52   +55.3%   -26.4%   2.09   262
+   120   20/120 mom2vol    B   30 |  1.44   +46.2%   -22.3%   2.07   665
+   120  200/600 mom2vol    B   18 |  1.81   +54.7%   -27.5%   1.99   629
+    30   50/300 mom2vol    B   60 |  1.35   +35.6%   -18.1%   1.96   618
+   240   20/120 mom2vol    D   60 |  1.69   +69.5%   -36.3%   1.92   392
+    30   50/150 mom2vol    B   30 |  1.50   +41.0%   -21.5%   1.91   800
+   120  100/300 mom2vol    D   18 |  1.74   +70.7%   -37.3%   1.89   839
+   120  200/600 mom2vol    B   30 |  1.53   +43.3%   -22.9%   1.89   499
+    30   50/300 mom2vol    B   30 |  1.50   +40.4%   -21.7%   1.86   779
+    30   50/300 mom2vol    B  120 |  1.39   +38.4%   -20.7%   1.85   538
+   120  200/600 mom2vol    B   60 |  1.50   +40.8%   -22.1%   1.85   385
+   120  100/600 mom2vol    D   18 |  1.70   +64.9%   -35.2%   1.85   833
+   240    10/60 mom2vol    D  120 |  1.52   +54.5%   -29.6%   1.84   262
+    30   50/150 mom2vol    B   18 |  1.62   +45.0%   -24.7%   1.82   997
+
+  ── 4h Diverse Top 5 ──
+
+  #1: SMA=240b Mom=10b mom1vol Vol=daily Snap=120b
+     Lev     Sh     CAGR      MDD    Cal    Rb
+     1.0   1.70   +68.4%   -27.6%   2.48   264
+     1.5   1.63  +101.0%   -39.2%   2.58   264 Liq1
+     2.0   1.64  +136.2%   -48.9%   2.79   264 Liq1
+     3.0   1.54  +168.3%   -69.1%   2.44   264 Liq5
+    서브기간:
+      Full       Sh= 1.70 CAGR= +68.4% MDD= -27.6% Cal= 2.48
+      Bull       Sh= 3.04 CAGR=+181.9% MDD= -19.5% Cal= 9.34
+      Bear       Sh=-0.23 CAGR= -10.6% MDD= -25.0% Cal=-0.42
+      Recovery   Sh= 1.12 CAGR= +39.2% MDD= -33.4% Cal= 1.17
+    Plateau (SMA ±30%, Mom ±50%):
+      SMA168 Mom5      Cal= 0.41 CAGR= +19.4%
+      SMA168 Mom10     Cal= 0.52 CAGR= +25.1%
+      SMA168 Mom15     Cal= 0.32 CAGR= +18.4%
+      SMA240 Mom5      Cal= 1.24 CAGR= +41.1%
+      SMA240 Mom15     Cal= 1.36 CAGR= +52.1%
+      SMA312 Mom5      Cal= 0.96 CAGR= +38.3%
+      SMA312 Mom10     Cal= 0.99 CAGR= +39.2%
+      SMA312 Mom15     Cal= 0.73 CAGR= +30.1%
+
+  #2: SMA=120b Mom=20/120b mom2vol Vol=bar Snap=18b
+     Lev     Sh     CAGR      MDD    Cal    Rb
+     1.0   1.61   +51.6%   -21.1%   2.45   969
+     1.5   1.61   +80.3%   -28.3%   2.84   969
+     2.0   1.50   +95.5%   -36.2%   2.64   969 Liq1
+     3.0   1.45  +128.7%   -51.5%   2.50   969 Liq1
+    서브기간:
+      Full       Sh= 1.61 CAGR= +51.6% MDD= -21.1% Cal= 2.45
+      Bull       Sh= 2.15 CAGR= +68.5% MDD= -21.1% Cal= 3.25
+      Bear       Sh= 0.67 CAGR= +13.6% MDD= -17.9% Cal= 0.76
+      Recovery   Sh= 1.70 CAGR= +61.5% MDD= -19.2% Cal= 3.20
+    Plateau (SMA ±30%, Mom ±50%):
+      SMA84 Mom10      Cal= 1.05 CAGR= +32.1%
+      SMA84 Mom20      Cal= 2.39 CAGR= +54.1%
+      SMA84 Mom30      Cal= 1.84 CAGR= +50.9%
+      SMA120 Mom10     Cal= 0.93 CAGR= +28.8%
+      SMA120 Mom30     Cal= 1.81 CAGR= +48.0%
+      SMA156 Mom10     Cal= 0.90 CAGR= +27.3%
+      SMA156 Mom20     Cal= 1.73 CAGR= +45.4%
+      SMA156 Mom30     Cal= 1.14 CAGR= +40.8%
+
+  #3: SMA=240b Mom=200/1200b mom2vol Vol=bar Snap=18b
+     Lev     Sh     CAGR      MDD    Cal    Rb
+     1.0   1.56   +46.1%   -20.8%   2.22   578
+     1.5   1.55   +69.2%   -29.9%   2.31   578
+     2.0   1.51   +84.9%   -38.1%   2.23   578
+     3.0   1.31   +93.6%   -52.0%   1.80   578 Liq1
+    서브기간:
+      Full       Sh= 1.56 CAGR= +46.1% MDD= -20.8% Cal= 2.22
+      Bull       Sh= 2.26 CAGR= +67.6% MDD= -18.2% Cal= 3.72
+      Bear       Sh= 0.41 CAGR=  +4.3% MDD=  -9.9% Cal= 0.43
+      Recovery   Sh= 1.69 CAGR= +60.1% MDD= -20.8% Cal= 2.89
+    Plateau (SMA ±30%, Mom ±50%):
+      SMA168 Mom100    Cal= 1.03 CAGR= +44.5%
+      SMA168 Mom200    Cal= 1.35 CAGR= +42.2%
+      SMA168 Mom300    Cal= 0.73 CAGR= +28.9%
+      SMA240 Mom100    Cal= 1.31 CAGR= +48.7%
+      SMA240 Mom300    Cal= 1.10 CAGR= +34.7%
+      SMA312 Mom100    Cal= 0.94 CAGR= +39.2%
+      SMA312 Mom200    Cal= 1.45 CAGR= +38.0%
+      SMA312 Mom300    Cal= 0.75 CAGR= +29.0%
+
+  #4: SMA=120b Mom=200/1200b mom2vol Vol=bar Snap=18b
+     Lev     Sh     CAGR      MDD    Cal    Rb
+     1.0   1.62   +46.9%   -21.5%   2.18   648
+     1.5   1.58   +67.6%   -29.7%   2.27   648
+     2.0   1.55   +86.0%   -37.8%   2.28   648
+     3.0   1.34   +95.4%   -48.6%   1.96   648 Liq1
+    서브기간:
+      Full       Sh= 1.62 CAGR= +46.9% MDD= -21.5% Cal= 2.18
+      Bull       Sh= 2.16 CAGR= +65.0% MDD= -17.7% Cal= 3.68
+      Bear       Sh= 0.68 CAGR=  +7.2% MDD=  -7.4% Cal= 0.97
+      Recovery   Sh= 1.65 CAGR= +55.7% MDD= -21.5% Cal= 2.59
+    Plateau (SMA ±30%, Mom ±50%):
+      SMA84 Mom100     Cal= 1.65 CAGR= +53.1%
+      SMA84 Mom200     Cal= 1.83 CAGR= +47.6%
+      SMA84 Mom300     Cal= 0.80 CAGR= +28.5%
+      SMA120 Mom100    Cal= 1.50 CAGR= +51.3%
+      SMA120 Mom300    Cal= 0.83 CAGR= +29.8%
+      SMA156 Mom100    Cal= 1.03 CAGR= +45.1%
+      SMA156 Mom200    Cal= 1.22 CAGR= +41.2%
+      SMA156 Mom300    Cal= 0.73 CAGR= +29.7%
+
+  #5: SMA=60b Mom=50/150b mom2vol Vol=bar Snap=18b
+     Lev     Sh     CAGR      MDD    Cal    Rb
+     1.0   1.56   +46.2%   -21.9%   2.11   936
+     1.5   1.54   +69.8%   -31.3%   2.23   936
+     2.0   1.42   +80.9%   -39.9%   2.03   936
+     3.0   1.34  +103.6%   -52.4%   1.98   936
+    서브기간:
+      Full       Sh= 1.56 CAGR= +46.2% MDD= -21.9% Cal= 2.11
+      Bull       Sh= 2.16 CAGR= +63.0% MDD= -20.1% Cal= 3.14
+      Bear       Sh= 0.95 CAGR= +21.8% MDD= -19.8% Cal= 1.10
+      Recovery   Sh= 1.52 CAGR= +48.7% MDD= -21.9% Cal= 2.22
+    Plateau (SMA ±30%, Mom ±50%):
+      SMA42 Mom25      Cal= 1.46 CAGR= +40.3%
+      SMA42 Mom50      Cal= 1.73 CAGR= +43.3%
+      SMA42 Mom75      Cal= 1.90 CAGR= +50.8%
+      SMA60 Mom25      Cal= 1.53 CAGR= +41.8%
+      SMA60 Mom75      Cal= 1.59 CAGR= +48.8%
+      SMA78 Mom25      Cal= 1.44 CAGR= +40.8%
+      SMA78 Mom50      Cal= 1.66 CAGR= +41.2%
+      SMA78 Mom75      Cal= 1.56 CAGR= +49.1%
+
+  4h 소요: 886s
+
+총 소요: 886s
