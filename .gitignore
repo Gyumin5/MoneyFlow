@@ -2,21 +2,18 @@
 config/settings.py
 config/upbit.py
 config/bithumb.py
+config.py
+config_v12*.py
+*.key
+*.pem
+.kis_token.json
 
-# Legacy config names (in case they exist)
-config_v12.py
-config_v12_upbit.py
-config_v12_bithumb.py
-
-# SSH keys and server info backup
+# SSH keys and server info
 backup_20260125/
-
-# Server operation manual (contains SSH/IP info)
 V12_Server_Operation_Manual.md
+V17_OPERATION_MANUAL.md
 
 # Data files
-data/
-!data/
 data/*
 !data/historical_universe.json
 
@@ -24,12 +21,6 @@ data/*
 __pycache__/
 *.pyc
 *.pyo
-
-# CSV data files
-*.csv
-
-# JSON data (chart data, etc.)
-v12_chart_data.json
 
 # Logs
 *.log
@@ -46,43 +37,15 @@ trade/binance_state.json.lock
 trade/binance_history.db
 trade/binance_trade.log
 
-# Intermediate experiment results
-strategies/cap_defend/results/
+# Intermediate data
+*.csv
 strategies/cap_defend/data/
-strategies/cap_defend/ensemble_*.txt
-strategies/cap_defend/optimize_*.txt
-strategies/cap_defend/validation_results.txt
-strategies/cap_defend/optimize_summary.md
-
-# Local experiment scripts not included in public reproducibility path
-strategies/cap_defend/backtest_coin_flexible_selection.py
-strategies/cap_defend/backtest_futures.py
-strategies/cap_defend/backtest_futures_mix.py
-strategies/cap_defend/backtest_futures_optimize.py
-strategies/cap_defend/backtest_futures_v3.py
-strategies/cap_defend/backtest_futures_v4.py
-strategies/cap_defend/run_cash_reserve.py
-strategies/cap_defend/run_lev_test.py
-strategies/cap_defend/run_liq_analysis.py
-strategies/cap_defend/run_multi_lev.py
-strategies/cap_defend/run_optimize_all.py
-strategies/cap_defend/run_optimize_bars.py
-strategies/cap_defend/run_optimize_final.py
-strategies/cap_defend/run_optimize_v2.py
-strategies/cap_defend/run_spot_futures_allocation.py
-strategies/cap_defend/run_validation.py
+strategies/cap_defend/results/
 
 # Local tool metadata
 .codex
 .codex/
 .claude/
 
-# Security - API keys, config
-config.py
-config/upbit.py
-config/bithumb.py
-config_v12_upbit.py
-*.key
-*.pem
-.kis_token.json
-V17_OPERATION_MANUAL.md
+# Progress (ephemeral)
+progress.md
