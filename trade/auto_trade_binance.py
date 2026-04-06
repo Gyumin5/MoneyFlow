@@ -1315,17 +1315,17 @@ def main():
         lines.append(f"  포지션 수: {visible_positions}")
         lines.append(f"  활성 스탑 수: {stop_count}")
 
-        # 전략 상태는 state에 저장된 과거값이 아니라 현재 봉 기준으로 다시 계산한다.
-        report_state = json.loads(json.dumps(state))
+        # 전략 상태는 state에 저장된 실제 실행 결과를 보여준다.
+        strategies_state = state.get('strategies', {})
+        last_target = state.get('last_target', {})
         for sname in STRATEGIES:
-            report_state.setdefault('strategies', {}).setdefault(sname, {})
-            report_state['strategies'][sname]['last_bar_ts'] = None
-            target_now = compute_strategy_target(sname, STRATEGIES[sname], data, report_state, alerts=None)
-            canary = "ON" if report_state.get('strategies', {}).get(sname, {}).get('canary_on', False) else "OFF"
+            st = strategies_state.get(sname, {})
+            canary = "ON" if st.get('canary_on', False) else "OFF"
+            combined = st.get('last_combined', {})
             lines.append(f"{sname} 카나리: {canary}")
-            if target_now and target_now.get('CASH', 0.0) < 0.999:
-                coins = ', '.join(f"{k}:{v:.1%}" for k, v in target_now.items() if k != 'CASH' and v > 0)
-                cash_w = target_now.get('CASH', 0.0)
+            if combined and combined.get('CASH', 0.0) < 0.999:
+                coins = ', '.join(f"{k}:{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0)
+                cash_w = combined.get('CASH', 0.0)
                 if cash_w > 0:
                     coins = f"{coins}, CASH:{cash_w:.1%}"
                 lines.append(f"  목표: {coins}")
