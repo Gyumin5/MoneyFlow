@@ -1,8 +1,10 @@
 """
-Cap Defend V18 Recommendation Script
+Cap Defend V19 Recommendation Script
 ===================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
 Coin V18: K:SMA(50)+1.5%hyst + H:Mom30+Mom90+Vol5% + Greedy Absorption + EW+33%Cap + DD Exit + Blacklist
+Futures: d005 4전략 앙상블 EW + 5x 동적 레버리지
+Asset Allocation: 주식60 / 코인25 / 선물15, 8pp 밴드
 """
 
 import os
@@ -72,7 +74,11 @@ DATA_DIR = "./data"
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 APP_HOME = os.environ.get("MONEYFLOW_APP_HOME", os.getcwd())
 ASSETS_DB = os.environ.get("ASSETS_DB", os.path.join(APP_HOME, "assets.db"))
-PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME", "portfolio_result.html")
+try:
+    from config import PORTFOLIO_HTML_NAME as CONFIG_HTML_NAME
+except ImportError:
+    CONFIG_HTML_NAME = "portfolio_result_gmoh.html"
+PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME") or CONFIG_HTML_NAME
 PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORTFOLIO_PUBLIC_URL
 STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
 COIN_ANCHOR_DAYS = (1, 11, 21)
@@ -188,7 +194,7 @@ VERSION_HISTORY = [
 • 5x 동적 레버리지 (cap_mom_blend_543_cash)
 • 단독: Sharpe 2.08, CAGR +227%, MDD -34%
 
-<b>▶ 주식/코인: V18 동일</b>"""),
+<b>▶ 주식: V17 동일, 코인: V18 동일</b>"""),
 
     ("V18", "2026-03",
      "코인: SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap",
@@ -361,7 +367,7 @@ CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V18: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V19: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -886,7 +892,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
 
 def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=True):
     date_str = target_date.date()
-    log.append(f"<h3>🪙 코인 포트폴리오 (V18) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V19) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     btc = all_prices.get('BTC-USD')
@@ -1010,7 +1016,7 @@ def run_coin_strategy_v15(coin_universe, all_prices, target_date, log, is_today=
     if not healthy:
         return {CASH_ASSET: 1.0}, "No Healthy", meta, log, []
 
-    # --- Selection: V18 Greedy Absorption ---
+    # --- Selection: V19 Greedy Absorption ---
     top5 = healthy[:N_SELECTED_COINS]
     log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
 
