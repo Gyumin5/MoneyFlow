@@ -938,7 +938,6 @@ class V16UpbitTrader:
                     tr['weights'] = {}
             if flip_on:
                 trade_state['last_flip_date'] = datetime.now().strftime('%Y-%m-%d')
-                trade_state['pfd_done'] = False
 
         # ── 3. DD Exit → 전 트랜치에서 해당 코인 제거 ──
         dd_removed = set()
@@ -968,22 +967,7 @@ class V16UpbitTrader:
                         if t in tr.get('picks', []):
                             tr['picks'].remove(t)
 
-        # ── 4. PFD5: 플립 후 5일 ──
-        if (is_risk_on_now and not trade_state.get('pfd_done', True)
-                and trade_state.get('last_flip_date')):
-            from datetime import datetime as dt2
-            try:
-                flip_dt = dt2.strptime(trade_state['last_flip_date'], '%Y-%m-%d')
-                if (datetime.now() - flip_dt).days >= 5:
-                    log(f"🔄 PFD5: 플립 후 5일 → 전 트랜치 갱신")
-                    for a_str in trade_state['tranches']:
-                        tr = trade_state['tranches'][a_str]
-                        tr['picks'] = [t for t in current_signal_w if t != 'Cash']
-                        tr['weights'] = {t: w for t, w in current_signal_w.items() if t != 'Cash'}
-                    trade_state['pfd_done'] = True
-                    trade_state['_pfd_triggered'] = True  # 트리거 플래그
-            except Exception:
-                pass
+        # ── 4. (PFD 제거됨 — V19 ablation 결과 포트폴리오 레벨 무차별) ──
 
         # ── 5. 앵커일: 해당 트랜치만 갱신 ──
         anchors_triggered = []
@@ -1081,8 +1065,7 @@ class V16UpbitTrader:
         bad_coins = [c for c in bad_coins if c != 'Cash']  # Cash 제외
         if bad_coins:
             trade_reasons.append(f"헬스 실패 {bad_coins}")
-        if trade_state.get('_pfd_triggered'):
-            trade_reasons.append("PFD5")
+        if trade_state.get('_pfd_triggered'):  # 레거시 호환
             del trade_state['_pfd_triggered']
         if is_first_run:
             trade_reasons.append("초기 진입")

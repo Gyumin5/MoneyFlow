@@ -1632,7 +1632,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         _coin_summary = [
             f"<b>리스크 상태:</b> {'Risk-On' if _coin_risk_on else 'Risk-Off'}",
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_coin_state.get('rebalancing_needed'))}",
-            f"<b>PFD 완료:</b> {_fmt_bool(_coin_state.get('pfd_done', False))}",
+            f"<b>마지막 플립:</b> {_coin_state.get('last_flip_date', '-')}",
             f"<b>마지막 실행일:</b> {_coin_state.get('last_trade_date', '-')}",
             f"<b>실행 목표:</b> {_coin_exec_target_text}",
             f"<b>다음 앵커:</b> {_next_anchor_str(COIN_ANCHOR_DAYS)}",
