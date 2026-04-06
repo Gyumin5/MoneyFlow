@@ -221,9 +221,22 @@ def get_futures_equity():
     return m.get('_equity')
 
 
+def eq_to_daily(eq):
+    """Equity curve → 일봉 리샘플링 (시간봉이면 일봉으로 변환)."""
+    if eq is None or len(eq) < 2:
+        return eq
+    # 시간봉 인덱스인지 확인 (하루에 여러 행)
+    if len(eq) > (eq.index[-1] - eq.index[0]).days * 1.5:
+        # 일봉보다 빈번 → 일봉 마지막 값으로 리샘플
+        daily = eq.resample('D').last().dropna()
+        return daily
+    return eq
+
+
 def eq_to_returns(eq):
     """Equity curve → daily returns."""
-    return eq.pct_change().fillna(0)
+    daily = eq_to_daily(eq)
+    return daily.pct_change().fillna(0)
 
 
 def print_row(label, m, rebal):
