@@ -373,7 +373,12 @@ STOCK_VERSIONS = {
               canary_sma=200, canary_hyst=0.005, select='zscore3', weight='ew',
               defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
               crash='vt', crash_thresh=0.03, crash_cool=3, sharpe_lookback=252),
-    # V19: 주식 = V17 동일 (선물+자산배분 추가, 주식 로직 변경 없음)
+    # V18: 주식 = V17 동일 (코인만 변경)
+    'V18': SP(offensive=OFF_R7, defensive=DEF, canary_assets=('EEM',),
+              canary_sma=200, canary_hyst=0.005, select='zscore3', weight='ew',
+              defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
+              crash='vt', crash_thresh=0.03, crash_cool=3, sharpe_lookback=252),
+    # V19: 주식 = V17 동일 (선물+자산배분 추가)
     'V19': SP(offensive=OFF_R7, defensive=DEF, canary_assets=('EEM',),
               canary_sma=200, canary_hyst=0.005, select='zscore3', weight='ew',
               defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
