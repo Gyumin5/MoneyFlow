@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""V12~V17 공식 백테스트 — 코인 + 주식.
+"""V12~V19 공식 백테스트 — 코인 + 주식 + 선물.
 
 코인: 구 엔진 (3-snapshot 합성, LA 수정: t-1 시그널 → t 체결)
 주식: test_stock_improve.py 엔진 (이미 LA 수정됨)
+선물: futures_ensemble_engine (V19, d005 4전략 앙상블)
 
 Usage:
   python3 backtest_official.py              # 전 버전 비교
-  python3 backtest_official.py --version v17  # V17만
+  python3 backtest_official.py --version v19  # V19만
+  python3 backtest_official.py --version v14,v17  # 선택
   python3 backtest_official.py --coin-only   # 코인만
   python3 backtest_official.py --stock-only  # 주식만
 """
@@ -322,6 +324,14 @@ COIN_VERSIONS = {
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=5),
+    # V19: 코인 = V18 동일 (선물+자산배분 추가, 코인 로직 변경 없음)
+    'V19': dict(
+        params=dict(sma_period=50, canary_band=1.5, vote_smas=(50,),
+                    health_sma=0, health_mom_short=30,
+                    selection='SG', n_picks=5, weighting='WG', top_n=40,
+                    risk='G5'),
+        dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
+        drift_threshold=0.10, post_flip_delay=5),
 }
 
 OFF_R7 = ('SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ')
@@ -363,6 +373,11 @@ STOCK_VERSIONS = {
               canary_sma=200, canary_hyst=0.005, select='zscore3', weight='ew',
               defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
               crash='vt', crash_thresh=0.03, crash_cool=3, sharpe_lookback=252),
+    # V19: 주식 = V17 동일 (선물+자산배분 추가, 주식 로직 변경 없음)
+    'V19': SP(offensive=OFF_R7, defensive=DEF, canary_assets=('EEM',),
+              canary_sma=200, canary_hyst=0.005, select='zscore3', weight='ew',
+              defense='top3', def_mom_period=126, health='none', tx_cost=0.001,
+              crash='vt', crash_thresh=0.03, crash_cool=3, sharpe_lookback=252),
 }
 
 
@@ -377,7 +392,7 @@ def main():
     parser.add_argument('--stock-only', action='store_true')
     args = parser.parse_args()
 
-    versions = args.version.upper().split(',') if args.version != 'all' else ['V12', 'V13', 'V14', 'V15', 'V16', 'V17', 'V18']
+    versions = args.version.upper().split(',') if args.version != 'all' else ['V12', 'V13', 'V14', 'V15', 'V16', 'V17', 'V18', 'V19']
 
     t0 = time.time()
     print("데이터 로딩...")
@@ -460,6 +475,56 @@ def main():
                     mdd = np.mean([r['MDD'] for r in rs])
                     cal = np.mean([r.get('Calmar', 0) for r in rs])
                     print(f"  {ver:<8s} {s:>7.3f} {c:>+8.1%} {mdd:>+8.1%} {cal:>7.2f}")
+
+    # ═══ FUTURES (V19) ═══
+    if 'V19' in versions and not args.stock_only and not args.coin_only:
+        print("\n\n" + "=" * 85)
+        print("선물 전략 (V19 d005 4전략 앙상블, 5x 동적레버리지)")
+        print("=" * 85)
+        try:
+            from backtest_futures_full import load_data as load_futures_data
+            from futures_live_config import CURRENT_STRATEGIES, CURRENT_LIVE_COMBO
+            from futures_live_config import START as F_START, END as F_END
+            from futures_ensemble_engine import SingleAccountEngine, combine_targets
+
+            def _gen_trace(fdata, cfg):
+                from backtest_futures_full import run as frun
+                rc = dict(cfg)
+                iv = rc.pop("interval")
+                bars, funding = fdata[iv]
+                trace = []
+                frun(bars, funding, interval=iv, leverage=1.0,
+                     start_date=F_START, end_date=F_END, _trace=trace, **rc)
+                return trace
+
+            fdata = {iv: load_futures_data(iv) for iv in ["4h", "2h", "1h"]}
+            bars_1h, funding_1h = fdata["1h"]
+            all_dates = bars_1h["BTC"].index[
+                (bars_1h["BTC"].index >= F_START) & (bars_1h["BTC"].index <= F_END)
+            ]
+            traces = {n: _gen_trace(fdata, c) for n, c in CURRENT_STRATEGIES.items()}
+            combined = combine_targets(
+                {k: traces[k] for k in CURRENT_LIVE_COMBO}, CURRENT_LIVE_COMBO, all_dates
+            )
+            engine = SingleAccountEngine(
+                bars_1h, funding_1h, leverage=5.0,
+                stop_kind="prev_close_pct", stop_pct=0.15,
+                stop_gate="cash_guard", stop_gate_cash_threshold=0.34,
+                per_coin_leverage_mode="cap_mom_blend_543_cash",
+                leverage_floor=3.0, leverage_mid=4.0, leverage_ceiling=5.0,
+                leverage_cash_threshold=0.34, leverage_partial_cash_threshold=0.0,
+                leverage_count_floor_max=2, leverage_count_mid_max=4,
+                leverage_canary_floor_gap=0.015, leverage_canary_mid_gap=0.04,
+                leverage_canary_high_gap=0.08, leverage_canary_sma_bars=1200,
+                leverage_mom_lookback_bars=24*30, leverage_vol_lookback_bars=24*90,
+            )
+            fm = engine.run(combined)
+            print(f"\n  [{F_START} ~ {F_END}]")
+            print(f"  {'버전':<8s} {'Sharpe':>7s} {'CAGR':>8s} {'MDD':>8s} {'Calmar':>7s} {'Liq':>4s} {'Stops':>5s}")
+            print(f"  {'-'*50}")
+            print(f"  {'V19':<8s} {fm.get('Sharpe',0):>7.3f} {fm['CAGR']:>+8.1%} {fm['MDD']:>+8.1%} {fm['Cal']:>7.2f} {fm['Liq']:>4d} {fm.get('Stops',0):>5d}")
+        except Exception as e:
+            print(f"  선물 백테스트 실패: {e}")
 
     print(f"\n총 소요: {time.time()-t0:.1f}s")
 
