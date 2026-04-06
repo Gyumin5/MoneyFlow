@@ -323,7 +323,7 @@ COIN_VERSIONS = {
                     selection='SG', n_picks=5, weighting='WG', top_n=40,
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
-        drift_threshold=0.10, post_flip_delay=5),
+        drift_threshold=0.10, post_flip_delay=0),
     # V19: 코인 = V18 동일 (선물+자산배분 추가, 코인 로직 변경 없음)
     'V19': dict(
         params=dict(sma_period=50, canary_band=1.5, vote_smas=(50,),
@@ -331,7 +331,7 @@ COIN_VERSIONS = {
                     selection='SG', n_picks=5, weighting='WG', top_n=40,
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
-        drift_threshold=0.10, post_flip_delay=5),
+        drift_threshold=0.10, post_flip_delay=0),
 }
 
 OFF_R7 = ('SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ')
