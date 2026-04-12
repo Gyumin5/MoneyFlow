@@ -114,8 +114,10 @@ UNIVERSE = [
 
 UNIVERSE_SIZE = 5
 CAP = 1/3  # EW + 33% cap
+CASH_BUFFER_DEFAULT = 0.02  # 현금 버퍼 기본값 (state에서 동적 읽기)
+CASH_BUFFER = CASH_BUFFER_DEFAULT  # 런타임에 state에서 갱신
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
-DELTA_THRESHOLD = 0.02  # 선물은 LOT_SIZE/최소 notional 영향이 커서 ±2% 허용
+DELTA_THRESHOLD = 0.01  # 리밸런싱 허용 편차 ±1% (MIN_NOTIONAL 미달 시 스킵)
 DISPLAY_DUST_NOTIONAL = 1.0  # 알림/대시보드에서 숨길 최소 포지션 금액
 ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
@@ -869,7 +871,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
     for coin, pos in current_positions.items():
         target_w = target.get(coin, 0)
         target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
-        target_notional = total_pv * target_w * 0.95 * target_lev
+        target_notional = total_pv * (1 - CASH_BUFFER) * target_w * target_lev
         current_notional = pos['notional']
         delta_pct = (target_notional - current_notional) / current_notional if current_notional > 0 else 999
         log.info(
@@ -894,7 +896,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             continue
         sym = coin + 'USDT'
         target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
-        target_notional = total_pv * w * 0.95 * target_lev
+        target_notional = total_pv * (1 - CASH_BUFFER) * w * target_lev
 
         current_notional = current_positions[coin]['notional'] if coin in current_positions else 0
         if current_notional > 0:
@@ -969,7 +971,7 @@ def needs_rebalance(client: Client, target: Dict[str, float], current_positions:
     for coin, pos in current_positions.items():
         target_w = target.get(coin, 0.0)
         target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
-        target_notional = total_pv * target_w * 0.95 * target_lev
+        target_notional = total_pv * (1 - CASH_BUFFER) * target_w * target_lev
         current_notional = pos.get('notional', 0.0)
         symbol = pos.get('symbol', coin + 'USDT')
         current_qty = abs(pos.get('qty', 0.0))
@@ -1009,7 +1011,7 @@ def needs_rebalance(client: Client, target: Dict[str, float], current_positions:
         if coin == 'CASH' or w <= 0:
             continue
         target_lev = target_lev_map.get(coin, LEVERAGE_FLOOR)
-        target_notional = total_pv * w * 0.95 * target_lev
+        target_notional = total_pv * (1 - CASH_BUFFER) * w * target_lev
         current_notional = current_positions.get(coin, {}).get('notional', 0.0)
         if current_notional <= 0 and target_notional > MIN_NOTIONAL:
             symbol = coin + 'USDT'
@@ -1267,6 +1269,11 @@ def main():
 
     client = Client(api_key, api_secret)
     state = load_state()
+
+    # cash_buffer: state에서 동적 읽기
+    global CASH_BUFFER
+    CASH_BUFFER = state.get('cash_buffer', CASH_BUFFER_DEFAULT)
+    log.info(f"cash_buffer: {CASH_BUFFER:.0%}")
 
     if args.status:
         positions, pv, ok = get_current_positions(client)
