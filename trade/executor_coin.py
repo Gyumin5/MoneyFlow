@@ -54,6 +54,22 @@ BL_EXCLUDE_DAYS = 7
 STALE_SIGNAL_HOURS = 24
 REBALANCE_TOLERANCE = 0.01  # 목표 달성 판정 허용 오차 ±1%
 
+import math
+
+def _round_price_up(price: float) -> float:
+    """업비트 호가 단위로 올림 (매수 지정가용)."""
+    if price >= 2_000_000: tick = 1000
+    elif price >= 1_000_000: tick = 500
+    elif price >= 500_000: tick = 100
+    elif price >= 100_000: tick = 50
+    elif price >= 10_000: tick = 10
+    elif price >= 1_000: tick = 5
+    elif price >= 100: tick = 1
+    elif price >= 10: tick = 0.1
+    elif price >= 1: tick = 0.01
+    else: tick = 0.001
+    return math.ceil(price / tick) * tick
+
 
 # ═══ 유틸리티 ═══
 RUN_ID = ''  # run_once()에서 설정
@@ -166,7 +182,7 @@ class UpbitAPI:
             if result and 'uuid' in str(result):
                 log(f'  매도 {coin} qty={qty:.6f} → {result}')
                 return True
-            send_telegram(f'⚠️ [코인] 매도 실패: {coin}')
+            _tg(f'매도 실패: {coin}')
             log(f'  매도 실패 {coin}: {result}')
             return False
         except Exception as e:
@@ -183,7 +199,7 @@ class UpbitAPI:
             price = pyupbit.get_current_price(ticker)
             if not price:
                 return False
-            limit_price = price * (1 + LIMIT_PRICE_SLIP)
+            limit_price = _round_price_up(price * (1 + LIMIT_PRICE_SLIP))
             qty = krw_amount / limit_price
             result = self.upbit.buy_limit_order(ticker, limit_price, qty)
             if result and 'uuid' in str(result):
@@ -195,7 +211,7 @@ class UpbitAPI:
                 except Exception:
                     pass
                 return True
-            send_telegram(f'⚠️ [코인] 매수 실패: {coin}')
+            _tg(f'매수 실패: {coin}')
             log(f'  매수 실패 {coin}: {result}')
             return False
         except Exception as e:
@@ -277,7 +293,7 @@ def handle_guard_exits(guard_result: dict, state: dict, api: UpbitAPI):
             qty = float(raw_bal) if raw_bal and not isinstance(raw_bal, (dict, list, tuple)) else 0
             if qty > 0:
                 api.sell(coin, qty)
-                send_telegram(f'DD Exit: {coin} 매도')
+                _tg(f'DD Exit: {coin} 매도')
         exclusions[coin] = {'reason': 'dd', 'until_date': None}
         # 트랜치에서 해당 코인 → Cash
         for tr in state.get('tranches', {}).values():
@@ -294,7 +310,7 @@ def handle_guard_exits(guard_result: dict, state: dict, api: UpbitAPI):
             qty = float(raw_bal) if raw_bal and not isinstance(raw_bal, (dict, list, tuple)) else 0
             if qty > 0:
                 api.sell(coin, qty)
-                send_telegram(f'Blacklist: {coin} 매도 (7일 제외)')
+                _tg(f'Blacklist: {coin} 매도 (7일 제외)')
         until = (datetime.now() + timedelta(days=BL_EXCLUDE_DAYS)).strftime('%Y-%m-%d')
         exclusions[coin] = {'reason': 'bl', 'until_date': until}
         for tr in state.get('tranches', {}).values():
@@ -342,7 +358,7 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
         state['flip_date'] = datetime.now().strftime('%Y-%m-%d')
         state['pfd_done'] = False
         state['rebalancing_needed'] = True
-        send_telegram(f'카나리 플립: {"Risk-On 🟢" if signal_risk_on else "Risk-Off 🔴"}')
+        _tg(f'카나리 플립: {"Risk-On 🟢" if signal_risk_on else "Risk-Off 🔴"}')
         return True
 
     state['prev_risk_on'] = signal_risk_on
@@ -475,7 +491,7 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI, state: dict):
     # 매수 실행 (매도 후 현금 재확인)
     if buys:
         balance = api.get_balance()
-        cash_available = balance.get('KRW', 0) * (1 - CASH_BUFFER)
+        cash_available = balance.get('KRW', 0) * 0.995  # 주문 마진 0.5%만 유지
         total_buy = sum(b[1] for b in buys)
 
         for ticker, amount in buys:
@@ -499,16 +515,29 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI, state: dict):
         if max_diff < REBALANCE_TOLERANCE:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
-            send_telegram(f'✅ [코인] 리밸런싱 완료')
+            _tg('리밸런싱 완료')
         else:
             log(f'  ⏳ 미달 (max diff={max_diff:.1%}), 다음 실행에서 재시도')
 
 
 # ═══ run_once ═══
 
+_tg_events = []  # 실행 중 이벤트 수집 → 종료 시 한 번에 전송
+
+def _tg(msg: str):
+    """이벤트를 수집 (send_telegram 대신 사용)."""
+    _tg_events.append(msg)
+
+def _flush_telegram():
+    """수집된 이벤트를 하나의 메시지로 전송."""
+    if _tg_events:
+        send_telegram('[코인] ' + ' / '.join(_tg_events))
+        _tg_events.clear()
+
 def run_once(dry_run=False):
     """단일 실행. cron에서 매 30분마다 호출."""
     global RUN_ID, CASH_BUFFER
+    _tg_events.clear()
     RUN_ID = uuid.uuid4().hex
     _t0 = time.time()
     log('=' * 50)
@@ -549,7 +578,7 @@ def run_once(dry_run=False):
     is_fresh = check_signal_freshness(signal)
     if not is_fresh:
         log('  ⚠️ signal이 24시간 이상 오래됨 — 가드만 체크, 매매 보류')
-        send_telegram('⚠️ signal_state 갱신 안 됨 (24시간 초과)')
+        _tg('⚠️ signal 갱신 안 됨 (24시간 초과)')
 
     # 2. 미체결 취소
     api.cancel_all()
@@ -564,11 +593,13 @@ def run_once(dry_run=False):
         handle_guard_exits(guards, state, api)
         save_json(TRADE_STATE_FILE, state)
         log('코인 executor 완료 (가드 발동)')
+        _flush_telegram()
         return
 
     if not is_fresh:
         save_json(TRADE_STATE_FILE, state)
         log('코인 executor 완료 (stale signal)')
+        _flush_telegram()
         return
 
     log('  [3] 카나리 플립 체크')
@@ -589,8 +620,18 @@ def run_once(dry_run=False):
         log('  매매 스킵: rebalancing_needed=false')
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
-        log(f'  Target: {target}')
-        send_telegram(f'📊 [코인] 리밸런싱 시작: {target}')
+        log(f'  Raw target: {target}')
+        # cash_buffer 반영: 전략 비중을 투자비율로 축소
+        if CASH_BUFFER > 0:
+            invested_frac = 1 - CASH_BUFFER
+            adjusted = {}
+            for k, v in target.items():
+                if k == 'Cash':
+                    adjusted[k] = CASH_BUFFER + v * invested_frac
+                else:
+                    adjusted[k] = v * invested_frac
+            target = adjusted
+        log(f'  Target (buffer {CASH_BUFFER:.0%}): {target}')
         # 디버그: 현재 잔고 상세
         _bal = api.get_balance() if hasattr(api, 'get_balance') else {}
         log(f'  Balance: {_bal}')
@@ -609,6 +650,7 @@ def run_once(dry_run=False):
     except Exception:
         _elapsed = time.time() - _t0
         log(f'코인 executor 완료 ({_elapsed:.1f}s)')
+    _flush_telegram()
 
 
 if __name__ == '__main__':
@@ -622,4 +664,5 @@ if __name__ == '__main__':
         err = traceback.format_exc()
         log(f'🚨 FATAL ERROR: {e}')
         log(err)
-        send_telegram(f'🚨 [코인] executor 비정상 종료: {e}')
+        _tg(f'🚨 비정상 종료: {e}')
+        _flush_telegram()

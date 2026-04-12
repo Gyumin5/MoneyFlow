@@ -50,7 +50,7 @@ TRADE_STATE_FILE = 'kis_trade_state.json'
 LOG_FILE = 'executor_stock.log'
 
 ANCHOR_DAYS = (1, 8, 15, 22)
-CASH_BUFFER = 0.02
+CASH_BUFFER_DEFAULT = 0.02
 MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
 LIMIT_PRICE_SLIP = 0.003   # ±0.3%
@@ -242,15 +242,15 @@ class KISAPI:
                 except Exception:
                     pass
 
-        # 환율
-        exrt = 1350.0  # fallback
+        # 환율 — API에서 조회, 실패 시 state 캐시 사용, 캐시도 없으면 None
+        exrt = 0.0
         fm_data = _get('/uapi/overseas-stock/v1/trading/foreign-margin', 'TTTC2101R', {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
             'OVRS_EXCG_CD': 'NASD', 'CRCY_CD': 'USD',
         })
         if fm_data.get('output'):
             try:
-                exrt = float(fm_data['output'].get('bass_exrt', 1350))
+                exrt = float(fm_data['output'].get('bass_exrt', 0))
             except Exception:
                 pass
 
@@ -287,6 +287,21 @@ class KISAPI:
 
         if total_usd <= 0:
             total_usd = holdings_usd + cash_usd
+
+        # 환율 캐싱: 유효한 환율이면 state에 저장, 없으면 캐시에서 복원
+        if exrt > 0:
+            _state = load_json(TRADE_STATE_FILE)
+            _state['last_exchange_rate'] = exrt
+            save_json(TRADE_STATE_FILE, _state)
+        elif exrt <= 0:
+            _state = load_json(TRADE_STATE_FILE)
+            cached = _state.get('last_exchange_rate', 0)
+            if cached > 0:
+                exrt = cached
+                log(f'  ⚠️ 환율 API 실패 — 캐시 사용: {exrt}')
+            else:
+                log('  ⚠️ 환율 API 실패 + 캐시 없음')
+
         return holdings, total_usd, exrt
 
     def get_current_price(self, ticker: str) -> float:
@@ -405,6 +420,33 @@ class KISAPI:
         else:
             log(f'  주문 실패 {side} {ticker}: {result}')
         return success
+
+    def get_max_buy_qty(self, ticker: str, price: float) -> int:
+        """매수 가능 수량 조회 (psamount API). -1이면 조회 실패."""
+        if self.dry_run:
+            return -1
+        data = _get('/uapi/overseas-stock/v1/trading/inquire-psamount', 'TTTS3007R', {
+            'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
+            'OVRS_EXCG_CD': EXCHANGE_MAP.get(ticker, 'NASD'),
+            'OVRS_ORD_UNPR': f'{price:.2f}',
+            'ITEM_CD': ticker,
+        }, retries=1)
+        output = data.get('output', {})
+        if not output:
+            return -1
+        try:
+            qty = int(float(output.get('ord_psbl_qty', 0)))
+            if qty > 0:
+                return qty
+        except (ValueError, TypeError):
+            pass
+        try:
+            amt = float(output.get('ovrs_ord_psbl_amt', 0))
+            if amt > 0 and price > 0:
+                return int(amt / price)
+        except (ValueError, TypeError):
+            pass
+        return 0
 
 
 # ═══ 핵심 로직 ═══
@@ -533,8 +575,10 @@ def merge_tranches(state: dict) -> Dict[str, float]:
     return merged
 
 
-def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
+def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None):
     """target vs 현재 잔고 → Delta 매매 (정수 주 단위)."""
+    if cash_buffer is None:
+        cash_buffer = CASH_BUFFER_DEFAULT
     holdings, total_usd, exrt = api.get_balance()
     if total_usd <= 0:
         log('  잔고 없음')
@@ -559,8 +603,8 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
     sells = []
     buys = []
     failed_orders = []
-    target_usd = total_usd * (1 - CASH_BUFFER)
-    log(f'    target_usd: ${target_usd:,.0f} (buffer={CASH_BUFFER:.2f})')
+    target_usd = total_usd * (1 - cash_buffer)
+    log(f'    target_usd: ${target_usd:,.0f} (buffer={cash_buffer:.2f})')
 
     for ticker, target_w in target.items():
         if ticker == 'Cash':
@@ -601,22 +645,30 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict):
             send_telegram(f'⚠️ 주문 실패: sell {ticker} {qty}주')
 
     if sells:
-        time.sleep(ORDER_WAIT_SEC)
+        time.sleep(15)  # 매도 체결 + 주문가능금액 갱신 대기
         api.cancel_all_pending()
 
-    # 매수 (재시도 포함)
+    # 매수 (psamount로 가능 수량 확인 후 실행)
     for ticker, qty, price in buys:
         buy_price = price * (1 + LIMIT_PRICE_SLIP)
-        log(f'  매수: {ticker} {qty}주 @ ${buy_price:.2f}')
+        max_qty = api.get_max_buy_qty(ticker, buy_price)
+        if max_qty == 0:
+            log(f'  ⚠️ {ticker} 매수 불가 (주문가능금액 0) → 다음 실행에서 재시도')
+            failed_orders.append(('buy', ticker, qty))
+            continue
+        actual_qty = min(qty, max_qty) if max_qty > 0 else qty
+        if 0 < max_qty < qty:
+            log(f'  ⚠️ {ticker} 매수 축소: {qty}→{actual_qty}주 (주문가능금액 제한)')
+        log(f'  매수: {ticker} {actual_qty}주 @ ${buy_price:.2f}')
         success = False
         for attempt in range(MAX_ORDER_ATTEMPTS):
-            success = api.place_order(ticker, qty, buy_price, 'buy')
+            success = api.place_order(ticker, actual_qty, buy_price, 'buy')
             if success:
                 break
             time.sleep(ORDER_WAIT_SEC)
         if not success:
-            failed_orders.append(('buy', ticker, qty))
-            send_telegram(f'⚠️ 주문 실패: buy {ticker} {qty}주')
+            failed_orders.append(('buy', ticker, actual_qty))
+            send_telegram(f'⚠️ 주문 실패: buy {ticker} {actual_qty}주')
 
     if buys:
         time.sleep(ORDER_WAIT_SEC)
@@ -682,6 +734,10 @@ def run_once(dry_run=False):
     if not signal:
         log('  signal_state.json 없음 — 스킵')
         return
+    # cash_buffer: state에서 읽기, 없으면 기본값 2%
+    cash_buffer = state.get('cash_buffer', CASH_BUFFER_DEFAULT)
+    log(f'  cash_buffer: {cash_buffer:.0%}')
+
     if not state.get('tranches'):
         log('  kis_trade_state.json 트랜치 없음 — 스킵')
         return
@@ -712,7 +768,7 @@ def run_once(dry_run=False):
         if state.get('rebalancing_needed'):
             target = {'Cash': 1.0}
             log('  Crash: target = 100% 현금')
-            execute_delta(target, api, state)
+            execute_delta(target, api, state, cash_buffer=cash_buffer)
         if not dry_run:
             save_json(TRADE_STATE_FILE, state)
         log('주식 executor 완료 (Crash)')
@@ -754,7 +810,7 @@ def run_once(dry_run=False):
         else:
             summary_lines.append('현재 보유: 없음')
         send_telegram('\n'.join(summary_lines))
-        result = execute_delta(target, api, state)
+        result = execute_delta(target, api, state, cash_buffer=cash_buffer)
         sells = result.get('sells', [])
         buys = result.get('buys', [])
         max_diff = result.get('max_diff')

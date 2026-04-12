@@ -19,7 +19,7 @@
 
 - 코인 전략 변경 시 최소 동기화 대상:
   - `strategies/cap_defend/backtest_official.py`
-  - `trade/auto_trade_upbit.py`
+  - `trade/executor_coin.py`
   - `strategies/cap_defend/recommend.py`
   - `strategies/cap_defend/recommend_personal.py`
   - `strategies/cap_defend/daily_history.py`
@@ -200,7 +200,7 @@
 ### 상태 스키마 변경 시
 
 - `trade_state.json` 키를 추가/변경하면 아래를 함께 점검한다:
-  - `trade/auto_trade_upbit.py`
+  - `trade/executor_coin.py`
   - `strategies/cap_defend/recommend_personal.py`
   - `trade/api_server.py`
   - 운영 매뉴얼
@@ -228,7 +228,9 @@
 
 - `strategies/cap_defend/recommend.py` → `$APP_HOME/recommend.py`
 - `strategies/cap_defend/recommend_personal.py` → `$APP_HOME/recommend_personal.py`
-- `trade/auto_trade_upbit.py` → `$APP_HOME/auto_trade_upbit.py`
+- `trade/executor_coin.py` → `$APP_HOME/executor_coin.py`
+- `trade/executor_stock.py` → `$APP_HOME/executor_stock.py`
+- `trade/auto_trade_binance.py` → `$APP_HOME/auto_trade_binance.py`
 - `trade/api_server.py` → `$APP_HOME/trade_api_server.py`
 
 ## 데이터 품질
