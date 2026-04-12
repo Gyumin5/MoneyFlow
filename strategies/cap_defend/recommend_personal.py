@@ -110,16 +110,19 @@ def save_daily_live_snapshot():
     binance = accounts.get("coin_binance", {}) or {}
 
     stock_krw = float(stock.get("stock_eval_usd", 0.0)) * float(stock.get("exchange_rate", 0.0))
+    fx_rate = float(stock.get("exchange_rate", 0.0) or binance.get("exchange_rate", 0.0) or 0.0)
     upbit_coin_krw = sum(float(row.get("value", 0.0)) for row in (upbit.get("holdings") or []))
-    binance_coin_krw = sum(float(row.get("value_krw", 0.0)) for row in (binance.get("holdings") or []))
-    coin_krw = upbit_coin_krw + binance_coin_krw
+    binance_total = float(binance.get("total_usdt", 0.0))
+    binance_available = float(binance.get("cash_usdt", 0.0))
+    binance_rate = float(binance.get("exchange_rate", 0.0)) or fx_rate
+    binance_position_krw = (binance_total - binance_available) * binance_rate  # 포지션 마진
+    coin_krw = upbit_coin_krw + binance_position_krw  # 업비트 코인 + 바이낸스 포지션
     cash_krw = (
         float(stock.get("cash_krw", 0.0))
         + float(upbit.get("krw_balance", 0.0))
-        + float(binance.get("cash_krw", 0.0))
-    )
+        + binance_available * binance_rate
+    )  # 모든 계좌의 현금 합산
     total_krw = stock_krw + coin_krw + cash_krw
-    fx_rate = float(stock.get("exchange_rate", 0.0) or binance.get("exchange_rate", 0.0) or 0.0)
     usd_cash = float(stock.get("cash_usd", 0.0))
     snapshot_date = datetime.now().strftime("%Y-%m-%d")
     accounts_json = json.dumps(accounts, ensure_ascii=False)
@@ -133,6 +136,7 @@ def save_daily_live_snapshot():
             snapshot_date TEXT UNIQUE NOT NULL,
             stock_krw REAL DEFAULT 0,
             coin_krw REAL DEFAULT 0,
+            futures_krw REAL DEFAULT 0,
             cash_krw REAL DEFAULT 0,
             total_krw REAL DEFAULT 0,
             fx_rate REAL DEFAULT 0,
@@ -142,13 +146,19 @@ def save_daily_live_snapshot():
             created_at TEXT
         )"""
     )
+    # 기존 DB에 futures_krw 컬럼이 없을 수 있음
+    try:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN futures_krw REAL DEFAULT 0")
+    except Exception:
+        pass  # 이미 존재
     conn.execute(
         """INSERT INTO snapshots
-           (snapshot_date, stock_krw, coin_krw, cash_krw, total_krw, fx_rate, usd_cash, memo, accounts_json, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           (snapshot_date, stock_krw, coin_krw, futures_krw, cash_krw, total_krw, fx_rate, usd_cash, memo, accounts_json, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(snapshot_date) DO UPDATE SET
              stock_krw=excluded.stock_krw,
              coin_krw=excluded.coin_krw,
+             futures_krw=excluded.futures_krw,
              cash_krw=excluded.cash_krw,
              total_krw=excluded.total_krw,
              fx_rate=excluded.fx_rate,
@@ -161,6 +171,7 @@ def save_daily_live_snapshot():
             snapshot_date,
             stock_krw,
             coin_krw,
+            0.0,  # futures_krw: 코인에 합산됨
             cash_krw,
             total_krw,
             fx_rate,

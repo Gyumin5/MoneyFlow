@@ -157,13 +157,14 @@ def health():
 ASSETS_DB = os.environ.get('ASSETS_DB', os.path.join(APP_HOME, 'assets.db'))
 
 def init_assets_db():
-    """SQLite 초기화 (v2: snapshot_date 유니크)."""
+    """SQLite 초기화 (v3: futures_krw 추가)."""
     conn = sqlite3.connect(ASSETS_DB)
     conn.execute("""CREATE TABLE IF NOT EXISTS snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         snapshot_date TEXT UNIQUE NOT NULL,
         stock_krw REAL DEFAULT 0,
         coin_krw REAL DEFAULT 0,
+        futures_krw REAL DEFAULT 0,
         cash_krw REAL DEFAULT 0,
         total_krw REAL DEFAULT 0,
         fx_rate REAL DEFAULT 0,
@@ -172,6 +173,11 @@ def init_assets_db():
         accounts_json TEXT DEFAULT '{}',
         created_at TEXT
     )""")
+    # 기존 DB 마이그레이션
+    try:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN futures_krw REAL DEFAULT 0")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -198,8 +204,9 @@ def save_snapshot():
 
     stock = float(data.get('stock_krw', 0))
     coin = float(data.get('coin_krw', 0))
+    futures = float(data.get('futures_krw', 0))
     cash = float(data.get('cash_krw', 0))
-    total = stock + coin + cash
+    total = stock + coin + futures + cash
     fx_rate = float(data.get('fx_rate', 0))
     usd_cash = float(data.get('usd_cash', 0))
     memo = data.get('memo', '')
@@ -207,14 +214,14 @@ def save_snapshot():
     now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
     conn = sqlite3.connect(ASSETS_DB)
-    conn.execute("""INSERT INTO snapshots (snapshot_date, stock_krw, coin_krw, cash_krw, total_krw,
+    conn.execute("""INSERT INTO snapshots (snapshot_date, stock_krw, coin_krw, futures_krw, cash_krw, total_krw,
                     fx_rate, usd_cash, memo, accounts_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(snapshot_date) DO UPDATE SET
-                    stock_krw=?, coin_krw=?, cash_krw=?, total_krw=?,
+                    stock_krw=?, coin_krw=?, futures_krw=?, cash_krw=?, total_krw=?,
                     fx_rate=?, usd_cash=?, memo=?, accounts_json=?, created_at=?""",
-                 (date, stock, coin, cash, total, fx_rate, usd_cash, memo, accounts, now,
-                  stock, coin, cash, total, fx_rate, usd_cash, memo, accounts, now))
+                 (date, stock, coin, futures, cash, total, fx_rate, usd_cash, memo, accounts, now,
+                  stock, coin, futures, cash, total, fx_rate, usd_cash, memo, accounts, now))
     conn.commit()
     conn.close()
     return jsonify({"message": f"{date} 저장 완료", "total_krw": total})

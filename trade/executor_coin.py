@@ -19,12 +19,18 @@ Usage:
   python3 executor_coin.py --dry-run      # 주문 없이 로그만
 """
 
-import json, os, time, argparse, logging, uuid
+import json, os, sys, time, argparse, logging, uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import pyupbit
 import requests
+
+from common.io import load_json, save_json
+from common.notify import send_telegram as _send_tg
+from common.logging_utils import setup_file_logger, make_log_fn
 
 try:
     from config import UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -73,48 +79,13 @@ def _round_price_up(price: float) -> float:
 
 # ═══ 유틸리티 ═══
 RUN_ID = ''  # run_once()에서 설정
-
-def _setup_logger():
-    from logging.handlers import TimedRotatingFileHandler
-    logger = logging.getLogger(LOG_FILE)
-    if not logger.handlers:
-        handler = TimedRotatingFileHandler(LOG_FILE, when='midnight', backupCount=14, encoding='utf-8')
-        handler.setFormatter(logging.Formatter('%(message)s'))
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-    return logger
-
-_logger = _setup_logger()
-
-def log(msg: str):
-    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    line = f'[{ts}] [{RUN_ID[:8]}] {msg}'
-    _logger.info(line)
+_run_id_ref = ['']
+_logger = setup_file_logger(LOG_FILE, LOG_FILE)
+log = make_log_fn(_logger, _run_id_ref)
 
 
 def send_telegram(msg: str):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    try:
-        url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
-        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': f'[코인] {msg}'}, timeout=5)
-    except Exception:
-        pass
-
-
-def load_json(path: str) -> dict:
-    try:
-        with open(path, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def save_json(path: str, data: dict):
-    tmp = path + '.tmp'
-    with open(tmp, 'w') as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
+    _send_tg(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg, prefix='코인')
 
 
 # ═══ 거래소 API ═══
@@ -539,6 +510,7 @@ def run_once(dry_run=False):
     global RUN_ID, CASH_BUFFER
     _tg_events.clear()
     RUN_ID = uuid.uuid4().hex
+    _run_id_ref[0] = RUN_ID
     _t0 = time.time()
     log('=' * 50)
     log('코인 executor 시작')

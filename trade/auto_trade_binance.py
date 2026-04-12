@@ -30,13 +30,18 @@ import sys
 import time
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import pandas as pd
 import requests
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
+
+from common.io import save_json as save_json_atomic
+from common.notify import send_telegram as _send_tg_common
 
 # ─── 설정 ───
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -161,13 +166,7 @@ def load_config():
 
 def send_telegram(msg: str):
     """텔레그램 알림."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': msg}, timeout=10)
-    except Exception as e:
-        log.warning(f"Telegram error: {e}")
+    _send_tg_common(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg, prefix='선물', timeout=10)
 
 
 def _as_bool(value) -> bool:
@@ -211,10 +210,7 @@ def load_state() -> dict:
 
 def save_state(state: dict):
     """상태 파일 원자적 저장."""
-    tmp = STATE_PATH + '.tmp'
-    with open(tmp, 'w') as f:
-        json.dump(state, f, indent=2, default=str)
-    os.replace(tmp, STATE_PATH)
+    save_json_atomic(STATE_PATH, state, default=str)
 
 
 # ─── 데이터 수집 ───
