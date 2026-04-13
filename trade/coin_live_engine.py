@@ -161,7 +161,7 @@ def normalize_cash_key(target: Dict[str, float]) -> Dict[str, float]:
 # ─── 데이터 수집: CoinGecko / Binance / Upbit ───
 def fetch_coingecko_top(session: requests.Session, fetch_limit: int = COINGECKO_FETCH_LIMIT,
                          retries: int = 5, cache_path: Optional[str] = None) -> List[Dict]:
-    """CoinGecko Top 100 가져오기. 실패 시 cache fallback."""
+    """CoinGecko Top N 가져오기 (N=fetch_limit). 실패 시 cache fallback."""
     headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 CoinExecutor/1.0'}
     for attempt in range(1, retries + 1):
         try:
@@ -353,8 +353,8 @@ def build_dynamic_universe(session: requests.Session, cache_dir: str,
             'binance_status': {coin: 'TRADING' or other},
         }
     """
-    cg_cache = os.path.join(cache_dir, 'v20_universe_cg_cache.json')
-    bn_cache = os.path.join(cache_dir, 'v20_binance_exchinfo_cache.json')
+    cg_cache = os.path.join(cache_dir, 'universe_cg_cache.json')
+    bn_cache = os.path.join(cache_dir, 'binance_exchinfo_cache.json')
     os.makedirs(cache_dir, exist_ok=True)
 
     meta = {'fallback_used': False, 'binance_status': {}, 'upbit_status': {}}
