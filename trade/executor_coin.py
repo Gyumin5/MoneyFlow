@@ -5,7 +5,7 @@
   - 신호: coin_live_engine.compute_live_targets
           (Binance spot kline → 멤버 D_SMA50 + 4h_SMA240 50:50 앙상블)
   - 체결: Upbit KRW (pyupbit)
-  - 상태: trade_state_v20.json (V19 live state `trade_state.json`과 완전 분리)
+  - 상태: trade_state.json
 
 실행 순서:
   1. flock /tmp/v20_coin.lock
@@ -64,7 +64,7 @@ except ImportError:
 
 
 # ═══ 상수 ═══
-STATE_FILE = 'trade_state_v20.json'
+STATE_FILE = 'trade_state.json'
 LOCK_FILE = '/tmp/v20_coin.lock'
 LOG_FILE = 'executor_coin.log'
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
