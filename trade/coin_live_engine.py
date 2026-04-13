@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Cap Defend V20 현물 라이브 엔진.
+"""Cap Defend 현물 라이브 엔진.
 
 멤버 D_SMA50 (일봉) + 멤버 4h_SMA240 (4시간봉) 앙상블 50:50 EW.
 바이낸스 spot kline에서 신호 계산 → 업비트 KRW 체결 (executor_coin.py에서 수행).
 
-멤버 D_SMA50: 일봉, SMA50, Mom30/90, snap 30봉, 갭 스탑 -15%, 제외 30일
-멤버 4h_SMA240: 4시간봉, SMA240, Mom30/120, snap 60봉(=10일), 갭 스탑 -10%, 제외 10일
+멤버 D_SMA50: 일봉, SMA50, Mom30/90, snap 30봉, Top3, 갭 스탑 -15%, 제외 30일
+멤버 4h_SMA240: 4시간봉, SMA240, Mom30/120, snap 60봉(=10일), Top3, 갭 스탑 -10%, 제외 10일
 
 설계:
 - compute_strategy_target(): auto_trade_binance 패턴 이식 (bar-idempotency + 3-snap stagger 내장)
 - 엔진 내부 현금 키는 'CASH' (대문자). executor로 넘어갈 때 'Cash' (소문자) 정규화.
-- 유니버스: CoinGecko Top100 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
+- 유니버스: CoinGecko Top40 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
 - Freshness: expected_last_bar_ts 일치 체크
 - 극단갭: 멤버별 임계치 초과 → excluded_coins에 unban_ts + reentry_after_snap_id 기록
 """
@@ -36,7 +36,7 @@ log = logging.getLogger('coin_live_engine')
 BINANCE_SPOT_BASE = 'https://api.binance.com'
 BINANCE_EXCHANGEINFO_CACHE_SEC = 6 * 3600  # 6시간
 COINGECKO_URL = 'https://api.coingecko.com/api/v3/coins/markets'
-COINGECKO_FETCH_LIMIT = 100
+COINGECKO_FETCH_LIMIT = 40
 UNIVERSE_TOP_N = 40
 UNIVERSE_MIN_HISTORY_DAYS = 253
 UNIVERSE_MIN_TRADE_VALUE_KRW = 1_000_000_000  # 30일 평균 ≥ 10억원
@@ -50,7 +50,7 @@ HARDCODED_FALLBACK = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK',
 
 UPBIT_MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all?is_details=true'
 
-# 멤버 설정 — V20 확정 (변경 금지)
+# 멤버 설정
 MEMBER_D_SMA50 = {
     'interval': 'D',
     'sma_bars': 50,
@@ -63,7 +63,7 @@ MEMBER_D_SMA50 = {
     'vol_mode': 'daily',
     'vol_threshold': 0.05,
     'vol_lookback_days': 90,
-    'universe_size': 5,
+    'universe_size': 3,
     'cap': 1.0 / 3.0,
     'gap_threshold': -0.15,   # 직전 완성 D봉 종가 vs 전일 종가 → -15% 이하
     'exclusion_days': 30,
@@ -81,7 +81,7 @@ MEMBER_4H_SMA240 = {
     'vol_mode': 'daily',
     'vol_threshold': 0.05,
     'vol_lookback_days': 90,
-    'universe_size': 5,
+    'universe_size': 3,
     'cap': 1.0 / 3.0,
     'gap_threshold': -0.10,   # 직전 완성 4h봉 종가 vs 전 4h봉 종가 → -10% 이하
     'exclusion_days': 10,     # 4h 60봉 = 10일
@@ -95,12 +95,6 @@ MEMBERS = {
 ENSEMBLE_WEIGHTS = {
     'D_SMA50': 0.5,
     '4h_SMA240': 0.5,
-}
-
-# 구 state 키 호환 (자동 마이그레이션)
-LEGACY_MEMBER_RENAMES = {
-    'V19': 'D_SMA50',
-    '4h_L120': '4h_SMA240',
 }
 
 # 각 interval별 최소 가져올 봉 수
@@ -168,7 +162,7 @@ def normalize_cash_key(target: Dict[str, float]) -> Dict[str, float]:
 def fetch_coingecko_top(session: requests.Session, fetch_limit: int = COINGECKO_FETCH_LIMIT,
                          retries: int = 5, cache_path: Optional[str] = None) -> List[Dict]:
     """CoinGecko Top 100 가져오기. 실패 시 cache fallback."""
-    headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 V20Executor/1.0'}
+    headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 CoinExecutor/1.0'}
     for attempt in range(1, retries + 1):
         try:
             params = {'vs_currency': 'usd', 'order': 'market_cap_desc',
@@ -927,19 +921,6 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
 
     ms_all = state.setdefault('members', {})
     excluded_all = state.setdefault('excluded_coins', {})
-
-    # 구 키 자동 마이그레이션 (V19 → D_SMA50, 4h_L120 → 4h_SMA240)
-    for old_key, new_key in LEGACY_MEMBER_RENAMES.items():
-        if old_key in ms_all and new_key not in ms_all:
-            ms_all[new_key] = ms_all.pop(old_key)
-            log.info('state 마이그레이션: members[%s] → members[%s]', old_key, new_key)
-        if old_key in excluded_all and new_key not in excluded_all:
-            excluded_all[new_key] = excluded_all.pop(old_key)
-    lmt = state.get('last_member_targets')
-    if isinstance(lmt, dict):
-        for old_key, new_key in LEGACY_MEMBER_RENAMES.items():
-            if old_key in lmt and new_key not in lmt:
-                lmt[new_key] = lmt.pop(old_key)
 
     for mname, cfg in MEMBERS.items():
         interval = cfg['interval']
