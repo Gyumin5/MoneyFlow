@@ -7,7 +7,7 @@ Coin V20: D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine: trade/coin_live_e
   - 4h_SMA240: 4h봉, SMA240, Mom30/120, snap 60봉, gap stop -10%, 제외 10일
   - 리포트는 trade_state.json(V20 live state) 스냅샷을 읽어 표시합니다.
 Futures: d005 4전략 앙상블 EW + 5x 동적 레버리지
-Asset Allocation: 주식60 / 코인25 / 선물15, 8pp 밴드
+Asset Allocation: 주식60 / 업비트35 / 바이낸스5, 8pp 밴드
 """
 
 import os
@@ -213,7 +213,7 @@ VERSION_HISTORY = [
     ("V19", "2026-04",
      "선물 추가 + 자산배분 60/25/15 + 밴드 8pp",
      """<b>▶ 자산배분 (V19)</b>
-• 주식 <span style='color:#d93025;'>60%</span> / 현물코인 <span style='color:#d93025;'>25%</span> / 선물 <span style='color:#d93025;'>15%</span>
+• 주식 <span style='color:#d93025;'>60%</span> / 업비트 <span style='color:#d93025;'>35%</span> / 바이낸스 <span style='color:#d93025;'>5%</span>
 • 밴드 리밸런싱: 편차 <span style='color:#d93025;'>±8%p</span> 초과 시만 (매일 자동체크)
 • 포트폴리오: Sharpe 2.12, CAGR +39%, MDD -12.2%
 
@@ -356,7 +356,7 @@ VERSION_HISTORY = [
 \u2022 \uc6d4\uac04 \uc2a4\ucf00\uc904 \uae30\ubc18"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.35, 0.05
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
@@ -1092,8 +1092,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
             const TARGET_STOCK_RATIO = 0.60;
-            const TARGET_COIN_RATIO = 0.25;
-            const TARGET_FUTURES_RATIO = 0.15;
+            const TARGET_COIN_RATIO = 0.35;
+            const TARGET_FUTURES_RATIO = 0.05;
             const REBAL_BAND = 0.08;  // ±8%p
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
@@ -1603,11 +1603,11 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 "현재 목표": _fmt_alloc_lines(_ms.get("last_combined", {}) or {}),
                 "제외 코인": _ex_text,
             })
-        state_sections.append(_strategy_block("📘 현물 코인 실행 상태 (V20)", _coin_summary, _coin_rows))
+        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V20)", _coin_summary, _coin_rows))
     except Exception as _e:
-        state_sections.append(f"<h2>📘 현물 코인 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
+        state_sections.append(f"<h2>📘 업비트 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
-    # ── 선물 실행 상태 ──
+    # ── 바이낸스 실행 상태 ──
     try:
         _fut, _fut_path = _load_first_json([
             os.path.join(APP_HOME, "binance_state.json"),
@@ -1643,9 +1643,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 "현재 합산": _fmt_alloc_lines(_st.get("last_combined", {})),
                 "트랜치": _snapshots_text,
             })
-        state_sections.append(_strategy_block("📘 선물 실행 상태", _fut_summary, _fut_tr_rows))
+        state_sections.append(_strategy_block("📘 바이낸스 실행 상태", _fut_summary, _fut_tr_rows))
     except Exception as _e:
-        state_sections.append(f"<h2>📘 선물 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
+        state_sections.append(f"<h2>📘 바이낸스 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
     execution_state_html = "".join(state_sections)
 
@@ -1926,17 +1926,17 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
                 html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px;">';
                 html += card('주식 - 한투', fmtKrwFull(stock.total_krw), fmtKrwFull(stock.cash_krw), shareText(stock.total_krw) + ' / 보유 ' + ((stock.holdings || []).length) + '종목', stock.error);
-                html += card('현물코인 - 업비트', fmtKrwFull(upbit.total_krw), fmtKrwFull(upbit.krw_balance), shareText(upbit.total_krw) + ' / 보유 ' + ((upbit.holdings || []).length) + '종목', upbit.error);
-                html += card('선물 - 바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
+                html += card('업비트', fmtKrwFull(upbit.total_krw), fmtKrwFull(upbit.krw_balance), shareText(upbit.total_krw) + ' / 보유 ' + ((upbit.holdings || []).length) + '종목', upbit.error);
+                html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (60/25/15, ±8pp 밴드) ===
+                // === 3자산 배분 체크 (60/35/5, ±8pp 밴드) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.60, T_SPOT = 0.25, T_FUT = 0.15, BAND = 0.08;
+                    const T_STOCK = 0.60, T_SPOT = 0.35, T_FUT = 0.05, BAND = 0.08;
                     const pStock = stockKrw / allocTotal;
                     const pSpot = spotKrw / allocTotal;
                     const pFut = futKrw / allocTotal;
@@ -1960,8 +1960,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         + (need ? '⚠️ 리밸런싱 필요' : '✅ 리밸런싱 불필요')
                         + ' (최대편차 ' + (maxD * 100).toFixed(1) + '%p ' + (need ? '≥' : '<') + ' ±8%p)</div>';
                     html += pctBar('주식', pStock, T_STOCK, dStock);
-                    html += pctBar('현물코인', pSpot, T_SPOT, dSpot);
-                    html += pctBar('선물', pFut, T_FUT, dFut);
+                    html += pctBar('업비트', pSpot, T_SPOT, dSpot);
+                    html += pctBar('바이낸스', pFut, T_FUT, dFut);
 
                     if (need) {{
                         const tgtStock = allocTotal * T_STOCK;
@@ -1970,8 +1970,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         html += '<div style="margin-top:10px;padding:10px;background:#fce8e6;border-radius:8px;font-size:0.95em;">';
                         const moves = [
                             ['주식', tgtStock - stockKrw],
-                            ['현물코인', tgtSpot - spotKrw],
-                            ['선물', tgtFut - futKrw],
+                            ['업비트', tgtSpot - spotKrw],
+                            ['바이낸스', tgtFut - futKrw],
                         ];
                         moves.forEach(m => {{
                             if (Math.abs(m[1]) > 10000) {{
@@ -2418,16 +2418,16 @@ if __name__ == "__main__":
             max_drift = max(d_stock, d_spot, d_fut)
 
             alloc_line = (
-                f"⚖️ 자산배분: 주식 {p_stock:.1%} / 현물 {p_spot:.1%} / 선물 {p_fut:.1%}"
-                f" (목표 60/25/15, 최대편차 {max_drift:.1%})"
+                f"⚖️ 자산배분: 주식 {p_stock:.1%} / 업비트 {p_spot:.1%} / 바이낸스 {p_fut:.1%}"
+                f" (목표 60/35/5, 최대편차 {max_drift:.1%})"
             )
             print(alloc_line)
 
             if max_drift >= REBAL_BAND_PP:
                 moves = []
                 for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
-                                        ("현물", spot_krw, alloc_total * COIN_RATIO),
-                                        ("선물", fut_krw, alloc_total * FUTURES_RATIO)]:
+                                        ("업비트", spot_krw, alloc_total * COIN_RATIO),
+                                        ("바이낸스", fut_krw, alloc_total * FUTURES_RATIO)]:
                     delta = tgt - cur
                     if abs(delta) > 10000:
                         moves.append(f"  {name}: {delta:+,.0f}원")
@@ -2435,8 +2435,8 @@ if __name__ == "__main__":
                     f"⚠️ 자산배분 리밸런싱 필요!\n"
                     f"최대편차 {max_drift:.1%} ≥ ±8%p\n\n"
                     f"주식 {p_stock:.1%} (목표 60%)\n"
-                    f"현물코인 {p_spot:.1%} (목표 25%)\n"
-                    f"선물 {p_fut:.1%} (목표 15%)\n\n"
+                    f"업비트 {p_spot:.1%} (목표 35%)\n"
+                    f"바이낸스 {p_fut:.1%} (목표 5%)\n\n"
                     f"조정 필요:\n" + "\n".join(moves)
                 )
                 send_telegram(alert_msg)
