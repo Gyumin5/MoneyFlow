@@ -1,4 +1,4 @@
-# MoneyFlow — V19
+# MoneyFlow — V20
 
 3자산 포트폴리오 자동매매 시스템. 주식 + 현물코인 + 바이낸스 선물을 통합 관리한다.
 
@@ -7,7 +7,7 @@
 | 자산 | 버전 | 거래소 | 핵심 전략 | 백테스트 성과 |
 |------|------|--------|-----------|--------------|
 | 주식 | V17 | 한국투자증권 | 7종 ETF, EEM 카나리, Z-score Top3, 4트랜치 | Sharpe 1.26, CAGR +13.3%, MDD -11.4% |
-| 현물코인 | V18 | 업비트 | BTC SMA50 카나리, 시총순 Top5, Greedy Absorption | Sharpe 1.60, CAGR +67.0%, MDD -26.8% |
+| 현물코인 | V20 | 업비트 | D_SMA50 + 4h_SMA240 50:50 EW | 별도 전용 백테스트 진입점 제공 |
 | 선물 | d005 | 바이낸스 | 4전략 앙상블, 5x 동적레버리지 | Sharpe 2.08, CAGR +227%, MDD -34% |
 
 ### 자산배분
@@ -42,7 +42,7 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target futures
 
 ```bash
 python3 strategies/cap_defend/run_current_stock_backtest.py     # 주식 V17
-python3 strategies/cap_defend/run_current_coin_backtest.py      # 코인 V18
+python3 strategies/cap_defend/run_current_coin_v20_backtest.py  # 코인 V20
 python3 strategies/cap_defend/run_current_futures_backtest.py   # 선물 d005
 ```
 
@@ -63,18 +63,15 @@ Crash:    VT -3% daily → 최소 3일 + VT>SMA10 회복 시 재진입
 거래비용: 0.2% (보수적)
 ```
 
-### 현물코인 V18
+### 현물코인 V20
 
 ```
-유니버스: 시총 Top 40 (월초 historical_universe.json 기준)
-카나리:   BTC > SMA(50), 1.5% hysteresis
-헬스:     Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5%
-선정:     시총순 Top 5 → Greedy Absorption
-비중:     EW + 33% Cap
-Crash:    BTC daily -10% → 3일 현금
-DD Exit:  60일 peak -25% → 매도
-Blacklist: -15% daily → 7일 제외
-스냅샷:   3개 (Day 1/11/21), PFD5, Drift 10%
+멤버1:    D_SMA50  (SMA50, Mom30/90, daily vol 5%, snap 30)
+멤버2:    4h_SMA240 (SMA240, Mom30/120, daily vol 5%, snap 60)
+앙상블:   50:50 EW
+유니버스: historical_universe.json 월별 Top40
+비중:     Top5, EW + 33% Cap
+가드:     멤버별 극단갭 exclusion, Cash buffer 2%
 거래비용: 0.4% (편도)
 ```
 
@@ -120,17 +117,13 @@ MoneyFlow/
 ├── strategies/cap_defend/             ★ 전략 핵심 디렉터리
 │   │
 │   │── 엔진 ──────────────────────
-│   ├── coin_engine.py                 현물 코인 백테스트 엔진
-│   ├── coin_helpers.py                코인 헬퍼 (파라미터, merge 등)
-│   ├── coin_dd_exit.py                코인 DD exit 로직
 │   ├── stock_engine.py                주식 백테스트 엔진
 │   ├── backtest_futures_full.py       선물 백테스트 엔진
 │   ├── futures_ensemble_engine.py     선물 앙상블 실행 엔진
 │   ├── futures_live_config.py         현재 실거래 선물 설정 (d005)
 │   │
 │   │── 백테스트 진입점 ───────────
-│   ├── backtest_official.py           V12~V18 코인+주식 공식 백테스트
-│   ├── run_current_coin_backtest.py   코인 V18 백테스트 실행
+│   ├── run_current_coin_v20_backtest.py 코인 V20 백테스트 실행
 │   ├── run_current_stock_backtest.py  주식 V17 백테스트 실행
 │   ├── run_current_futures_backtest.py 선물 d005 백테스트 실행
 │   │
@@ -142,18 +135,27 @@ MoneyFlow/
 │   │── 운영/리포트 ───────────────
 │   ├── recommend.py                   공개 추천 HTML 생성
 │   ├── recommend_personal.py          개인 대시보드 (자산배분 + 신호 + 알림)
-│   ├── daily_history.py               히스토리 빌더
 │   ├── serve.py                       정적 파일 서버 (port 8080)
 │   ├── strategy.html                  전략 요약 페이지
 │   ├── strategy_guide.html            상세 전략 가이드
 │   │
 │   │── 문서 ──────────────────────
 │   ├── README.md                      디렉터리 안내
+│   ├── STRATEGY_EVOLUTION.md          V12→V20 전략 진화 기록
 │   ├── repo_backtest_guide.md         통합 백테스트 재현 가이드
-│   ├── coin_backtest_howto.md         코인 백테스트 설명
 │   ├── stock_backtest_howto.md        주식 백테스트 설명
 │   ├── futures_backtest_howto.md      선물 백테스트 설명
 │   ├── futures_strategy_final.md      선물 최종 전략 명세
+│   │
+│   │── legacy/ ────────────────────
+│   ├── legacy/README.md              레거시 백테스트 안내
+│   ├── legacy/backtest_official.py   과거 통합 백테스트
+│   ├── legacy/coin_engine.py         V18 계열 코인 엔진
+│   ├── legacy/coin_helpers.py        V18 계열 코인 헬퍼
+│   ├── legacy/coin_dd_exit.py        V18 DD exit
+│   ├── legacy/coin_backtest_howto.md 코인 V18 설명
+│   ├── legacy/daily_history.py       과거 일별 히스토리 빌더
+│   ├── legacy/run_portfolio_backtest.py 과거 포트폴리오 백테스트
 │   │
 │   └── research/                      연구/실험 파일 (재현에 불필요)
 │       ├── README.md                  연구 파일 목록
@@ -162,17 +164,15 @@ MoneyFlow/
 │       └── *_results.*                실험 결과 (~30개)
 │
 ├── trade/                             ★ 실거래 코드 (서버 배포)
-│   ├── auto_trade_upbit.py            코인 현물 자동매매 (업비트)
+│   ├── coin_live_engine.py            V20 코인 앙상블 엔진
+│   ├── executor_coin.py               코인 executor (V20, 업비트, 매시간 :05)
+│   ├── executor_stock.py              주식 executor (V17, 한국투자증권)
 │   ├── auto_trade_binance.py          선물 자동매매 (바이낸스)
-│   ├── auto_trade_kis.py              주식 자동매매 (한국투자증권)
-│   ├── executor_coin.py               코인 executor (새 아키텍처)
-│   ├── executor_stock.py              주식 executor (새 아키텍처)
 │   ├── api_server.py                  Flask API 서버 (자산 조회)
 │   ├── schema.py                      상태 파일 스키마
 │   ├── config.py                      서버 설정 (API 키, 비밀번호 등)
 │   └── config.example.py              설정 템플릿
 │
-├── backup_20260125/                   V12 백업 (레거시)
 └── V17_OPERATION_MANUAL.md            운영 매뉴얼
 ```
 
@@ -190,10 +190,10 @@ MoneyFlow/
 | 시간 | 작업 |
 |------|------|
 | 09:15 | `run_recommend.sh` — 추천 HTML 생성 + 텔레그램 알림 |
-| 09:20 | `run_trade.sh` — 코인/주식 자동매매 |
-| **:05, **:35 | `auto_trade_upbit.py --monitor` — 코인 모니터 |
+| 09:20 | `executor_stock.py` — 주식 자동매매 (한투) |
+| 매시간 :05 | `executor_coin.py` — 코인 V20 앙상블 실행 (bar-idempotent) |
 | */5 | watchdog |
-| */2h 또는 */4h | `auto_trade_binance.py` — 선물 자동매매 |
+| 2h/4h | `auto_trade_binance.py` — 선물 자동매매 |
 
 ### 텔레그램 알림
 
@@ -216,6 +216,7 @@ MoneyFlow/
 
 | 버전 | 날짜 | 주요 변경 |
 |------|------|-----------|
+| V20 | 2026-04-13 | 코인: D_SMA50 + 4h_SMA240 50:50 EW 라이브 앙상블 (현재 운영) |
 | V19 | 2026-04 | 선물 d005 4전략 확정 + 자산배분 60/25/15 + 밴드 8pp |
 | V18 | 2026-03 | 코인: SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap |
 | V17 | 2026-03 | 주식: Z-score Top3(Sh252) + VT Crash |
@@ -223,6 +224,8 @@ MoneyFlow/
 | V15 | 2026-03 | 주식: R7(+VNQ), Zscore4(Sh63) |
 | V14 | 2026-02 | 코인: SMA60+hyst, DD+BL+Crash |
 | V12 | 2026-01 | 초기 버전 |
+
+전체 변경 근거와 폐기된 아이디어는 [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](strategies/cap_defend/STRATEGY_EVOLUTION.md) 참조.
 
 ## 한 줄 요약
 

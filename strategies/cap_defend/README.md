@@ -1,6 +1,7 @@
 # Cap Defend 전략 디렉터리
 
 주식/현물코인/선물 전략의 백테스트 엔진, 실거래 설정, 운영 도구를 포함한다.
+현재 운영 기준으로 유지하는 전용 백테스트 진입점은 주식 V17, 코인 V20, 선물 d005 세 개다.
 
 ## 바로 재현하기
 
@@ -21,7 +22,7 @@ python3 refresh_backtest_data.py --target futures  # 선물 갱신
 
 ```bash
 python3 run_current_stock_backtest.py     # 주식 V17
-python3 run_current_coin_backtest.py      # 코인 V18
+python3 run_current_coin_v20_backtest.py  # 코인 V20
 python3 run_current_futures_backtest.py   # 선물 d005
 ```
 
@@ -33,9 +34,6 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 | 파일 | 설명 |
 |------|------|
-| `coin_engine.py` | 현물 코인 백테스트 엔진 (3-snapshot 합성) |
-| `coin_helpers.py` | 파라미터 클래스 `B()`, merge, 유니버스 로더 |
-| `coin_dd_exit.py` | DD exit 로직 (60일 peak -25%) |
 | `stock_engine.py` | 주식 백테스트 엔진 (delta 기반) |
 | `backtest_futures_full.py` | 선물 백테스트 엔진 (D/4h/2h/1h/30m/15m) |
 | `futures_ensemble_engine.py` | 선물 앙상블 실행 엔진 (다전략 합산) |
@@ -45,8 +43,7 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 | 파일 | 설명 |
 |------|------|
-| `backtest_official.py` | V12~V18 코인+주식 공식 백테스트 (버전별 파라미터 정의) |
-| `run_current_coin_backtest.py` | 코인 V18 백테스트 |
+| `run_current_coin_v20_backtest.py` | 코인 V20 전용 백테스트 |
 | `run_current_stock_backtest.py` | 주식 V17 백테스트 |
 | `run_current_futures_backtest.py` | 선물 d005 백테스트 |
 
@@ -63,8 +60,7 @@ python3 run_current_futures_backtest.py   # 선물 d005
 | 파일 | 설명 |
 |------|------|
 | `recommend.py` | 공개 추천 HTML 생성 |
-| `recommend_personal.py` | 개인 대시보드 (V19: 3자산 배분 모니터 + 텔레그램 알림) |
-| `daily_history.py` | 일별 포트폴리오 히스토리 빌더 |
+| `recommend_personal.py` | 개인 대시보드 (3자산 배분 모니터 + 텔레그램 알림) |
 | `serve.py` | 정적 파일 서버 (port 8080) |
 | `strategy.html` | 전략 요약 웹페이지 |
 | `strategy_guide.html` | 상세 전략 가이드 웹페이지 |
@@ -73,11 +69,17 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 | 파일 | 설명 |
 |------|------|
+| `STRATEGY_EVOLUTION.md` | V12→V20 전략 진화 기록 (변경 근거, 폐기 아이디어) |
 | `repo_backtest_guide.md` | 통합 백테스트 재현 가이드 |
-| `coin_backtest_howto.md` | 코인 백테스트 상세 설명 |
 | `stock_backtest_howto.md` | 주식 백테스트 상세 설명 |
 | `futures_backtest_howto.md` | 선물 백테스트 상세 설명 |
 | `futures_strategy_final.md` | 선물 최종 전략 명세 |
+
+### 레거시
+
+| 파일 | 설명 |
+|------|------|
+| [`legacy/`](./legacy/) | V18 계열 코인/통합 백테스트와 과거 유틸 모음 |
 
 ### 연구 파일
 
@@ -87,17 +89,27 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 ## 전략 아키텍처
 
-### 코인 엔진 흐름 (V18)
+### 코인 엔진 흐름 (V20)
 
 ```
-매일 루프:
-  1. crash/cooldown 체크
-  2. 카나리 플립 (BTC vs SMA50, 1.5% hyst)
-  3. blacklist 갱신 (-15% daily → 7일 제외)
-  4. DD/헬스 제거 (Mom30/90, Vol90)
-  5. PFD/앵커 갱신 (Day 1/11/21)
-  6. drift/재진입
-  7. execute_rebalance (매도→매수)
+멤버1 D_SMA50:
+  1. BTC vs SMA50 카나리
+  2. Mom30/90 + Vol90d 필터
+  3. Top5 + 33% cap
+  4. 30봉 기준 3-snapshot stagger
+  5. 극단갭 -15% 코인 제외
+
+멤버2 4h_SMA240:
+  1. BTC vs SMA240 카나리
+  2. Mom30/120 + Vol90d 필터
+  3. Top5 + 33% cap
+  4. 60봉 기준 3-snapshot stagger
+  5. 극단갭 -10% 코인 제외
+
+최종:
+  1. 두 멤버 50:50 EW 합산
+  2. Cash buffer 2%
+  3. 4h 기준 현물 리밸런싱
 ```
 
 ### 주식 엔진 흐름 (V17)
@@ -121,7 +133,7 @@ python3 run_current_futures_backtest.py   # 선물 d005
   5. 포지션 조정
 ```
 
-### 자산배분 (V19)
+### 자산배분 (V20, 비율은 V19 확정치 유지)
 
 ```
 매일 09:15 cron:
@@ -135,7 +147,8 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 ## 주의사항
 
-- `data/historical_universe.json`은 과거 시총 데이터 — 생존편향 방지에 필수
+- `run_current_coin_v20_backtest.py`는 V20 라이브 로직을 재현하기 위한 전용 러너다
+- `data/historical_universe.json`은 V20 백테스트에서 월별 Top40 유니버스 입력으로 사용한다
 - 선물은 `1h` 원본 기준, `4h`/`2h`는 리샘플링
 - 현금 키: 백테스트 `CASH`, 실매매/리포트 `Cash` — 혼동 주의
 - 상태파일(`trade_state.json`, `signal_state.json`)은 전략 상태이므로 함부로 삭제하지 않는다

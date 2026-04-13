@@ -1,0 +1,135 @@
+# 전략 진화 (V12 → V20)
+
+이 문서는 Cap Defend 전략의 버전별 변경점과 결정 근거를 정리한다. 자세한 백테스트 결과는 각 버전의 백테스트 코드 또는 [research/](./research/)의 결과 파일을 참조한다.
+
+---
+
+## 한눈에 보기
+
+| 버전 | 시점 | 자산군 | 핵심 변경 | 폐기 이유 |
+|---|---|---|---|---|
+| V12 | 2026-01 | 코인+주식 | 초기 합본 (단순 모멘텀 + 카나리) | 코인 과적합, 주식 단일트랜치 |
+| V14 | 2026-02 | 코인 | SMA60+hyst, DD+BL+Crash 가드 추가 | 카나리 SMA 짧고 휩쏘 잦음 |
+| V15 | 2026-03 초 | 주식 | 유니버스 R7(+VNQ), Z-score 4트랜치(Sh63) | 단기 Sharpe 노이즈 |
+| V16 | 2026-03 중 | 코인 | Mom30 도입 | 단일 모멘텀 과적합 |
+| V17 | 2026-03 말 | 주식 | Z-score Top3(Sh252) + VT Crash → 확정 | — |
+| V18 | 2026-03 말 | 코인 | SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap | 단일 D봉 한계 |
+| V19 | 2026-04 초 | 선물+자산배분 | 선물 d005 4전략 EW + 60/25/15 배분 + 8pp 밴드 | 선물 미정 |
+| V20 | 2026-04-13 | 코인 | D_SMA50 + 4h_SMA240 50:50 EW 라이브 앙상블 | (현재 운영) |
+
+---
+
+## V12 (2026-01) — 초기 단순화
+
+- 코인: 단일 SMA 카나리 + 모멘텀 Top N, 월간 1회 리밸런싱
+- 주식: SPY/QQQ + GLD 단순 비중, 단일 트랜치
+- 결과: 횡보장에서 휩쏘, 베어장에서 보호 부족
+
+## V14 (2026-02) — 코인 가드 강화
+
+- 코인 카나리 SMA60 + hysteresis
+- 추가 가드: DD exit (60d, 25%), Blacklist (-15% 7d), Crash cooldown
+- 결과: MDD 개선되었으나 카나리 hyst 0% → 휩쏘 여전
+
+## V15 (2026-03 초) — 주식 R7 + 4트랜치
+
+- 주식 유니버스 7종 ETF (SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ)
+- Z-score 선정 (12M mom + Sharpe 63d)
+- 4트랜치 (Day 1/8/15/22) — 타이밍 리스크 분산
+- 결과: Sharpe 일관성 부족 (Sh63 단기 노이즈)
+
+## V16 (2026-03 중) — 코인 Mom30
+
+- 코인 모멘텀 윈도우 Mom30
+- 결과: 단일 윈도우 과적합 의심, plateau 불충분
+
+## V17 (2026-03 말) — 주식 확정
+
+- Z-score Top 3 (12M mom + Sharpe 252d로 확장)
+- VT crash filter (-3% daily → 최소 3일 + VT>SMA10 회복)
+- EW 33% per slot, 4트랜치
+- 거래비용 0.2% 보수
+- 백테스트: Sharpe 1.255, CAGR +13.3%, MDD -11.4%, σ(Sh) 0.019
+- 채택 사유: 10-anchor 평균 일관, plateau 넓음, MDD 우수
+
+## V18 (2026-03 말) — 코인 단일 D봉 확정 (이후 V19 잠시 사용)
+
+- 카나리 SMA50 + 1.5% hyst
+- Greedy Absorption (cap 33%, 초과분 다음 순위로 흡수)
+- EW + 33% cap, Top 5
+- DD 60d/-25%, Blacklist -15%/7d, gap exclusion
+- backtest_official.py로 V12~V19 비교 가능
+- 한계: 단일 D봉 → 진입 타이밍 한 점, 4h 단위 시장 변동 무시
+
+## V19 (2026-04 초) — 선물 도입 + 자산배분 확정
+
+- 선물 d005 4전략 EW (25%씩):
+  - 4h_d005 (SMA240, Mom20/720, daily vol 5%, snap60)
+  - 2h_S240 (SMA240, Mom20/720, bar vol 60%, snap120)
+  - 2h_S120 (SMA120, Mom20/720, bar vol 60%, snap120)
+  - 4h_M20  (SMA240, Mom20/120, bar vol 60%, snap21)
+- 레버리지: cap_mom_blend_543_cash (3/4/5x 동적, CASH≥34% 시 floor 3x)
+- 스탑: prev_close -15%, cash_guard
+- 자산배분: 주식 60% / 현물 25% / 선물 15%, 8pp drift band
+- 5.5년 백테스트: Sharpe 2.08, CAGR +227%, MDD -34%, Cal 6.69 (선물 단독)
+- 통합 포트: Sharpe 2.12, CAGR +39%, MDD -12.2%, Cal 3.21
+- PFD 제거 (post_flip_delay 5→0, 포트폴리오 레벨에서 무차별 확인)
+
+## V20 (2026-04-13) — 코인 멀티 인터벌 앙상블
+
+배경: V19까지의 코인 엔진은 단일 D봉 + 월간 앵커. 4월 그리드서치(D/4h/2h/1h 1620조합)에서 D와 4h가 사실상 동률로 1위 (Sharpe ~1.85), 2h/1h는 노이즈로 열위 확인. 두 봉 주기를 앙상블로 결합하면 이벤트 탈동기화로 MDD 추가 개선 가능.
+
+변경:
+
+- 단일 엔진 → 라이브 앙상블 엔진(`trade/coin_live_engine.py`)
+- 멤버 1: D_SMA50 (SMA50, Mom30/90, snap 30봉 × 3 stagger, gap-15%/excl 30일)
+- 멤버 2: 4h_SMA240 (SMA240, Mom30/120, snap 60봉 × 3 stagger, gap-10%/excl 10일)
+- 공통: 카나리 BTC vs SMA + 1.5% hyst, mom2vol(vol_cap 5%), Top5/cap 33%
+- 50:50 EW 합산, Cash buffer 2%
+- 월간 앵커 1/11/21 폐기 → 봉 단위 stagger
+- DD/BL 폐기 → gap threshold + exclusion days
+- 상태 스키마 변경: tranches → members, last_flip_date → bar_counter/snap_id
+- Upbit warning/delisting delta 알림 (set 비교, 스팸 방지)
+- 실행: cron 매시간 :05, bar-idempotency
+
+V19 호환: 표현 불가. backtest_official.py(legacy)는 V12~V19 재현용으로 유지, V20은 `run_current_coin_v20_backtest.py` 전용.
+
+---
+
+## 자산배분 결정 흐름 (V19 → V20 동일)
+
+```
+2026-04-05 — 4전략 ablation + dynamic 방법론 비교 (4,928조합)
+  → InvVol/카나리/밴드 후보 모두 검토
+  → 결론: 단순 EW + 8pp drift band가 가장 robust
+  → 카나리 레짐 전환(자산간 강제 이동) 기각 — 사용자 선호 (자산 내부 방어에 맡김)
+
+2026-04-06 — V12~V19 전 버전 portfolio backtest로 검증
+  → V19 + 60/25/15 배분 채택
+  → PFD ablation: 포트폴리오 레벨 무차별 → 제거
+
+2026-04-13 — 코인 V20으로 교체 (배분 비율은 유지)
+```
+
+---
+
+## 폐기된 아이디어와 사유
+
+| 아이디어 | 시점 | 폐기 사유 |
+|---|---|---|
+| DD entry filter | 2026-03 | 과적합, sharp peak |
+| 카나리 레짐 전환 (자산간 이동) | 2026-04 | 사용자 선호 + 백테스트 차이 미미 |
+| 2h/1h 봉 추가 멤버 | 2026-04 | 노이즈, 동일 universe/canary로 직교성 약함 |
+| TLT 방어 추가 | 2026-04 | V19 대비 한계효용 낮음 |
+| Post-Flip Delay (PFD) | 2026-04 | 포트폴리오 레벨 무차별 |
+| 단일 D봉 코인 (V18 유지) | 2026-04-13 | 4h 결합으로 이벤트 탈동기화 이득 |
+
+---
+
+## 채택 기준 (모든 버전 공통)
+
+1. 10-anchor 평균 + σ(Sharpe) 낮음 (0.1 이하 robust)
+2. 파라미터 plateau 존재 (인접값 성과 유사)
+3. 다기간(2018~/2019~/2021~) 일관성
+4. 거래비용 반영 후에도 개선 유지
+5. 실매매 엔진으로 상태전이 재현 가능

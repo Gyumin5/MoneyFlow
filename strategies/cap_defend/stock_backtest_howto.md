@@ -6,7 +6,7 @@
 
 - 공식 전략: `V17`
 - 엔진:
-  - [backtest_official.py](./backtest_official.py)
+  - [run_current_stock_backtest.py](./run_current_stock_backtest.py)
   - [stock_engine.py](./stock_engine.py)
 
 ## 데이터 소스
@@ -24,7 +24,7 @@
 주식 전략만 돌리려면:
 
 ```bash
-python3 strategies/cap_defend/backtest_official.py --stock-only --version v17
+python3 strategies/cap_defend/run_current_stock_backtest.py
 ```
 
 데이터를 먼저 갱신하려면:
@@ -77,6 +77,6 @@ python3 strategies/cap_defend/check_data_freshness.py
 
 재현에 필요한 최소 세트는 다음과 같다.
 
-- `backtest_official.py`
+- `run_current_stock_backtest.py`
 - `stock_engine.py`
 - `strategies/cap_defend/data/stock_cache/*.csv` 또는 안정적인 Yahoo 접근 환경
