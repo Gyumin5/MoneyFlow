@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cap Defend V20 코인 현물 Executor.
+"""Cap Defend 코인 현물 Executor.
 
 구조:
   - 신호: coin_live_engine.compute_live_targets
@@ -8,13 +8,13 @@
   - 상태: trade_state.json
 
 실행 순서:
-  1. flock /tmp/v20_coin.lock
+  1. flock /tmp/coin_executor.lock
   2. UpbitAPI + 미체결 취소
   3. 유의종목/거래정지 감지 → 즉시 시장가 청산 (freshness 무관, try/except + 3회 재시도 + permanent_block)
   4. compute_live_targets() 호출 (엔진 내부에서 freshness / 카나리 / 갭 / 앙상블 처리)
   5. all_fresh=False 면 리밸런싱 스킵 (청산만 수행)
   6. Cash buffer 2% 적용
-  7. Notional cap 20% (per-run 축소, carryover 상태 저장 없음)
+  7. Notional cap 비활성 (필요 시 상수로 재활성)
   8. Delta 매매 (매도 → 매수), dust <5000 KRW → 전량 매도
   9. 상태 저장 + 텔레그램 사전/사후 알림
 
@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import pyupbit
 import requests
+from pyupbit import request_api as pyupbit_request_api
 
 from common.io import load_json, save_json
 from common.notify import send_telegram as _send_tg
@@ -65,12 +66,12 @@ except ImportError:
 
 # ═══ 상수 ═══
 STATE_FILE = 'trade_state.json'
-LOCK_FILE = '/tmp/v20_coin.lock'
+LOCK_FILE = '/tmp/coin_executor.lock'
 LOG_FILE = 'executor_coin.log'
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 CASH_BUFFER_DEFAULT = 0.02          # 총자산의 2%는 KRW 유지
-NOTIONAL_CAP_FRACTION = 0.20        # 초회 실행 시 20% 상한
+NOTIONAL_CAP_FRACTION = 1.00        # 1.0이면 비활성
 MIN_ORDER_KRW = 5000                # 업비트 최소주문
 DUST_KRW = 5000                     # 이보다 작은 잔여는 전량 매도
 LIMIT_PRICE_SLIP = 0.003            # 매수 지정가 +0.3%
@@ -78,10 +79,31 @@ ORDER_WAIT_SEC = 5                  # 매수 후 미체결 취소 대기
 LIQUIDATION_MAX_RETRIES = 3
 
 
+def _patch_pyupbit_remaining_req_parser():
+    """pyupbit Remaining-Req 파싱 실패를 무해화.
+
+    Upbit 응답 헤더 형식이 약간 달라질 때 pyupbit가 예외를 던지고
+    private API 결과를 None으로 삼켜 버리는 문제가 있어, 파싱 실패 시에도
+    기본 구조를 반환하도록 패치한다.
+    """
+    orig_parse = pyupbit_request_api._parse
+
+    def _safe_parse(remaining_req: str):
+        try:
+            return orig_parse(remaining_req)
+        except Exception:
+            return {"group": "unknown", "min": 0, "sec": 0}
+
+    pyupbit_request_api._parse = _safe_parse
+
+
+_patch_pyupbit_remaining_req_parser()
+
+
 # ═══ 로거 ═══
 LOG_PATH = os.path.join(CACHE_DIR, LOG_FILE)
 if setup_file_logger and make_log_fn:
-    _logger = setup_file_logger(LOG_PATH, LOG_FILE)
+    _logger = setup_file_logger(LOG_FILE, LOG_PATH)
     _run_id_ref = ['']
     log = make_log_fn(_logger, _run_id_ref)
 else:
@@ -102,7 +124,7 @@ def _flush_telegram(dry_run: bool = False):
     if not _tg_events:
         return
     prefix = '[DRY] ' if dry_run else ''
-    payload = prefix + '[V20 코인]\n' + '\n'.join(_tg_events)
+    payload = prefix + '[코인]\n' + '\n'.join(_tg_events)
     try:
         _send_tg(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, payload)
     except Exception as e:
@@ -198,12 +220,15 @@ class UpbitAPI:
         return result
 
     def get_coin_qty(self, coin: str) -> float:
-        """코인 수량 (locked 포함 못함 — pyupbit get_balance는 free만 리턴)."""
+        """코인 수량 (locked 포함)."""
         try:
-            raw = self.upbit.get_balance(coin)
-            if raw is None or isinstance(raw, (dict, list, tuple)):
+            balances = self.upbit.get_balances()
+            if not isinstance(balances, list):
                 return 0.0
-            return float(raw)
+            for b in balances:
+                if b.get('currency') == coin and b.get('unit_currency') == 'KRW':
+                    return float(b.get('balance', 0) or 0) + float(b.get('locked', 0) or 0)
+            return 0.0
         except Exception:
             return 0.0
 
@@ -509,9 +534,13 @@ def run_once(dry_run: bool = False) -> int:
     """한 사이클 실행. 리턴: 0=정상, 1=freshness 스킵, 2=에러."""
     state_path = os.path.join(CACHE_DIR, STATE_FILE)
     state = load_json(state_path, default={})
+    if 'cash_buffer' in state and 'buffer_pct' not in state:
+        state['buffer_pct'] = state['cash_buffer']
+    elif 'buffer_pct' in state and 'cash_buffer' not in state:
+        state['cash_buffer'] = state['buffer_pct']
     now = cle.utc_now()
 
-    log(f'═══ V20 코인 Executor 시작 (dry_run={dry_run}, now={cle.to_utc_iso(now)}) ═══')
+    log(f'═══ 코인 Executor 시작 (dry_run={dry_run}, now={cle.to_utc_iso(now)}) ═══')
 
     session = requests.Session()
     api = UpbitAPI(dry_run=dry_run)
@@ -531,7 +560,7 @@ def run_once(dry_run: bool = False) -> int:
         holdings = api.get_balance()
         if failed_liq:
             log(f'❌ 청산 실패 {failed_liq} → fail-closed (리밸런싱 스킵)')
-            _tg(f'❌ V20 청산 실패 {failed_liq} → 실행 중단')
+            _tg(f'❌ 코인 청산 실패 {failed_liq} → 실행 중단')
             save_json(state_path, state)
             _flush_telegram(dry_run)
             return 3
@@ -574,8 +603,19 @@ def run_once(dry_run: bool = False) -> int:
         _flush_telegram(dry_run)
         return 0
 
+    # 멤버/합산 target 로깅
+    for mname, mt in result.member_targets.items():
+        coins = ', '.join(f'{k}:{v:.1%}' for k, v in mt.items() if k != 'Cash' and v > 0)
+        cash_w = result.member_targets.get(mname, {}).get('Cash', 0.0)
+        log(f'  {mname} target: {coins or "CASH only"} (cash={cash_w:.1%})')
+    combined_coins = ', '.join(f'{k}:{v:.1%}' for k, v in result.combined_target.items() if k != 'Cash' and v > 0)
+    combined_cash = result.combined_target.get('Cash', 0.0)
+    log(f'  combined target: {combined_coins or "CASH only"} (cash={combined_cash:.1%})')
+
     # Cash buffer
-    buffer_pct = float(state.get('buffer_pct', CASH_BUFFER_DEFAULT))
+    buffer_pct = float(state.get('cash_buffer', state.get('buffer_pct', CASH_BUFFER_DEFAULT)))
+    state['cash_buffer'] = buffer_pct
+    state['buffer_pct'] = buffer_pct
     target = apply_cash_buffer(result.combined_target, buffer_pct)
     log(f'  Cash buffer {buffer_pct*100:.1f}% 적용 후 target Cash={target.get("Cash",0)*100:.2f}%')
 
@@ -583,7 +623,7 @@ def run_once(dry_run: bool = False) -> int:
     balance = api.get_balance()
     total_krw = sum(balance.values())
     effective_target = dict(target)
-    if total_krw > 0:
+    if total_krw > 0 and 0 < NOTIONAL_CAP_FRACTION < 1:
         effective_target, gross = apply_notional_cap(target, balance, total_krw, NOTIONAL_CAP_FRACTION)
         log(f'  Notional cap {NOTIONAL_CAP_FRACTION*100:.0f}% 적용 (gross_delta={gross*100:.1f}%)')
 
@@ -617,7 +657,7 @@ def run_once(dry_run: bool = False) -> int:
 
 # ═══ 진입점 ═══
 def main():
-    parser = argparse.ArgumentParser(description='Cap Defend V20 현물 Executor')
+    parser = argparse.ArgumentParser(description='Cap Defend 코인 현물 Executor')
     parser.add_argument('--dry-run', action='store_true', help='주문 없이 target/delta만 로그+텔레그램')
     args = parser.parse_args()
 
@@ -628,7 +668,7 @@ def main():
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             log('🔒 다른 인스턴스 실행 중 (lock 충돌) → 종료')
-            _tg('🔒 V20 락 충돌 → 스킵')
+            _tg('🔒 코인 락 충돌 → 스킵')
             _flush_telegram(args.dry_run)
             return
 
@@ -638,7 +678,7 @@ def main():
         raise
     except Exception as e:
         log(f'❌ 치명 오류: {e}\n{traceback.format_exc()}')
-        _tg(f'❌ V20 치명 오류: {e}')
+        _tg(f'❌ 코인 치명 오류: {e}')
         _flush_telegram(args.dry_run)
         sys.exit(2)
     finally:
