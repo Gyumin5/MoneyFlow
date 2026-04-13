@@ -1024,7 +1024,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, log_today, log_yesterday, date_today, asset_prices_krw, s_meta, c_meta, coin_health_status, cur_assets_raw=None, action_guide="", diff_table_rows=None, coin_total_krw=0):
     filepath = PORTFOLIO_HTML_NAME
 
-    # 현금 버퍼 (coin_trade_state에서 읽기)
+    # 현금 버퍼 (trade_state.json)
     cash_buffer_pct = get_cash_buffer()
     try:
         pass
