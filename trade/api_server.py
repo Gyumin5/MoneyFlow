@@ -106,7 +106,7 @@ def set_holdings():
 def get_status():
     return jsonify(running_tasks)
 
-TRADE_STATE_FILE = os.environ.get('COIN_TRADE_STATE_FILE', os.path.join(APP_HOME, 'coin_trade_state.json'))
+TRADE_STATE_FILE = os.environ.get('COIN_TRADE_STATE_FILE', os.path.join(APP_HOME, 'trade_state.json'))
 
 @app.route('/api/cash_buffer', methods=['POST'])
 def update_cash_buffer():
@@ -127,6 +127,7 @@ def update_cash_buffer():
     except Exception:
         pass
     state['cash_buffer'] = round(new_buffer, 2)
+    state['buffer_pct'] = state['cash_buffer']
     state['buffer_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M')
     state['buffer_changed'] = True  # 다음 trade에서 트리거로 인식
     try:
@@ -145,7 +146,7 @@ def get_cash_buffer():
     try:
         with open(TRADE_STATE_FILE, 'r') as f:
             state = json.load(f)
-        return jsonify({"cash_buffer": state.get('cash_buffer', 0.02)})
+        return jsonify({"cash_buffer": state.get('cash_buffer', state.get('buffer_pct', 0.02))})
     except Exception:
         return jsonify({"cash_buffer": 0.02})
 
