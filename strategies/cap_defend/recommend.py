@@ -1,5 +1,5 @@
 """
-Cap Defend V19 Recommendation Script (Standard Version)
+Cap Defend V20 Recommendation Script (Standard Version)
 =======================================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
 - Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs)
@@ -8,13 +8,12 @@ Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 - Crash Breaker: VT daily -3% → 3 days cash
 
-Coin V18: K:SMA(50)+1.5%hyst + H:Mom(30)+Mom(90)+Vol5% + Greedy Absorption + EW+33%Cap + DD Exit + Blacklist
-- Canary: BTC > SMA(50) + 1.5% hysteresis
-- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5%
-- Selection: 시총순 Top 5 → Greedy Absorption, EW + 33% Cap
-- DD Exit: 60d peak -25% → sell warning
-- Blacklist: -15% daily drop → 7d exclude
-- Crash Breaker: BTC daily -10% → cash warning
+Coin V20: D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine: trade/coin_live_engine.py)
+- D_SMA50: 1D봉, SMA50, Mom30/90, snap 30봉, gap stop -15%, 제외 30일
+- 4h_SMA240: 4h봉, SMA240, Mom30/120, snap 60봉, gap stop -10%, 제외 10일
+- 카나리: 멤버별 BTC > SMA + 1.5% hysteresis
+- 헬스: Mom_short>0 AND Mom_long>0 AND Vol≤5% (멤버 내부)
+- 리포트는 trade_state.json(V20 live state) 스냅샷을 읽어 표시합니다.
 """
 
 import os
@@ -61,7 +60,7 @@ COIN_CANARY_HYST = 0.015  # 1.5% hysteresis band
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V19: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V20: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -444,159 +443,85 @@ def run_stock_strategy_v15(log, all_prices):
     log.append(f"<p>Defense Picks: <b>{picks}</b> (Equal Weight)</p>")
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
 
-def run_coin_strategy_v15(coin_universe, all_prices, target_date, log):
-    log.append("<h2>🪙 코인 포트폴리오 (V19)</h2>")
+def _load_v20_state():
+    """V20 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
+    candidates = [
+        os.path.join(os.getcwd(), 'trade_state.json'),
+        '/home/ubuntu/trade_state.json',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trade_state.json'),
+    ]
+    for path in candidates:
+        try:
+            with open(path, 'r') as f:
+                return json.load(f), path
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+    return None, None
 
-    btc = all_prices.get('BTC-USD')
-    if len(btc) < CANARY_SMA_PERIOD: return {CASH_ASSET: 1.0}, "데이터 부족"
+def run_coin_strategy_v20(coin_universe, all_prices, target_date, log):
+    """V20 앙상블 표시: trade_state.json의 last_target_snapshot + 멤버 상태를 렌더링."""
+    log.append("<h2>🪙 코인 포트폴리오 (V20: D_SMA50 + 4h_SMA240 50:50 앙상블)</h2>")
 
-    tgt_dt = target_date.date() if hasattr(target_date, 'date') else target_date
+    state, path = _load_v20_state()
+    if state is None:
+        log.append("<p class='error'>V20 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
+        return {CASH_ASSET: 1.0}, "상태 로드 실패"
 
-    # --- Crash Breaker (G5): BTC daily -10% in last 3d → cash ---
-    CRASH_COOLDOWN = 3
-    if len(btc) >= CRASH_COOLDOWN + 1:
-        crash_rets = btc.iloc[-(CRASH_COOLDOWN + 1):].pct_change().dropna()
-        worst_crash = crash_rets.min()
-        if worst_crash <= CRASH_THRESHOLD:
-            log.append(f"<p class='error'><b>[CRASH BREAKER]</b> BTC worst {worst_crash:+.1%} in {CRASH_COOLDOWN}d — 현금 대기</p>")
-            return {CASH_ASSET: 1.0}, "CRASH (BTC -10%)"
+    log.append(f"<p class='info'>상태 파일: {path} · 마지막 실행 {state.get('last_run_ts', 'N/A')}</p>")
 
-    # --- Canary: BTC > SMA(50) with 1.5% Hysteresis ---
-    sma = btc.rolling(CANARY_SMA_PERIOD).mean().iloc[-1]
-    cur = btc.iloc[-1]
-    dist = cur / sma - 1
+    members = state.get('members', {}) or {}
+    excluded = state.get('excluded_coins', {}) or {}
+    last_member_targets = state.get('last_member_targets', {}) or {}
+    combined_snap = state.get('last_target_snapshot', {}) or {}
 
-    # Load previous canary state from signal_state.json
-    prev_coin_risk_on = None
+    # 멤버별 상태 테이블
+    mrows = []
+    for m_name in ('D_SMA50', '4h_SMA240'):
+        m_st = members.get(m_name, {})
+        m_tgt = {k: v for k, v in (last_member_targets.get(m_name, {}) or {}).items() if k != '_ts'}
+        m_ex = list((excluded.get(m_name, {}) or {}).keys())
+        inv_pct = sum(v for k, v in m_tgt.items() if k not in ('Cash', 'CASH'))
+        picks = [k for k in m_tgt if k not in ('Cash', 'CASH')]
+        mrows.append({
+            '멤버': m_name,
+            '카나리': '🟢 On' if m_st.get('canary_on') else '🔴 Off',
+            '마지막 봉': m_st.get('last_bar_ts', 'N/A'),
+            '스냅 ID': m_st.get('snap_id', '-'),
+            'Picks': ', '.join(picks) if picks else 'Cash 100%',
+            '투자 비중': f"{inv_pct*100:.1f}%",
+            '제외': ', '.join(m_ex) if m_ex else '-',
+        })
     try:
-        import json as _json
-        _state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_state.json')
-        with open(_state_path, 'r') as _sf:
-            _sig = _json.load(_sf)
-            prev_coin_risk_on = _sig.get('coin', {}).get('risk_on', _sig.get('coin_risk_on'))
+        log.append(f"<div class='table-wrap'>{pd.DataFrame(mrows).to_html(classes='dataframe small-table', index=False)}</div>")
     except Exception:
         pass
 
-    if dist > COIN_CANARY_HYST:
-        canary_on = True
-    elif dist < -COIN_CANARY_HYST:
-        canary_on = False
-    elif prev_coin_risk_on is not None:
-        canary_on = prev_coin_risk_on  # dead zone: maintain previous state
-    else:
-        canary_on = cur > sma  # no state: fallback to simple comparison
-    risk_label = '<span style="color:green">Risk-On</span>' if canary_on else '<span style="color:red">Risk-Off</span>'
-    hyst_info = f" (Hyst ±{COIN_CANARY_HYST:.0%}, dist {dist:+.2%})"
-    log.append(f"<p><b>[Canary]</b> BTC ${cur:,.0f} vs SMA({CANARY_SMA_PERIOD}) ${sma:,.0f} → {risk_label}{hyst_info}</p>")
+    # 결합 타겟 (50:50 EW)
+    weights = {k: v for k, v in combined_snap.items() if k != '_ts'}
+    if not weights:
+        weights = {CASH_ASSET: 1.0}
 
-    # --- Blacklist: -15% daily drop → exclude 7d ---
-    blacklisted = []
-    for t in coin_universe:
-        p = all_prices.get(t)
-        if p is None or len(p) < 2: continue
-        is_bl, daily_ret = check_blacklist(p)
-        if is_bl:
-            blacklisted.append((t, daily_ret))
-    if blacklisted:
-        bl_text = ', '.join([f"{t} ({r:+.1%})" for t, r in blacklisted])
-        log.append(f"<p class='warning'><b>[Blacklist]</b> {bl_text} — 7일 제외</p>")
-    bl_set = {t for t, _ in blacklisted}
-    filtered_universe = [t for t in coin_universe if t not in bl_set]
+    cash_key = 'Cash' if 'Cash' in weights else ('CASH' if 'CASH' in weights else None)
+    weights_norm = dict(weights)
+    if cash_key and cash_key != CASH_ASSET:
+        weights_norm[CASH_ASSET] = weights_norm.pop(cash_key)
 
-    # --- Health: Mom(30)>0 AND Mom(90)>0 AND Vol(90)<=5% ---
-    rows = []
-    healthy = []
-    for t in filtered_universe:
-        p = all_prices.get(t)
-        if p is None or len(p) < 91: continue
+    w_rows = [{'자산': t, '비중': f"{w*100:.2f}%"} for t, w in sorted(weights_norm.items(), key=lambda x: -x[1])]
+    try:
+        log.append("<p><b>[결합 타겟]</b> 멤버 50:50 EW 합산</p>")
+        log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
+    except Exception:
+        pass
 
-        last_dt = p.index[-1].date() if hasattr(p.index[-1], 'date') else p.index[-1]
-        if (tgt_dt - last_dt).days != 0: continue
-
-        cur_p = p.iloc[-1]
-        mom30 = calc_ret(p, 30)
-        mom90 = calc_ret(p, 90)
-        vol90 = p.pct_change().iloc[-90:].std()
-
-        is_ok = (pd.notna(mom30) and mom30 > 0 and
-                 pd.notna(mom90) and mom90 > 0 and
-                 vol90 <= VOL_CAP_FILTER)
-
-        rows.append({'Coin': t, 'Price': f"${cur_p:.4f}",
-                     'Mom30': f"{mom30:.2%}" if pd.notna(mom30) else "-",
-                     'Mom90': f"{mom90:.2%}" if pd.notna(mom90) else "-",
-                     'Vol90': f"{vol90:.4f}",
-                     'Status': "🟢" if is_ok else "🔴"})
-        if is_ok:
-            healthy.append(t)
-
-    try: log.append(f"<div class='table-wrap'>{pd.DataFrame(rows).to_html(classes='dataframe small-table', index=False)}</div>")
-    except: pass
-
-    log.append(f"<p>🔍 Healthy Coins: <b>{len(healthy)}</b> {healthy}</p>")
-
-    if not canary_on:
-        log.append(f"<p><b>→ 카나리아 OFF: 전량 현금 대기</b></p>")
-        return {CASH_ASSET: 1.0}, "Risk-Off"
-
-    if not healthy:
-        return {CASH_ASSET: 1.0}, "No Healthy"
-
-    # --- Selection: V19 Greedy Absorption ---
-    top5 = healthy[:N_SELECTED_COINS]
-    log.append(f"<p><b>[Selection]</b> 시총순 Top {N_SELECTED_COINS}: {top5}</p>")
-
-    # Greedy: 시총 큰 코인이 Mom30 높으면 작은 코인 제거
-    picks = list(top5)
-    for i in range(len(picks) - 1, 0, -1):
-        p_above = all_prices.get(picks[i-1])
-        p_below = all_prices.get(picks[i])
-        if p_above is not None and p_below is not None and len(p_above) > 30 and len(p_below) > 30:
-            mom_above = float(p_above.iloc[-1]) / float(p_above.iloc[-31]) - 1
-            mom_below = float(p_below.iloc[-1]) / float(p_below.iloc[-31]) - 1
-            if mom_above >= mom_below:
-                picks.pop(i)
-    log.append(f"<p><b>[Greedy]</b> 생존: {picks} ({len(picks)}개)</p>")
-    top5 = picks
-
-    # --- Weighting: EW + Cap 33% ---
-    COIN_WEIGHT_CAP = 1.0 / 3
-    w = min(1.0 / len(top5), COIN_WEIGHT_CAP)
-    weights = {t: w for t in top5}
-    w_rows = [{'Coin': t, 'Weight': f"{w:.2%}"} for t, w in weights.items()]
-    try: log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
-    except: pass
-
-    # --- DD Exit Warning: 60d peak -25% ---
-    dd_warnings = []
-    for t in top5:
-        p = all_prices.get(t)
-        if p is None: continue
-        is_exit, dd = check_dd_exit(p)
-        if is_exit:
-            dd_warnings.append((t, dd))
-    if dd_warnings:
-        dd_text = ', '.join([f"<b>{t}</b> ({dd:+.1%})" for t, dd in dd_warnings])
-        log.append(f"<p class='error'><b>[DD EXIT]</b> {dd_text} — 매도 필요 (60d 고점 대비 -25% 초과)</p>")
-        # Remove DD-exited coins: their weight goes to CASH (not redistributed)
-        cash_weight = 0.0
-        for t, _ in dd_warnings:
-            if t in weights:
-                cash_weight += weights[t]
-                del weights[t]
-        if cash_weight > 0:
-            weights[CASH_ASSET] = weights.get(CASH_ASSET, 0.0) + cash_weight
-        if not weights:
-            weights = {CASH_ASSET: 1.0}
-
-    invested_pct = sum(v for k, v in weights.items() if k != CASH_ASSET)
-    cash_pct = 1.0 - invested_pct
-    if cash_pct > 0.01:
-        weights[CASH_ASSET] = weights.get(CASH_ASSET, 0) + cash_pct  # Cash 명시
-        stat = f"투자 {invested_pct:.0%} / 현금 {cash_pct:.0%}"
+    invested = sum(v for k, v in weights_norm.items() if k != CASH_ASSET)
+    cash_pct = weights_norm.get(CASH_ASSET, 0.0)
+    if cash_pct >= 0.99:
+        stat = "Risk-Off (Cash 100%)"
+    elif cash_pct > 0.01:
+        stat = f"투자 {invested:.0%} / 현금 {cash_pct:.0%}"
     else:
         stat = "Full Invest"
-    return weights, stat
+    return weights_norm, stat
 
 def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today):
     filepath = "portfolio_result.html"
@@ -636,7 +561,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V19</h1>
+            <h1>🚀 Cap Defend V20</h1>
             <p>리포트 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 종가 기준일: {date_today.strftime('%Y-%m-%d')}</p>
 
             <div class="status-bar">
@@ -680,7 +605,7 @@ if __name__ == "__main__":
 
     # 3. Strategy
     s_port, s_stat = run_stock_strategy_v15(log, prices)
-    c_port, c_stat = run_coin_strategy_v15(c_univ, prices, target_date, log)
+    c_port, c_stat = run_coin_strategy_v20(c_univ, prices, target_date, log)
     
     # 4. Final Port (Stock 60% + Spot Coin 25% + Futures 15%)
     final_port = {CASH_ASSET: 0}

@@ -17,14 +17,16 @@
 
 ### Single Source of Truth
 
-- 코인 전략 변경 시 최소 동기화 대상:
-  - `strategies/cap_defend/backtest_official.py`
-  - `trade/executor_coin.py`
+- 코인 전략 변경 시 최소 동기화 대상 (V20):
+  - `trade/coin_live_engine.py` (앙상블 엔진)
+  - `trade/executor_coin.py` (실매매 executor)
+  - `strategies/cap_defend/backtest_spot_barfreq.py` (V20 백테스트)
+  - `strategies/cap_defend/backtest_official.py` (legacy V12~V19 참조만)
   - `strategies/cap_defend/recommend.py`
   - `strategies/cap_defend/recommend_personal.py`
-  - `strategies/cap_defend/daily_history.py`
   - `V17_OPERATION_MANUAL.md`
   - `CLAUDE.md`
+  - 상태파일: `trade_state.json` (V19 `coin_trade_state.json`과 다름, 스키마도 완전 다름)
 - 주식 전략 변경 시 최소 동기화 대상:
   - `strategies/cap_defend/backtest_official.py`
   - `strategies/cap_defend/recommend.py`
@@ -41,6 +43,33 @@
   - `CLAUDE.md`
 - 앵커일, 버퍼, 상태키, 모니터 기준통화가 다르면 "같은 전략"이라고 쓰지 않는다.
 - 현재 저장소에는 `1/10/19`와 `1/11/21` 표기가 혼재할 수 있으므로, 변경 시 관련 파일을 반드시 함께 정리한다.
+
+## 코인 현물 전략 규칙 (V20, 확정 2026-04-13)
+
+### 앙상블 구성
+
+- D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine)
+- Member 1 (D_SMA50): interval=D, SMA50, Mom30/90, snap 30봉×3, canary hyst 1.5%, gap-15%/excl30d
+- Member 2 (4h_SMA240): interval=4h, SMA240, Mom30/120, snap 60봉×3, canary hyst 1.5%, gap-10%/excl10d
+- 공통: health=mom2vol (vol_cap 5%, vol_lookback 90d), universe Top5, cap 33%
+- Upbit warning/delisting 코인은 target에서 즉시 제외
+- TX: 0.04% (백테스트), 실매매는 Upbit 수수료
+
+### 실행 파라미터
+
+- Executor: `trade/executor_coin.py`
+- Engine: `trade/coin_live_engine.py`
+- State: `trade_state.json` (members/excluded_coins/last_target_snapshot/last_upbit_status/last_warning_coins_alerted)
+- Cron: 매시간 :05 (`5 * * * *`), bar-idempotency로 실제 작업은 봉 닫힘 시에만
+- 알림: Upbit 상태 변경은 delta 기반 (set 비교, 중복 알림 방지)
+
+### V19 → V20 마이그레이션
+
+- 단일 D봉 3-snapshot → D+4h 멀티 주기 앙상블
+- 월간 앵커 1/11/21 → 봉단위 stagger (D: 30봉, 4h: 60봉)
+- DD exit 60d -25% / BL -15%/7d → gap threshold + exclusion days (멤버별)
+- 상태 스키마: tranches/last_flip_date/guard_state → members/excluded_coins
+- V19 legacy 3-snapshot 엔진으로 V20을 표현할 수 없음 — backtest_spot_barfreq.py 사용
 
 ## 선물 전략 규칙
 
