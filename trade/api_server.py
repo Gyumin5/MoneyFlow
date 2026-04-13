@@ -368,9 +368,56 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
     client = Client(api_key, api_secret)
 
     account = client.futures_account()
-    total_usdt = float(account.get('totalMarginBalance') or account.get('totalWalletBalance') or 0.0)
-    available_usdt = float(account.get('availableBalance') or 0.0)
+    fut_total_usdt = float(account.get('totalMarginBalance') or account.get('totalWalletBalance') or 0.0)
+    fut_available_usdt = float(account.get('availableBalance') or 0.0)
     unrealized_usdt = float(account.get('totalUnrealizedProfit') or 0.0)
+
+    # Spot 잔고 합산 (USDT는 현금, 그 외 토큰은 holdings에 추가)
+    spot_usdt = 0.0
+    spot_other_value_usdt = 0.0
+    spot_holdings = []
+    try:
+        spot_acc = client.get_account()
+        spot_prices = None
+        for b in spot_acc.get('balances', []):
+            asset = b.get('asset', '')
+            qty = float(b.get('free', 0)) + float(b.get('locked', 0))
+            if qty <= 0:
+                continue
+            if asset == 'USDT':
+                spot_usdt += qty
+                continue
+            # 다른 토큰: USDT 페어 시세로 평가, 없으면 0 처리
+            if spot_prices is None:
+                try:
+                    spot_prices = {p['symbol']: float(p['price']) for p in client.get_all_tickers()}
+                except Exception:
+                    spot_prices = {}
+            sym = asset + 'USDT'
+            price = spot_prices.get(sym, 0.0)
+            value = qty * price
+            if value < 1.0:  # 1 USDT 미만 dust는 무시
+                continue
+            spot_other_value_usdt += value
+            spot_holdings.append({
+                "ticker": asset,
+                "symbol": sym,
+                "qty": qty,
+                "entry_price": 0.0,
+                "price": price,
+                "price_krw": price * rate,
+                "value_usdt": value,
+                "value_krw": value * rate,
+                "weight_value_krw": value * rate,
+                "pnl_usdt": 0.0,
+                "pnl_krw": 0.0,
+                "account": "spot",
+            })
+    except Exception:
+        pass
+
+    total_usdt = fut_total_usdt + spot_usdt + spot_other_value_usdt
+    available_usdt = fut_available_usdt + spot_usdt
 
     holdings = []
     for p in client.futures_position_information():
@@ -413,6 +460,7 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
                     weights['현금' if str(k).upper() == 'CASH' else str(k)] = float(v) / total_target
     except Exception:
         pass
+    holdings.extend(spot_holdings)
     if not weights and total_usdt > 0:
         total_krw = total_usdt * rate
         for h in holdings:
@@ -423,6 +471,10 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
         "total_usdt": total_usdt,
         "cash_usdt": available_usdt,
         "cash_krw": available_usdt * rate,
+        "spot_usdt": spot_usdt,
+        "spot_other_value_usdt": spot_other_value_usdt,
+        "futures_total_usdt": fut_total_usdt,
+        "futures_cash_usdt": fut_available_usdt,
         "unrealized_usdt": unrealized_usdt,
         "exchange_rate": rate,
         "holdings": holdings,
