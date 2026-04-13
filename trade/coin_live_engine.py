@@ -645,12 +645,13 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
         return weights
 
     # 스냅샷 초기화 (첫 실행 또는 n_snap 변경 시)
-    if not state.snapshots or len(state.snapshots) != n_snap:
+    freshly_initialized = (not state.snapshots or len(state.snapshots) != n_snap)
+    if freshly_initialized:
         state.snapshots = [{'CASH': 1.0} for _ in range(n_snap)]
 
     # 스냅샷 갱신
-    if canary_flipped:
-        # 전 스냅샷 즉시 전환
+    if canary_flipped or (freshly_initialized and canary_on):
+        # 전 스냅샷 즉시 전환 (플립 또는 최초 초기화 시 전체 populate)
         for si in range(n_snap):
             state.snapshots[si] = compute_weights(si)
         state.snap_id += 1
