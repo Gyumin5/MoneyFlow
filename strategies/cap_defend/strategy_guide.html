@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cap Defend V18 - 전략 가이드</title>
+    <title>Cap Defend V20 - 전략 가이드</title>
     <style>
       body {
         font-family:
@@ -226,11 +226,51 @@
   </head>
   <body>
     <div class="container">
-      <h1>Cap Defend V18</h1>
+      <h1>Cap Defend V20</h1>
       <div class="meta">
-        <span>문서 갱신: <time datetime="2026-03-26">2026-03-26</time></span>
-        <span>적용 버전: V18</span>
+        <span>문서 갱신: <time datetime="2026-04-13">2026-04-13</time></span>
+        <span>적용 버전: V20 (코인 D_SMA50 + 4h_SMA240 앙상블, 구현 중) · live는 V19</span>
         <span>시간 기준: KST (미국장은 현지 정규장)</span>
+      </div>
+
+      <!-- ═══ 0. V20 전환 요약 ═══ -->
+      <div class="highlight" style="margin-top: 12px">
+        <b>V20 코인 전환 요약 (2026-04, 구현 중)</b>
+        <ul style="margin: 8px 0 0 20px">
+          <li>
+            <b>앙상블:</b> 멤버1 D_SMA50 (일봉, SMA50 · Mom30/90 · snap 30봉) +
+            멤버2 4h_SMA240 (4시간봉, SMA240 · Mom30/120 · snap 60봉) —
+            <b>50:50 EW 합성</b>
+          </li>
+          <li>
+            <b>가드 간소화:</b> DD Exit / Blacklist / Crash / PFD /
+            Drift <b>전부 제거</b>. 멤버별 canary OFF 시 해당 비중만 Cash로
+            전환. 극단갭(D -15% / 4h -10%)은 멤버별 exclusion만.
+          </li>
+          <li>
+            <b>캘린더 앵커 제거:</b> Day 1/11/21 대신
+            <code>bar_counter % snap_interval_bars == offset</code> 봉 기반
+            3-snapshot staggered snap
+          </li>
+          <li>
+            <b>매시간 cron:</b> new bar 없으면 auto-skip (idempotent).
+            <code>expected_last_closed_bar_ts</code> strict equality
+            freshness 체크
+          </li>
+          <li>
+            <b>상태 분리:</b>
+            <code>trade_state_v20.json</code> (V19 live <code>trade_state.json</code>과
+            완전 분리). 유의/정지 매 실행 체크, 청산 실패 시 permanent_block
+            + fail-closed.
+          </li>
+          <li>
+            <b>주식·선물:</b> V19 그대로 유지 (주식 V17 · 선물 d005 앙상블
+            5x). 자산배분 60/25/15, 8pp drift 밴드.
+          </li>
+        </ul>
+        <p style="margin: 8px 0 0">
+          아래 본문은 <b>직전 live V19</b> 기준. V20 반영 완료 시 갱신 예정.
+        </p>
       </div>
 
       <!-- ═══ 1. 핵심 규칙 ═══ -->
@@ -365,13 +405,6 @@
               >
             </td>
           </tr>
-          <tr>
-            <td>
-              <b>PFD (플립 후 재평가)</b>
-            </td>
-            <td>없음</td>
-            <td>카나리 플립 후 5일에 전 트랜치 재갱신</td>
-          </tr>
         </table>
       </div>
 
@@ -402,18 +435,20 @@
             <td>2017~2025</td>
           </tr>
           <tr>
-            <td><b>코인</b> (10-anchor 평균, tx 0.4%)</td>
-            <td class="perf">1.645</td>
-            <td class="perf">+73.2%</td>
-            <td>-35.3%</td>
-            <td>2018~2025</td>
+            <td><b>코인 V19</b> (10-anchor 평균, tx 0.4%)</td>
+            <td class="perf">1.60</td>
+            <td class="perf">+67.0%</td>
+            <td>-26.8%</td>
+            <td>2018~2026.03</td>
           </tr>
           <tr>
-            <td><b>통합 60:40</b></td>
-            <td class="perf">2.063</td>
-            <td class="perf">+34.6%</td>
-            <td>-16.4%</td>
-            <td>2018~2025</td>
+            <td>
+              <small>참고: V17 (SMA60+1% hyst) baseline</small>
+            </td>
+            <td>1.56</td>
+            <td>+66.9%</td>
+            <td>-30.8%</td>
+            <td>Calmar 2.17</td>
           </tr>
         </table>
       </div>
@@ -672,10 +707,6 @@
             &rarr; 전 트랜치를 공격/방어로 즉시 전환
           </li>
           <li>
-            <b>PFD:</b> 플립 후 5일 경과 + pfd_done=false &rarr; 전 트랜치
-            picks를 signal 최신값으로 재평가 (코인만)
-          </li>
-          <li>
             <b>앵커 체크:</b> 오늘 &ge; 앵커일 AND anchor_month &ne; 이번달
             &rarr; 해당 트랜치에 signal.picks 반영 (하루 1회만)
           </li>
@@ -730,21 +761,20 @@ run_once():
      - DD Exit(코인): 현재가 &le; peak_60d &times; 0.75 &rarr; 해당 종목 매도 &rarr; 현금 &rarr; 다음 앵커에서 새 종목
      - Blacklist(코인): 현재가 &le; prev_close &times; 0.85 &rarr; 해당 종목 매도 + 7일 제외 &rarr; 다음 앵커
   3. 카나리 플립: signal.risk_on &ne; state.prev_risk_on &rarr; 전 트랜치 즉시 전환
-  4. PFD: flip_date + 5달력일 이후 첫 실행에서 1회 수행 (코인만)
-  5. 앵커 체크: risk_on이면 offense, 아니면 defense picks를 해당 트랜치에 반영
+  4. 앵커 체크: risk_on이면 offense, 아니면 defense picks를 해당 트랜치에 반영
      (anchor_month 체크로 하루 1회만 적용)
-  6. 전 트랜치 merge &rarr; 최종 target
+  5. 전 트랜치 merge &rarr; 최종 target
      산식: 각 트랜치 비중을 1/N (코인 1/3, 주식 1/4)로 합산
      * crash_active=true &rarr; target=100% 현금 (트랜치 무시)
      * exclusions에 있는 종목 &rarr; target에서 제거, 해당 비중은 현금
      * recommend가 BL 코인을 여전히 picks에 넣더라도 executor가 걸러냄
-  7. target vs 잔고 &rarr; Delta &gt; 임계치면 매매
-  8. trade_state 저장 + 텔레그램 알림
+  6. target vs 잔고 &rarr; Delta &gt; 임계치면 매매
+  7. trade_state 저장 + 텔레그램 알림
 </pre
       >
       <p style="font-size: 0.9em; color: #666">
-        <b>이벤트 우선순위:</b> Crash &gt; DD/BL &gt; 플립 &gt; PFD &gt; 앵커
-        &gt; Delta 매매
+        <b>이벤트 우선순위:</b> Crash &gt; DD/BL &gt; 플립 &gt; 앵커 &gt; Delta
+        매매
       </p>
 
       <h4>실행 스케줄 (KST)</h4>
@@ -938,10 +968,6 @@ for attempt in 1..5:
             <td>카나리 플립 감지용</td>
           </tr>
           <tr>
-            <td>flip_date / pfd_done</td>
-            <td>PFD 5일 카운트 (코인)</td>
-          </tr>
-          <tr>
             <td>last_action / last_trade_date</td>
             <td>최근 매매 기록</td>
           </tr>
@@ -970,7 +996,6 @@ for attempt in 1..5:
     "exclusions": {}
   },
   "prev_risk_on": true,
-  "flip_date": null, "pfd_done": true,
   "last_action": "trade", "last_trade_date": "2026-03-25"
 }</pre
         >
@@ -1024,9 +1049,7 @@ for attempt in 1..5:
           </tr>
           <tr>
             <td>멱등성</td>
-            <td>
-              같은 날 여러 번 실행해도 앵커/PFD 중복 안 됨 (anchor_month 체크)
-            </td>
+            <td>같은 날 여러 번 실행해도 앵커 중복 안 됨 (anchor_month 체크)</td>
           </tr>
           <tr>
             <td>수수료 버퍼</td>
@@ -1279,10 +1302,6 @@ for attempt in 1..5:
             <td>하루에 크게 빠진 종목을 일정 기간 매수 대상에서 제외</td>
           </tr>
           <tr>
-            <td>PFD (플립 후 재평가)</td>
-            <td>카나리 전환 후 N일 뒤 종목을 다시 확인하여 리밸런싱</td>
-          </tr>
-          <tr>
             <td>트랜치</td>
             <td>
               자산을 N등분하여 서로 다른 날에 리밸런싱. 타이밍 리스크 분산
@@ -1290,7 +1309,9 @@ for attempt in 1..5:
           </tr>
           <tr>
             <td>앵커일</td>
-            <td>각 트랜치가 리밸런싱하는 날짜 (예: 1일, 8일, 15일, 22일)</td>
+            <td>
+              각 트랜치가 리밸런싱하는 날짜 (주식 1/8/15/22, 코인 1/11/21)
+            </td>
           </tr>
           <tr>
             <td>rebalancing_needed</td>
