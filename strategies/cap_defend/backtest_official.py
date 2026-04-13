@@ -332,6 +332,10 @@ COIN_VERSIONS = {
                     risk='G5'),
         dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15, bl_days=7,
         drift_threshold=0.10, post_flip_delay=0),
+    # V20: D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine).
+    #      이 엔진(3-snapshot 일봉 합성)으로는 표현 불가.
+    #      백테스트: strategies/cap_defend/backtest_spot_barfreq.py
+    #      실매매: trade/coin_live_engine.py + trade/executor_coin.py
 }
 
 OFF_R7 = ('SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ')
