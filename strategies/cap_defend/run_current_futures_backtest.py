@@ -35,7 +35,8 @@ def generate_trace(data, cfg):
 def main():
     t0 = time.time()
     print("Loading data...")
-    data = {iv: load_data(iv) for iv in ["4h", "1h"]}
+    intervals = sorted({cfg["interval"] for cfg in CURRENT_STRATEGIES.values()} | {"1h"})
+    data = {iv: load_data(iv) for iv in intervals}
     bars_1h, funding_1h = data["1h"]
     all_dates = bars_1h["BTC"].index[(bars_1h["BTC"].index >= START) & (bars_1h["BTC"].index <= END)]
 

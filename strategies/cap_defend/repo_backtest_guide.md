@@ -5,7 +5,8 @@
 ## 읽는 순서
 
 1. 현물 코인:
-   - [coin_backtest_howto.md](./coin_backtest_howto.md)
+   - 현재 운영 기준: `run_current_coin_v20_backtest.py`
+   - 레거시 V18 문서: [legacy/coin_backtest_howto.md](./legacy/coin_backtest_howto.md)
 2. 주식:
    - [stock_backtest_howto.md](./stock_backtest_howto.md)
 3. 선물:
@@ -13,7 +14,7 @@
 
 ## 전략별 실행 명령
 
-### 현물 코인
+### 현물 코인 V20
 
 데이터 갱신:
 
@@ -24,7 +25,7 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target coin
 백테스트:
 
 ```bash
-python3 strategies/cap_defend/run_current_coin_backtest.py
+python3 strategies/cap_defend/run_current_coin_v20_backtest.py
 ```
 
 ### 주식
@@ -101,6 +102,6 @@ python3 strategies/cap_defend/check_data_freshness.py
 
 ## 현재 공식 버전
 
-- 현물: `V18`
+- 현물: `V20`
 - 주식: `V17`
-- 선물: `1h_09 + 4h_01 + 4h_09`
+- 선물: `d005 4전략 EW` (4h_d005 + 2h_b60_S240 + 2h_b60_S120 + 4h_b60_M20_120)

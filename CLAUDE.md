@@ -310,14 +310,14 @@
 5. 인접 파라미터와 ablation으로 2차 검증한다.
 6. 실제 거래 로그 관점에서 최근 몇 개월 구간을 수동 점검한다.
 7. 실매매 엔진으로 같은 상태전이와 같은 이벤트 순서를 재현할 수 있는지 확인한다.
-8. 채택 결정 후에만 `auto_trade_upbit.py`, `recommend*.py`, 매뉴얼, `CLAUDE.md`를 동기화한다.
+8. 채택 결정 후에만 `trade/coin_live_engine.py`, `trade/executor_coin.py`, `recommend*.py`, 매뉴얼, `CLAUDE.md`를 동기화한다.
 9. 서버 반영 전 dry-run 또는 소액/모의 shadow 기간을 둔다.
 10. 반영 직후 1주일은 HTML, 로그, state 파일, pending, monitor 동작을 집중 점검한다.
 
 ## 전략 변경 시 체크리스트
 
-- [ ] `backtest_official.py` 버전 정의 업데이트
-- [ ] `auto_trade_upbit.py` 실매매 코드 동기화
+- [ ] 백테스트 코드 업데이트 (`backtest_spot_barfreq.py` V20 / `legacy/backtest_official.py` V12~V19)
+- [ ] `trade/coin_live_engine.py` + `trade/executor_coin.py` 동기화
 - [ ] `recommend.py` + `recommend_personal.py` 동시 수정
 - [ ] 앵커일 정의 일치 확인
 - [ ] 카나리 hysteresis와 `coin_risk_on` state 참조 일치 확인

@@ -32,15 +32,32 @@ portfolio_result*.html
 signal_state.json
 strategies/cap_defend/signal_state.json
 strategies/cap_defend/coin_trade_state.json
+trade/coin_trade_state.json
+trade/trade_state.json
+trade/kis_trade_state.json
 trade/binance_state.json
 trade/binance_state.json.lock
 trade/binance_history.db
 trade/binance_trade.log
+trade/executor_coin.log*
+trade/executor_stock.log*
+trade/universe_cg_cache.json
+trade/universe_upbit_cache.json
+trade/binance_exchinfo_cache.json
+trade/v20_*.json
 
 # Intermediate data
 *.csv
+*.tsv
 strategies/cap_defend/data/
 strategies/cap_defend/results/
+
+# Research artifacts (large outputs; scripts and .md kept)
+strategies/cap_defend/research/grid_results/
+strategies/cap_defend/research/configs/
+strategies/cap_defend/research/fixedlev_search_runs/
+strategies/cap_defend/research/*.txt
+strategies/cap_defend/research/*.json
 
 # Local tool metadata
 .codex
