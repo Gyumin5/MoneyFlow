@@ -118,16 +118,17 @@ def save_daily_live_snapshot():
 
     stock_krw = float(stock.get("stock_eval_usd", 0.0)) * float(stock.get("exchange_rate", 0.0))
     fx_rate = float(stock.get("exchange_rate", 0.0) or binance.get("exchange_rate", 0.0) or 0.0)
-    coin_krw = sum(float(row.get("value", 0.0)) for row in (upbit.get("holdings") or []))
+    upbit_coin_krw = sum(float(row.get("value", 0.0)) for row in (upbit.get("holdings") or []))
     binance_total_krw = float(binance.get("total_krw", 0.0))
     binance_cash_krw = float(binance.get("cash_krw", 0.0))
-    futures_krw = max(binance_total_krw - binance_cash_krw, 0.0)  # 바이낸스 포지션 마진
+    binance_invested_krw = max(binance_total_krw - binance_cash_krw, 0.0)  # 선물 포지션 + spot 토큰
+    coin_krw = upbit_coin_krw + binance_invested_krw  # 업비트 holdings + 바이낸스 투자분
     cash_krw = (
         float(stock.get("cash_krw", 0.0))
         + float(upbit.get("krw_balance", 0.0))
         + binance_cash_krw
     )  # KIS 현금 + Upbit KRW + Binance(선물 free margin + spot USDT)
-    total_krw = stock_krw + coin_krw + futures_krw + cash_krw
+    total_krw = stock_krw + coin_krw + cash_krw
     usd_cash = float(stock.get("cash_usd", 0.0))
     snapshot_date = datetime.now().strftime("%Y-%m-%d")
     accounts_json = json.dumps(accounts, ensure_ascii=False)
@@ -176,7 +177,7 @@ def save_daily_live_snapshot():
             snapshot_date,
             stock_krw,
             coin_krw,
-            futures_krw,
+            0.0,  # futures_krw: 코인에 합산됨
             cash_krw,
             total_krw,
             fx_rate,
