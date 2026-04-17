@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cap Defend Phase Status</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:20px;line-height:1.5;max-width:1400px}
+h1{margin:0 0 10px} h2{margin:0 0 8px;font-size:1.15rem} h3{margin:8px 0 4px;font-size:0.98rem}
+section{margin:18px 0;padding:12px;border:1px solid #e5e7eb;border-radius:6px;background:#fafafa}
+.meta{color:#555;font-size:0.85rem;margin:2px 0}
+table.tbl{border-collapse:collapse;width:100%;font-size:0.82rem}
+table.tbl th,table.tbl td{border:1px solid #ddd;padding:3px 6px} th{background:#f3f4f6}
+.pb{position:relative;background:#eee;height:16px;border-radius:3px;overflow:hidden;margin:4px 0}
+.pb-fill{background:#4ade80;height:100%}
+.pb-text{position:absolute;left:8px;top:0;font-size:0.78rem;color:#111;line-height:16px}
+nav a{margin-right:8px;font-size:0.85rem;color:#2563eb;text-decoration:none}
+nav a:hover{text-decoration:underline}
+pre.log{background:#f1f5f9;padding:8px;font-size:0.78rem;max-height:200px;overflow:auto;border-radius:4px}
+ul,ol{margin:4px 0 4px 20px}
+</style></head><body>
+<h1>Cap Defend Phase Status</h1>
+<p class="meta">updated 2026-04-17</p>
+<nav><a href='#recommend'><b>최종 추천</b></a> <a href='#leverage'>Leverage 비교</a> <a href='#spot_fixed'>현물 고정</a> <a href='#holdout'>Holdout</a> <a href='#grid_10x'>10x Grid</a> <a href='#plan'>계획</a> <a href='#iter_refine'>iter_refine</a></nav>
+<section id='plan'><h2>실험 계획 (2026-04-16 업데이트)</h2>
+<ul>
+<li><b>목표:</b> 주식 V17 + 업비트 현물 + 바이낸스 선물 앙상블 재설계. 자산배분 60/35/5 (8pp band).</li>
+<li><b>탐색 범위:</b> D + 4h 봉 (2h 제거), 현물 L1 + 선물 L2/L3/L4.</li>
+<li><b>앵커:</b> 2020-10-01 단일. FULL_END 2026-04-13. OOS 미분리 (IS only).</li>
+</ul>
+<h3>체인 순서</h3>
+<ol>
+<li><b>iter_refine</b> — 5-stage peak refinement. AXIS_CAP=7, prominence≥0.15, PEAK_CAP=3.</li>
+<li><b>plateau_check</b> — 버킷별 top-100 × sma/ms/ml/snap ±5/±10% perturbation. min/center Cal ≥ 0.85 통과.</li>
+<li><b>bridge_iter_to_phase1</b> — survivor → phase1_sweep/summary.csv 포맷 변환.</li>
+<li><b>phase3_ensemble</b> — (bucket×interval) 지표4 top-5 합집합 pool, k=1/2/3 조합. CAGR floor 0.30/0.40 두 세트. diversity gate + yearly consistency 출력.</li>
+<li><b>robustness_check</b> — <u>NEW</u>. phase3 top-20 앙상블 대상 LOYO(연도 제외) + LOAO(코인 제외). Spearman 순위 안정성 + top-5 overlap.</li>
+<li><b>phase4_3asset</b> — 주식 60% 고정, 현물 {20..40}%, 선물 40-현물. 절대 band {3,5,8,10,15}pp + sleeve-relative {0.2,0.3,0.4,0.5}. 자산별 비용 반영.</li>
+</ol>
+<h3>핵심 수정 (2026-04-16)</h3>
+<ul>
+<li>snap 매칭 버그 수정: raw bar → wall-clock hour (D 30봉 = 4h 180봉 일치).</li>
+<li>diversity gate: 같은 interval + 4축 상대차 &lt;15% 쌍 제외.</li>
+<li>yearly consistency: equity 기반 연도별 Cal, min_year_cal/worst_year_ret/negative_years 출력.</li>
+<li>sleeve-relative band: phase4에서 자산 weight × ratio로 독립 band 추가.</li>
+<li>robustness_check 신규 작성: LOYO 5년 + LOAO 16코인 (anchor이후 top-10 등장, stable 제외).</li>
+</ul>
+</section>
+<section id='iter_refine'><h2>iter_refine (5-stage peak refinement)</h2><p class='meta'>status=<b style='color:#16a34a'>DONE</b> stages: stage1=9728 stage2=55782 stage3=20857 stage4=18355 stage5=17412</p><pre class='log'>  [15800/17412] 2.3/s eta=11.8m
+  [16000/17412] 2.3/s eta=10.4m
+  [16200/17412] 2.3/s eta=8.9m
+  [16400/17412] 2.2/s eta=7.5m
+  [16600/17412] 2.2/s eta=6.1m
+  [16800/17412] 2.2/s eta=4.6m
+  [17000/17412] 2.2/s eta=3.1m
+  [17200/17412] 2.2/s eta=1.6m
+  [17400/17412] 2.2/s eta=0.1m
+  [17412/17412] 2.2/s eta=0.0m
+[stage5→6] grid change: 19.8% top_Cal=9.446 Δ=23.26%
+[done] combined rows: 121718 → /home/gmoh/mon/251229/strategies/cap_defend/research/iter_refine/raw_combined.csv
+</pre></section>
+<section id='plateau'><h2>plateau_check (parameter robustness)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><p class='meta'>no rows</p></section>
+<section id='bridge'><h2>bridge (plateau → phase1_sweep/summary.csv)</h2><p class='meta'>status=<b style='color:#16a34a'>DONE</b> summary rows=121718</p></section>
+<section id='phase3_30'><h2>Phase-3 ensemble (CAGR floor 3.0)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><h3>spot_top</h3><p class='meta'>no rows</p><h3>fut_top</h3><p class='meta'>no rows</p><h3>all combos (sample)</h3><p class='meta'>no rows</p></section>
+<section id='phase3_40'><h2>Phase-3 ensemble (CAGR floor 4.0)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><h3>spot_top</h3><p class='meta'>no rows</p><h3>fut_top</h3><p class='meta'>no rows</p><h3>all combos (sample)</h3><p class='meta'>no rows</p></section>
+<section id='robustness_30'><h2>robustness_check (LOYO + LOAO, floor 3.0)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><h3>Summary</h3><p class='meta'>no rows</p><h3>LOYO (Leave-One-Year-Out)</h3><p class='meta'>no rows</p><h3>LOAO (Leave-One-Asset-Out)</h3><p class='meta'>no rows</p></section>
+<section id='robustness_40'><h2>robustness_check (LOYO + LOAO, floor 4.0)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><h3>Summary</h3><p class='meta'>no rows</p><h3>LOYO (Leave-One-Year-Out)</h3><p class='meta'>no rows</p><h3>LOAO (Leave-One-Asset-Out)</h3><p class='meta'>no rows</p></section>
+<section id='phase4_30'><h2>Phase-4 3-asset mix (floor 3.0)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><p class='meta'>no rows</p></section>
+<section id='phase4_40'><h2>Phase-4 3-asset mix (floor 4.0)</h2><p class='meta'>status=<b>missing</b>  updated=-</p><p class='meta'>no rows</p></section>
+
+<section id='grid_10x'><h2>10x Grid 재설계 (2026-04-17)</h2>
+<p class='meta'>dense grid(SMA 39/44 등) 과적합 의심 → 엄격 10배수 그리드 재실행</p>
+<h3>Grid 스펙</h3>
+<ul>
+<li>D: sma [20,30,50,100,150] / ms [10,20,30,60] / ml [60,90,120,240] / snap [20,30,60,90] / vol 0.03/0.05/0.07</li>
+<li>4h: sma [120,240,480,720] / ms [20,60,120] / ml [120,240,480,720] / snap [30,60,120,180] / vol d0.05/b0.5/b0.7</li>
+<li>2h 제외. 총 5,472 configs (dense 16,416 대비 33%)</li>
+</ul>
+<h3>Phase 통과율 및 3-anchor OOS 비교</h3>
+<table class='tbl'>
+<tr><th>항목</th><th>10x</th><th>dense</th><th>비고</th></tr>
+<tr><td>Phase-2 plateau 통과율</td><td>49% (461/938)</td><td>26% (316/1216)</td><td>10x가 진짜 plateau</td></tr>
+<tr><td>Phase-3 pool members</td><td>59</td><td>69</td><td></td></tr>
+<tr><td>Phase-3 combos</td><td>661</td><td>740</td><td></td></tr>
+<tr><td>60/30/10 abs10 Cal_mean</td><td>3.00</td><td>2.61</td><td>+15%</td></tr>
+<tr><td>60/35/5 abs15 Cal_mean</td><td>2.91</td><td>2.50</td><td>+16%</td></tr>
+<tr><td>현 운영(60/35/5 L4 abs15)</td><td>-</td><td>2.32</td><td>dense 기반</td></tr>
+</table>
+<p class='meta'>핵심: 10x 그리드가 dense를 OOS에서 이김. coarse grid = regularization. 좁은 noise island 회피.</p>
+</section>
+
+<section id='holdout'><h2>True Blind Holdout 결과 (2026-04-17)</h2>
+<p class='meta'>train 2020-10~2023-12 only로 Phase-1→4 전체 재실행 / holdout 2024-01~2026-04 (선정에 한 번도 안 쓴 구간)</p>
+<table class='tbl'>
+<tr><th>label</th><th>train_Cal</th><th>hold_Cal</th><th>hold_CAGR</th><th>hold_MDD</th></tr>
+<tr><td>60/25/15 sleeve</td><td>6.66</td><td>1.66</td><td>30.2%</td><td>-18.2%</td></tr>
+<tr><td>60/30/10 sleeve</td><td>6.44</td><td>1.68</td><td>29.0%</td><td>-17.2%</td></tr>
+<tr><td>60/25/15 abs</td><td>7.51</td><td>1.76</td><td>27.2%</td><td>-15.5%</td></tr>
+<tr><td>60/35/5 sleeve</td><td>5.84</td><td>1.52</td><td>23.9%</td><td>-15.7%</td></tr>
+<tr><td>60/35/5 abs</td><td>6.68</td><td>1.55</td><td>22.2%</td><td>-14.3%</td></tr>
+<tr><td>60/30/10 abs</td><td>6.93</td><td>1.34</td><td>23.5%</td><td>-17.6%</td></tr>
+<tr><td>60/40/0 abs</td><td>5.82</td><td>1.43</td><td>17.8%</td><td>-12.5%</td></tr>
+<tr><td>60/40/0 sleeve</td><td>5.42</td><td>1.39</td><td>17.0%</td><td>-12.2%</td></tr>
+</table>
+<ul>
+<li>IS Cal의 ~75%가 선택편향 (train 5~7 → holdout 1.3~1.8)</li>
+<li>전 후보 holdout Cal &gt; 1.0 → 전략 알파 실존 (BTC 0.53 대비 2.5~3.3배)</li>
+<li>sleeve 밴드가 holdout에서 abs보다 안정</li>
+<li>선물 10~15% + sleeve 밴드가 holdout 상위 3개 공통</li>
+<li><b>경고:</b> holdout이 2024~2026 회복/상승장 → 진짜 bear OOS 부재</li>
+</ul>
+</section>
+
+<section id='leverage'><h2>Leverage L2/L3/L4 비교 (2026-04-17)</h2>
+<p class='meta'>Sub-period rank-sum (10 semi-annual windows H1 2021~H2 2025) × 현물 고정 k3_4b270476 × sleeve 밴드</p>
+<table class='tbl'>
+<tr><th>label</th><th>ranksum_total</th><th>fp_Cal</th><th>fp_CAGR</th><th>fp_MDD</th></tr>
+<tr style='background:#fef3c7'><td>60/35/5 L3</td><td>61</td><td>3.23</td><td>38.5%</td><td>-11.9%</td></tr>
+<tr style='background:#fef3c7'><td>60/30/10 L3</td><td>68</td><td>3.41</td><td>43.2%</td><td>-12.7%</td></tr>
+<tr style='background:#fef3c7'><td>60/25/15 L3</td><td>77</td><td>3.53</td><td>47.9%</td><td>-13.6%</td></tr>
+<tr><td>60/35/5 L4</td><td>84</td><td>3.19</td><td>41.5%</td><td>-13.0%</td></tr>
+<tr><td>60/35/5 L2</td><td>88</td><td>3.10</td><td>36.0%</td><td>-11.6%</td></tr>
+<tr><td>60/30/10 L4</td><td>99</td><td>3.13</td><td>47.0%</td><td>-15.0%</td></tr>
+<tr><td>60/30/10 L2</td><td>100</td><td>3.17</td><td>36.7%</td><td>-11.6%</td></tr>
+<tr><td>60/20/20 L3</td><td>101</td><td>3.56</td><td>53.4%</td><td>-15.0%</td></tr>
+<tr><td>60/25/15 L4</td><td>103</td><td>3.36</td><td>54.8%</td><td>-16.3%</td></tr>
+<tr><td>60/25/15 L2</td><td>105</td><td>3.12</td><td>40.2%</td><td>-12.9%</td></tr>
+<tr><td>60/20/20 L4</td><td>113</td><td>3.46</td><td>60.1%</td><td>-17.4%</td></tr>
+<tr><td>60/20/20 L2</td><td>121</td><td>3.20</td><td>41.6%</td><td>-13.0%</td></tr>
+</table>
+<ul>
+<li>L3(3배)가 robustness 1~3위 독점 (60/35/5, 60/30/10, 60/25/15)</li>
+<li>L4(4배)는 절대 CAGR 최고지만 기복 심해 rank-sum 밀림 (청산 리스크 포함)</li>
+<li>L2(2배)는 MDD 최저지만 robustness도 같이 약함 (의외의 결과)</li>
+<li>L4 제외 결정 (사용자 판단): 청산 위험</li>
+</ul>
+<h3>선물 앙상블 단독 청산 횟수 (100% 배분, 가드 없음)</h3>
+<table class='tbl'>
+<tr><th>앙상블</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>청산</th></tr>
+<tr><td>L2 70fb40c0 (D k=3)</td><td>2.30</td><td>94.3%</td><td>-41.0%</td><td>0</td></tr>
+<tr><td>L2 b48b3541 (4h k=3)</td><td>2.61</td><td>89.9%</td><td>-34.5%</td><td>1</td></tr>
+<tr><td>L3 12652d57 (4h k=3)</td><td>2.89</td><td>142.6%</td><td>-49.4%</td><td>2</td></tr>
+<tr><td>L3 fd2dfed2 (4h k=3)</td><td>2.81</td><td>142.7%</td><td>-50.8%</td><td>2</td></tr>
+</table>
+<p class='meta'>3자산 배분에서 선물 5~20%만 차지하므로 포트폴리오 레벨 청산 위험은 훨씬 낮음.</p>
+</section>
+
+<section id='spot_fixed'><h2>현물 앙상블 고정 — AI 3자 합의 (2026-04-17)</h2>
+<p class='meta'>선택: <b>ENS_spot_k3_4b270476</b> (k=3 EW)</p>
+<ul>
+<li>spot_1D_S50_M20_90_d0.05_SN90 (SMA50, Mom20/90)</li>
+<li>spot_1D_S150_M20_60_d0.05_SN90 (SMA150, Mom20/60)</li>
+<li>spot_1D_S100_M20_120_d0.05_SN90 (SMA100, Mom20/120)</li>
+</ul>
+<p class='meta'>공통: D봉, daily vol 5%, snap 90봉. Cal 2.40, CAGR 63.0% (현물 단독 full-period)</p>
+<p class='meta'>선정 근거: L2/L3 12개 조건 중 10개에서 1위, k=3 분산효과, k2 후보 대비 Cal -0.02/CAGR -0.5%p는 노이즈 수준.</p>
+</section>
+
+<section id='recommend'><h2>최종 추천 — AI 3자 합의 B안 (2026-04-17)</h2>
+<p class='meta'>현재 운영: 60/35/5 L4 abs15 (CAGR 41.5%, MDD -14.6%) → 전환 권장</p>
+<table class='tbl'>
+<tr><th>후보</th><th>배분</th><th>Lev</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>밴드 (sleeve r30)</th></tr>
+<tr><td>A (robust)</td><td>60/35/5</td><td>L3</td><td>3.23</td><td>38.5%</td><td>-11.9%</td><td>st18/sp10.5/fu1.5</td></tr>
+<tr style='background:#d1fae5'><td><b>B (balanced, 추천)</b></td><td>60/30/10</td><td>L3</td><td>3.41</td><td>43.2%</td><td>-12.7%</td><td>st18/sp9/fu3</td></tr>
+<tr><td>C (공격)</td><td>60/25/15</td><td>L3</td><td>3.53</td><td>47.9%</td><td>-13.6%</td><td>st18/sp7.5/fu4.5</td></tr>
+<tr><td>D (초공격)</td><td>60/20/20</td><td>L3</td><td>3.56</td><td>53.4%</td><td>-15.0%</td><td>st18/sp6/fu6</td></tr>
+<tr><td>선물없음</td><td>60/40/0</td><td>-</td><td>2.93</td><td>32.5%</td><td>-11.1%</td><td>st12/sp8</td></tr>
+</table>
+<h3>B안 구성</h3>
+<ul>
+<li>현물 앙상블: ENS_spot_k3_4b270476 (SMA50+100+150, D봉, vol5%, snap90, k=3 EW)</li>
+<li>선물 앙상블: ENS_fut_L3_k3_12652d57 (4h봉 k=3, SMA 240/240/120, Mom20/720|480|720)</li>
+<li>밴드: sleeve r30 (자산 가중치 × 30% = 밴드폭)</li>
+<li>가드 전략: 없음 (stop_kind=none, 앙상블 분산만 방어)</li>
+</ul>
+<h3>AI 3자 공통 우려 (실전 투입 전 해결 필요)</h3>
+<ol>
+<li><b>Holdout이 bear 부재</b> — 2024~2026은 회복/상승장 위주. 진짜 bear OOS 미검증.</li>
+<li><b>Data reuse</b> — 여러 후보 중 1개 선택 시 blindness 훼손. 엄밀히는 B+C 병행 shadow 필요.</li>
+<li><b>가드 없음 tail risk</b> — 코로나 빔/루나 같은 전방위 시스템 붕괴 시 멤버 동시 타격 위험. 포트폴리오 레벨 서킷브레이커(-20% 등) 도입 검토 권장.</li>
+<li><b>비교표에 Sharpe 누락</b> (Codex 지적).</li>
+<li><b>sleeve vs abs 리밸 비용 일관성 의심</b> (Claude code review) — 추가 점검 필요.</li>
+</ol>
+<h3>권고 추가 검증</h3>
+<ul>
+<li>블록 부트스트랩으로 bear 시나리오 스트레스 테스트</li>
+<li>crash week / exchange outage / partial fill 포함 스트레스 테스트</li>
+<li>B와 C 병행 shadow paper 2~3개월 후 확정</li>
+<li>후보별 Sharpe 포함 4지표 최종 비교표 재작성</li>
+<li>실전 후 첫 bear는 "진짜 시험대" — 이 점 인식 필요</li>
+</ul>
+</section>
+</body></html>

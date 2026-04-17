@@ -1,0 +1,9 @@
+{
+  "run_name": "guard_v1",
+  "n_seeds": 80,
+  "n_variants": 21,
+  "total_cases": 1680,
+  "start": "2020-10-01",
+  "end": "2026-03-28",
+  "started_at": "2026-04-13T20:35:51.685197"
+}

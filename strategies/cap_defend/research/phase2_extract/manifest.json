@@ -1,0 +1,8 @@
+{
+  "status": "done",
+  "stage": "phase2_extract",
+  "n_audit": 1216,
+  "n_survivors": 316,
+  "top_k_per_group": 100,
+  "updated_at": "2026-04-16 16:17:22"
+}
