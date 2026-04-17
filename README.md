@@ -1,20 +1,21 @@
-# MoneyFlow — V20
+# MoneyFlow — V21 (2026-04-17)
 
 3자산 포트폴리오 자동매매 시스템. 주식 + 현물코인 + 바이낸스 선물을 통합 관리한다.
 
-## 전략 요약
+## 전략 요약 (V21)
 
-| 자산 | 버전 | 거래소 | 핵심 전략 | 백테스트 성과 |
+| 자산 | 버전 | 거래소 | 핵심 전략 | 백테스트 참고 |
 |------|------|--------|-----------|--------------|
 | 주식 | V17 | 한국투자증권 | 7종 ETF, EEM 카나리, Z-score Top3, 4트랜치 | Sharpe 1.26, CAGR +13.3%, MDD -11.4% |
-| 현물코인 | V20 | 업비트 | D_SMA50 + 4h_SMA240 50:50 EW | 별도 전용 백테스트 진입점 제공 |
-| 선물 | d005 | 바이낸스 | 4전략 앙상블, 5x 동적레버리지 | Sharpe 2.08, CAGR +227%, MDD -34% |
+| 현물코인 | V21 | 업비트 | D_SMA50 + D_SMA150 + D_SMA100 1/3씩 EW (D봉 3멤버) | Cal 2.40, CAGR 63.0% (단독) |
+| 선물 | V21 (L3) | 바이낸스 | 4h 3전략 앙상블 EW, 고정 3배 레버리지, 가드 없음 | Cal 2.89, CAGR 143% (단독) |
 
-### 자산배분
+### 자산배분 V21
 
-- **주식 60% / 현물코인 25% / 선물 15%**
-- 밴드 리밸런싱: 편차 ±8%p 초과 시만 전체 복원 (매일 자동체크 + 텔레그램 알림)
-- 통합 포트폴리오: Sharpe 2.12, CAGR +39%, MDD -12.2%
+- **주식 60% / 현물코인 40% / 선물 0%** (선물 0에서 시작, 필요 시 수동 이동)
+- 밴드: sleeve r30 (자산 weight × 30%, 최소 2%p)
+- 리밸런싱: **수동** (`recommend_personal`이 밴드 초과 시 텔레그램 알림)
+- 3자산 추천 조합(백테스트 기준): 60/30/10 L3 sleeve — Cal 3.41 / CAGR 43.2% / MDD -12.7%
 
 ---
 
@@ -41,10 +42,23 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target futures
 ### 3. 백테스트 실행
 
 ```bash
-python3 strategies/cap_defend/run_current_stock_backtest.py     # 주식 V17
-python3 strategies/cap_defend/run_current_coin_v20_backtest.py  # 코인 V20
-python3 strategies/cap_defend/run_current_futures_backtest.py   # 선물 d005
+python3 strategies/cap_defend/run_current_stock_backtest.py       # 주식 V17
+python3 strategies/cap_defend/run_current_coin_v20_backtest.py    # 코인 V21
+                                                                  # (이 스크립트는 coin_live_engine.py의 MEMBERS를 import하므로
+                                                                  #  현재 V21 멤버 정의로 자동 실행됨)
+python3 strategies/cap_defend/run_current_futures_backtest.py     # 선물 V21 L3
 ```
+
+### 4. 연구 파이프라인 (Phase-1~4, 10x 그리드)
+
+```bash
+# research 디렉터리에 Phase-1~4 파이프라인, 10x grid brute force, holdout 결과 등이 있음
+ls strategies/cap_defend/research/phase{1,2,3,4}_10x/
+python3 strategies/cap_defend/research/run_subperiod_ranksum.py  # 10-window rank-sum
+python3 strategies/cap_defend/research/run_block_bootstrap.py    # block bootstrap stress
+```
+
+자세한 Phase-1~4 연구 기록과 V21 채택 근거는 [`V21_HISTORY.md`](./V21_HISTORY.md) 참조.
 
 ---
 
@@ -63,30 +77,33 @@ Crash:    VT -3% daily → 최소 3일 + VT>SMA10 회복 시 재진입
 거래비용: 0.2% (보수적)
 ```
 
-### 현물코인 V20
+### 현물코인 V21 (ENS_spot_k3_4b270476)
 
 ```
-멤버1:    D_SMA50  (SMA50, Mom30/90, daily vol 5%, snap 30)
-멤버2:    4h_SMA240 (SMA240, Mom30/120, daily vol 5%, snap 60)
-앙상블:   50:50 EW
-유니버스: historical_universe.json 월별 Top40
-비중:     Top5, EW + 33% Cap
-가드:     멤버별 극단갭 exclusion, Cash buffer 2%
+멤버1:    D_SMA50  (SMA50, Mom20/90, daily vol 5%, snap 90)
+멤버2:    D_SMA150 (SMA150, Mom20/60, daily vol 5%, snap 90)
+멤버3:    D_SMA100 (SMA100, Mom20/120, daily vol 5%, snap 90)
+앙상블:   1/3씩 EW (전부 D봉)
+유니버스: CoinGecko Top40 ∩ Binance spot ∩ Upbit KRW ∩ 253d+ ∩ 거래대금 10억↑
+비중:     Top3, EW + 1/3 Cap
+가드:     멤버별 gap -15% / 제외 30일, Cash buffer 2%
 거래비용: 0.4% (편도)
+Cron:     매일 09:05 KST (일 1회)
 ```
 
-### 선물 d005
+### 선물 V21 L3 (ENS_fut_L3_k3_12652d57)
 
 ```
-앙상블:   4전략 EW (25%씩)
-  1) 4h_d005:  SMA240, Mom20/720, daily vol 5%, snap60
-  2) 2h_S240:  SMA240, Mom20/720, bar vol 60%, snap120
-  3) 2h_S120:  SMA120, Mom20/720, bar vol 60%, snap120
-  4) 4h_M20:   SMA240, Mom20/120, bar vol 60%, snap21
+앙상블:   3전략 EW (1/3씩, 전부 4h봉)
+  1) 4h_S240_SN120: SMA240, Mom20/720, daily vol 5%, snap120
+  2) 4h_S240_SN30:  SMA240, Mom20/480, daily vol 5%, snap30
+  3) 4h_S120_SN120: SMA120, Mom20/720, daily vol 5%, snap120
 공통:     canary_hyst=0.015, n_snapshots=3, health=mom2vol
-레버리지: cap_mom_blend_543_cash (3/4/5x 동적)
-스탑:     prev_close -15%, cash_guard(CASH>=34%)
+레버리지: 고정 3배 (L3)
+스탑:     없음 (stop_kind=none, 앙상블 분산만으로 방어)
+캐시가드: 없음 (STOP_GATE_CASH_THRESHOLD=0)
 거래비용: 0.04% (바이낸스 maker)
+Cron:     4h마다 6회 (09/13/17/21/01/05시 KST)
 ```
 
 ---
@@ -185,15 +202,15 @@ MoneyFlow/
 - Oracle Cloud VM (IP/접속 정보는 개인 운영 매뉴얼 참조, 공개 금지)
 - 포트: serve.py (8080), api_server (5000)
 
-### Cron 스케줄
+### Cron 스케줄 (V21)
 
 | 시간 | 작업 |
 |------|------|
-| 09:15 | `run_recommend.sh` — 추천 HTML 생성 + 텔레그램 알림 |
-| 09:20 | `executor_stock.py` — 주식 자동매매 (한투) |
-| 매시간 :05 | `executor_coin.py` — 코인 V20 앙상블 실행 (bar-idempotent) |
-| */5 | watchdog |
-| 2h/4h | `auto_trade_binance.py` — 선물 자동매매 |
+| 09:05 | `executor_coin.py` — 코인 V21 (D봉, 일 1회) |
+| 09:15 | `run_recommend.sh` — 추천 HTML 생성 + 자산배분 sleeve r30 체크 + 텔레그램 |
+| 09:20 | `executor_stock.py` — 주식 V17 자동매매 |
+| 09/13/17/21/01/05 :05 | `auto_trade_binance.py` — 선물 V21 (4h마다 6회) |
+| */5 | `watchdog_serve.sh` — 서버 생존 체크 |
 
 ### 텔레그램 알림
 
@@ -216,7 +233,8 @@ MoneyFlow/
 
 | 버전 | 날짜 | 주요 변경 |
 |------|------|-----------|
-| V20 | 2026-04-13 | 코인: D_SMA50 + 4h_SMA240 50:50 EW 라이브 앙상블 (현재 운영) |
+| **V21** | **2026-04-17** | **코인: D봉 3멤버 1/3 EW. 선물: L3 3전략 고정 3x, 가드 없음. 배분 60/40/0 sleeve r30 (현재 운영)** |
+| V20 | 2026-04-13 | 코인: D_SMA50 + 4h_SMA240 50:50 EW 라이브 앙상블 |
 | V19 | 2026-04 | 선물 d005 4전략 확정 + 자산배분 60/25/15 + 밴드 8pp |
 | V18 | 2026-03 | 코인: SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap |
 | V17 | 2026-03 | 주식: Z-score Top3(Sh252) + VT Crash |
@@ -225,8 +243,19 @@ MoneyFlow/
 | V14 | 2026-02 | 코인: SMA60+hyst, DD+BL+Crash |
 | V12 | 2026-01 | 초기 버전 |
 
-전체 변경 근거와 폐기된 아이디어는 [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](strategies/cap_defend/STRATEGY_EVOLUTION.md) 참조.
+전체 변경 근거와 폐기된 아이디어는 [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](strategies/cap_defend/STRATEGY_EVOLUTION.md),
+V21 연구/실험 상세는 [`V21_HISTORY.md`](./V21_HISTORY.md), 운영 절차/롤백은 [`V21_OPERATION_MANUAL.md`](./V21_OPERATION_MANUAL.md) 참조.
 
 ## 한 줄 요약
 
 처음 받으면: `check_data_freshness.py` → `refresh_backtest_data.py` → `run_current_*_backtest.py` 순서로 실행.
+
+## 문서 인덱스
+
+- [`V21_OPERATION_MANUAL.md`](./V21_OPERATION_MANUAL.md) — V21 운영 스펙, 전환 절차, 롤백
+- [`V21_HISTORY.md`](./V21_HISTORY.md) — V21 개발 중 실험/결정/AI 검토/배포 로그
+- [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](./strategies/cap_defend/STRATEGY_EVOLUTION.md) — V12~V21 진화 요약
+- [`strategies/cap_defend/repo_backtest_guide.md`](./strategies/cap_defend/repo_backtest_guide.md) — 통합 백테스트 재현 가이드
+- [`strategies/cap_defend/stock_backtest_howto.md`](./strategies/cap_defend/stock_backtest_howto.md)
+- [`strategies/cap_defend/futures_backtest_howto.md`](./strategies/cap_defend/futures_backtest_howto.md)
+- [`history.md`](./history.md) — 최근 30일 결정 로그 (append-only)
