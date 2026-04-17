@@ -182,7 +182,7 @@ MoneyFlow/
 
 ### 서버 정보
 
-- Oracle Cloud VM: `[REDACTED_SERVER]`
+- Oracle Cloud VM (IP/접속 정보는 개인 운영 매뉴얼 참조, 공개 금지)
 - 포트: serve.py (8080), api_server (5000)
 
 ### Cron 스케줄
@@ -197,7 +197,7 @@ MoneyFlow/
 
 ### 텔레그램 알림
 
-- 봇: `[REDACTED_BOT]`
+- 봇 토큰/chat_id는 개인 설정 파일(`~/.config/telegram_bot.json` 또는 환경변수)에서 로드
 - Crash/카나리 플립, 자산배분 밴드 초과 시 자동 알림
 
 ---
