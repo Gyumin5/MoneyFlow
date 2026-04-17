@@ -234,6 +234,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         stop_lookback_bars=0,
         initial_capital=10000.0,
         start_date='2020-10-01', end_date='2026-03-28',
+        fill_mode='open',  # 'open'(unified_backtest 기준) | 'close'(legacy)
         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
     """시간봉 완전 선물 백테스트. 봉 단위 파라미터 지원."""
 
@@ -303,7 +304,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         return pv
 
     def _get_price(coin, date):
-        """date 기준 종가 (ffill)."""
+        """date 기준 종가 (ffill). pv 평가 전용."""
         df = bars.get(coin)
         if df is None:
             return 0
@@ -311,6 +312,20 @@ def run(bars, funding, interval='1h', leverage=1.0,
         if ci < 0:
             return 0
         return float(df['Close'].iloc[ci])
+
+    def _get_fill_price(coin, date):
+        """체결가: fill_mode='open'이면 해당 봉 Open (exact match),
+        'close'면 Close(legacy)."""
+        df = bars.get(coin)
+        if df is None:
+            return 0
+        if fill_mode == 'close':
+            return _get_price(coin, date)
+        try:
+            ci = df.index.get_loc(date)
+        except KeyError:
+            return 0
+        return float(df['Open'].iloc[ci])
 
     def _get_bar_index(coin, date):
         df = bars.get(coin)
@@ -396,13 +411,13 @@ def run(bars, funding, interval='1h', leverage=1.0,
         if pv <= 0:
             return
 
-        # 목표 포지션
+        # 목표 포지션 (체결가는 t 봉 Open)
         target_qty = {}
         target_margin = {}
         for coin, w in target_weights.items():
             if coin == 'CASH' or w <= 0:
                 continue
-            cur = _get_price(coin, date)
+            cur = _get_fill_price(coin, date)
             if cur <= 0:
                 continue
             tmgn = pv * w * 0.95
@@ -413,7 +428,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
 
         # 매도 (보유 중이지만 target에 없거나 줄어야)
         for coin in list(holdings.keys()):
-            cur = _get_price(coin, date)
+            cur = _get_fill_price(coin, date)
             if cur <= 0:
                 continue
             slip = SLIPPAGE_MAP.get(coin, 0.0005)
@@ -442,7 +457,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
 
         # 매수 (target에 있지만 미보유거나 늘어야)
         for coin, tqty in target_qty.items():
-            cur = _get_price(coin, date)
+            cur = _get_fill_price(coin, date)
             if cur <= 0:
                 continue
             slip = SLIPPAGE_MAP.get(coin, 0.0005)

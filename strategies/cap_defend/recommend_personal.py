@@ -1,11 +1,12 @@
 """
-Cap Defend V20 Recommendation Script
+Cap Defend V21 Recommendation Script
 ===================================
 Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
-Coin V20: D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine: trade/coin_live_engine.py)
-  - D_SMA50: 1D봉, SMA50, Mom30/90, snap 30봉, gap stop -15%, 제외 30일
-  - 4h_SMA240: 4h봉, SMA240, Mom30/120, snap 60봉, gap stop -10%, 제외 10일
-  - 리포트는 trade_state.json(V20 live state) 스냅샷을 읽어 표시합니다.
+Coin V21: D_SMA50 + D_SMA150 + D_SMA100 1/3씩 EW 앙상블 (live engine: trade/coin_live_engine.py)
+  - D_SMA50: 1D봉, SMA50, Mom20/90, snap 90봉, gap stop -15%, 제외 30일
+  - D_SMA150: 1D봉, SMA150, Mom20/60, snap 90봉, gap stop -15%, 제외 30일
+  - D_SMA100: 1D봉, SMA100, Mom20/120, snap 90봉, gap stop -15%, 제외 30일
+  - 리포트는 trade_state.json(V21 live state) 스냅샷을 읽어 표시합니다.
 Futures: d005 4전략 앙상블 EW + 5x 동적 레버리지
 Asset Allocation: 주식60 / 업비트35 / 바이낸스5, 8pp 밴드
 """
@@ -86,14 +87,14 @@ PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORT
 STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
 COIN_ANCHOR_DAYS = (1, 11, 21)
 FUTURES_TRANCHE_META = {
-    "4h_d005": {"interval_hours": 4, "snap_interval_bars": 60, "n_snapshots": 3},
-    "2h_S240": {"interval_hours": 2, "snap_interval_bars": 120, "n_snapshots": 3},
-    "2h_S120": {"interval_hours": 2, "snap_interval_bars": 120, "n_snapshots": 3},
-    "4h_M20":  {"interval_hours": 4, "snap_interval_bars": 21, "n_snapshots": 3},
+    "4h_S240_SN120": {"interval_hours": 4, "snap_interval_bars": 120, "n_snapshots": 3},
+    "4h_S240_SN30":  {"interval_hours": 4, "snap_interval_bars": 30,  "n_snapshots": 3},
+    "4h_S120_SN120": {"interval_hours": 4, "snap_interval_bars": 120, "n_snapshots": 3},
 }
 COIN_MEMBER_META = {
-    "D_SMA50":   {"interval_hours": 24, "snap_interval_bars": 30, "n_snapshots": 3},
-    "4h_SMA240": {"interval_hours": 4,  "snap_interval_bars": 60, "n_snapshots": 3},
+    "D_SMA50":  {"interval_hours": 24, "snap_interval_bars": 90, "n_snapshots": 3},
+    "D_SMA150": {"interval_hours": 24, "snap_interval_bars": 90, "n_snapshots": 3},
+    "D_SMA100": {"interval_hours": 24, "snap_interval_bars": 90, "n_snapshots": 3},
 }
 
 def _save_signal_state(data):
@@ -196,17 +197,20 @@ def save_daily_live_snapshot():
         "cash_krw": cash_krw,
         "total_krw": total_krw,
     }
-STRATEGY_VERSION = "V20"
+STRATEGY_VERSION = "V21"
 VERSION_HISTORY = [
-    ("V20", "2026-04",
-     "코인 현물: D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine)",
-     """<b>▶ 코인 현물 (V20 신규 — 앙상블)</b>
-• <b>멤버1 D_SMA50:</b> 일봉 · SMA50 · Mom30/90 · snap 30봉 · gap stop -15% · 제외 30일
-• <b>멤버2 4h_SMA240:</b> 4시간봉 · SMA240 · Mom30/120 · snap 60봉 · gap stop -10% · 제외 10일
-• <b>앙상블:</b> 50:50 EW (combined target은 live engine이 자동 산출)
+    ("V21", "2026-04",
+     "코인 현물: D_SMA50 + D_SMA150 + D_SMA100 1/3 EW (D봉 3멤버 앙상블). 선물: L3 3멤버 EW. 가드 없음.",
+     """<b>▶ 코인 현물 (V21 — k3_4b270476 D봉 3멤버 앙상블)</b>
+• <b>멤버1 D_SMA50:</b> 일봉 · SMA50 · Mom20/90 · snap 90봉 · gap stop -15% · 제외 30일
+• <b>멤버2 D_SMA150:</b> 일봉 · SMA150 · Mom20/60 · snap 90봉 · gap stop -15% · 제외 30일
+• <b>멤버3 D_SMA100:</b> 일봉 · SMA100 · Mom20/120 · snap 90봉 · gap stop -15% · 제외 30일
+• <b>앙상블:</b> 1/3씩 EW (combined target은 live engine이 자동 산출)
 • <b>카나리:</b> 멤버별 BTC &gt; SMA + 1.5% hysteresis
 • <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND Vol≤5% (멤버 내부)
-• <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py, 매시 05분 cron
+• <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py, 매일 09:05 cron
+• <b>선물 (V21 — L3 12652d57):</b> 4h봉 3멤버(S240_SN120, S240_SN30, S120_SN120) EW 1/3씩, 고정 3x, 가드 없음
+• <b>자산배분:</b> 60/40/0 시작 (주식/현물/선물), sleeve r30 밴드, 리밸런싱은 수동
 
 <b>▶ 주식: V17 동일, 선물: V19 동일, 자산배분: 60/25/15</b>"""),
 
@@ -356,13 +360,15 @@ VERSION_HISTORY = [
 \u2022 \uc6d4\uac04 \uc2a4\ucf00\uc904 \uae30\ubc18"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.35, 0.05
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.40, 0.00  # V21: 60/40/0 (선물 0 시작, 수동 이동)
+SLEEVE_RATIO = 0.30  # V21 sleeve r30: 자산별 밴드 = weight * 30%
+SLEEVE_MIN_BAND = 0.02  # 선물 0% 같은 경우 최소 밴드 2%p (sleeve 0 방지)
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
 
 def get_cash_buffer():
-    """현금 버퍼 비율. V20 trade_state에서 읽기 (HTML 표시용)."""
+    """현금 버퍼 비율. V21 trade_state에서 읽기 (HTML 표시용)."""
     for _p in (
         os.path.join(APP_HOME, 'trade_state.json'),
         'trade_state.json',
@@ -401,7 +407,7 @@ CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V20: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V21: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -925,7 +931,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})", meta
 
 def _load_v20_state_personal():
-    """V20 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
+    """V21 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
     candidates = [
         os.path.join(os.getcwd(), 'trade_state.json'),
         '/home/ubuntu/trade_state.json',
@@ -940,18 +946,18 @@ def _load_v20_state_personal():
     return None, None
 
 def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=True):
-    """V20 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
+    """V21 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
 
     시그니처는 V19 버전과 호환 (caller가 5-tuple 언팩).
     coin_universe / all_prices / is_today는 현재 미사용(engine이 자체 데이터 사용).
     """
     date_str = target_date.date() if hasattr(target_date, 'date') else target_date
-    log.append(f"<h3>🪙 코인 포트폴리오 (V20: D_SMA50 + 4h_SMA240 50:50 앙상블) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V21: D봉 3멤버 EW 앙상블) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     state, path = _load_v20_state_personal()
     if state is None:
-        log.append("<p class='error'>V20 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
+        log.append("<p class='error'>V21 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
         return {CASH_ASSET: 1.0}, "상태 로드 실패", meta, log, []
 
     log.append(f"<p class='info'>상태: {path} · 마지막 실행 {state.get('last_run_ts', 'N/A')}</p>")
@@ -964,7 +970,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
     # 멤버별 상태 테이블
     mrows = []
     healthy_union = []
-    for m_name in ('D_SMA50', '4h_SMA240'):
+    for m_name in ('D_SMA50', 'D_SMA150', 'D_SMA100'):
         m_st = members.get(m_name, {})
         m_tgt = {k: v for k, v in (last_member_targets.get(m_name, {}) or {}).items() if k != '_ts'}
         m_ex = list((excluded.get(m_name, {}) or {}).keys())
@@ -985,7 +991,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
     except Exception:
         pass
 
-    # 결합 타겟 (50:50 EW)
+    # 결합 타겟 (1/3씩 EW, V21)
     weights = {k: v for k, v in combined_snap.items() if k != '_ts'}
     if not weights:
         weights = {CASH_ASSET: 1.0}
@@ -996,15 +1002,20 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
 
     w_rows = [{'자산': t, '비중': f"{w*100:.2f}%"} for t, w in sorted(weights.items(), key=lambda x: -x[1])]
     try:
-        log.append("<p><b>[결합 타겟]</b> 멤버 50:50 EW 합산 (실매매는 executor가 이 비중으로 실행)</p>")
+        log.append("<p><b>[결합 타겟]</b> D봉 3멤버 1/3씩 EW 합산 (V21, executor가 이 비중으로 실행)</p>")
         log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except Exception:
         pass
 
     # 카나리 상태 요약 (signal_dist meta 채우기 — 기존 UI 호환)
-    d_canary = members.get('D_SMA50', {}).get('canary_on')
-    h_canary = members.get('4h_SMA240', {}).get('canary_on')
-    meta['signal_dist'] = {'D_SMA50_canary': d_canary, '4h_SMA240_canary': h_canary}
+    d50_canary = members.get('D_SMA50', {}).get('canary_on')
+    d150_canary = members.get('D_SMA150', {}).get('canary_on')
+    d100_canary = members.get('D_SMA100', {}).get('canary_on')
+    meta['signal_dist'] = {
+        'D_SMA50_canary': d50_canary,
+        'D_SMA150_canary': d150_canary,
+        'D_SMA100_canary': d100_canary,
+    }
 
     invested = sum(v for k, v in weights.items() if k != CASH_ASSET)
     cash_pct = weights.get(CASH_ASSET, 0.0)
@@ -1092,9 +1103,13 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
             const TARGET_STOCK_RATIO = 0.60;
-            const TARGET_COIN_RATIO = 0.35;
-            const TARGET_FUTURES_RATIO = 0.05;
-            const REBAL_BAND = 0.08;  // ±8%p
+            const TARGET_COIN_RATIO = 0.40;
+            const TARGET_FUTURES_RATIO = 0.00;
+            const SLEEVE_RATIO = 0.30;       // V21 sleeve r30: 자산 밴드 = weight × 30%
+            const SLEEVE_MIN_BAND = 0.02;    // 선물 0% 같은 경우 최소 밴드 2%p
+            const BAND_STOCK = Math.max(TARGET_STOCK_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
+            const BAND_COIN = Math.max(TARGET_COIN_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
+            const BAND_FUTURES = Math.max(TARGET_FUTURES_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1265,30 +1280,32 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const driftStock = Math.abs(curStockPct - TARGET_STOCK_RATIO);
                 const driftCoin = Math.abs(curCoinPct - TARGET_COIN_RATIO);
                 const driftFutures = Math.abs(curFuturesPct - TARGET_FUTURES_RATIO);
-                const maxDrift = Math.max(driftStock, driftCoin, driftFutures);
-                const needRebal = maxDrift >= REBAL_BAND;
+                const breachStock = driftStock >= BAND_STOCK;
+                const breachCoin = driftCoin >= BAND_COIN;
+                const breachFutures = driftFutures >= BAND_FUTURES;
+                const needRebal = breachStock || breachCoin || breachFutures;
 
                 // 2. 목표 금액
                 const targetStockKRW = totalAsset * TARGET_STOCK_RATIO;
                 const targetCoinKRW = totalAsset * TARGET_COIN_RATIO;
                 const targetFuturesKRW = totalAsset * TARGET_FUTURES_RATIO;
 
-                // 3. 비중 카드 (3열)
-                function pctColor(cur, target) {
-                    return Math.abs(cur - target) >= REBAL_BAND ? '#d93025' : '#0d904f';
+                // 3. 비중 카드 (3열, sleeve 밴드 기준)
+                function pctColor(cur, target, band) {
+                    return Math.abs(cur - target) >= band ? '#d93025' : '#0d904f';
                 }
-                function assetCard(label, krw, cur, target) {
+                function assetCard(label, krw, cur, target, band) {
                     return '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
                         + '<div style="font-size:0.85em; color:#666;">' + label + '</div>'
                         + '<div style="font-size:1.25em; font-weight:700;">' + Math.round(krw).toLocaleString() + '\\uc6d0</div>'
-                        + '<div style="color:' + pctColor(cur, target) + '; font-weight:600;">'
-                        + (cur * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (target * 100).toFixed(0) + '%)</div></div>';
+                        + '<div style="color:' + pctColor(cur, target, band) + '; font-weight:600;">'
+                        + (cur * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (target * 100).toFixed(0) + '% \\u00b1' + (band * 100).toFixed(1) + '%)</div></div>';
                 }
 
                 let html = '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:16px;">';
-                html += assetCard('\\uc8fc\\uc2dd', stockKRW, curStockPct, TARGET_STOCK_RATIO);
-                html += assetCard('\\ud604\\ubb3c\\ucf54\\uc778', coinKRW, curCoinPct, TARGET_COIN_RATIO);
-                html += assetCard('\\uc120\\ubb3c', futuresKRW, curFuturesPct, TARGET_FUTURES_RATIO);
+                html += assetCard('\\uc8fc\\uc2dd', stockKRW, curStockPct, TARGET_STOCK_RATIO, BAND_STOCK);
+                html += assetCard('\\ud604\\ubb3c\\ucf54\\uc778', coinKRW, curCoinPct, TARGET_COIN_RATIO, BAND_COIN);
+                html += assetCard('\\uc120\\ubb3c', futuresKRW, curFuturesPct, TARGET_FUTURES_RATIO, BAND_FUTURES);
                 html += '</div>';
 
                 html += '<div style="padding:8px 14px; background:#e8eaf6; border-radius:8px; margin-bottom:12px;">'
@@ -1308,13 +1325,17 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             moves.push(d.name + ' ' + sign + Math.round(d.delta).toLocaleString() + '\\uc6d0');
                         }
                     });
+                    const breached = [];
+                    if (breachStock) breached.push('\\uc8fc\\uc2dd');
+                    if (breachCoin) breached.push('\\ud604\\ubb3c');
+                    if (breachFutures) breached.push('\\uc120\\ubb3c');
                     html += '<div style="padding:14px; background:#fce8e6; border:2px solid #d93025; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 (\\ucd5c\\ub300\\ud3b8\\ucc28 ' + (maxDrift * 100).toFixed(1) + '%p \\u2265 ' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 — sleeve r30 \\ubc34\\ub4dc \\ucd08\\uacfc: ' + breached.join(', ') + '</div>'
                         + '<div style="font-size:1.05em;">' + moves.join('<br>') + '</div>'
                         + '</div>';
                 } else {
                     html += '<div style="padding:14px; background:#e8f5e9; border:1px solid #0d904f; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (\\ucd5c\\ub300\\ud3b8\\ucc28 ' + (maxDrift * 100).toFixed(1) + '%p < ' + (REBAL_BAND * 100).toFixed(0) + '%p)</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (sleeve r30 \\ubc34\\ub4dc \\ub0b4)</div>'
                         + '</div>';
                 }
 
@@ -1563,7 +1584,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     except Exception as _e:
         state_sections.append(f"<h2>📘 주식 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
-    # ── 현물 코인 실행 상태 (V20 앙상블) ──
+    # ── 현물 코인 실행 상태 (V21 앙상블) ──
     try:
         _coin_state, _coin_path = _load_first_json([
             os.path.join(APP_HOME, "trade_state.json"),
@@ -1579,7 +1600,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         _coin_summary = [
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_coin_state.get('rebalancing_needed'))}",
             f"<b>마지막 실행:</b> {_fmt_run_ts(_coin_state.get('last_run_ts', '-'))}",
-            f"<b>합산 목표 (50:50 EW):</b><br>{_fmt_alloc_lines(_last_target_clean)}",
+            f"<b>합산 목표 (V21 1/3 EW):</b><br>{_fmt_alloc_lines(_last_target_clean)}",
         ]
         if _warning_coins:
             _coin_summary.append(f"<b>Upbit 유의/상폐:</b> {', '.join(_warning_coins)}")
@@ -1603,7 +1624,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 "현재 목표": _fmt_alloc_lines(_ms.get("last_combined", {}) or {}),
                 "제외 코인": _ex_text,
             })
-        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V20)", _coin_summary, _coin_rows))
+        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V21)", _coin_summary, _coin_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 업비트 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
@@ -1930,38 +1951,49 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (60/35/5, ±8pp 밴드) ===
+                // === 3자산 배분 체크 (V21: 60/40/0, sleeve r30 밴드 — 리밸런싱은 수동) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.60, T_SPOT = 0.35, T_FUT = 0.05, BAND = 0.08;
+                    const T_STOCK = 0.60, T_SPOT = 0.40, T_FUT = 0.00;
+                    const SLEEVE = 0.30, MIN_BAND = 0.02;
+                    const B_STOCK = Math.max(T_STOCK * SLEEVE, MIN_BAND);
+                    const B_SPOT = Math.max(T_SPOT * SLEEVE, MIN_BAND);
+                    const B_FUT = Math.max(T_FUT * SLEEVE, MIN_BAND);
                     const pStock = stockKrw / allocTotal;
                     const pSpot = spotKrw / allocTotal;
                     const pFut = futKrw / allocTotal;
                     const dStock = Math.abs(pStock - T_STOCK);
                     const dSpot = Math.abs(pSpot - T_SPOT);
                     const dFut = Math.abs(pFut - T_FUT);
-                    const maxD = Math.max(dStock, dSpot, dFut);
-                    const need = maxD >= BAND;
+                    const breachStock = dStock >= B_STOCK;
+                    const breachSpot = dSpot >= B_SPOT;
+                    const breachFut = dFut >= B_FUT;
+                    const need = breachStock || breachSpot || breachFut;
 
-                    const pctColor = (d) => d >= BAND ? '#d93025' : '#0d904f';
-                    const pctBar = (label, cur, target, drift) => {{
+                    const pctColor = (d, b) => d >= b ? '#d93025' : '#0d904f';
+                    const pctBar = (label, cur, target, drift, band) => {{
                         return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;">'
                             + '<span>' + label + '</span>'
-                            + '<span style="color:' + pctColor(drift) + ';font-weight:600;">'
+                            + '<span style="color:' + pctColor(drift, band) + ';font-weight:600;">'
                             + (cur * 100).toFixed(1) + '% (목표 ' + (target * 100).toFixed(0) + '%'
-                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p)</span></div>';
+                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p / 밴드 ±' + (band * 100).toFixed(1) + '%p)</span></div>';
                     }};
+
+                    const breached = [];
+                    if (breachStock) breached.push('주식');
+                    if (breachSpot) breached.push('업비트');
+                    if (breachFut) breached.push('바이낸스');
 
                     html += '<div class="card" style="margin-top:12px;border:2px solid ' + (need ? '#d93025' : '#0d904f') + ';">';
                     html += '<div style="font-weight:700;font-size:1.05em;color:' + (need ? '#d93025' : '#0d904f') + ';margin-bottom:8px;">'
-                        + (need ? '⚠️ 리밸런싱 필요' : '✅ 리밸런싱 불필요')
-                        + ' (최대편차 ' + (maxD * 100).toFixed(1) + '%p ' + (need ? '≥' : '<') + ' ±8%p)</div>';
-                    html += pctBar('주식', pStock, T_STOCK, dStock);
-                    html += pctBar('업비트', pSpot, T_SPOT, dSpot);
-                    html += pctBar('바이낸스', pFut, T_FUT, dFut);
+                        + (need ? ('⚠️ 리밸런싱 필요 — sleeve r30 밴드 초과: ' + breached.join(', ')) : '✅ 리밸런싱 불필요 (sleeve r30 밴드 내)')
+                        + '</div>';
+                    html += pctBar('주식', pStock, T_STOCK, dStock, B_STOCK);
+                    html += pctBar('업비트', pSpot, T_SPOT, dSpot, B_SPOT);
+                    html += pctBar('바이낸스', pFut, T_FUT, dFut, B_FUT);
 
                     if (need) {{
                         const tgtStock = allocTotal * T_STOCK;
@@ -2398,7 +2430,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
 
-    # ─── 3자산 배분 체크 (60/25/15, ±8pp 밴드) ───
+    # ─── 3자산 배분 체크 (V21: sleeve r30 밴드) ───
     try:
         api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
         ov = requests.get(f"{api}/api/assets/live_overview", timeout=60).json()
@@ -2415,15 +2447,25 @@ if __name__ == "__main__":
             d_stock = abs(p_stock - STOCK_RATIO)
             d_spot = abs(p_spot - COIN_RATIO)
             d_fut = abs(p_fut - FUTURES_RATIO)
-            max_drift = max(d_stock, d_spot, d_fut)
+            # sleeve r30: 자산별 밴드 = weight × SLEEVE_RATIO (최소 SLEEVE_MIN_BAND)
+            b_stock = max(STOCK_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND)
+            b_spot = max(COIN_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND)
+            b_fut = max(FUTURES_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND)
+            breached_assets = []
+            if d_stock >= b_stock:
+                breached_assets.append(f"주식(편차{d_stock:.1%}/밴드{b_stock:.1%})")
+            if d_spot >= b_spot:
+                breached_assets.append(f"업비트(편차{d_spot:.1%}/밴드{b_spot:.1%})")
+            if d_fut >= b_fut:
+                breached_assets.append(f"바이낸스(편차{d_fut:.1%}/밴드{b_fut:.1%})")
 
             alloc_line = (
-                f"⚖️ 자산배분: 주식 {p_stock:.1%} / 업비트 {p_spot:.1%} / 바이낸스 {p_fut:.1%}"
-                f" (목표 60/35/5, 최대편차 {max_drift:.1%})"
+                f"⚖️ 자산배분: 주식 {p_stock:.1%}(밴드±{b_stock:.1%}) / 업비트 {p_spot:.1%}(밴드±{b_spot:.1%}) / 바이낸스 {p_fut:.1%}(밴드±{b_fut:.1%})"
+                f" — V21 목표 60/40/0 sleeve r30"
             )
             print(alloc_line)
 
-            if max_drift >= REBAL_BAND_PP:
+            if breached_assets:
                 moves = []
                 for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
                                         ("업비트", spot_krw, alloc_total * COIN_RATIO),
@@ -2432,16 +2474,16 @@ if __name__ == "__main__":
                     if abs(delta) > 10000:
                         moves.append(f"  {name}: {delta:+,.0f}원")
                 alert_msg = (
-                    f"⚠️ 자산배분 리밸런싱 필요!\n"
-                    f"최대편차 {max_drift:.1%} ≥ ±8%p\n\n"
-                    f"주식 {p_stock:.1%} (목표 60%)\n"
-                    f"업비트 {p_spot:.1%} (목표 35%)\n"
-                    f"바이낸스 {p_fut:.1%} (목표 5%)\n\n"
-                    f"조정 필요:\n" + "\n".join(moves)
+                    f"⚠️ 자산배분 리밸런싱 필요 (V21 sleeve r30)\n"
+                    f"밴드 초과: {', '.join(breached_assets)}\n\n"
+                    f"주식 {p_stock:.1%} (목표 60%, 밴드 ±{b_stock:.1%})\n"
+                    f"업비트 {p_spot:.1%} (목표 40%, 밴드 ±{b_spot:.1%})\n"
+                    f"바이낸스 {p_fut:.1%} (목표 0%, 밴드 ±{b_fut:.1%})\n\n"
+                    f"수동 조정 필요:\n" + "\n".join(moves)
                 )
                 send_telegram(alert_msg)
-                print("🚨 자산배분 리밸런싱 알림 전송")
+                print(f"🚨 자산배분 리밸런싱 알림 전송 (breached: {breached_assets})")
             else:
-                print("✅ 자산배분 밴드 내 (리밸런싱 불필요)")
+                print("✅ 자산배분 sleeve 밴드 내 (리밸런싱 불필요)")
     except Exception as e:
         print(f"⚠️ 자산배분 체크 실패: {e}")

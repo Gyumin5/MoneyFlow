@@ -3,7 +3,7 @@
 
 구조:
   - 신호: coin_live_engine.compute_live_targets
-          (Binance spot kline → 멤버 D_SMA50 + 4h_SMA240 50:50 앙상블)
+          (Binance spot kline → V21 D봉 3멤버 D_SMA50/150/100 1/3씩 EW 앙상블)
   - 체결: Upbit KRW (pyupbit)
   - 상태: trade_state.json
 
@@ -540,6 +540,11 @@ def run_once(dry_run: bool = False) -> int:
         state['cash_buffer'] = state['buffer_pct']
     now = cle.utc_now()
 
+    # 이전 사이클의 combined target 캡처 (engine 이 덮어쓰기 전)
+    _prev_snap = state.get('last_target_snapshot') or {}
+    prev_combined = {k: float(v) for k, v in _prev_snap.items()
+                     if k != '_ts' and isinstance(v, (int, float))}
+
     log(f'═══ 코인 Executor 시작 (dry_run={dry_run}, now={cle.to_utc_iso(now)}) ═══')
 
     session = requests.Session()
@@ -640,6 +645,24 @@ def run_once(dry_run: bool = False) -> int:
         flips = [m for m, f in result.canary_flipped.items() if f]
         if flips:
             _tg(f'🔄 카나리 플립: {flips}')
+
+    # Anchor-only 가드: 이전 combined_target 과 사실상 동일하면 drift 리밸런싱 스킵
+    # (V21: 스냅샷 회전(anchor)이 실제로 일어났을 때만 매매)
+    def _targets_equal(a: Dict[str, float], b: Dict[str, float], tol: float = 0.005) -> bool:
+        if not a or not b:
+            return False
+        keys = set(a.keys()) | set(b.keys())
+        for k in keys:
+            if abs(a.get(k, 0.0) - b.get(k, 0.0)) > tol:
+                return False
+        return True
+
+    if _targets_equal(result.combined_target, prev_combined):
+        log(f'  ℹ target 불변 (앵커 미발생) → 리밸런싱 스킵. prev={prev_combined}')
+        state['last_krw_balance'] = total_krw
+        save_json(state_path, state)
+        _flush_telegram(dry_run)
+        return 0
 
     # Delta 매매
     permanent_block = state.get('permanent_block', [])

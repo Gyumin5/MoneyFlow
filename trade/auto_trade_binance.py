@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
 """
-바이낸스 선물 자동매매 — d005 앙상블 전략 (2026-04-05 확정)
+바이낸스 선물 자동매매 — V21 L3 앙상블 (ENS_fut_L3_k3_12652d57, 2026-04-17 확정)
 ========================================
 확정 신호 조합:
-- 4h_d005:      (SMA=240, Mom=20/720, mom2vol, daily vol 5%,  Snap=60)
-- 2h_b60_S240:  (SMA=240, Mom=20/720, mom2vol, bar vol 60%,   Snap=120)
-- 2h_b60_S120:  (SMA=120, Mom=20/720, mom2vol, bar vol 60%,   Snap=120)
-- 4h_b60_M20:   (SMA=240, Mom=20/120, mom2vol, bar vol 60%,   Snap=21)
+- 4h_S240_SN120: (SMA=240, Mom=20/720, mom2vol, daily vol 5%, Snap=120)
+- 4h_S240_SN30:  (SMA=240, Mom=20/480, mom2vol, daily vol 5%, Snap=30)
+- 4h_S120_SN120: (SMA=120, Mom=20/720, mom2vol, daily vol 5%, Snap=120)
 
 실행층:
-- 종목별 동적 레버리지: cap+mom blend 5/4/3x
-- 스탑: prev_close 15%
-- 게이트: cash_guard(34%)
+- 고정 3배 레버리지 (L3)
+- 스탑: 없음 (STOP_PCT=0, 가드 비활성)
+- 캐시 게이트: 없음 (STOP_GATE_CASH_THRESHOLD=0)
+- 앙상블 분산만으로 방어
 
-실행: 매 1시간 크론
-1. 바이낸스에서 1h/2h/4h OHLCV 수집
-2. 4전략 각각 목표 비중 계산
-3. 가중 합산 → 단일 포트폴리오
-4. 종목별 5/4/3x 레버리지 매핑
+실행: 4h마다 (cron "5 9,13,17,21,1,5 * * *" 한국시간)
+1. 바이낸스에서 4h OHLCV 수집
+2. 3전략 각각 목표 비중 계산
+3. 가중 합산 (1/3씩) → 단일 포트폴리오
+4. 고정 3x 레버리지로 매핑
 5. 현재 포지션과 비교 → delta 리밸런싱
-6. 필요 시 reduce-only STOP_MARKET 주문 동기화
+6. STOP 주문 없음 (sync_stop_orders는 early return)
 """
 
 import argparse
@@ -49,17 +49,19 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.py')
 STATE_PATH = os.path.join(SCRIPT_DIR, 'binance_state.json')
 LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
 
-# 전략/실행 파라미터
+# V21 전략/실행 파라미터 (ENS_fut_L3_k3_12652d57, 2026-04-17 확정)
+# 고정 3배 레버리지, 가드 없음, 4h봉 3멤버 EW 1/3씩
 LEVERAGE_FLOOR = 3
-LEVERAGE_MID = 4
-LEVERAGE_CEILING = 5
-STOP_PCT = 0.15
-STOP_GATE_CASH_THRESHOLD = 0.34
-LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30
-ENSEMBLE_WEIGHTS = {'4h_d005': 1/4, '2h_S240': 1/4, '2h_S120': 1/4, '4h_M20': 1/4}
+LEVERAGE_MID = 3
+LEVERAGE_CEILING = 3
+STOP_PCT = 0.0            # 가드 비활성
+STOP_GATE_CASH_THRESHOLD = 0.0  # cash_guard 비활성
+LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30  # 동적 lev 비활성이지만 상수 유지
+
+ENSEMBLE_WEIGHTS = {'4h_S240_SN120': 1/3, '4h_S240_SN30': 1/3, '4h_S120_SN120': 1/3}
 
 STRATEGIES = {
-    '4h_d005': {
+    '4h_S240_SN120': {
         'interval': '4h',
         'sma_bars': 240,
         'mom_short_bars': 20,
@@ -67,57 +69,50 @@ STRATEGIES = {
         'health_mode': 'mom2vol',
         'vol_mode': 'daily',
         'vol_threshold': 0.05,
-        'snap_interval_bars': 60,
-        'canary_hyst': 0.015,
-        'n_snapshots': 3,
-    },
-    '2h_S240': {
-        'interval': '2h',
-        'sma_bars': 240,
-        'mom_short_bars': 20,
-        'mom_long_bars': 720,
-        'health_mode': 'mom2vol',
-        'vol_mode': 'bar',
-        'vol_threshold': 0.60,
         'snap_interval_bars': 120,
         'canary_hyst': 0.015,
         'n_snapshots': 3,
     },
-    '2h_S120': {
-        'interval': '2h',
+    '4h_S240_SN30': {
+        'interval': '4h',
+        'sma_bars': 240,
+        'mom_short_bars': 20,
+        'mom_long_bars': 480,
+        'health_mode': 'mom2vol',
+        'vol_mode': 'daily',
+        'vol_threshold': 0.05,
+        'snap_interval_bars': 30,
+        'canary_hyst': 0.015,
+        'n_snapshots': 3,
+    },
+    '4h_S120_SN120': {
+        'interval': '4h',
         'sma_bars': 120,
         'mom_short_bars': 20,
         'mom_long_bars': 720,
         'health_mode': 'mom2vol',
-        'vol_mode': 'bar',
-        'vol_threshold': 0.60,
+        'vol_mode': 'daily',
+        'vol_threshold': 0.05,
         'snap_interval_bars': 120,
-        'canary_hyst': 0.015,
-        'n_snapshots': 3,
-    },
-    '4h_M20': {
-        'interval': '4h',
-        'sma_bars': 240,
-        'mom_short_bars': 20,
-        'mom_long_bars': 120,
-        'health_mode': 'mom2vol',
-        'vol_mode': 'bar',
-        'vol_threshold': 0.60,
-        'snap_interval_bars': 21,
         'canary_hyst': 0.015,
         'n_snapshots': 3,
     },
 }
 
-# 유니버스 (시총순, 바이낸스 선물)
-UNIVERSE = [
+# 유니버스 (시총순). 매 매매 사이클마다 CoinGecko top40 + 바이낸스 USDT-M 선물 listing intersect로 동적 갱신.
+# API 실패 시 fallback.
+HARDCODED_UNIVERSE_FALLBACK = [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
     'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'TRXUSDT', 'LINKUSDT',
     'DOTUSDT', 'UNIUSDT', 'NEARUSDT', 'LTCUSDT', 'BCHUSDT',
     'APTUSDT', 'ICPUSDT', 'FILUSDT', 'ATOMUSDT', 'ARBUSDT',
 ]
+UNIVERSE: List[str] = list(HARDCODED_UNIVERSE_FALLBACK)
+UNIVERSE_TARGET_SIZE = 40  # CoinGecko top N
+COINGECKO_URL = 'https://api.coingecko.com/api/v3/coins/markets'
+STABLECOINS = {'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD', 'USDD', 'PYUSD', 'USDe'}
 
-UNIVERSE_SIZE = 5
+UNIVERSE_SIZE = 3  # 헬스 통과한 상위 N개 (전략별)
 CAP = 1/3  # EW + 33% cap
 CASH_BUFFER_DEFAULT = 0.02  # 현금 버퍼 기본값 (state에서 동적 읽기)
 CASH_BUFFER = CASH_BUFFER_DEFAULT  # 런타임에 state에서 갱신
@@ -262,6 +257,82 @@ def fetch_klines(client: Client, symbol: str, interval: str, limit: int = 1500) 
     except Exception as e:
         log.error(f"fetch_klines {symbol} {interval}: {e}")
         return pd.DataFrame()
+
+
+def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
+                                 cache_path: Optional[str] = None) -> List[Dict]:
+    """CoinGecko top N 시총순 fetch. 실패 시 cache fallback."""
+    headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 BinanceFut/1.0'}
+    for attempt in range(1, 4):
+        try:
+            r = requests.get(COINGECKO_URL, params={
+                'vs_currency': 'usd', 'order': 'market_cap_desc',
+                'per_page': limit, 'page': 1,
+            }, headers=headers, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if cache_path:
+                    try:
+                        tmp = cache_path + '.tmp'
+                        with open(tmp, 'w') as f:
+                            json.dump({'ts': datetime.now(timezone.utc).isoformat(), 'data': data}, f)
+                        os.replace(tmp, cache_path)
+                    except Exception:
+                        pass
+                return data
+            log.warning(f"coingecko status {r.status_code} attempt {attempt}")
+        except Exception as e:
+            log.warning(f"coingecko fail attempt {attempt}: {e}")
+        time.sleep(5 * attempt)
+    if cache_path and os.path.isfile(cache_path):
+        try:
+            with open(cache_path) as f:
+                return json.load(f).get('data', [])
+        except Exception:
+            pass
+    return []
+
+
+def fetch_binance_futures_listed(client: Client) -> set:
+    """바이낸스 USDT-M 선물 TRADING 중인 심볼 set."""
+    try:
+        info = client.futures_exchange_info()
+        return {s['symbol'] for s in info.get('symbols', [])
+                if s.get('contractType') == 'PERPETUAL'
+                and s.get('status') == 'TRADING'
+                and s.get('quoteAsset') == 'USDT'}
+    except Exception as e:
+        log.warning(f"binance futures exchangeInfo fail: {e}")
+        return set()
+
+
+def refresh_universe(client: Client, cache_dir: str = '/tmp') -> List[str]:
+    """CoinGecko top40 + 바이낸스 USDT-M 선물 listing intersect, 시총순 정렬.
+
+    실패 시 HARDCODED_UNIVERSE_FALLBACK 리턴. 글로벌 UNIVERSE도 갱신.
+    """
+    global UNIVERSE
+    cg = fetch_coingecko_top_futures(cache_path=os.path.join(cache_dir, 'binfut_cg_cache.json'))
+    listed = fetch_binance_futures_listed(client)
+    if not cg or not listed:
+        log.warning(f"universe API 실패 (cg={len(cg)} listed={len(listed)}) → fallback")
+        UNIVERSE = list(HARDCODED_UNIVERSE_FALLBACK)
+        return UNIVERSE
+    out: List[str] = []
+    for item in cg:
+        sym = (item.get('symbol') or '').upper()
+        if not sym or sym in STABLECOINS:
+            continue
+        full = sym + 'USDT'
+        if full in listed:
+            out.append(full)
+    if not out:
+        log.warning("universe intersect 비어있음 → fallback")
+        UNIVERSE = list(HARDCODED_UNIVERSE_FALLBACK)
+        return UNIVERSE
+    UNIVERSE = out
+    log.info(f"universe 갱신: {len(out)}개 (cg={len(cg)} listed={len(listed)}) head={out[:5]}")
+    return UNIVERSE
 
 
 def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
@@ -665,6 +736,20 @@ def get_current_positions(client: Client):
                     notional = abs(_safe_float(p.get('notional')))
                     if notional <= 0 and mark > 0:
                         notional = abs(amt * mark)
+                    lev = _safe_float(p.get('leverage')) or 0.0
+                    margin = (_safe_float(p.get('isolatedMargin'))
+                              or _safe_float(p.get('positionInitialMargin'))
+                              or _safe_float(p.get('initialMargin'))
+                              or 0.0)
+                    if margin > 0:
+                        real_notional = margin
+                        if lev <= 0 and margin > 0:
+                            lev = notional / margin if margin > 0 else 1.0
+                    elif lev > 0:
+                        real_notional = notional / lev
+                    else:
+                        real_notional = notional
+                        lev = 1.0
                     positions[coin] = {
                         'qty': amt,
                         'qty_raw': str(p.get('positionAmt') or ''),
@@ -674,7 +759,10 @@ def get_current_positions(client: Client):
                         'pnl': _safe_float(p.get('unRealizedProfit')),
                         'liquidation_price': _safe_float(p.get('liquidationPrice')),
                         'notional': notional,
+                        'leverage': lev,
+                        'real_notional': real_notional,
                         'weight': notional / total_pv if total_pv > 0 else 0,
+                        'real_weight': real_notional / total_pv if total_pv > 0 else 0,
                     }
 
             return positions, total_pv, True
@@ -1159,6 +1247,11 @@ def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[s
     """cash_guard 조건에 따라 reduce-only STOP_MARKET 주문 재등록."""
     cancel_stop_orders(client, list(UNIVERSE))
 
+    # V21: STOP_PCT=0 이면 가드 완전 비활성 (앙상블 분산만으로 방어)
+    if STOP_PCT <= 0.0 or STOP_GATE_CASH_THRESHOLD <= 0.0:
+        log.info("STOP OFF (V21: 가드 비활성, STOP_PCT=0)")
+        return
+
     cash_w = target.get('CASH', 0.0) if target else 0.0
     if cash_w < STOP_GATE_CASH_THRESHOLD:
         log.info(f"STOP OFF (cash={cash_w:.1%} < {STOP_GATE_CASH_THRESHOLD:.0%})")
@@ -1241,7 +1334,7 @@ def _record_equity(pv: float, positions: dict, target: dict):
                       (now, pv, len(positions), json.dumps(target)))
         for coin, pos in positions.items():
             conn.execute('INSERT INTO position_history VALUES (?,?,?,?)',
-                          (now, coin, pos['notional'], pos['weight']))
+                          (now, coin, pos.get('real_notional', pos['notional']), pos.get('real_weight', pos['weight'])))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1286,6 +1379,7 @@ def main():
         if not ok:
             log.error("리포트 생성 중 포지션 조회 실패")
             return
+        refresh_universe(client)
         data = fetch_all_data(client)
         initial = state.get('initial_capital', pv)
         if 'initial_capital' not in state:
@@ -1296,15 +1390,18 @@ def main():
 
         lines = [f"📊 바이낸스 선물 일일 리포트 ({now})"]
         lines.append(f"총 자산: ${pv:.2f} ({pnl_pct:+.1f}%)")
-        lines.append(f"레버리지: capmom 5/4/3x")
+        lines.append(f"레버리지: 고정 3x (V21 L3 ensemble)")
 
         if positions:
-            lines.append("\n포지션:")
+            lines.append("\n포지션 (실질금액, notional/lev):")
             for coin, pos in positions.items():
                 if pos.get('notional', 0.0) < DISPLAY_DUST_NOTIONAL:
                     continue
                 pnl = pos.get('pnl', 0.0)
-                lines.append(f"  {coin}: ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
+                real_n = pos.get('real_notional', pos['notional'])
+                real_w = pos.get('real_weight', pos['weight'])
+                lev = pos.get('leverage', 1.0)
+                lines.append(f"  {coin}: ${real_n:.0f} ({real_w:.1%}, {lev:.0f}x, PnL {pnl:+.2f})")
         else:
             lines.append("포지션: 없음 (현금)")
 
@@ -1369,6 +1466,9 @@ def main():
             jitter = random.randint(*CRON_START_JITTER_SECONDS)
             log.info(f"시작 지연: {jitter}s (크론 동시충돌 완화)")
             time.sleep(jitter)
+
+        # 0. 유니버스 갱신 (CoinGecko top40 ∩ 바이낸스 USDT-M 선물 listing)
+        refresh_universe(client)
 
         # 1. 데이터 수집
         log.info("데이터 수집...")
