@@ -1,0 +1,47 @@
+[
+  {
+    "stage": 1,
+    "resumed_from": "iter_refine/stage_1/raw.csv",
+    "rows": 9728
+  },
+  {
+    "stage": 2,
+    "rows": 55782
+  },
+  {
+    "stage_change": 2,
+    "change_pct": 0.35185185185185186,
+    "top_cal": 6.937374100245712,
+    "improve_pct": Infinity
+  },
+  {
+    "stage": 3,
+    "rows": 20857
+  },
+  {
+    "stage_change": 3,
+    "change_pct": 0.2875,
+    "top_cal": 7.220025374854934,
+    "improve_pct": 0.04074326546685884
+  },
+  {
+    "stage": 4,
+    "rows": 18355
+  },
+  {
+    "stage_change": 4,
+    "change_pct": 0.22821576763485477,
+    "top_cal": 7.663843928714663,
+    "improve_pct": 0.06147049779151867
+  },
+  {
+    "stage": 5,
+    "rows": 17412
+  },
+  {
+    "stage_change": 5,
+    "change_pct": 0.19834710743801653,
+    "top_cal": 9.446249897455024,
+    "improve_pct": 0.23257336466131504
+  }
+]

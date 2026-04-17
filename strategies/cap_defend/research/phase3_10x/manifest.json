@@ -1,0 +1,11 @@
+{
+  "status": "done",
+  "stage": "phase3_ensemble",
+  "n_combos": 661,
+  "n_ok": 661,
+  "n_spot_top": 14,
+  "n_fut_top": 41,
+  "cagr_floor_per_lev": 0.3,
+  "pool_per_metric": 5,
+  "updated_at": "2026-04-17 01:48:56"
+}
