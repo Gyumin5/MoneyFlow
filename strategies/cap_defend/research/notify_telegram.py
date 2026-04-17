@@ -8,18 +8,17 @@ try:
 except Exception:
     requests = None
 
-DEFAULT_CHAT_ID = "[REDACTED_CHAT_ID]"
-
 def _creds():
+    """TELEGRAM_BOT_TOKEN과 TELEGRAM_CHAT_ID를 ~/.config/telegram_bot.json 또는 환경변수에서 로드."""
     cfg = os.path.expanduser("~/.config/telegram_bot.json")
     if os.path.isfile(cfg):
         try:
             with open(cfg) as f:
                 d = json.load(f)
-            return d.get("TELEGRAM_BOT_TOKEN", ""), d.get("TELEGRAM_CHAT_ID", DEFAULT_CHAT_ID)
+            return d.get("TELEGRAM_BOT_TOKEN", ""), d.get("TELEGRAM_CHAT_ID", "")
         except Exception:
             pass
-    return os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", DEFAULT_CHAT_ID)
+    return os.environ.get("TELEGRAM_BOT_TOKEN", ""), os.environ.get("TELEGRAM_CHAT_ID", "")
 
 def send(text):
     if requests is None:
