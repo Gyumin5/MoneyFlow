@@ -435,6 +435,16 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
             or p.get('isolatedMargin')
             or 0.0
         )
+        lev = float(p.get('leverage') or 0.0)
+        if margin_usdt > 0:
+            real_notional = margin_usdt
+            if lev <= 0:
+                lev = notional / margin_usdt if margin_usdt > 0 else 1.0
+        elif lev > 0:
+            real_notional = notional / lev
+        else:
+            real_notional = notional
+            lev = 1.0
         holdings.append({
             "ticker": symbol.replace("USDT", ""),
             "symbol": symbol,
@@ -442,9 +452,11 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
             "entry_price": entry,
             "price": mark,
             "price_krw": mark * rate,
-            "value_usdt": notional,
-            "value_krw": notional * rate,
-            "weight_value_krw": margin_usdt * rate,
+            "value_usdt": real_notional,
+            "value_krw": real_notional * rate,
+            "weight_value_krw": (margin_usdt or real_notional) * rate,
+            "leverage": lev,
+            "notional_usdt": notional,
             "pnl_usdt": pnl,
             "pnl_krw": pnl * rate,
         })
