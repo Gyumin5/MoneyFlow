@@ -25,6 +25,7 @@ class SingleAccountEngine:
                  stop_gate_cash_threshold=0.0,
                  stop_atr_lookback_bars=0,
                  stop_atr_mult=0.0,
+                 stop_liq_buffer_pct=0.05,
                  leverage_mode='fixed',
                  per_coin_leverage_mode='none',
                  leverage_floor=3.0,
@@ -39,8 +40,10 @@ class SingleAccountEngine:
                  leverage_canary_high_gap=0.08,
                  leverage_canary_sma_bars=1200,
                  leverage_mom_lookback_bars=720,
-                 leverage_vol_lookback_bars=2160):
+                 leverage_vol_lookback_bars=2160,
+                 fill_mode='open'):
         self.bars = bars_1h
+        self.fill_mode = fill_mode
         self.funding = funding
         self.leverage = leverage
         self.tx_cost = tx_cost
@@ -54,6 +57,7 @@ class SingleAccountEngine:
         self.stop_gate_cash_threshold = stop_gate_cash_threshold
         self.stop_atr_lookback_bars = stop_atr_lookback_bars
         self.stop_atr_mult = stop_atr_mult
+        self.stop_liq_buffer_pct = stop_liq_buffer_pct
         self.leverage_mode = leverage_mode
         self.per_coin_leverage_mode = per_coin_leverage_mode
         self.leverage_floor = leverage_floor
@@ -166,7 +170,21 @@ class SingleAccountEngine:
         sh = dr.mean() / dr.std() * np.sqrt(365) if dr.std() > 0 else 0
         mdd = (eq / eq.cummax() - 1).min()
         cal = cagr / abs(mdd) if mdd != 0 else 0
+        mdd_m_list = []
+        for offset in range(0, 30, 3):
+            sampled = eq_daily.iloc[offset::30]
+            if len(sampled) >= 2:
+                mdd_m_list.append(float((sampled / sampled.cummax() - 1).min()))
+        if mdd_m_list:
+            mdd_m_avg = float(np.mean(mdd_m_list))
+            mdd_m_min = float(np.min(mdd_m_list))
+            mdd_m_max = float(np.max(mdd_m_list))
+        else:
+            mdd_m_avg = mdd_m_min = mdd_m_max = mdd
+        cal_m = cagr / abs(mdd_m_avg) if mdd_m_avg != 0 else 0
         return {'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
+                'MDD_m_avg': mdd_m_avg, 'MDD_m_min': mdd_m_min, 'MDD_m_max': mdd_m_max,
+                'Cal_m': cal_m,
                 'Liq': liq_count, 'Stops': stop_count, 'Rebal': rebal_count, '_equity': eq}
 
     def _get_price(self, coin, date):
@@ -174,6 +192,18 @@ class SingleAccountEngine:
         if df is None: return 0
         ci = df.index.get_indexer([date], method='ffill')[0]
         return float(df['Close'].iloc[ci]) if ci >= 0 else 0
+
+    def _get_fill_price(self, coin, date):
+        df = self.bars.get(coin)
+        if df is None:
+            return 0
+        if self.fill_mode == 'close':
+            return self._get_price(coin, date)
+        try:
+            ci = df.index.get_loc(date)
+        except KeyError:
+            return 0
+        return float(df['Open'].iloc[ci])
 
     def _get_bar_index(self, coin, date):
         df = self.bars.get(coin)
@@ -399,19 +429,29 @@ class SingleAccountEngine:
             if start_ci < 0 or atr is None or self.stop_atr_mult <= 0:
                 return None
             ref = float(np.max(df['High'].iloc[start_ci:ci]))
-            return max(ref - self.stop_atr_mult * atr, 0.0)
+            return self._floor_above_liq(coin, max(ref - self.stop_atr_mult * atr, 0.0))
         elif self.stop_kind == 'atr_rolling_high_high':
             atr = self._calc_atr(coin, ci, self.stop_atr_lookback_bars)
             if self.stop_lookback_bars <= 0 or ci < self.stop_lookback_bars or atr is None or self.stop_atr_mult <= 0:
                 return None
             ref = float(np.max(df['High'].iloc[ci - self.stop_lookback_bars:ci]))
-            return max(ref - self.stop_atr_mult * atr, 0.0)
+            return self._floor_above_liq(coin, max(ref - self.stop_atr_mult * atr, 0.0))
         else:
             return None
 
         if ref <= 0:
             return None
-        return ref * (1.0 - self.stop_pct)
+        stop_price = ref * (1.0 - self.stop_pct)
+        return self._floor_above_liq(coin, stop_price)
+
+    def _floor_above_liq(self, coin, stop_price):
+        if stop_price is None or self.stop_liq_buffer_pct <= 0:
+            return stop_price
+        liq_price = self._get_liq_price(coin)
+        if liq_price is None or liq_price <= 0:
+            return stop_price
+        floor = liq_price * (1.0 + self.stop_liq_buffer_pct)
+        return max(stop_price, floor)
 
     def _execute_stop_exit(self, coin, date, stop_price):
         ci = self._get_bar_index(coin, date)
@@ -462,7 +502,7 @@ class SingleAccountEngine:
         target_lev = self._get_coin_leverage_map(date, target)
         for coin, w in target.items():
             if coin == 'CASH' or w <= 0: continue
-            cur = self._get_price(coin, date)
+            cur = self._get_fill_price(coin, date)
             if cur <= 0: continue
             coin_lev = target_lev.get(coin, self.leverage)
             tmgn = pv * w * 0.95
@@ -471,7 +511,7 @@ class SingleAccountEngine:
             target_margin[coin] = tmgn
 
         for coin in list(self.holdings.keys()):
-            cur = self._get_price(coin, date)
+            cur = self._get_fill_price(coin, date)
             if cur <= 0: continue
             slip = SLIPPAGE_MAP.get(coin, 0.0005)
             if coin not in target_qty:
@@ -493,7 +533,7 @@ class SingleAccountEngine:
                     self.margins[coin] -= sell_margin
 
         for coin, tqty in target_qty.items():
-            cur = self._get_price(coin, date)
+            cur = self._get_fill_price(coin, date)
             if cur <= 0: continue
             if coin in self.reentry_cooldown and coin not in self.holdings:
                 continue

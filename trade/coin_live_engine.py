@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Cap Defend 현물 라이브 엔진.
 
-멤버 D_SMA50 (일봉) + 멤버 4h_SMA240 (4시간봉) 앙상블 50:50 EW.
+V21: D봉 3멤버 (D_SMA50 + D_SMA150 + D_SMA100) 1/3씩 EW 앙상블.
 바이낸스 spot kline에서 신호 계산 → 업비트 KRW 체결 (executor_coin.py에서 수행).
 
 멤버 D_SMA50: 일봉, SMA50, Mom30/90, snap 30봉, Top3, 갭 스탑 -15%, 제외 30일
-멤버 4h_SMA240: 4시간봉, SMA240, Mom30/120, snap 60봉(=10일), Top3, 갭 스탑 -10%, 제외 10일
+멤버 D_SMA150: 일봉, SMA150, Mom20/60, snap 90봉, Top3, 갭 스탑 -15%, 제외 30일
+멤버 D_SMA100: 일봉, SMA100, Mom20/120, snap 90봉, Top3, 갭 스탑 -15%, 제외 30일
 
 설계:
 - compute_strategy_target(): auto_trade_binance 패턴 이식 (bar-idempotency + 3-snap stagger 내장)
@@ -50,13 +51,14 @@ HARDCODED_FALLBACK = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK',
 
 UPBIT_MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all?is_details=true'
 
-# 멤버 설정
+# V21 멤버 설정 (ENS_spot_k3_4b270476, 2026-04-17 확정)
+# 3멤버 D봉 EW 1/3씩. 4h봉 제거.
 MEMBER_D_SMA50 = {
     'interval': 'D',
     'sma_bars': 50,
-    'mom_short_bars': 30,
+    'mom_short_bars': 20,
     'mom_long_bars': 90,
-    'snap_interval_bars': 30,
+    'snap_interval_bars': 90,
     'n_snapshots': 3,
     'canary_hyst': 0.015,
     'health_mode': 'mom2vol',
@@ -65,16 +67,16 @@ MEMBER_D_SMA50 = {
     'vol_lookback_days': 90,
     'universe_size': 3,
     'cap': 1.0 / 3.0,
-    'gap_threshold': -0.15,   # 직전 완성 D봉 종가 vs 전일 종가 → -15% 이하
+    'gap_threshold': -0.15,
     'exclusion_days': 30,
 }
 
-MEMBER_4H_SMA240 = {
-    'interval': '4h',
-    'sma_bars': 240,
-    'mom_short_bars': 30,
-    'mom_long_bars': 120,
-    'snap_interval_bars': 60,
+MEMBER_D_SMA150 = {
+    'interval': 'D',
+    'sma_bars': 150,
+    'mom_short_bars': 20,
+    'mom_long_bars': 60,
+    'snap_interval_bars': 90,
     'n_snapshots': 3,
     'canary_hyst': 0.015,
     'health_mode': 'mom2vol',
@@ -83,30 +85,48 @@ MEMBER_4H_SMA240 = {
     'vol_lookback_days': 90,
     'universe_size': 3,
     'cap': 1.0 / 3.0,
-    'gap_threshold': -0.10,   # 직전 완성 4h봉 종가 vs 전 4h봉 종가 → -10% 이하
-    'exclusion_days': 10,     # 4h 60봉 = 10일
+    'gap_threshold': -0.15,
+    'exclusion_days': 30,
+}
+
+MEMBER_D_SMA100 = {
+    'interval': 'D',
+    'sma_bars': 100,
+    'mom_short_bars': 20,
+    'mom_long_bars': 120,
+    'snap_interval_bars': 90,
+    'n_snapshots': 3,
+    'canary_hyst': 0.015,
+    'health_mode': 'mom2vol',
+    'vol_mode': 'daily',
+    'vol_threshold': 0.05,
+    'vol_lookback_days': 90,
+    'universe_size': 3,
+    'cap': 1.0 / 3.0,
+    'gap_threshold': -0.15,
+    'exclusion_days': 30,
 }
 
 MEMBERS = {
     'D_SMA50': MEMBER_D_SMA50,
-    '4h_SMA240': MEMBER_4H_SMA240,
+    'D_SMA150': MEMBER_D_SMA150,
+    'D_SMA100': MEMBER_D_SMA100,
 }
 
 ENSEMBLE_WEIGHTS = {
-    'D_SMA50': 0.5,
-    '4h_SMA240': 0.5,
+    'D_SMA50': 1.0 / 3.0,
+    'D_SMA150': 1.0 / 3.0,
+    'D_SMA100': 1.0 / 3.0,
 }
 
 # 각 interval별 최소 가져올 봉 수
 KLINE_LIMITS = {
-    'D': 500,    # SMA50 + Mom90 + vol90d → 여유롭게 500
-    '4h': 1500,  # SMA240 + Mom120 + vol90d(=540봉) → 1500
+    'D': 500,    # SMA150 + Mom120 + vol90d → 500 충분
 }
 
 # Binance interval 매핑
 BINANCE_INTERVAL_MAP = {
     'D': '1d',
-    '4h': '4h',
 }
 
 
@@ -440,6 +460,14 @@ def _calc_vol_daily(arr: np.ndarray, bpd: int, lookback_bars: int) -> float:
     return float(np.std(np.diff(np.log(daily))))
 
 
+def _calc_vol_bars(arr: np.ndarray, lookback_bars: int, bars_per_year: int) -> float:
+    """봉 기반 변동성 (연환산). backtest_futures_full.calc_vol_bars와 동일 정의."""
+    if len(arr) < lookback_bars + 1:
+        return 999.0
+    rets = np.diff(np.log(arr[-lookback_bars - 1:]))
+    return float(np.std(rets) * np.sqrt(bars_per_year))
+
+
 def _bars_per_day(interval: str) -> int:
     return {'D': 1, '4h': 6, '2h': 12, '1h': 24}[interval]
 
@@ -604,6 +632,8 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
             m_long = _calc_mom(c, mom_l) if 'mom2' in hmode else 999.0
             if vol_mode == 'daily':
                 vol = _calc_vol_daily(c, bpd, vol_lookback)
+            elif vol_mode == 'bar':
+                vol = _calc_vol_bars(c, vol_lookback, bpd * 365)
             else:
                 vol = 999.0
 
