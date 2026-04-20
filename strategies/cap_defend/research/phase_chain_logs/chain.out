@@ -1,0 +1,8 @@
+[2026-04-15 09:30:36] Lock acquired: /home/gmoh/mon/251229/strategies/cap_defend/research/.phase_chain.lock
+[2026-04-15 09:30:37] Started progress_notifier (pid=3622900)
+[2026-04-15 09:30:38] [phase1] manifest polling: /home/gmoh/mon/251229/strategies/cap_defend/research/phase1_sweep/manifest.json (fallback raw=/home/gmoh/mon/251229/strategies/cap_defend/research/phase1_sweep/raw.csv target=16416)
+[2026-04-15 09:30:38] [phase1] manifest done.
+[2026-04-15 09:30:38] Phase-2a extract start
+[2026-04-15 09:30:45] Phase-2b 10-anchor OOS start
+[2026-04-15 10:28:05] Phase-3 ensemble start
+Terminated

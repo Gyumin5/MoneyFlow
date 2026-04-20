@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strategy C — Dip-Buy Mean Reversion 상세 리포트</title>
+<style>
+ body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px;margin:20px auto;padding:0 16px;color:#222;line-height:1.5}
+ h1{border-bottom:3px solid #333;padding-bottom:8px}
+ h2{border-bottom:1px solid #aaa;padding-bottom:6px;margin-top:32px;color:#0366d6}
+ h3{color:#24292e;margin-top:20px}
+ code{background:#f6f8fa;padding:2px 5px;border-radius:3px;font-size:0.92em}
+ pre{background:#f6f8fa;padding:12px;border-radius:5px;overflow-x:auto}
+ table{border-collapse:collapse;margin:10px 0;font-size:0.94em}
+ th,td{border:1px solid #d0d7de;padding:6px 10px;text-align:left}
+ th{background:#f6f8fa}
+ .good{color:#1a7f37;font-weight:600}
+ .bad{color:#d1242f;font-weight:600}
+ .hl{background:#fff8c5;padding:1px 4px;border-radius:3px}
+ .note{background:#ddf4ff;border-left:4px solid #0969da;padding:10px 14px;margin:12px 0}
+ .warn{background:#fff8c5;border-left:4px solid #bf8700;padding:10px 14px;margin:12px 0}
+ .meta{font-size:0.88em;color:#57606a;margin-bottom:20px}
+</style>
+</head>
+<body>
+
+<h1>Strategy C — Dip-Buy Mean Reversion</h1>
+<div class="meta">생성 2026-04-19 · V21 live 운영 상태 위 C 결합 검증 결과 스냅샷</div>
+
+<h2>1. 개요 — 전략이 하는 일</h2>
+<p>
+V21 롱 앙상블(주식 V17 / 코인 V21 D봉 3멤버 / 선물 V21 4h 3전략 L3)은 <b>추세 추종</b>에 특화되어 있어, 단기 급락 직후의 반등 구간을 잡지 못하고 cash로 들고 있는 경우가 많다. Strategy C는 V21이 비워둔 <b>남은 현금</b>에서만 동작하여 "급락 후 반등"을 짧게 먹는 보조 슬리브다.
+</p>
+<div class="note">
+<b>설계 철학:</b> V21은 "주인", C는 "남는 돈만 쓰는 보조자". V21이 다시 cash가 필요해지면 C는 자동 축소(shrink)되고, liquidation은 발생하지 않는다.
+</div>
+
+<h2>2. 시그널 로직 (<code>c_engine_v5.py</code>)</h2>
+
+<h3>2-1. 진입 조건</h3>
+<p>1시간봉 기준, 최근 <code>dip_bars</code> 시간의 누적 수익률이 <code>dip_thr</code> 이하로 떨어지면 롱 진입.</p>
+<pre>cum_ret(1h × dip_bars) ≤ dip_thr   →   Long 진입 시그널 발행</pre>
+
+<h3>2-2. 체결 가정 (보수)</h3>
+<ul>
+<li>매수 가격: 시그널봉의 <b>High</b> (불리 체결)</li>
+<li>매도 가격: 청산봉의 <b>Open</b> (다음 봉 open, 지연 반영)</li>
+<li>거래비용: <code>tx_cost=0.003</code> (편도 0.3%, 실전 Upbit 0.1~0.2% / Binance 0.04%보다 보수적)</li>
+</ul>
+
+<h3>2-3. 청산 조건</h3>
+<ul>
+<li><b>Take Profit</b>: <code>entry_px × (1 + tp)</code> 터치 시 익절</li>
+<li><b>Time Stop</b>: <code>tstop</code> 시간 경과 시 강제 청산</li>
+<li><b>Stop-Loss 없음</b>: 반등 대기 (단 레버리지 wipeout 5% buffer는 작동)</li>
+</ul>
+
+<h2>3. V21과의 결합 구조 (핵심)</h2>
+<p>
+각 자산군 내 동일 계정에서 V21 우선, C는 남는 cash에서만 동작. <code>m3_engine_final.py</code> (현물) / <code>m3_engine_futures.py</code> (선물) 구현.
+</p>
+<pre>alloc_base_eq       = V21_equity + C_delta             ← 슬리브 총자산
+slot_margin         = cap_per_slot × alloc_base_eq     ← C 목표 margin (전체 대비)
+remaining_margin    = V21_prev_cash × alloc_base_eq    ← V21 안 쓴 cash 한도
+target_margin       = min(slot_margin, remaining_margin)
+target_notional     = target_margin × leverage
+
+if target_notional < cur_notional   →   shrink (부분 청산, TX 부과)
+if target_notional > cur_notional   →   expand (더 매수)
+</pre>
+
+<div class="note">
+<b>중요:</b> <code>cap_per_slot</code>은 <b>전체 슬리브 자산 대비 비중</b>이지 "남는 cash 대비"가 아니다.
+예: cap=0.30, V21 cash_ratio=0.40 → C 목표 margin 30, 한도 40, 30 배정.
+V21 cash가 0.20으로 줄면 20으로 shrink.
+</div>
+
+<h3>유니버스 + 종목 관리</h3>
+<ul>
+<li>유니버스: <b>당시 시총 Top 15</b> (stablecoin 제외, 역사적 universe json 기반)</li>
+<li>동시 보유: <code>n_pick=1</code> 1종목만</li>
+<li>Swap: <code>swap_edge_threshold=1</code> — 더 높은 cap_rank 신호 오면 기존 lot 교체</li>
+</ul>
+
+<h2>4. 확정 파라미터</h2>
+
+<h3>4-1. 현물 C (1x, cap=0.333)</h3>
+<table>
+<tr><th>파라미터</th><th>값</th><th>의미</th></tr>
+<tr><td><code>dip_bars</code></td><td>24</td><td>최근 24시간 관찰</td></tr>
+<tr><td><code>dip_thr</code></td><td>-0.20</td><td>20% 급락 시 진입 (더 깊은 dip 대기)</td></tr>
+<tr><td><code>tp</code></td><td>0.04</td><td>4% 익절 (레버리지 없으므로 작게)</td></tr>
+<tr><td><code>tstop</code></td><td>24</td><td>24시간 내 미체결 시 청산</td></tr>
+<tr><td><code>cap_per_slot</code></td><td>0.333</td><td>슬리브 자산 33.3% 목표 (청산 없으므로 최대)</td></tr>
+<tr><td>leverage</td><td>1.0</td><td>현물</td></tr>
+</table>
+
+<h3>4-2. 선물 C (3x) — cap 미확정 (3가지 옵션)</h3>
+<table>
+<tr><th>파라미터</th><th>값</th><th>의미</th></tr>
+<tr><td><code>dip_bars</code></td><td>24</td><td>최근 24시간 관찰</td></tr>
+<tr><td><code>dip_thr</code></td><td>-0.18</td><td>18% 급락 시 진입 (중간 dip도 허용)</td></tr>
+<tr><td><code>tp</code></td><td>0.08</td><td>8% 익절 (레버리지 효과)</td></tr>
+<tr><td><code>tstop</code></td><td>48</td><td>48시간 대기</td></tr>
+<tr><td><code>cap_per_slot</code></td><td class="hl">0.12 / 0.25 / 0.30 (선택 필요)</td><td>자금 계층 설계 단계에서 결정</td></tr>
+<tr><td>leverage</td><td>3.0</td><td>선물 L3</td></tr>
+</table>
+
+<h2>5. 성과 — V21 단독 vs V21+C</h2>
+
+<h3>5-1. 현물 (cap=0.333, 기간 2020-10 ~ 2026-04)</h3>
+<table>
+<tr><th>구간</th><th>V21 단독 Cal</th><th>V21+C Cal</th><th>CAGR Δ</th><th>MDD Δ</th></tr>
+<tr><td>전구간 (5.5년)</td><td>3.10 (CAGR 60%, MDD -19.3%)</td><td class="good">3.96 (CAGR 64%, MDD -16.2%)</td><td>+4.3pp</td><td>+3.1pp 개선</td></tr>
+<tr><td>Train (~2023-12)</td><td>4.43 (CAGR 79%)</td><td class="good">5.45 (CAGR 89%)</td><td>+9.3pp</td><td>+1.6pp 개선</td></tr>
+<tr><td>Holdout (2024+)</td><td>1.75 (CAGR 34%, MDD -19.3%)</td><td class="good">2.32 (CAGR 37%, MDD -16.1%)</td><td>+3.6pp</td><td>+3.2pp 개선</td></tr>
+</table>
+<p>C entries: 전구간 59 / train 44 / holdout 15 (월 ~1회)</p>
+
+<h3>5-2. 선물 — cap 옵션별 성과 (전구간 / Train / Holdout)</h3>
+<table>
+<tr><th>cap</th><th>전구간 Cal</th><th>Train Cal / MDD</th><th>Holdout Cal / MDD</th><th>평가</th></tr>
+<tr><td>(V21 단독)</td><td>2.96</td><td>5.03 / -43.0%</td><td>1.29 / -48.3%</td><td>baseline</td></tr>
+<tr><td class="hl">0.12</td><td class="good">3.98 (최고)</td><td class="good">6.23 / -37.7%</td><td>1.75 / -41.9%</td><td>win-win, 보수 최적</td></tr>
+<tr><td>0.15</td><td>3.89</td><td>6.03 / -39.9%</td><td>1.82 / -41.8%</td><td>소폭 공격</td></tr>
+<tr><td>0.25</td><td>3.47</td><td>5.50 / -47.3%</td><td>2.04 / -41.5%</td><td>균형</td></tr>
+<tr><td>0.30</td><td>3.31</td><td>5.30 / -51.0%</td><td class="good">2.13 / -42.0%</td><td>Holdout 극대화</td></tr>
+<tr><td>0.333</td><td>3.22</td><td>5.18 / -53.5%</td><td>2.14 / -43.4%</td><td>공격, Train MDD 10pp 악화</td></tr>
+</table>
+
+<div class="note">
+<b>핵심 발견:</b> <span class="hl">cap 0.10~0.12</span>에서 Train MDD가 V21 단독(-43%)보다 오히려 <b>개선</b>(-37.2% ~ -37.7%). C가 단순 수익 증폭이 아니라 drawdown 완충 역할을 함. cap ≥ 0.15부터 점진 악화.
+</div>
+
+<h2>6. 수행한 검증 목록</h2>
+<ol>
+<li><b>파라미터 grid sweep (240 configs)</b>: 현물/선물 각각 dip_bars × dip_thr × tp × tstop</li>
+<li><b>Train(~2023-12) / Holdout(2024+) 분리 재평가</b>: 선택편향 없음 확인</li>
+<li><b>cap_per_slot 민감도</b>: 0.03 ~ 0.333 13단계 (선물), 7단계 (현물)</li>
+<li><b>Top N 수익 이벤트 제거 ablation</b>: 희소성 의존도 체크 (현물 불변, 선물 경미)</li>
+<li><b>TX 스트레스</b>: 0.3 / 0.5 / 0.8 / 1.3% (실전 마진 충분)</li>
+<li><b>AI 3자 리뷰 2라운드</b>: Gemini + Codex 병렬 (cap 권고, stress 가이드)</li>
+<li><b>V21 baseline 검증</b>: README Cal 2.89 CAGR 143% 일치 확인 (선물 L3 3멤버)</li>
+<li><b>연도별 분해 + 초기 bootstrap</b>: tail risk 예비 확인</li>
+</ol>
+
+<h2>7. 주요 발견</h2>
+<ol>
+<li>현물 C는 모든 구간(전구간/train/holdout)에서 <b>단조 개선</b> → freeze 가능 수준</li>
+<li>선물 C는 cap 딜레마 존재 — 낮은 cap(0.12): 전구간+Train 우위 / 높은 cap(0.30): Holdout 우위</li>
+<li><b>반전:</b> 선물 cap 0.10-0.12에서 Train MDD가 V21 단독보다 개선 → C가 drawdown 완충</li>
+<li>희소성 의존 없음 (Top N 제거에도 Cal 유지)</li>
+<li>TX 스트레스 0.8%에서도 V21 단독 대비 우위 유지</li>
+</ol>
+
+<h2>8. 잔여 이슈 (자금 계층 설계 단계에서 다룰 것)</h2>
+<div class="warn">
+<ol>
+<li>선물 cap 최종 선택 (0.12 / 0.25 / 0.30) — pool 설계에 종속</li>
+<li>실전 주문 충돌 (V21 + C 동시 신호, 호가단위/최소수량 shrink 호환)</li>
+<li>High 진입 / Open 청산 가정 vs 실전 체결 괴리</li>
+<li>반등 실패 dip 구간 평균/최악 보유시간 분포 확인</li>
+<li>Short Momentum 등 추가 전략 편입 시 자금 pool 재설계</li>
+</ol>
+</div>
+
+<h2>9. 결과 파일 / 스크립트</h2>
+<pre>strategies/cap_defend/research/
+├── c_fut_holdout/            ← 선물 240-config sweep + cap sensitivity
+├── c_spot_holdout/           ← 현물 240-config sweep + cap sensitivity
+├── c_stress_final/           ← Top N, cap 미세, TX 스트레스
+├── c_fut_holdout_sweep.py
+├── c_spot_holdout_sweep.py
+├── c_stress_final.py
+├── c_fut_cap_low.py          ← cap 0.03~0.333 전범위 비교
+├── c_engine_v5.py            ← 시그널 엔진
+├── m3_engine_final.py        ← 현물 lot-level M3 엔진
+└── m3_engine_futures.py      ← 선물 lot-level M3 엔진 (leverage)
+</pre>
+
+<h2>10. 한 줄 결론</h2>
+<div class="note">
+<p><b>현물 C:</b> 모든 구간 일관 개선 + MDD 감소. <span class="good">실전 투입 가치 높음 (freeze)</span>.</p>
+<p><b>선물 C:</b> 설계 의도대로 작동(V21 우선순위, shrink, liquidation 0). <span class="good">실전 투입 가치 있음</span>, 단 선물 비중 점진 증액(초기 10% → 15% → 20% hard cap)과 cap 선택(0.12 보수 / 0.30 공격) 자금 계층 설계에서 확정 필요.</p>
+</div>
+
+</body>
+</html>
