@@ -1,0 +1,32 @@
+{
+  "champion": {
+    "stock_strategy": "V17 (고정)",
+    "spot_ensemble": "ENS_spot_k2_dbaf3f9c",
+    "spot_members": [
+      "spot_4h_S240_M42_488_d0.05_SN360_L1",
+      "spot_4h_S240_M20_720_b0.70_SN96_L1"
+    ],
+    "fut_ensemble": "ENS_fut_L3_k1_6bdcbc78",
+    "fut_member": "fut_1D_S44_M28_127_d0.05_SN24_L3",
+    "fut_leverage": 3.0,
+    "weights": {
+      "stock": 0.6,
+      "spot": 0.25,
+      "fut": 0.15
+    },
+    "band": {
+      "mode": "abs",
+      "pp": 0.08
+    }
+  },
+  "validation": {
+    "full_Cal": 2.9706,
+    "holdout_Cal": 2.1195,
+    "full_CAGR": 0.5003,
+    "holdout_CAGR": 0.357,
+    "holdout_MDD": -0.1684,
+    "reproducibility": "bit-identical"
+  },
+  "data_date": "2026-04-13",
+  "created_at": "2026-04-18"
+}

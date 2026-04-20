@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cap Defend — 추가 전략 단독 검증 계획서</title>
+<style>
+ body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:960px;margin:20px auto;padding:0 16px;color:#222;line-height:1.55}
+ h1{border-bottom:3px solid #333;padding-bottom:8px}
+ h2{border-bottom:1px solid #aaa;padding-bottom:6px;margin-top:32px;color:#0366d6}
+ h3{color:#24292e;margin-top:20px}
+ code{background:#f6f8fa;padding:2px 5px;border-radius:3px;font-size:0.92em}
+ pre{background:#f6f8fa;padding:12px;border-radius:5px;overflow-x:auto;font-size:0.88em}
+ table{border-collapse:collapse;margin:10px 0;font-size:0.93em;width:100%}
+ th,td{border:1px solid #d0d7de;padding:6px 10px;text-align:left}
+ th{background:#f6f8fa}
+ .priority1{background:#d1f4d1}
+ .priority2{background:#fff4c4}
+ .priority3{background:#f4e0c4}
+ .drop{background:#f4d1d1}
+ .meta{font-size:0.88em;color:#57606a;margin-bottom:20px}
+ .box{border:1px solid #d0d7de;border-radius:5px;padding:12px;margin:12px 0}
+ .box.good{border-left:4px solid #1a7f37}
+ .box.warn{border-left:4px solid #bf8700}
+ .box.bad{border-left:4px solid #d1242f}
+</style>
+</head>
+<body>
+
+<h1>Cap Defend — 추가 전략 단독 검증 계획서</h1>
+<div class="meta">작성 2026-04-19 · Plan 서브에이전트 + Claude 검토 · 총 7개 후보 중 3개 우선, 4개 드롭 권고</div>
+
+<div class="box good">
+<b>핵심 철학:</b> "단독 실패하면 조합해도 의미 없다"
+<br>각 후보 전략을 먼저 standalone backtest로 검증. holdout Cal ≥ 0.5 통과한 것만 V21+C 조합 단계로 승격.
+</div>
+
+<h2>1. 공통 검증 프레임워크</h2>
+<p>모든 후보 전략은 <code>c_engine_v5.py</code> 구조를 모사:</p>
+<pre>def run_&lt;strat&gt;(df_1h, **params) -&gt; (equity: pd.Series, events: list[dict])</pre>
+
+<table>
+<tr><th>항목</th><th>설정</th></tr>
+<tr><td>데이터</td><td><code>/data/futures/{SYM}USDT_1h.csv</code> (2020-10 ~ 2026-03)</td></tr>
+<tr><td>유니버스</td><td><code>/data/historical_universe.json</code> monthly top-N</td></tr>
+<tr><td>Train / Holdout</td><td>2020-10 ~ 2023-12 / 2024-01 ~ 2026-03 (strict split, Train에서만 grid search)</td></tr>
+<tr><td>Cost</td><td><code>tx=0.003</code> (futures round-trip 0.06% maker + slippage buffer)</td></tr>
+<tr><td>체결</td><td>signal t-bar close → t+1 bar open 체결 (보수는 High 체결, C와 동일)</td></tr>
+<tr><td>Equity</td><td>초기 $10,000, multi-coin EW aggregation (m3_engine 방식)</td></tr>
+<tr><td>탈락 기준</td><td><b>holdout Cal &lt; 0.5 → drop</b></td></tr>
+</table>
+
+<h2>2. 우선순위 요약</h2>
+<table>
+<tr><th>순위</th><th>전략</th><th>구현</th><th>기대 성과</th><th>차별성</th><th>권고</th></tr>
+<tr class="priority1"><td>1</td><td>Pullback Trend Entry</td><td>낮음</td><td>중상</td><td>중 (V21 entry timing 개선)</td><td><b>최우선 검증</b></td></tr>
+<tr class="priority2"><td>2</td><td>Short Momentum</td><td>중 (funding 반영)</td><td>낮음~중</td><td>최상 (유일 숏)</td><td>편입 임계 완화 (Cal ≥ 0.3)</td></tr>
+<tr class="priority3"><td>3</td><td>Volatility Breakout</td><td>낮음</td><td>중 (right-tail)</td><td>중 (Pullback과 중첩 가능)</td><td>Pullback과 signal IoU 확인</td></tr>
+<tr class="drop"><td>DROP</td><td>Range MR</td><td colspan="4">Strategy C와 알파 60%+ 중첩</td></tr>
+<tr class="drop"><td>DROP</td><td>Breakdown Short</td><td colspan="4">Short Momentum과 70%+ 중복</td></tr>
+<tr class="drop"><td>DROP</td><td>Tail Hedge</td><td colspan="4">Standalone Cal 부적합 (보험상품). 향후 overlay 단계</td></tr>
+<tr class="drop"><td>DROP</td><td>RS Rotation</td><td colspan="4">V17/V21 coin EW와 알파 중복</td></tr>
+</table>
+
+<h2>3. 전략 1: Pullback Trend Entry (최우선)</h2>
+
+<h3>3-1. 시그널 정의</h3>
+<pre>EMA_fast  = EMA(Close, 50)          # 1h 기준
+EMA_slow  = EMA(Close, 200)
+trend_up  = (Close &gt; EMA_slow) AND (EMA_fast &gt; EMA_slow)
+
+pullback_depth = (EMA_fast - Low_rolling_6) / EMA_fast
+reclaim        = Close &gt; EMA_fast
+
+dip_sig = trend_up
+        AND pullback_depth &gt;= 0.015
+        AND pullback_depth &lt; 0.08
+        AND reclaim</pre>
+
+<h3>3-2. 체결/청산</h3>
+<ul>
+<li><b>Entry</b>: signal 확정 t → t+1 open 매수</li>
+<li><b>Exit (3종)</b>:
+  <ul>
+  <li>trailing stop: <code>Close &lt; EMA_fast × (1 - 0.02)</code></li>
+  <li>Take Profit: +6%</li>
+  <li>Time Stop: 72h</li>
+  </ul>
+</li>
+</ul>
+
+<h3>3-3. 파라미터 grid</h3>
+<table>
+<tr><th>파라미터</th><th>초기</th><th>grid</th></tr>
+<tr><td>ema_fast</td><td>50</td><td>{30, 50, 80}</td></tr>
+<tr><td>ema_slow</td><td>200</td><td>{150, 200, 300}</td></tr>
+<tr><td>pullback_min</td><td>0.015</td><td>{0.01, 0.015, 0.025}</td></tr>
+<tr><td>tp</td><td>0.06</td><td>{0.04, 0.06, 0.10}</td></tr>
+<tr><td>tstop_bars</td><td>72</td><td>{48, 72, 120}</td></tr>
+</table>
+
+<h3>3-4. 예상 성과 / 위험</h3>
+<ul>
+<li>예상 n_events: Top10 코인 전체 월 15~30회, Train ~850 events</li>
+<li>실패 케이스: V21 D봉 추세와 correlation 0.6+ 가능성 (실제 측정 필수)</li>
+<li>2022-bear whipsaw 구간에서 false reclaim 빈발</li>
+<li>EMA200 warmup 8일 필요</li>
+</ul>
+
+<h3>3-5. 파일</h3>
+<pre>strategies/cap_defend/research/pullback_v1/
+  engine_pullback.py
+  validate_pullback_standalone.py</pre>
+
+<h2>4. 전략 2: Short Momentum (하락 추세 숏)</h2>
+
+<h3>4-1. 시그널</h3>
+<pre>ema_fast = EMA(Close, 50)
+ema_slow = EMA(Close, 200)
+regime_down = (Close &lt; ema_slow) AND (ema_fast &lt; ema_slow)
+
+swing_low = rolling_min(Low, 72).shift(1)
+short_sig = regime_down
+          AND (Close &lt; swing_low)
+          AND (Close / ema_fast - 1 &lt; -0.01)</pre>
+
+<h3>4-2. 체결/청산</h3>
+<ul>
+<li>Entry: t+1 open 숏</li>
+<li>Stop: <code>Close &gt; ema_fast × 1.02</code></li>
+<li>TP: +6% (short profit)</li>
+<li>tstop: 72h</li>
+<li><b>Leverage 1x</b> (squeeze 방지)</li>
+</ul>
+
+<h3>4-3. 위험</h3>
+<ul>
+<li>Crypto 장기 상방 드리프트 → negative CAGR 가능</li>
+<li>Funding rate 양수 구간 cost 누적 → <b>backtest에 funding 반영 필수</b></li>
+<li>Short squeeze 시 stop slippage 2~3x</li>
+<li>2024-2025 bull extended → holdout 부진 예상</li>
+</ul>
+
+<div class="box warn">
+<b>편입 기준 완화</b>: 단독 Cal &lt; 0.5여도 bear 구간 (2022, 2025-Q1) CAGR &gt; +20% + combined test에서 MDD 축소 기여 증명되면 5~10% weight 편입 검토. 유일한 숏 엔진이라 diversification 값어치 있음.
+</div>
+
+<h3>4-4. 파일</h3>
+<pre>strategies/cap_defend/research/short_mom_v1/
+  engine_short_mom.py
+  validate_short_mom_standalone.py
+  funding_loader.py  (신규)</pre>
+
+<h2>5. 전략 3: Volatility Breakout</h2>
+
+<h3>5-1. 시그널</h3>
+<pre>ATR         = Wilder ATR(14h)
+donch_high  = rolling_max(High, 48)   # 2일 고점
+vol_filter  = ATR / Close &lt; 0.035     # 극단 변동성 제외
+regime      = Close &gt; SMA(Close, 168) # 1주 이평 위
+
+breakout_sig = (Close &gt;= donch_high.shift(1))
+             AND vol_filter
+             AND regime</pre>
+
+<h3>5-2. 체결/청산</h3>
+<ul>
+<li>Entry: t+1 open</li>
+<li>Trailing stop: <code>max(High since entry) - 2×ATR_entry</code></li>
+<li>TP: +8%</li>
+<li>tstop: 96h</li>
+</ul>
+
+<h3>5-3. 파라미터</h3>
+<table>
+<tr><th></th><th>초기</th><th>grid</th></tr>
+<tr><td>donch_window</td><td>48</td><td>{24, 48, 96}</td></tr>
+<tr><td>atr_window</td><td>14</td><td>{10, 14, 20}</td></tr>
+<tr><td>trail_atr_mult</td><td>2.0</td><td>{1.5, 2.0, 3.0}</td></tr>
+<tr><td>tp</td><td>0.08</td><td>{0.05, 0.08, 0.15}</td></tr>
+<tr><td>vol_filter_max</td><td>0.035</td><td>{0.025, 0.035, 0.05}</td></tr>
+</table>
+
+<h3>5-4. 위험</h3>
+<ul>
+<li><b>Pullback과 알파 중첩</b>: 둘 다 trend-following. Pullback 검증 후 진행. Signal IoU &gt; 50%면 drop</li>
+<li>2023~2024 저변동성 구간 false signal 많음</li>
+<li>Funding rate 음수 구간에서 슬리피지 &gt; 가정</li>
+</ul>
+
+<h2>6. 드롭 권고 상세</h2>
+<table>
+<tr><th>전략</th><th>드롭 사유</th></tr>
+<tr><td>Range MR</td><td>Strategy C (dip-buy MR)와 알파 중첩. BB+RSI vs 24h dip -15%. Signal IoU 60%+ 예상. 작은 변형일 뿐</td></tr>
+<tr><td>Breakdown Short</td><td>Short Momentum과 알파 70%+ 중복. Donchian breakdown vs EMA regime + swing low. 둘 중 regime filter 강한 Short Momentum만 남김</td></tr>
+<tr><td>Tail Hedge</td><td>Standalone Cal 측정 자체가 부적합 (보험상품). 현재 "단독 실패=탈락" 철학에 안 맞음. 향후 V21+C+Pullback 검증 끝난 뒤 별도 overlay 단계</td></tr>
+<tr><td>RS Rotation</td><td>V17 stock (추세) + V21 coin daily 3멤버 EW와 알파 중복. Crypto universe 작아 rotation 우월성 증거 부족</td></tr>
+</table>
+
+<h2>7. 실행 순서 제안</h2>
+<ol>
+<li><b>Week 1</b>: Pullback engine + standalone validate
+  <ul>
+  <li>Train grid search 405 combos (EMA × pullback × tp × tstop × vol)</li>
+  <li>holdout Cal 측정 + V21 correlation</li>
+  </ul>
+</li>
+<li><b>Week 2</b>: VBO engine + validate. Pullback과 signal IoU 분석 (drop 판단)</li>
+<li><b>Week 3</b>: Short Momentum engine + funding loader. Bear 구간 집중 분석</li>
+<li><b>Week 4</b>: 생존 전략들 V21/C 와 pairwise correlation → 최종 weight 제안</li>
+</ol>
+
+<p>각 단계 끝에 <code>strategies/cap_defend/research/&lt;strat&gt;_v1/HOLDOUT_REPORT.md</code> 형태 보고서 생성 (Cal/MDD/win_rate + C-engine 이벤트 비교).</p>
+
+<h2>8. Critical Files</h2>
+<pre>/home/gmoh/mon/251229/strategies/cap_defend/research/c_engine_v5.py
+/home/gmoh/mon/251229/strategies/cap_defend/research/m3_engine_futures.py
+/home/gmoh/mon/251229/strategies/cap_defend/research/strat_C_v3/v21_futures_daily.csv
+/home/gmoh/mon/251229/data/historical_universe.json
+/home/gmoh/mon/251229/data/futures/BTCUSDT_1h.csv
+  + top10 유니버스 전체</pre>
+
+<div class="box good">
+<b>한 줄 결론:</b> Pullback 최우선 구현 + V21 correlation 측정. 통과 시 VBO(중첩 확인 후), Short Momentum(bear 구간 집중) 순. Range MR / Breakdown Short / Tail Hedge / RS Rotation은 알파 중복 / 본질 부적합으로 드롭.
+</div>
+
+</body>
+</html>

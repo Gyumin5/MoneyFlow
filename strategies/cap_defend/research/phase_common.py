@@ -196,8 +196,10 @@ def run_single_target(asset: str, cfg: dict, lev: float, anchor: str,
 
 
 def _cfg_to_member(cfg: dict) -> dict:
-    from coin_live_engine import MEMBER_D_SMA50, MEMBER_4H_SMA240
-    template = MEMBER_D_SMA50 if cfg["interval"] == "D" else MEMBER_4H_SMA240
+    # V21부터 4h 멤버 제거. D봉 템플릿만 사용.
+    # 연구 파이프라인은 4h도 탐색 가능하지만 템플릿은 D 기반 공통 필드만 참조
+    from coin_live_engine import MEMBER_D_SMA50
+    template = MEMBER_D_SMA50
     member = dict(template)
     member.update({
         "interval": cfg["interval"],
