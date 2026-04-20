@@ -1,0 +1,94 @@
+[10x_chain] start 21:51:08
+[10x_chain] phase1 done 00:32:05
+[10x_chain] phase2 start
+audit=938 survivors=461 -> phase2_10x
+[10x_chain] phase3 start
+CAGR floor: 461 → 247 (>= 30%×lev)
+Pool after top-5 union (Cal/Sh/CAGR/rank_sum) per (bucket,interval): 59
+  fut_L2_4h: 8
+  fut_L2_D: 6
+  fut_L3_4h: 8
+  fut_L3_D: 6
+  fut_L4_4h: 5
+  fut_L4_D: 7
+  spot_4h: 9
+  spot_D: 10
+Combos: 661 (k=1,2,3, snap-aligned mixed only, near-duplicate pairs excluded for k>=2)
+  [50/602] ok=109
+  [100/602] ok=159
+  [150/602] ok=209
+  [200/602] ok=259
+  [250/602] ok=309
+  [300/602] ok=359
+  [350/602] ok=409
+  [400/602] ok=459
+  [450/602] ok=509
+  [500/602] ok=559
+  [550/602] ok=609
+  [600/602] ok=659
+  [602/602] ok=661
+combos=661 ok=661 spot_top=14 fut_top=41
+[10x_chain] phase4 start
+Loading V17 stock equity...
+Loading stock data...
+Stock anchors: 11
+Building 14 spot + 41 fut ensembles full equity...
+  spot ensemble ENS_spot_k3_1a7c0e2a
+  spot ensemble ENS_spot_k3_3e62cb12
+  spot ensemble ENS_spot_k3_f5052d5f
+  spot ensemble ENS_spot_k3_9ad55584
+  spot ensemble ENS_spot_k3_e7082229
+  spot ensemble ENS_spot_k3_ecfa1cf7
+  spot ensemble ENS_spot_k3_7a2b7299
+  spot ensemble ENS_spot_k2_3c2b46f7
+  spot ensemble ENS_spot_k3_4b270476
+  spot ensemble ENS_spot_k3_6f3f42b2
+  spot ensemble ENS_spot_k3_8530a7ff
+  spot ensemble ENS_spot_k2_f8f52424
+  spot ensemble ENS_spot_k1_a85caa35
+  spot ensemble ENS_spot_k2_c3f4cf27
+  fut ensemble ENS_fut_L2_k3_70fb40c0 (L2)
+  fut ensemble ENS_fut_L2_k3_04cd9a53 (L2)
+  fut ensemble ENS_fut_L2_k3_b48b3541 (L2)
+  fut ensemble ENS_fut_L2_k2_f6afd578 (L2)
+  fut ensemble ENS_fut_L2_k2_41f8f949 (L2)
+  fut ensemble ENS_fut_L2_k3_8579744f (L2)
+  fut ensemble ENS_fut_L2_k3_77d81ef8 (L2)
+  fut ensemble ENS_fut_L2_k3_ad670b5b (L2)
+  fut ensemble ENS_fut_L2_k3_ce563f29 (L2)
+  fut ensemble ENS_fut_L2_k3_b5fa76a0 (L2)
+  fut ensemble ENS_fut_L2_k3_c84c735a (L2)
+  fut ensemble ENS_fut_L2_k2_34f15f41 (L2)
+  fut ensemble ENS_fut_L2_k3_e1146b9d (L2)
+  fut ensemble ENS_fut_L2_k2_4446cd5d (L2)
+  fut ensemble ENS_fut_L2_k1_ea0c772f (L2)
+  fut ensemble ENS_fut_L3_k2_6e9f1155 (L3)
+  fut ensemble ENS_fut_L3_k3_df1c7fbe (L3)
+  fut ensemble ENS_fut_L3_k3_d72a705d (L3)
+  fut ensemble ENS_fut_L3_k2_8461357e (L3)
+  fut ensemble ENS_fut_L3_k3_c0b73ac8 (L3)
+  fut ensemble ENS_fut_L3_k3_12652d57 (L3)
+  fut ensemble ENS_fut_L3_k3_45e4f3d3 (L3)
+  fut ensemble ENS_fut_L3_k3_7069b405 (L3)
+  fut ensemble ENS_fut_L3_k3_684f9bb5 (L3)
+  fut ensemble ENS_fut_L3_k3_fd2dfed2 (L3)
+  fut ensemble ENS_fut_L3_k3_21ad9927 (L3)
+  fut ensemble ENS_fut_L3_k3_441d46a4 (L3)
+  fut ensemble ENS_fut_L3_k3_c77a3b98 (L3)
+  fut ensemble ENS_fut_L3_k3_da7114e2 (L3)
+  fut ensemble ENS_fut_L3_k3_fa4dab45 (L3)
+  fut ensemble ENS_fut_L3_k2_0531e350 (L3)
+  fut ensemble ENS_fut_L3_k3_95cb2ca3 (L3)
+  fut ensemble ENS_fut_L4_k3_3352eafb (L4)
+  fut ensemble ENS_fut_L4_k3_988d0823 (L4)
+  fut ensemble ENS_fut_L4_k3_9873622d (L4)
+  fut ensemble ENS_fut_L4_k3_8556eaa1 (L4)
+  fut ensemble ENS_fut_L4_k3_9c564e95 (L4)
+  fut ensemble ENS_fut_L4_k3_58ae7401 (L4)
+  fut ensemble ENS_fut_L4_k3_5c53910a (L4)
+  fut ensemble ENS_fut_L4_k3_cd5f0d66 (L4)
+  fut ensemble ENS_fut_L4_k3_bb7f838b (L4)
+Grid: 5 weight tuples × (5 abs bands + 4 sleeve ratios) × 14 spot × 41 fut
+  abs configs=25, sleeve configs=20
+Done. rows=25830 -> phase4_10x
+[10x_chain] DONE 02:30:01
