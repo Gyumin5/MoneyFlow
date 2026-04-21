@@ -632,22 +632,9 @@ def run_once(dry_run: bool = False) -> int:
         effective_target, gross = apply_notional_cap(target, balance, total_krw, NOTIONAL_CAP_FRACTION)
         log(f'  Notional cap {NOTIONAL_CAP_FRACTION*100:.0f}% 적용 (gross_delta={gross*100:.1f}%)')
 
-    # 사전 알림
-    if state.get('pretrade_alert', True):
-        summary = format_target_summary(result.combined_target, result.member_targets)
-        delta_preview = format_delta_preview(effective_target, balance, total_krw)
-        universe_sample = ', '.join(result.universe[:8])
-        if len(result.universe) > 8:
-            universe_sample += f' ... (+{len(result.universe) - 8})'
-        _tg(summary)
-        _tg(delta_preview)
-        _tg(f'유니버스 {len(result.universe)}: {universe_sample}')
-        flips = [m for m, f in result.canary_flipped.items() if f]
-        if flips:
-            _tg(f'🔄 카나리 플립: {flips}')
-
     # Anchor-only 가드: 이전 combined_target 과 사실상 동일하면 drift 리밸런싱 스킵
     # (V21: 스냅샷 회전(anchor)이 실제로 일어났을 때만 매매)
+    # 2026-04-21: 사전 알림보다 먼저 판정 — 타겟 불변이면 텔레그램 메시지도 보내지 않음.
     def _targets_equal(a: Dict[str, float], b: Dict[str, float], tol: float = 0.005) -> bool:
         if not a or not b:
             return False
@@ -663,6 +650,20 @@ def run_once(dry_run: bool = False) -> int:
         save_json(state_path, state)
         _flush_telegram(dry_run)
         return 0
+
+    # 사전 알림 (타겟 변화가 실제로 있을 때만)
+    if state.get('pretrade_alert', True):
+        summary = format_target_summary(result.combined_target, result.member_targets)
+        delta_preview = format_delta_preview(effective_target, balance, total_krw)
+        universe_sample = ', '.join(result.universe[:8])
+        if len(result.universe) > 8:
+            universe_sample += f' ... (+{len(result.universe) - 8})'
+        _tg(summary)
+        _tg(delta_preview)
+        _tg(f'유니버스 {len(result.universe)}: {universe_sample}')
+        flips = [m for m, f in result.canary_flipped.items() if f]
+        if flips:
+            _tg(f'🔄 카나리 플립: {flips}')
 
     # Delta 매매
     permanent_block = state.get('permanent_block', [])
