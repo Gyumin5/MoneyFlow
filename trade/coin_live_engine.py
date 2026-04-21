@@ -748,38 +748,45 @@ def combine_ensemble(member_targets: Dict[str, Dict[str, float]],
     return merged
 
 
-# ─── V22 C 슬리브 신호 ───
+# ─── V22 C 슬리브 신호 (Intent-only, 체결은 executor 가 담당) ───
 @dataclass
-class CSignal:
-    """C 슬리브 한 사이클 신호 결과.
+class CIntent:
+    """C 슬리브 의도 (주문 X).
 
-    - entry_candidate: 신규 진입 후보 (dict) 또는 None
-      {coin, entry_ts(ISO), entry_px, tp_px, tstop_ts(ISO)}
-    - exit_signal: 현재 포지션이 TP or tstop 도달 여부
-    - exit_reason: 'tp' | 'tstop' | None
-    - last_bar_ts: 이번 호출 기준 최신 1h 봉 timestamp
+    action:
+      'hold'           — 포지션 유지 or 아무것도 안 함
+      'enter'          — 신규 진입 (V21 target 에 coin 추가)
+      'exit'           — 포지션 청산 (coin 제거)
+      'pending_save'   — 시그널 대기 상태 저장 요청 (체결은 다음 사이클)
+      'pending_expire' — pending 만료 clear 요청
+    payload: action 별 필드
+      enter:  {coin, entry_ts_expected, tp_px, tstop_ts, dip_ret, cap_weight}
+      exit:   {coin, reason}
+      pending_save: {coin, bar_ts, dip_ret, last_signal_bar_ts}
     """
-    entry_candidate: Optional[Dict] = None
-    exit_signal: bool = False
-    exit_reason: Optional[str] = None
+    action: str = 'hold'
+    payload: Optional[Dict] = None
     last_bar_ts: Optional[str] = None
     note: Optional[str] = None
 
 
-def compute_c_signal(state: Dict, bars_1h: Dict[str, pd.DataFrame],
-                     universe: List[str], now_utc: datetime) -> CSignal:
-    """C 슬리브 한 사이클 판정. V22 현물 전용. State machine:
+# 하위호환 alias (기존 compute_c_signal 호출코드가 있을 경우)
+CSignal = CIntent
 
-    3단계 흐름 (백테 A2_bounce_w1 재현):
-      T   시점 cron: 봉 T가 방금 닫힘 → dip 조건 검사.
-                    dip 하면서 봉 T가 양봉(Close>Open)이면 pending_entry 저장.
-                    (백테 filter_bounce_confirm의 "양봉 확인 후 다음 봉 Open 진입" 매칭)
-      T+1 시점 cron: 봉 T+1이 방금 닫힘 → pending 봉 직후 봉이므로 Open 가격으로 진입.
-      T+N 시점 cron: 포지션 TP/tstop 체크.
 
-    - bars_1h: {coin: 1h OHLCV DataFrame} — 직전 완성봉까지 slice된 상태.
-    - universe: warning 제외된 effective_universe.
-    - state['c_sleeve'] mutate 안함. caller가 CSignal 처리 후 갱신.
+def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
+                     universe: List[str], now_utc: datetime) -> CIntent:
+    """C 슬리브 의도 계산 (순수 함수, 주문 X).
+
+    State machine (A2_bounce_w1 라이브 재현):
+      T   : 봉 T 닫힘 → dip 체크 + 봉 T 양봉이면 pending 저장 (pending_save)
+      T+1 : 봉 T+1 닫힘 → pending 다음 봉 도달, Open 기준 진입 의도 (enter)
+      T+N : 포지션 있으면 TP/tstop 체크 → 청산 의도 (exit)
+
+    caller는 intent에 따라:
+      - hold/pending_save/pending_expire: 주문 없음, state만 업데이트
+      - enter: merged target에 coin 포함, 체결
+      - exit: merged target에서 coin 제거, 체결
     """
     cfg = C_SLEEVE_CFG
     c_state = state.setdefault('c_sleeve', {})
@@ -787,11 +794,12 @@ def compute_c_signal(state: Dict, bars_1h: Dict[str, pd.DataFrame],
 
     btc = bars_1h.get('BTC')
     if btc is None or len(btc) < cfg['dip_bars'] + 2:
-        return CSignal(note='BTC 1h 데이터 부족')
+        return CIntent(action='hold', note='BTC 1h 데이터 부족')
     last_ts_pd = btc.index[-1]
-    last_bar_ts = to_utc_iso(last_ts_pd.to_pydatetime().replace(tzinfo=timezone.utc))
+    last_ts_utc = last_ts_pd.to_pydatetime().replace(tzinfo=timezone.utc)
+    last_bar_ts = to_utc_iso(last_ts_utc)
 
-    # ─── 1. 기존 포지션 청산 체크 (우선순위 최상) ───
+    # ─── 1. 기존 포지션 청산 체크 ───
     if pos:
         coin = pos.get('coin')
         tp_px = float(pos.get('tp_px', 0))
@@ -799,58 +807,66 @@ def compute_c_signal(state: Dict, bars_1h: Dict[str, pd.DataFrame],
         coin_bars = bars_1h.get(coin)
         if coin_bars is None or len(coin_bars) == 0:
             if tstop_ts and now_utc >= tstop_ts:
-                return CSignal(exit_signal=True, exit_reason='tstop',
+                return CIntent(action='exit',
+                               payload={'coin': coin, 'reason': 'tstop'},
                                last_bar_ts=last_bar_ts,
-                               note=f'{coin} 1h 데이터 없음, tstop 경과')
-            return CSignal(last_bar_ts=last_bar_ts, note=f'{coin} 데이터 없음 HOLD')
+                               note=f'{coin} 데이터 없음 + tstop 경과')
+            return CIntent(action='hold',
+                           last_bar_ts=last_bar_ts,
+                           note=f'{coin} 데이터 없음 HOLD')
         latest_high = float(coin_bars['High'].iloc[-1])
         latest_close = float(coin_bars['Close'].iloc[-1])
         if latest_high >= tp_px or latest_close >= tp_px:
-            return CSignal(exit_signal=True, exit_reason='tp', last_bar_ts=last_bar_ts)
+            return CIntent(action='exit',
+                           payload={'coin': coin, 'reason': 'tp'},
+                           last_bar_ts=last_bar_ts)
         if tstop_ts and now_utc >= tstop_ts:
-            return CSignal(exit_signal=True, exit_reason='tstop', last_bar_ts=last_bar_ts)
-        return CSignal(last_bar_ts=last_bar_ts,
-                       note=f'HOLD {coin}: close={latest_close:.4f} / tp={tp_px:.4f}')
+            return CIntent(action='exit',
+                           payload={'coin': coin, 'reason': 'tstop'},
+                           last_bar_ts=last_bar_ts)
+        return CIntent(action='hold',
+                       last_bar_ts=last_bar_ts,
+                       note=f'HOLD {coin} close={latest_close:.4f} tp={tp_px:.4f}')
 
-    # ─── 2. pending_entry 처리 (어제 시그널 + 양봉 → 오늘 Open 진입) ───
-    # 유효 조건: pending_bar_ts 바로 다음 봉(정확히 +1h)이 last_bar_ts 와 일치해야 함.
-    # 그렇지 않으면 "늦게 도착한 pending" 으로 간주하고 만료 플래그 반환.
+    # ─── 2. pending_entry → enter 전환 ───
     pending = c_state.get('pending_entry')
     if pending:
         pend_bar_ts = parse_utc_iso(pending.get('bar_ts', ''))
         pend_coin = pending.get('coin')
-        expected_entry_ts = pend_bar_ts + timedelta(hours=1) if pend_bar_ts else None
-        current_last_ts = btc.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
+        expected_entry_ts = (pend_bar_ts + timedelta(hours=1)) if pend_bar_ts else None
         if (pend_bar_ts and pend_coin and expected_entry_ts
-                and current_last_ts == expected_entry_ts):
+                and last_ts_utc == expected_entry_ts):
             cbars = bars_1h.get(pend_coin)
-            if cbars is not None and len(cbars) > 0 and cbars.index[-1].to_pydatetime().replace(tzinfo=timezone.utc) == expected_entry_ts:
-                entry_row = cbars.iloc[-1]
-                entry_ts_pd = entry_row.name
-                entry_px = float(entry_row['Open'])
-                tp_px = entry_px * (1 + cfg['tp_pct'])
-                entry_ts_utc = entry_ts_pd.to_pydatetime().replace(tzinfo=timezone.utc)
-                tstop_ts = entry_ts_utc + timedelta(hours=cfg['tstop_hours'])
-                return CSignal(
-                    entry_candidate={
-                        'coin': pend_coin,
-                        'entry_ts': to_utc_iso(entry_ts_utc),
-                        'entry_px': entry_px,
-                        'tp_px': tp_px,
-                        'tstop_ts': to_utc_iso(tstop_ts),
-                        'dip_ret': pending.get('dip_ret'),
-                    },
-                    last_bar_ts=last_bar_ts,
-                    note=f'A2 confirmed: {pend_coin} @ {entry_px:.6f}')
-        # pending 만료 (다음 봉 놓침 or stale) — caller에게 clear 요청
-        return CSignal(last_bar_ts=last_bar_ts,
-                       note='pending_entry 만료 — clear',
-                       entry_candidate={'_expire_pending': True})
+            if cbars is not None and len(cbars) > 0:
+                coin_last_ts = cbars.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
+                if coin_last_ts == expected_entry_ts:
+                    entry_row = cbars.iloc[-1]
+                    entry_px = float(entry_row['Open'])
+                    tp_px = entry_px * (1 + cfg['tp_pct'])
+                    tstop_ts = expected_entry_ts + timedelta(hours=cfg['tstop_hours'])
+                    return CIntent(
+                        action='enter',
+                        payload={
+                            'coin': pend_coin,
+                            'entry_ts_expected': to_utc_iso(expected_entry_ts),
+                            'entry_px_ref': entry_px,
+                            'tp_px_ref': tp_px,
+                            'tstop_ts': to_utc_iso(tstop_ts),
+                            'dip_ret': pending.get('dip_ret'),
+                            'cap_weight': cfg['cap_per_slot'],
+                        },
+                        last_bar_ts=last_bar_ts,
+                        note=f'A2 confirmed enter: {pend_coin} @ {entry_px:.6f}')
+        # pending 만료
+        return CIntent(action='pending_expire',
+                       last_bar_ts=last_bar_ts,
+                       note='pending_entry 만료')
 
     # ─── 3. 신규 dip 탐지 ───
-    # 중복 시그널 방지
     if c_state.get('last_signal_bar_ts') == last_bar_ts:
-        return CSignal(last_bar_ts=last_bar_ts, note='동일 봉 중복 시그널 skip')
+        return CIntent(action='hold',
+                       last_bar_ts=last_bar_ts,
+                       note='동일 봉 중복 시그널 skip')
 
     candidates = []
     for coin in universe:
@@ -863,34 +879,88 @@ def compute_c_signal(state: Dict, bars_1h: Dict[str, pd.DataFrame],
             candidates.append((coin, dip_ret))
 
     if not candidates:
-        return CSignal(last_bar_ts=last_bar_ts, note='dip 후보 없음')
+        return CIntent(action='hold',
+                       last_bar_ts=last_bar_ts,
+                       note='dip 후보 없음')
 
-    # universe 순서 기준 최상위 코인
     cand_set = {c[0] for c in candidates}
     chosen = next((c for c in universe if c in cand_set), None)
     if chosen is None:
-        return CSignal(last_bar_ts=last_bar_ts, note='chosen 실패')
+        return CIntent(action='hold', last_bar_ts=last_bar_ts, note='chosen 실패')
 
-    # A2 bounce: 시그널 봉 자체가 양봉이어야 다음 봉에서 진입
     cbars = bars_1h[chosen]
     sig_bar = cbars.iloc[-1]
     sig_green = float(sig_bar['Close']) > float(sig_bar['Open'])
     dip_ret = next(d for c, d in candidates if c == chosen)
 
     if not sig_green:
-        return CSignal(last_bar_ts=last_bar_ts,
-                       note=f'{chosen} dip={dip_ret:.1%} but not green — skip')
+        return CIntent(action='hold',
+                       last_bar_ts=last_bar_ts,
+                       note=f'{chosen} dip={dip_ret:.1%} not green — skip')
 
-    # pending_entry 로 저장 요청 (caller 가 state에 기록)
-    return CSignal(
-        last_bar_ts=last_bar_ts,
-        note=f'A2 pending: {chosen} dip={dip_ret:.1%} green → next bar 진입 대기',
-        entry_candidate={
-            '_pending': True,
+    return CIntent(
+        action='pending_save',
+        payload={
             'coin': chosen,
             'bar_ts': last_bar_ts,
             'dip_ret': round(dip_ret, 4),
-        })
+            'last_signal_bar_ts': last_bar_ts,
+        },
+        last_bar_ts=last_bar_ts,
+        note=f'A2 pending: {chosen} dip={dip_ret:.1%} green → 다음 봉 진입')
+
+
+def apply_c_to_target(v21_target: Dict[str, float],
+                       c_position: Optional[Dict],
+                       c_intent: CIntent,
+                       total_pv: float) -> Dict[str, float]:
+    """V21 target 에 C 포지션/의도를 overlay 하여 merged target 반환.
+
+    규칙:
+    - C 포지션 유지 (hold) or pending_save: 기존 포지션이 있으면 그 coin 가중치를 target에 추가.
+      (아직 안 산 pending은 merged에 영향 없음 — 실제 매수는 다음 사이클 enter 때.)
+    - C enter 의도: coin을 merged target에 cap_weight 로 추가.
+    - C exit 의도: coin 이 merged target에 있어도 포함 안 함 (매도될 방향).
+    - pending_expire: no-op.
+
+    CASH (대소문자 상관 없이) 은 자동 잔여로 재계산. 합 1.0 정규화 안 함 — execute_delta에서 처리.
+    반환은 'Cash' 키 사용 (executor 규약).
+    """
+    merged = {k: float(v) for k, v in v21_target.items() if not str(k).startswith('_')}
+    # Cash 키 표준화
+    if 'CASH' in merged and 'Cash' not in merged:
+        merged['Cash'] = merged.pop('CASH')
+
+    add_coin = None
+    add_weight = 0.0
+
+    if c_intent.action == 'enter' and c_intent.payload:
+        add_coin = c_intent.payload['coin']
+        add_weight = float(c_intent.payload.get('cap_weight', 0.0))
+    elif c_intent.action == 'hold' and c_position:
+        # 기존 보유 포지션 반영
+        add_coin = c_position.get('coin')
+        krw_spent = float(c_position.get('krw_spent', 0.0))
+        if total_pv > 0 and krw_spent > 0:
+            add_weight = krw_spent / total_pv
+    elif c_intent.action == 'pending_save':
+        # 아직 안 산 상태 — merged 에 영향 없음
+        pass
+    elif c_intent.action == 'exit':
+        # 매도될 coin 의 기존 보유분 merged 에 포함하지 않음 (target = 0 의미)
+        pass
+
+    if add_coin and add_weight > 0:
+        merged[add_coin] = merged.get(add_coin, 0.0) + add_weight
+        # Cash 에서 차감 (underflow 방지)
+        cash = merged.get('Cash', 0.0) - add_weight
+        merged['Cash'] = max(0.0, cash)
+
+    return merged
+
+
+# 하위호환 alias — 기존 compute_c_signal 이름으로 CIntent 반환
+compute_c_signal = compute_c_intent
 
 
 def fetch_c_bars(session: requests.Session, coins: List[str],
