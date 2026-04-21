@@ -505,6 +505,44 @@ def format_target_summary(combined: Dict[str, float],
     return '\n'.join(lines)
 
 
+def _save_state_unless_dry(state_path: str, state: dict, dry_run: bool) -> None:
+    """dry-run이면 state 저장을 건너뛰어 실거래 트리거가 오염되지 않게 한다."""
+    if dry_run:
+        log('  (dry-run) state 저장 생략')
+        return
+    save_json(state_path, state)
+
+
+def coin_needs_rebalance(target: Dict[str, float], balance: Dict[str, float],
+                          total: float, delta_pct_tol: float = 0.01) -> bool:
+    """현재 잔고와 목표 사이 편차가 체결 가능한 크기로 남아있으면 True.
+
+    선물 auto_trade_binance.needs_rebalance 와 동일 역할:
+      - 체결액이 MIN_ORDER_KRW 미만이면 무시 (거래소 최소주문 미만은 의미 없음)
+      - 그 외에는 현재 notional 대비 편차가 tol(1%) 넘으면 True
+      - 목표에 있는데 보유 없으면 True
+    """
+    if total <= 0:
+        return False
+    current_v = {k: v for k, v in balance.items() if k != 'KRW'}
+    keys = set(current_v.keys()) | set(target.keys())
+    for k in keys:
+        if k == 'Cash':
+            continue
+        tgt_v = target.get(k, 0.0) * total
+        cur_v = current_v.get(k, 0.0)
+        diff = tgt_v - cur_v
+        if abs(diff) < MIN_ORDER_KRW:
+            continue
+        if cur_v <= 0:
+            if tgt_v >= MIN_ORDER_KRW:
+                return True
+            continue
+        if abs(diff) / max(cur_v, 1.0) > delta_pct_tol:
+            return True
+    return False
+
+
 def format_delta_preview(target: Dict[str, float], balance: Dict[str, float],
                           total: float) -> str:
     if total <= 0:
@@ -566,7 +604,7 @@ def run_once(dry_run: bool = False) -> int:
         if failed_liq:
             log(f'❌ 청산 실패 {failed_liq} → fail-closed (리밸런싱 스킵)')
             _tg(f'❌ 코인 청산 실패 {failed_liq} → 실행 중단')
-            save_json(state_path, state)
+            _save_state_unless_dry(state_path, state, dry_run)
             _flush_telegram(dry_run)
             return 3
 
@@ -586,7 +624,7 @@ def run_once(dry_run: bool = False) -> int:
     except Exception as e:
         log(f'❌ 엔진 호출 실패: {e}\n{traceback.format_exc()}')
         _tg(f'❌ 엔진 호출 실패: {e}')
-        save_json(state_path, state)
+        _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
         return 2
 
@@ -598,13 +636,13 @@ def run_once(dry_run: bool = False) -> int:
         fresh_str = ', '.join(f'{k}={"✓" if v else "✗"}' for k, v in result.fresh.items())
         log(f'  ⚠ Freshness 미달 ({fresh_str}) → 리밸런싱 스킵. 상태만 저장.')
         _tg(f'⚠ Freshness 미달: {fresh_str} → 스킵')
-        save_json(state_path, state)
+        _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
         return 1
 
     if not result.any_new_bar:
         log('  ℹ 새 봉 없음 (idempotent) → 리밸런싱 스킵')
-        save_json(state_path, state)
+        _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
         return 0
 
@@ -632,9 +670,10 @@ def run_once(dry_run: bool = False) -> int:
         effective_target, gross = apply_notional_cap(target, balance, total_krw, NOTIONAL_CAP_FRACTION)
         log(f'  Notional cap {NOTIONAL_CAP_FRACTION*100:.0f}% 적용 (gross_delta={gross*100:.1f}%)')
 
-    # Anchor-only 가드: 이전 combined_target 과 사실상 동일하면 drift 리밸런싱 스킵
-    # (V21: 스냅샷 회전(anchor)이 실제로 일어났을 때만 매매)
-    # 2026-04-21: 사전 알림보다 먼저 판정 — 타겟 불변이면 텔레그램 메시지도 보내지 않음.
+    # 이벤트 트리거 판정 (auto_trade_binance의 rebalancing_needed 패턴 이식)
+    # - target이 prev 대비 변하면 rebalancing_needed=True (카나리/스냅 회전/유의 퇴출 등)
+    # - 한 번 True면 실제 포지션이 목표에 근접할 때까지 다음 실행에서도 유지
+    # - 가격 drift만으로는 여기 안 들어옴 (target 불변 + rebalancing_needed False)
     def _targets_equal(a: Dict[str, float], b: Dict[str, float], tol: float = 0.005) -> bool:
         if not a or not b:
             return False
@@ -644,14 +683,29 @@ def run_once(dry_run: bool = False) -> int:
                 return False
         return True
 
-    if _targets_equal(result.combined_target, prev_combined):
-        log(f'  ℹ target 불변 (앵커 미발생) → 리밸런싱 스킵. prev={prev_combined}')
+    target_changed = not _targets_equal(result.combined_target, prev_combined)
+    if target_changed:
+        state['rebalancing_needed'] = True
+        log(f'  🔔 target 변경 감지 → rebalancing_needed=True. prev={prev_combined}, new={result.combined_target}')
+
+    rebalance_needed = bool(state.get('rebalancing_needed', False))
+    if not rebalance_needed:
+        log(f'  ℹ target 불변 + rebalancing_needed=False → 스킵. prev={prev_combined}')
         state['last_krw_balance'] = total_krw
-        save_json(state_path, state)
+        _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
         return 0
 
-    # 사전 알림 (타겟 변화가 실제로 있을 때만)
+    # 실제 잔고 편차 체크 — 목표에 이미 근접해있고 이벤트 흔적(True)만 남았으면 클리어
+    if not target_changed and not coin_needs_rebalance(effective_target, balance, total_krw):
+        state['rebalancing_needed'] = False
+        log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
+        state['last_krw_balance'] = total_krw
+        _save_state_unless_dry(state_path, state, dry_run)
+        _flush_telegram(dry_run)
+        return 0
+
+    # 사전 알림 (실제 매매가 진행될 때만)
     if state.get('pretrade_alert', True):
         summary = format_target_summary(result.combined_target, result.member_targets)
         delta_preview = format_delta_preview(effective_target, balance, total_krw)
@@ -669,9 +723,26 @@ def run_once(dry_run: bool = False) -> int:
     permanent_block = state.get('permanent_block', [])
     execute_delta(effective_target, api, permanent_block, dry_run)
 
+    # 체결 후 잔고 재조회 → 여전히 편차 남으면 다음 실행에서 재시도 (부분체결 대응)
+    if not dry_run:
+        balance_after = api.get_balance()
+        total_after = sum(balance_after.values()) if balance_after else 0.0
+        # 잔고 조회 실패(빈 dict) 또는 total 0 → 판정 보류, 플래그 유지
+        if not balance_after or total_after <= 0:
+            state['rebalancing_needed'] = True
+            log(f'  ⚠ 체결 후 잔고 조회 실패/빈값 → rebalancing_needed=True 유지 (보수적 재시도)')
+        else:
+            still_needed = coin_needs_rebalance(effective_target, balance_after, total_after)
+            if still_needed:
+                state['rebalancing_needed'] = True
+                log(f'  ⏳ 체결 후에도 편차 잔존 → rebalancing_needed 유지. total=₩{total_after:,.0f}')
+            else:
+                state['rebalancing_needed'] = False
+                log(f'  ✅ 목표 도달 → rebalancing_needed=False. total=₩{total_after:,.0f}')
+
     # 상태 저장
     state['last_krw_balance'] = total_krw
-    save_json(state_path, state)
+    _save_state_unless_dry(state_path, state, dry_run)
     log(f'  상태 저장: {STATE_FILE}')
 
     _tg(f'✅ 실행 완료 ({"DRY" if dry_run else "LIVE"}) total=₩{total_krw:,.0f}')
