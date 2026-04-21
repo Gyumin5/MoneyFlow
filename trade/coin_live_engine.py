@@ -828,14 +828,22 @@ def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
                        last_bar_ts=last_bar_ts,
                        note=f'HOLD {coin} close={latest_close:.4f} tp={tp_px:.4f}')
 
-    # ─── 2. pending_entry → enter 전환 ───
+    # ─── 2. pending_entry → enter/hold/expire 3분기 ───
     pending = c_state.get('pending_entry')
     if pending:
         pend_bar_ts = parse_utc_iso(pending.get('bar_ts', ''))
         pend_coin = pending.get('coin')
         expected_entry_ts = (pend_bar_ts + timedelta(hours=1)) if pend_bar_ts else None
-        if (pend_bar_ts and pend_coin and expected_entry_ts
-                and last_ts_utc == expected_entry_ts):
+        if not (pend_bar_ts and pend_coin and expected_entry_ts):
+            return CIntent(action='pending_expire',
+                           last_bar_ts=last_bar_ts,
+                           note='pending meta 결손 — expire')
+        # 3분기: last_ts_utc 가 expected 보다 이전 / 정확히 일치 / 이후
+        if last_ts_utc < expected_entry_ts:
+            return CIntent(action='hold',
+                           last_bar_ts=last_bar_ts,
+                           note=f'pending 진입 시간 대기: expected {expected_entry_ts}')
+        if last_ts_utc == expected_entry_ts:
             cbars = bars_1h.get(pend_coin)
             if cbars is not None and len(cbars) > 0:
                 coin_last_ts = cbars.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
@@ -857,10 +865,14 @@ def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
                         },
                         last_bar_ts=last_bar_ts,
                         note=f'A2 confirmed enter: {pend_coin} @ {entry_px:.6f}')
-        # pending 만료
+            # 진입 봉 데이터 없음 → pending 유지, 한 사이클 더 기다림
+            return CIntent(action='hold',
+                           last_bar_ts=last_bar_ts,
+                           note=f'{pend_coin} 진입 봉 데이터 없음 HOLD')
+        # last_ts_utc > expected_entry_ts → 이미 지남, 만료
         return CIntent(action='pending_expire',
                        last_bar_ts=last_bar_ts,
-                       note='pending_entry 만료')
+                       note=f'pending 진입 봉 놓침 (last={last_ts_utc}, expected={expected_entry_ts})')
 
     # ─── 3. 신규 dip 탐지 ───
     if c_state.get('last_signal_bar_ts') == last_bar_ts:
@@ -913,53 +925,76 @@ def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
 def apply_c_to_target(v21_target: Dict[str, float],
                        c_position: Optional[Dict],
                        c_intent: CIntent,
-                       total_pv: float) -> Dict[str, float]:
-    """V21 target 에 C 포지션/의도를 overlay 하여 merged target 반환.
+                       total_pv: float,
+                       mark_price_fn=None) -> Dict[str, float]:
+    """V21 target 에 기존 C 포지션만 overlay (stray-sell 방지 전용).
 
-    규칙:
-    - C 포지션 유지 (hold) or pending_save: 기존 포지션이 있으면 그 coin 가중치를 target에 추가.
-      (아직 안 산 pending은 merged에 영향 없음 — 실제 매수는 다음 사이클 enter 때.)
-    - C enter 의도: coin을 merged target에 cap_weight 로 추가.
-    - C exit 의도: coin 이 merged target에 있어도 포함 안 함 (매도될 방향).
-    - pending_expire: no-op.
+    V22 최종 설계 (2026-04-22):
+    - V21 과 C 는 완전히 별개의 주문으로 처리. apply_c_to_target 은 V21 execute_delta
+      가 C 포지션을 stray 로 오판해 매도하지 않도록 "현재 보유 중인 C"만 보호.
+    - intent 상관 없이 c_position 이 있으면 항상 MTM(qty × current_price) 로 overlay.
+    - enter 의도는 overlay 안 함 (handle_c_only 가 별도 매수).
+    - exit 의도도 보호 유지 (handle_c_only 가 qty 만큼만 매도. V21 잔고 보존).
+    - mark_price_fn(coin) → 현재가. None 이면 cost-basis 로 fallback.
 
-    CASH (대소문자 상관 없이) 은 자동 잔여로 재계산. 합 1.0 정규화 안 함 — execute_delta에서 처리.
-    반환은 'Cash' 키 사용 (executor 규약).
+    Cash 부족 시 shrink.
     """
     merged = {k: float(v) for k, v in v21_target.items() if not str(k).startswith('_')}
-    # Cash 키 표준화
     if 'CASH' in merged and 'Cash' not in merged:
         merged['Cash'] = merged.pop('CASH')
 
-    add_coin = None
-    add_weight = 0.0
+    if not c_position:
+        return merged
+    add_coin = c_position.get('coin')
+    qty = float(c_position.get('qty', 0) or 0)
+    krw_spent = float(c_position.get('krw_spent', 0) or 0)
+    if not add_coin or total_pv <= 0:
+        return merged
 
-    if c_intent.action == 'enter' and c_intent.payload:
-        add_coin = c_intent.payload['coin']
-        add_weight = float(c_intent.payload.get('cap_weight', 0.0))
-    elif c_intent.action == 'hold' and c_position:
-        # 기존 보유 포지션 반영
-        add_coin = c_position.get('coin')
-        krw_spent = float(c_position.get('krw_spent', 0.0))
-        if total_pv > 0 and krw_spent > 0:
-            add_weight = krw_spent / total_pv
-    elif c_intent.action == 'pending_save':
-        # 아직 안 산 상태 — merged 에 영향 없음
-        pass
-    elif c_intent.action == 'exit':
-        # 매도될 coin 의 기존 보유분 merged 에 포함하지 않음 (target = 0 의미)
-        pass
+    mark_px = None
+    if mark_price_fn:
+        try:
+            mark_px = mark_price_fn(add_coin)
+        except Exception:
+            mark_px = None
 
-    if add_coin and add_weight > 0:
-        # Cash 가 충분한지 확인. 부족하면 C weight 축소 (target 합 1.0 유지).
-        cash_avail = merged.get('Cash', 0.0)
-        effective_add = min(add_weight, max(0.0, cash_avail))
-        if effective_add > 0:
-            merged[add_coin] = merged.get(add_coin, 0.0) + effective_add
-            merged['Cash'] = max(0.0, cash_avail - effective_add)
-        if effective_add < add_weight:
-            log.info('apply_c_to_target: Cash 부족 (avail=%.3f, req=%.3f) → shrink %.3f',
-                     cash_avail, add_weight, effective_add)
+    if qty > 0 and mark_px and mark_px > 0:
+        add_weight = qty * mark_px / total_pv
+    elif krw_spent > 0:
+        add_weight = krw_spent / total_pv  # fallback
+    else:
+        return merged
+
+    cash_avail = merged.get('Cash', 0.0)
+    if add_weight <= cash_avail:
+        # 정상: Cash 에서 빼서 C 추가
+        merged[add_coin] = merged.get(add_coin, 0.0) + add_weight
+        merged['Cash'] = max(0.0, cash_avail - add_weight)
+    else:
+        # Cash 부족: V21 의 다른 코인 weight 를 비례 축소해 add_weight 확보
+        # 합 1.0 유지하며 C 보호 완전 달성.
+        shortfall = add_weight - cash_avail
+        v21_coin_total = sum(v for k, v in merged.items()
+                              if k not in ('Cash', add_coin))
+        if v21_coin_total > 0 and shortfall < v21_coin_total:
+            scale = (v21_coin_total - shortfall) / v21_coin_total
+            for k in list(merged.keys()):
+                if k not in ('Cash', add_coin):
+                    merged[k] = merged[k] * scale
+            merged[add_coin] = merged.get(add_coin, 0.0) + add_weight
+            merged['Cash'] = 0.0
+            log.info('apply_c_to_target: Cash 부족 (%.3f) + V21 %.3f scale down to 보호 %s %.3f',
+                     cash_avail, scale, add_coin, add_weight)
+        else:
+            # V21 자산도 부족 (very rare) → 가능한 만큼만
+            effective = cash_avail + max(0.0, v21_coin_total)
+            merged[add_coin] = merged.get(add_coin, 0.0) + effective
+            merged['Cash'] = 0.0
+            for k in list(merged.keys()):
+                if k not in ('Cash', add_coin):
+                    merged[k] = 0.0
+            log.warning('apply_c_to_target: Cash+V21 모두 부족, C 보호 %.3f (요청 %.3f)',
+                        effective, add_weight)
 
     return merged
 
