@@ -222,7 +222,62 @@ cap 0.12 선정 이유: cap 0.03 ~ 0.333 전범위 테스트 결과 전구간 Ca
 - 엔진: `strategies/cap_defend/research/m3_engine_final.py` (현물), `m3_engine_futures.py` (선물)
 - 신호: `strategies/cap_defend/research/c_engine_v5.py`
 - 검증: `strategies/cap_defend/research/c_tests_v2/`
-- 실매매: `trade/auto_trade_binance.py` 연결 예정 (미착수)
+- 실매매: V22 에서 현물만 채택 (선물 C 는 2022 bear 악화로 보류)
+
+---
+
+## V22 (2026-04-21) — 현물 C 슬리브 실전 투입 (champion 재튜닝)
+
+V21 대비 변경: 현물에 Strategy C 슬리브 추가. 선물/주식은 V21 그대로.
+
+### 추가 검증 경과 (c_tests_v3/)
+Phase A/B/C/C2/C3 로 dip_thr/가드/tp/tstop/universe 그리드 재탐색. 기존 C 파라미터 대비 champion 확인:
+
+| 자산 | champion 파라미터 | Holdout Cal | Δ vs V21+C |
+|---|---|---|---|
+| 현물 | dip_thr -0.12, tp 0.03, tstop 24, A2_bounce_w1, cap 0.333 | 3.24 | +40% |
+| 선물 | dip_thr -0.14, tp 0.10, G3(A2+B2), cap 0.30 | 4.06 | +132% |
+
+2022 bear / 2025 Q1 adverse 구간 추가 검증 결과:
+- 현물 champion: 전 구간 Cal/MDD 개선 (2022 bear Cal -0.03 → +1.57).
+- 선물 champion: Holdout 은 개선이나 2022 H1 MDD 가드의 역효과로 -26% → -41% 악화.
+→ 선물은 보류, 현물만 투입.
+
+### 현물 V22 C 슬리브 (champion, 실전)
+
+| 파라미터 | 값 |
+|---|---|
+| dip_bars | 24 |
+| dip_thr | -0.12 |
+| tp | 0.03 |
+| tstop | 24 |
+| cap_per_slot | 0.15 (실전 초기, 백테 champion 0.333) |
+| 가드 | A2_bounce_w1 (시그널 봉 양봉 후 다음 봉 Open 진입) |
+| 실매매 | V21 우선 + V21 안 쓴 cash 에서 C 동작 |
+
+### V22 아키텍처 (intent/merge/finalize 3단계)
+- `compute_c_intent(state, bars_1h, universe, now) → CIntent` 주문 X
+- `apply_c_to_target(v21_target, c_position, c_intent, total_pv) → merged_target`
+- `finalize_c_state(state, intent, fill_result)` 체결 후 state 갱신
+- `handle_c_only(...)` V21 skip 경로에서 C 단독 체결
+
+V21 trade path 에서도 merged target 을 execute_delta 에 사용해 C 포지션을 stray 로 매도하지 않도록 보호. (Codex 2차 리뷰 critical 반영)
+
+### 실전 배포 상태 (2026-04-21)
+- cron: `5 * * * *` (매시간 :05, 기존 1회/일에서 확장)
+- 서버 배포: `trade/coin_live_engine.py`, `trade/executor_coin.py`
+- 초기 관측: 5회 cron 정상, dip 조건 미충족 (hold)
+- 실전 cap 상향 로드맵: 0.15 → 0.20 → 0.25 → 0.333 (1~3개월 간격)
+
+### 구현
+- 실매매: `trade/coin_live_engine.py` (C_SLEEVE_CFG, CIntent, compute_c_intent, apply_c_to_target, fetch_c_bars)
+- 실매매: `trade/executor_coin.py` (handle_c_only, finalize_c_state, _market_buy_krw/_market_sell_coin)
+- 매뉴얼: `V22_OPERATION_MANUAL.md`
+
+### V22 미채택 (추가 검증 후 보류)
+- 선물 C 업그레이드 (f_dthr14 + G3): 2022 bear MDD 악화
+- dip_thr-only 완화 (선물): 22건 검증 범위 밖
+- BTC regime 가드 (SMA200): V22 목표 단순성과 충돌
 
 ---
 
