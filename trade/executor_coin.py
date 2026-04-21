@@ -528,10 +528,10 @@ def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float) -> Optional[f
         if not order or not isinstance(order, dict) or 'uuid' not in order:
             log(f'  C 매수 주문 실패: {order}')
             return None
-        # 체결 확인: 최대 3초 대기
+        # 체결 확인: 최대 10초 대기 (5회 × 2s)
         uuid = order['uuid']
-        for _ in range(3):
-            time.sleep(1.0)
+        for _ in range(5):
+            time.sleep(2.0)
             info = api.upbit.get_order(uuid)
             if isinstance(info, dict) and info.get('trades'):
                 trades = info['trades']
@@ -539,7 +539,7 @@ def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float) -> Optional[f
                 total_funds = sum(float(t.get('funds', 0) or 0) for t in trades)
                 if total_vol > 0:
                     return total_funds / total_vol
-        log(f'  C 매수 체결 미확정 (uuid={uuid}) — position 기록 보류')
+        log(f'  C 매수 체결 미확정 (uuid={uuid}, 10s) — position 기록 보류')
         return None
     except Exception as e:
         log(f'  C 매수 예외: {e}')
@@ -595,7 +595,7 @@ def handle_c_only(state: dict, api: UpbitAPI, session: requests.Session,
 
 
 def compute_c_intent_live(state: dict, session: requests.Session,
-                           universe: List[str]) -> Tuple[Optional[object], Optional[Dict]]:
+                           universe: List[str]) -> 'Tuple[Optional[cle.CIntent], Optional[Dict]]':
     """1h bar fetch + Intent 계산. 주문 없이 반환.
     returns: (CIntent, bars_1h) 또는 (None, None) — 실패 시.
     """
@@ -837,6 +837,15 @@ def run_once(dry_run: bool = False) -> int:
     if total_krw > 0 and 0 < NOTIONAL_CAP_FRACTION < 1:
         effective_target, gross = apply_notional_cap(target, balance, total_krw, NOTIONAL_CAP_FRACTION)
         log(f'  Notional cap {NOTIONAL_CAP_FRACTION*100:.0f}% 적용 (gross_delta={gross*100:.1f}%)')
+
+    # V22: V21 execute_delta가 C 포지션을 stray 로 보고 매도하지 않도록 merged target 구성.
+    # C 의도를 여기서 미리 계산하고 target 에 overlay.
+    c_intent_pre, _c_bars = compute_c_intent_live(state, session, result.universe)
+    c_pos_pre = state.get('c_sleeve', {}).get('position')
+    if c_intent_pre:
+        effective_target = cle.apply_c_to_target(
+            effective_target, c_pos_pre, c_intent_pre, total_krw)
+        log(f'  V22: C intent={c_intent_pre.action} → merged target={effective_target}')
 
     # 이벤트 트리거 판정 (auto_trade_binance의 rebalancing_needed 패턴 이식)
     # - target이 prev 대비 변하면 rebalancing_needed=True (카나리/스냅 회전/유의 퇴출 등)
