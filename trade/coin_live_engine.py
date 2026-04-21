@@ -951,10 +951,15 @@ def apply_c_to_target(v21_target: Dict[str, float],
         pass
 
     if add_coin and add_weight > 0:
-        merged[add_coin] = merged.get(add_coin, 0.0) + add_weight
-        # Cash 에서 차감 (underflow 방지)
-        cash = merged.get('Cash', 0.0) - add_weight
-        merged['Cash'] = max(0.0, cash)
+        # Cash 가 충분한지 확인. 부족하면 C weight 축소 (target 합 1.0 유지).
+        cash_avail = merged.get('Cash', 0.0)
+        effective_add = min(add_weight, max(0.0, cash_avail))
+        if effective_add > 0:
+            merged[add_coin] = merged.get(add_coin, 0.0) + effective_add
+            merged['Cash'] = max(0.0, cash_avail - effective_add)
+        if effective_add < add_weight:
+            log.info('apply_c_to_target: Cash 부족 (avail=%.3f, req=%.3f) → shrink %.3f',
+                     cash_avail, add_weight, effective_add)
 
     return merged
 
