@@ -513,6 +513,145 @@ def _save_state_unless_dry(state_path: str, state: dict, dry_run: bool) -> None:
     save_json(state_path, state)
 
 
+def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float) -> Optional[float]:
+    """시장가 매수 (KRW 금액 지정). 체결 확인된 평균 체결가만 반환.
+    체결 미확정이면 None 반환 (caller가 position 기록 미루고 다음 사이클 재시도).
+    dry-run은 현재가 조회해서 시뮬 값 반환.
+    """
+    if krw_amount < MIN_ORDER_KRW:
+        return None
+    try:
+        if api.dry_run:
+            price = pyupbit.get_current_price(ticker)
+            return float(price) if isinstance(price, (int, float)) and price else None
+        order = api.upbit.buy_market_order(ticker, krw_amount)
+        if not order or not isinstance(order, dict) or 'uuid' not in order:
+            log(f'  C 매수 주문 실패: {order}')
+            return None
+        # 체결 확인: 최대 3초 대기
+        uuid = order['uuid']
+        for _ in range(3):
+            time.sleep(1.0)
+            info = api.upbit.get_order(uuid)
+            if isinstance(info, dict) and info.get('trades'):
+                trades = info['trades']
+                total_vol = sum(float(t.get('volume', 0) or 0) for t in trades)
+                total_funds = sum(float(t.get('funds', 0) or 0) for t in trades)
+                if total_vol > 0:
+                    return total_funds / total_vol
+        log(f'  C 매수 체결 미확정 (uuid={uuid}) — position 기록 보류')
+        return None
+    except Exception as e:
+        log(f'  C 매수 예외: {e}')
+        return None
+
+
+def _market_sell_coin(api: UpbitAPI, ticker: str, coin: str) -> bool:
+    """보유 수량 전량 시장가 매도."""
+    qty = api.get_coin_qty(coin)
+    if qty <= 0:
+        return True  # 없으면 성공 처리
+    try:
+        if api.dry_run:
+            return True
+        order = api.upbit.sell_market_order(ticker, qty)
+        return bool(order and 'uuid' in order)
+    except Exception as e:
+        log(f'  C 매도 예외 {coin}: {e}')
+        return False
+
+
+def process_c_sleeve(state: dict, api: UpbitAPI, session: requests.Session,
+                     universe: List[str], total_krw: float, dry_run: bool) -> List[str]:
+    """C 슬리브 1 사이클 처리.
+    - 포지션 있으면 TP/tstop 체크 후 청산
+    - 없으면 pending_entry 처리 또는 새 dip 시그널 탐지
+    반환: 텔레그램 알림 메시지 리스트.
+    """
+    alerts: List[str] = []
+    c_state = state.setdefault('c_sleeve', {})
+    now = cle.utc_now()
+
+    # 1. 1h bar fetch
+    try:
+        bars_1h = cle.fetch_c_bars(session, universe, now_utc=now)
+    except Exception as e:
+        log(f'  C: 1h bar fetch 실패: {e}')
+        return alerts
+    if not bars_1h or 'BTC' not in bars_1h:
+        log('  C: 1h bar 부족, skip')
+        return alerts
+
+    # 2. 시그널 계산
+    sig = cle.compute_c_signal(state, bars_1h, universe, now)
+    log(f'  C: {sig.note}')
+
+    # 3. 청산 (TP or tstop)
+    if sig.exit_signal:
+        pos = c_state.get('position')
+        if pos:
+            coin = pos['coin']
+            ticker = f'KRW-{coin}'
+            log(f'  C: 청산 시도 {coin} ({sig.exit_reason})')
+            ok = _market_sell_coin(api, ticker, coin)
+            if ok:
+                krw_before = pos.get('krw_spent', 0.0)
+                reason = sig.exit_reason
+                alerts.append(f'💰 C 청산: {coin} ({reason}) 진입 ₩{krw_before:,.0f}')
+                c_state.pop('position', None)
+                c_state.pop('pending_entry', None)
+            else:
+                alerts.append(f'❌ C 청산 실패 {coin} — 다음 실행 재시도')
+
+    # 4. 신규 진입
+    elif sig.entry_candidate:
+        cand = sig.entry_candidate
+        if cand.get('_expire_pending'):
+            # pending이 만료됨 (다음 봉 놓침) — clear
+            c_state.pop('pending_entry', None)
+            log('  C: pending_entry 만료 clear')
+        elif cand.get('_pending'):
+            # 시그널 봉 확인 → pending_entry 저장 (다음 봉에서 실제 진입)
+            c_state['pending_entry'] = {
+                'coin': cand['coin'],
+                'bar_ts': cand['bar_ts'],
+                'dip_ret': cand.get('dip_ret'),
+            }
+            c_state['last_signal_bar_ts'] = sig.last_bar_ts
+            dip_s = f"{cand.get('dip_ret', 0)*100:.1f}%"
+            alerts.append(f'👀 C 시그널 대기: {cand["coin"]} dip {dip_s}, 다음 시간 진입')
+        else:
+            # 실제 진입 (pending 확인 후 다음 봉 Open)
+            if c_state.get('position'):
+                log('  C: 기존 포지션 있음 — 진입 skip')
+            else:
+                coin = cand['coin']
+                ticker = f'KRW-{coin}'
+                cap_per_slot = cle.C_SLEEVE_CFG['cap_per_slot']
+                krw_alloc = total_krw * cap_per_slot
+                log(f'  C: 진입 시도 {coin} @ {cand["entry_px"]:.4f}, 할당 ₩{krw_alloc:,.0f}')
+                fill_px = _market_buy_krw(api, ticker, krw_alloc)
+                if fill_px and fill_px > 0:
+                    c_state['position'] = {
+                        'coin': coin,
+                        'entry_ts': cand['entry_ts'],
+                        'entry_px': fill_px,  # 실제 체결가 사용
+                        'tp_px': fill_px * (1 + cle.C_SLEEVE_CFG['tp_pct']),
+                        'tstop_ts': cand['tstop_ts'],
+                        'krw_spent': krw_alloc,
+                        'dip_ret': cand.get('dip_ret'),
+                    }
+                    c_state.pop('pending_entry', None)
+                    alerts.append(
+                        f'🎯 C 진입: {coin} @ ₩{fill_px:,.2f} (TP +3%, tstop 24h)\n'
+                        f'   할당 ₩{krw_alloc:,.0f} (슬롯 {cap_per_slot*100:.0f}%)')
+                else:
+                    alerts.append(f'❌ C 진입 실패 {coin} — pending 유지')
+
+    return alerts
+
+
+
 def coin_needs_rebalance(target: Dict[str, float], balance: Dict[str, float],
                           total: float, delta_pct_tol: float = 0.01) -> bool:
     """현재 잔고와 목표 사이 편차가 체결 가능한 크기로 남아있으면 True.
@@ -641,7 +780,13 @@ def run_once(dry_run: bool = False) -> int:
         return 1
 
     if not result.any_new_bar:
-        log('  ℹ 새 봉 없음 (idempotent) → 리밸런싱 스킵')
+        log('  ℹ 새 봉 없음 (idempotent) → V21 리밸런싱 스킵, C 슬리브만 체크')
+        # V22: V21 D봉 idempotent skip — C는 1h 기반이라 매 시간 확인
+        balance = api.get_balance()
+        total_krw = sum(balance.values())
+        c_alerts = process_c_sleeve(state, api, session, result.universe, total_krw, dry_run)
+        for a in c_alerts:
+            _tg(a)
         _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
         return 0
@@ -690,7 +835,11 @@ def run_once(dry_run: bool = False) -> int:
 
     rebalance_needed = bool(state.get('rebalancing_needed', False))
     if not rebalance_needed:
-        log(f'  ℹ target 불변 + rebalancing_needed=False → 스킵. prev={prev_combined}')
+        log(f'  ℹ target 불변 + rebalancing_needed=False → V21 스킵, C만 체크. prev={prev_combined}')
+        # V22: V21 스킵 경로에서도 C 슬리브는 매 시간 실행
+        c_alerts = process_c_sleeve(state, api, session, result.universe, total_krw, dry_run)
+        for a in c_alerts:
+            _tg(a)
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
@@ -700,6 +849,10 @@ def run_once(dry_run: bool = False) -> int:
     if not target_changed and not coin_needs_rebalance(effective_target, balance, total_krw):
         state['rebalancing_needed'] = False
         log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
+        # V22: V21 skip 상황에서도 C 슬리브는 매 시간 체크
+        c_alerts = process_c_sleeve(state, api, session, result.universe, total_krw, dry_run)
+        for a in c_alerts:
+            _tg(a)
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
@@ -739,6 +892,13 @@ def run_once(dry_run: bool = False) -> int:
             else:
                 state['rebalancing_needed'] = False
                 log(f'  ✅ 목표 도달 → rebalancing_needed=False. total=₩{total_after:,.0f}')
+
+    # V22: V21 체결 후에도 C 슬리브 체크 (total_krw 재조회 — V21이 이미 KRW 일부 사용)
+    balance_c = api.get_balance() if not dry_run else balance
+    total_c = sum(balance_c.values()) if balance_c else total_krw
+    c_alerts = process_c_sleeve(state, api, session, result.universe, total_c, dry_run)
+    for a in c_alerts:
+        _tg(a)
 
     # 상태 저장
     state['last_krw_balance'] = total_krw
