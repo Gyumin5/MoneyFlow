@@ -4,16 +4,18 @@
 V21: D봉 3멤버 (D_SMA50 + D_SMA150 + D_SMA100) 1/3씩 EW 앙상블.
 바이낸스 spot kline에서 신호 계산 → 업비트 KRW 체결 (executor_coin.py에서 수행).
 
-멤버 D_SMA50: 일봉, SMA50, Mom30/90, snap 30봉, Top3, 갭 스탑 -15%, 제외 30일
-멤버 D_SMA150: 일봉, SMA150, Mom20/60, snap 90봉, Top3, 갭 스탑 -15%, 제외 30일
-멤버 D_SMA100: 일봉, SMA100, Mom20/120, snap 90봉, Top3, 갭 스탑 -15%, 제외 30일
+멤버 D_SMA50: 일봉, SMA50, Mom30/90, snap 30봉, Top3
+멤버 D_SMA150: 일봉, SMA150, Mom20/60, snap 90봉, Top3
+멤버 D_SMA100: 일봉, SMA100, Mom20/120, snap 90봉, Top3
+
+가드 없음 (2026-04-21 확정): gap/exclusion 가드 전면 제거.
+앙상블 분산 + Upbit warning/delisting 필터만으로 방어.
 
 설계:
 - compute_strategy_target(): auto_trade_binance 패턴 이식 (bar-idempotency + 3-snap stagger 내장)
 - 엔진 내부 현금 키는 'CASH' (대문자). executor로 넘어갈 때 'Cash' (소문자) 정규화.
 - 유니버스: CoinGecko Top40 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
 - Freshness: expected_last_bar_ts 일치 체크
-- 극단갭: 멤버별 임계치 초과 → excluded_coins에 unban_ts + reentry_after_snap_id 기록
 """
 
 from __future__ import annotations
@@ -67,8 +69,6 @@ MEMBER_D_SMA50 = {
     'vol_lookback_days': 90,
     'universe_size': 3,
     'cap': 1.0 / 3.0,
-    'gap_threshold': -0.15,
-    'exclusion_days': 30,
 }
 
 MEMBER_D_SMA150 = {
@@ -85,8 +85,6 @@ MEMBER_D_SMA150 = {
     'vol_lookback_days': 90,
     'universe_size': 3,
     'cap': 1.0 / 3.0,
-    'gap_threshold': -0.15,
-    'exclusion_days': 30,
 }
 
 MEMBER_D_SMA100 = {
@@ -103,8 +101,6 @@ MEMBER_D_SMA100 = {
     'vol_lookback_days': 90,
     'universe_size': 3,
     'cap': 1.0 / 3.0,
-    'gap_threshold': -0.15,
-    'exclusion_days': 30,
 }
 
 MEMBERS = {
@@ -511,42 +507,18 @@ class MemberComputeResult:
     fresh: bool                        # expected_last_bar_ts 일치 여부
     new_bar: bool                      # 새 봉이어서 재계산 수행했는지
     canary_flipped: bool
-    gap_coins: List[str]               # 이번 봉 기준 극단갭 감지된 코인
     alerts: List[str]                  # 텔레그램 알림용 메시지
-
-
-def detect_gap_coins(bars: Dict[str, pd.DataFrame], threshold: float,
-                      universe: List[str]) -> List[str]:
-    """직전 완성봉 vs 그 전 봉 수익률이 threshold 이하인 코인 리스트.
-
-    bars는 slice_to_last_closed를 거친 상태이므로 iloc[-1]이 직전 완성봉,
-    iloc[-2]가 그 전 봉.
-    """
-    out = []
-    for coin in universe:
-        df = bars.get(coin)
-        if df is None or len(df) < 2:
-            continue
-        closes = df['Close'].values
-        prev_close = float(closes[-1])
-        prev_prev = float(closes[-2])
-        if prev_prev <= 0:
-            continue
-        ret = prev_close / prev_prev - 1.0
-        if ret <= threshold:
-            out.append(coin)
-    return out
 
 
 def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFrame],
                           universe: List[str], state: MemberState,
-                          excluded_coins: Dict[str, Dict],
                           now_utc: datetime) -> MemberComputeResult:
     """단일 멤버 target 계산 (auto_trade_binance.compute_strategy_target 이식).
 
     - bar-idempotency: latest_bar_ts == state.last_bar_ts 이면 재계산 스킵
     - 3-snapshot stagger: bar_counter % snap_interval == offset 마다 각 스냅샷 갱신
-    - excluded_coins: member별로 유지. 해당 코인은 target에서 강제 제외
+    - 가드 없음 (2026-04-21): gap/exclusion 필터 제거. Upbit warning/delisting은
+      상위 호출자(compute_live_targets)에서 universe 레벨로 이미 걸러짐.
 
     bars 는 'Close' 등 포함 DataFrame. 사전에 "직전 완성봉까지만" slice 되어 있어야 함
     (즉 iloc[-1] 이 직전 완성봉, iloc[-2] 가 그 전 봉).
@@ -574,7 +546,7 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
         state.last_combined = {'CASH': 1.0}
         return MemberComputeResult(target={'CASH': 1.0}, new_state=state,
                                    fresh=False, new_bar=False,
-                                   canary_flipped=False, gap_coins=[], alerts=alerts)
+                                   canary_flipped=False, alerts=alerts)
 
     # Freshness: 마지막 봉(iloc[-1])이 expected_last_closed_bar_ts와 일치해야
     # (bars는 사전에 '직전 완성봉까지'로 slice되어 있다고 가정)
@@ -590,7 +562,7 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
         log.info('%s: 봉 동일 (%s) → 이전 target 유지', member_name, latest_bar_str)
         return MemberComputeResult(target=dict(state.last_combined or {'CASH': 1.0}),
                                    new_state=state, fresh=fresh, new_bar=False,
-                                   canary_flipped=False, gap_coins=[], alerts=alerts)
+                                   canary_flipped=False, alerts=alerts)
 
     # 새 봉 — 재계산
     # 카나리 (BTC 종가 vs SMA)
@@ -615,11 +587,8 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
         if not canary_on:
             return {'CASH': 1.0}
 
-        excluded_set = set(excluded_coins.keys())
         healthy: List[str] = []
         for coin in universe:
-            if coin in excluded_set:
-                continue
             df = bars.get(coin)
             if df is None or df.empty:
                 continue
@@ -707,30 +676,15 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
     if not canary_on:
         combined = {'CASH': 1.0}
 
-    # excluded_coins 제거 (이미 healthy 단계에서 제외했지만 스냅샷에 남아 있을 수 있음)
-    excluded_set = set(excluded_coins.keys())
-    if excluded_set:
-        removed_w = sum(v for k, v in combined.items() if k in excluded_set)
-        combined = {k: v for k, v in combined.items() if k not in excluded_set}
-        if removed_w > 0:
-            combined['CASH'] = combined.get('CASH', 0.0) + removed_w
-
     # 상태 업데이트
     state.canary_on = canary_on
     state.bar_counter += 1
     state.last_bar_ts = latest_bar_str
     state.last_combined = combined
 
-    # 극단갭 감지 (이번 봉 기준, universe 전체)
-    gap_coins = detect_gap_coins(bars, cfg['gap_threshold'], universe)
-    if gap_coins:
-        alerts.append(f'{member_name} 극단갭 감지: {",".join(gap_coins)} '
-                      f'({cfg["gap_threshold"]:.0%} 이하)')
-
     return MemberComputeResult(target=dict(combined), new_state=state,
                                fresh=fresh, new_bar=True,
-                               canary_flipped=canary_flipped, gap_coins=gap_coins,
-                               alerts=alerts)
+                               canary_flipped=canary_flipped, alerts=alerts)
 
 
 # ─── 앙상블 + 데이터 슬라이스 ───
@@ -774,46 +728,6 @@ def combine_ensemble(member_targets: Dict[str, Dict[str, float]],
     return merged
 
 
-# ─── Excluded coins 처리 ───
-def update_excluded_after_gap(excluded: Dict[str, Dict], gap_coins: List[str],
-                                exclusion_days: int, cur_snap_id: int,
-                                now_utc: datetime) -> List[str]:
-    """gap_coins 를 excluded에 추가. 이미 있으면 연장. 반환: 새로 추가된 코인."""
-    new_entries = []
-    unban = to_utc_iso(now_utc + timedelta(days=exclusion_days))
-    for c in gap_coins:
-        prev = excluded.get(c)
-        if prev is None:
-            excluded[c] = {
-                'unban_ts': unban,
-                'reentry_after_snap_id': cur_snap_id + 1,
-            }
-            new_entries.append(c)
-        else:
-            # 더 늦은 시각으로 연장
-            prev_ts = parse_utc_iso(prev.get('unban_ts', '')) or now_utc
-            new_ts = now_utc + timedelta(days=exclusion_days)
-            if new_ts > prev_ts:
-                prev['unban_ts'] = to_utc_iso(new_ts)
-            prev['reentry_after_snap_id'] = max(
-                int(prev.get('reentry_after_snap_id', 0)), cur_snap_id + 1)
-    return new_entries
-
-
-def prune_expired_exclusions(excluded: Dict[str, Dict], cur_snap_id: int,
-                              now_utc: datetime) -> List[str]:
-    """해제 가능한 exclusion 제거. 조건: unban_ts 경과 AND snap_id > reentry_after_snap_id."""
-    removed = []
-    for coin in list(excluded.keys()):
-        info = excluded[coin]
-        unban_ts = parse_utc_iso(info.get('unban_ts', '')) or now_utc + timedelta(days=999)
-        reentry_after = int(info.get('reentry_after_snap_id', 0))
-        if now_utc >= unban_ts and cur_snap_id > reentry_after:
-            del excluded[coin]
-            removed.append(coin)
-    return removed
-
-
 # ─── Top-level 진입점 ───
 @dataclass
 class EngineResult:
@@ -827,7 +741,6 @@ class EngineResult:
     universe: List[str]
     universe_meta: Dict
     alerts: List[str]
-    gap_coins_by_member: Dict[str, List[str]]
 
 
 def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
@@ -873,8 +786,7 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         return EngineResult(combined_target={'Cash': 1.0}, member_targets={},
                             fresh={}, new_bar={}, canary_flipped={},
                             all_fresh=False, any_new_bar=False,
-                            universe=[], universe_meta=u_meta, alerts=['유니버스 비어있음'],
-                            gap_coins_by_member={})
+                            universe=[], universe_meta=u_meta, alerts=['유니버스 비어있음'])
 
     # 2) Upbit 상태 (executor에서 전달받거나 엔진에서 재조회)
     live_upbit_status = upbit_status if upbit_status is not None else fetch_upbit_market_status(session)
@@ -913,8 +825,7 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
                             fresh={}, new_bar={}, canary_flipped={},
                             all_fresh=False, any_new_bar=False,
                             universe=[], universe_meta=u_meta,
-                            alerts=alerts + ['경고 제외 후 유니버스 비어있음'],
-                            gap_coins_by_member={})
+                            alerts=alerts + ['경고 제외 후 유니버스 비어있음'])
 
     # 경고 코인은 멤버별 snapshots/last_combined에서도 즉시 제거 — 새 봉 없이
     # 캐시된 target을 반환할 때 유의종목이 되살아나는 것을 차단.
@@ -948,10 +859,10 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     fresh_map: Dict[str, bool] = {}
     new_bar_map: Dict[str, bool] = {}
     flipped_map: Dict[str, bool] = {}
-    gap_map: Dict[str, List[str]] = {}
 
     ms_all = state.setdefault('members', {})
-    excluded_all = state.setdefault('excluded_coins', {})
+    # 가드 제거 (2026-04-21): 기존 state의 excluded_coins는 이후 save 때 자연 소거.
+    state.pop('excluded_coins', None)
 
     for mname, cfg in MEMBERS.items():
         interval = cfg['interval']
@@ -979,36 +890,15 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
             fresh_map[mname] = False
             new_bar_map[mname] = False
             flipped_map[mname] = False
-            gap_map[mname] = []
             continue
 
-        # excluded prune
-        mem_excluded = excluded_all.setdefault(mname, {})
         mem_state = MemberState.from_dict(ms_all.get(mname, {}))
-        removed = prune_expired_exclusions(mem_excluded, mem_state.snap_id, now_utc)
-        if removed:
-            log.info('%s: exclusion 해제 %s', mname, removed)
-
-        res = compute_member_target(mname, cfg, bars, universe, mem_state,
-                                     mem_excluded, now_utc)
-
-        # gap 발생 → exclusion 갱신 + 타겟에서 즉시 제외
-        if res.gap_coins:
-            new_excl = update_excluded_after_gap(
-                mem_excluded, res.gap_coins, cfg['exclusion_days'],
-                res.new_state.snap_id, now_utc)
-            # gap 코인을 target에서 Cash로
-            removed_w = sum(v for k, v in res.target.items() if k in res.gap_coins)
-            res.target = {k: v for k, v in res.target.items() if k not in res.gap_coins}
-            if removed_w > 0:
-                res.target['CASH'] = res.target.get('CASH', 0.0) + removed_w
-            log.warning('%s: gap 감지 %s → exclusion 등록 %s', mname, res.gap_coins, new_excl)
+        res = compute_member_target(mname, cfg, bars, effective_universe, mem_state, now_utc)
 
         member_targets[mname] = res.target
         fresh_map[mname] = res.fresh
         new_bar_map[mname] = res.new_bar
         flipped_map[mname] = res.canary_flipped
-        gap_map[mname] = res.gap_coins
         ms_all[mname] = res.new_state.to_dict()
         alerts.extend(res.alerts)
 
@@ -1038,5 +928,4 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         universe=universe,
         universe_meta=u_meta,
         alerts=alerts,
-        gap_coins_by_member=gap_map,
     )

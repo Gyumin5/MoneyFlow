@@ -1244,77 +1244,20 @@ def count_stop_orders(client: Client, symbols: Optional[List[str]] = None) -> in
 def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[str, pd.DataFrame],
                      target: Dict[str, float], order_alerts: Optional[List[str]] = None,
                      error_alerts: Optional[List[str]] = None):
-    """cash_guard 조건에 따라 reduce-only STOP_MARKET 주문 재등록."""
-    cancel_stop_orders(client, list(UNIVERSE))
+    """V21 (2026-04-21 가드 완전 제거): 스탑 주문 로직 없음.
 
-    # V21: STOP_PCT=0 이면 가드 완전 비활성 (앙상블 분산만으로 방어)
-    if STOP_PCT <= 0.0 or STOP_GATE_CASH_THRESHOLD <= 0.0:
-        log.info("STOP OFF (V21: 가드 비활성, STOP_PCT=0)")
-        return
-
-    cash_w = target.get('CASH', 0.0) if target else 0.0
-    if cash_w < STOP_GATE_CASH_THRESHOLD:
-        log.info(f"STOP OFF (cash={cash_w:.1%} < {STOP_GATE_CASH_THRESHOLD:.0%})")
-        return
-
-    log.info(f"STOP ON (cash={cash_w:.1%} >= {STOP_GATE_CASH_THRESHOLD:.0%}) positions={list(positions.keys())}")
-
-    for coin, pos in positions.items():
-        qty = abs(pos.get('qty', 0.0))
-        if qty <= 0:
-            continue
-        df = data_1h.get(coin)
-        if df is None or len(df) < 2:
-            continue
-        prev_close = float(df['Close'].iloc[-2])
-        if prev_close <= 0:
-            continue
-        entry_price = float(pos.get('entry_price') or 0.0)
-        entry_stop = entry_price * (1.0 - STOP_PCT) if entry_price > 0 else 0.0
-        prev_close_stop = prev_close * (1.0 - STOP_PCT)
-        stop_price = max(prev_close_stop, entry_stop)
-        symbol = pos['symbol']
-        stop_str = format_price(client, symbol, stop_price)
-        qty_str = format_quantity(client, symbol, qty)
-        log.info(
-            f"STOP PLAN {symbol}: qty={qty:.6f} entry={entry_price:.4f} prev_close={prev_close:.4f} "
-            f"entry_stop={entry_stop:.4f} prev_close_stop={prev_close_stop:.4f} stop={stop_str}"
-        )
-        try:
-            order = create_order_with_retry(client, dict(
-                symbol=symbol,
-                side='SELL',
-                type='STOP_MARKET',
-                stopPrice=stop_str,
-                quantity=qty_str,
-                reduceOnly='true',
-                workingType='CONTRACT_PRICE',
-            ))
-            log.info(f"STOP SELL {symbol} stop={stop_str}: {order.get('status', 'OK')}")
-            if order_alerts is not None:
-                order_alerts.append(f"STOP {symbol} {stop_str}")
-        except BinanceAPIException as e:
-            if 'code=-4130' in str(e) or 'closeposition in the direction is existing' in str(e).lower():
-                try:
-                    force_cancel_all_orders(client, [symbol])
-                    order = create_order_with_retry(client, dict(
-                        symbol=symbol,
-                        side='SELL',
-                        type='STOP_MARKET',
-                        stopPrice=stop_str,
-                        quantity=qty_str,
-                        reduceOnly='true',
-                        workingType='CONTRACT_PRICE',
-                    ))
-                    log.info(f"STOP SELL {symbol} stop={stop_str}: {order.get('status', 'OK')} (retry after cancel_all)")
-                    if order_alerts is not None:
-                        order_alerts.append(f"STOP {symbol} {stop_str}")
-                    continue
-                except Exception as e2:
-                    e = e2
-            log.error(f"STOP FAILED {symbol} stop={stop_str}: {e}")
-            if error_alerts is not None:
-                error_alerts.append(f"STOP FAILED {symbol} {stop_str}: {e}")
+    이전 배포에서 남았을 수 있는 잔존 스탑을 정리하고 즉시 반환.
+    현재 UNIVERSE 밖 심볼에도 stale 스탑이 있을 수 있으므로
+    현재 포지션 심볼 + UNIVERSE 합집합을 대상으로 정리한다.
+    앙상블 분산만으로 방어한다.
+    """
+    cleanup_symbols = set(UNIVERSE)
+    for pos in (positions or {}).values():
+        sym = pos.get('symbol')
+        if sym:
+            cleanup_symbols.add(sym)
+    cancel_stop_orders(client, sorted(cleanup_symbols))
+    log.info("STOP OFF (V21: 가드 완전 제거, 잔존 스탑 정리 %d심볼)", len(cleanup_symbols))
 
 
 # ─── SQLite 자산 기록 ───
