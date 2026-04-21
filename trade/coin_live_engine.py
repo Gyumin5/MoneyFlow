@@ -805,19 +805,8 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     if warning_coins:
         log.warning('Upbit 유의/상폐 코인 %d: %s → 타겟 제외', len(warning_coins),
                     ','.join(sorted(warning_coins))[:200])
-    # 알림은 경고 집합이 변경되었을 때만 전송(매 호출 스팸 방지).
-    prev_alerted = set(state.get('last_warning_coins_alerted', []) or [])
-    if warning_coins != prev_alerted:
-        newly_added = warning_coins - prev_alerted
-        removed = prev_alerted - warning_coins
-        parts = []
-        if newly_added:
-            parts.append(f'추가 {len(newly_added)}: {",".join(sorted(newly_added))}')
-        if removed:
-            parts.append(f'해제 {len(removed)}: {",".join(sorted(removed))}')
-        if parts:
-            alerts.append('Upbit 유의/상폐 변경 · ' + ' · '.join(parts))
-        state['last_warning_coins_alerted'] = sorted(warning_coins)
+    # 2026-04-21: 유의/상폐 변경 알림 제거 (사용자 요청). 로그에만 기록.
+    state['last_warning_coins_alerted'] = sorted(warning_coins)
     effective_universe = [c for c in universe if c not in warning_coins]
     if not effective_universe:
         log.error('경고 제외 후 유니버스 비어있음 → CASH 100%')
