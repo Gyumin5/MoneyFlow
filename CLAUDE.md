@@ -44,50 +44,52 @@
 - 앵커일, 버퍼, 상태키, 모니터 기준통화가 다르면 "같은 전략"이라고 쓰지 않는다.
 - 현재 저장소에는 `1/10/19`와 `1/11/21` 표기가 혼재할 수 있으므로, 변경 시 관련 파일을 반드시 함께 정리한다.
 
-## 코인 현물 전략 규칙 (V20, 확정 2026-04-13)
+## 코인 현물 전략 규칙 (V21, 확정 2026-04-17, 가드 제거 2026-04-21)
 
 ### 앙상블 구성
 
-- D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine)
-- Member 1 (D_SMA50): interval=D, SMA50, Mom30/90, snap 30봉×3, canary hyst 1.5%, gap-15%/excl30d
-- Member 2 (4h_SMA240): interval=4h, SMA240, Mom30/120, snap 60봉×3, canary hyst 1.5%, gap-10%/excl10d
-- 공통: health=mom2vol (vol_cap 5%, vol_lookback 90d), universe Top5, cap 33%
-- Upbit warning/delisting 코인은 target에서 즉시 제외
+- D봉 3멤버 EW 1/3씩 앙상블 (ENS_spot_k3_4b270476, live engine)
+- Member 1 (D_SMA50):  interval=D, SMA50,  Mom20/90,  snap 90봉×3, canary hyst 1.5%
+- Member 2 (D_SMA150): interval=D, SMA150, Mom20/60,  snap 90봉×3, canary hyst 1.5%
+- Member 3 (D_SMA100): interval=D, SMA100, Mom20/120, snap 90봉×3, canary hyst 1.5%
+- 공통: health=mom2vol (vol_cap 5%, vol_lookback 90d), universe_size=3, cap=1/3
+- 가드 없음 (2026-04-21 확정): gap_threshold/exclusion_days 전면 제거. 앙상블 분산이 유일한 방어.
+- Upbit warning/delisting 코인은 universe 단계에서 즉시 제외 (유지).
 - TX: 0.04% (백테스트), 실매매는 Upbit 수수료
 
 ### 실행 파라미터
 
 - Executor: `trade/executor_coin.py`
 - Engine: `trade/coin_live_engine.py`
-- State: `trade_state.json` (members/excluded_coins/last_target_snapshot/last_upbit_status/last_warning_coins_alerted)
-- Cron: 매시간 :05 (`5 * * * *`), bar-idempotency로 실제 작업은 봉 닫힘 시에만
+- State: `trade_state.json` (members/last_target_snapshot/last_upbit_status/last_warning_coins_alerted).
+  `excluded_coins` 키는 가드 제거 이후 엔진이 매 실행마다 삭제하므로 state에서 사라진다.
+- Cron: `5 9 * * *` (한국시간 09:05, 1회/일), bar-idempotency
 - 알림: Upbit 상태 변경은 delta 기반 (set 비교, 중복 알림 방지)
 
-### V19 → V20 마이그레이션
+### V20 → V21 마이그레이션
 
-- 단일 D봉 3-snapshot → D+4h 멀티 주기 앙상블
-- 월간 앵커 1/11/21 → 봉단위 stagger (D: 30봉, 4h: 60봉)
-- DD exit 60d -25% / BL -15%/7d → gap threshold + exclusion days (멤버별)
-- 상태 스키마: tranches/last_flip_date/guard_state → members/excluded_coins
-- V19 legacy 3-snapshot 엔진으로 V20을 표현할 수 없음 — backtest_spot_barfreq.py 사용
+- 앙상블: D+4h 50:50 → D봉 3멤버 EW 1/3씩
+- snap: 30봉(D)/60봉(4h) → 90봉(D 공통, 30봉 stagger)
+- cron: 매시간 :05 → 하루 1회 09:05
+- 가드: gap/exclusion (멤버별) → 전면 제거 (2026-04-21)
+- 상태 스키마: `excluded_coins` 키 사용 안 함 (runtime에서 자동 소거)
 
-## 선물 전략 규칙
+## 선물 전략 규칙 (V21, 확정 2026-04-17, 가드 제거 2026-04-21)
 
-### 앙상블 구성 (확정 2026-04-05)
+### 앙상블 구성
 
-- d005 4전략 EW(25%씩), 단일 계정에서 합산 비중 실행
-- 4h_d005: SMA240, Mom20/720, daily vol 5%, snap60
-- 2h_b60_S240: SMA240, Mom20/720, bar vol 60%, snap120
-- 2h_b60_S120: SMA120, Mom20/720, bar vol 60%, snap120
-- 4h_b60_M20_120: SMA240, Mom20/120, bar vol 60%, snap21
-- 공통: canary_hyst=0.015, n_snapshots=3, drift/dd/bl 없음
+- ENS_fut_L3_k3_12652d57, 4h봉 3멤버 EW 1/3씩
+- 4h_S240_SN120: SMA240, Mom20/720, daily vol 5%, snap120
+- 4h_S240_SN30 : SMA240, Mom20/480, daily vol 5%, snap30
+- 4h_S120_SN120: SMA120, Mom20/720, daily vol 5%, snap120
+- 공통: canary_hyst=0.015, n_snapshots=3, universe_size=3, cap=1/3
 
 ### 실행 파라미터
 
-- 레버리지: 5x 동적 (cap_mom_blend_543_cash)
-  - floor=3x (CASH≥34% 또는 신호 약할 때)
-  - mid=4x, ceiling=5x
-- 스탑: prev_close_pct -15%, cash_guard(CASH≥34%일 때만 활성)
+- 레버리지: 고정 3배 (floor=mid=ceiling=3, 동적 레버리지 비활성)
+- 스탑: 없음 (STOP_PCT=0, sync_stop_orders는 잔존 스탑 정리만 수행)
+- 캐시 가드: 없음 (STOP_GATE_CASH_THRESHOLD=0)
+- 가드 전면 제거 (2026-04-21): stop/cash_guard 로직 본체 삭제, 앙상블 분산이 유일 방어
 - 거래비용: 0.04% (바이낸스 maker)
 - 유지증거금: 0.4%
 
