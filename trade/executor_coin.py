@@ -513,23 +513,27 @@ def _save_state_unless_dry(state_path: str, state: dict, dry_run: bool) -> None:
     save_json(state_path, state)
 
 
-def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float) -> Optional[float]:
-    """시장가 매수 (KRW 금액 지정). 체결 확인된 평균 체결가만 반환.
-    체결 미확정이면 None 반환 (caller가 position 기록 미루고 다음 사이클 재시도).
-    dry-run은 현재가 조회해서 시뮬 값 반환.
+def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float,
+                     coin: Optional[str] = None) -> Optional[Tuple[float, float]]:
+    """시장가 매수. 체결 확인된 (fill_px, qty_filled) 튜플 반환. 미확정 시 None.
+    qty_filled: 실제 체결 수량 (주문 trades 합계). 수수료 제외.
+    dry-run은 (current_price, krw_amount/price) 시뮬 반환.
     """
     if krw_amount < MIN_ORDER_KRW:
         return None
     try:
         if api.dry_run:
             price = pyupbit.get_current_price(ticker)
-            return float(price) if isinstance(price, (int, float)) and price else None
+            if isinstance(price, (int, float)) and price:
+                p = float(price)
+                return (p, krw_amount / p) if p > 0 else None
+            return None
         order = api.upbit.buy_market_order(ticker, krw_amount)
         if not order or not isinstance(order, dict) or 'uuid' not in order:
             log(f'  C 매수 주문 실패: {order}')
             return None
-        # 체결 확인: 최대 10초 대기 (5회 × 2s)
         uuid = order['uuid']
+        # 체결 확인: 최대 10초 대기 (5회 × 2s)
         for _ in range(5):
             time.sleep(2.0)
             info = api.upbit.get_order(uuid)
@@ -538,7 +542,8 @@ def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float) -> Optional[f
                 total_vol = sum(float(t.get('volume', 0) or 0) for t in trades)
                 total_funds = sum(float(t.get('funds', 0) or 0) for t in trades)
                 if total_vol > 0:
-                    return total_funds / total_vol
+                    avg_px = total_funds / total_vol
+                    return (avg_px, total_vol)
         log(f'  C 매수 체결 미확정 (uuid={uuid}, 10s) — position 기록 보류')
         return None
     except Exception as e:
@@ -546,19 +551,41 @@ def _market_buy_krw(api: UpbitAPI, ticker: str, krw_amount: float) -> Optional[f
         return None
 
 
-def _market_sell_coin(api: UpbitAPI, ticker: str, coin: str) -> bool:
-    """보유 수량 전량 시장가 매도."""
-    qty = api.get_coin_qty(coin)
-    if qty <= 0:
-        return True  # 없으면 성공 처리
+def _market_sell_qty(api: UpbitAPI, ticker: str, coin: str, qty_target: float) -> bool:
+    """지정 qty 만큼 시장가 매도 (V21 잔고 보존). qty_target 이 보유량보다 크면 보유량 전량.
+    체결 검증: 매도 후 잔고가 최소 qty_target 만큼 감소했는지 확인."""
+    qty_now = api.get_coin_qty(coin)
+    if qty_now <= 0:
+        return True
+    sell_qty = min(qty_target, qty_now)
+    if sell_qty <= 0:
+        return True
     try:
         if api.dry_run:
             return True
-        order = api.upbit.sell_market_order(ticker, qty)
-        return bool(order and 'uuid' in order)
+        order = api.upbit.sell_market_order(ticker, sell_qty)
+        if not (order and isinstance(order, dict) and 'uuid' in order):
+            return False
+        # 체결 검증: 최대 10초 대기, qty 가 sell_qty 이상 줄었는지 확인
+        qty_after = qty_now
+        for _ in range(5):
+            time.sleep(2.0)
+            qty_after = api.get_coin_qty(coin)
+            if qty_now - qty_after >= sell_qty * 0.99:  # 99% 이상 감소
+                return True
+        log(f'  C 매도 체결 미확정 {coin}: qty_before={qty_now:.6f} qty_after={qty_after:.6f} 요청={sell_qty:.6f}')
+        return False
     except Exception as e:
         log(f'  C 매도 예외 {coin}: {e}')
         return False
+
+
+def _market_sell_coin(api: UpbitAPI, ticker: str, coin: str) -> bool:
+    """보유 수량 전량 시장가 매도 (legacy, 유의종목 청산 등). V22 C 청산은 _market_sell_qty 사용."""
+    qty = api.get_coin_qty(coin)
+    if qty <= 0:
+        return True
+    return _market_sell_qty(api, ticker, coin, qty)
 
 
 def handle_c_only(state: dict, api: UpbitAPI, session: requests.Session,
@@ -574,21 +601,47 @@ def handle_c_only(state: dict, api: UpbitAPI, session: requests.Session,
         return alerts
     fill_result = None
     if intent.action == 'enter' and intent.payload:
-        # V21 변화 없음 → C만 단독 매수
         coin = intent.payload['coin']
         ticker = f'KRW-{coin}'
         balance = api.get_balance()
         total_krw = sum(balance.values()) if balance else 0.0
         cap = cle.C_SLEEVE_CFG['cap_per_slot']
         krw_alloc = total_krw * cap
-        log(f'  C (solo) 진입 시도: {coin} @ ~{intent.payload["entry_px_ref"]:.4f}, 할당 ₩{krw_alloc:,.0f}')
-        fill_px = _market_buy_krw(api, ticker, krw_alloc)
-        fill_result = {'coin': coin, 'fill_px': fill_px, 'krw_spent': krw_alloc}
+        qty_pre = api.get_coin_qty(coin) if not api.dry_run else 0.0
+        log(f'  C 진입 시도: {coin} @ ~{intent.payload["entry_px_ref"]:.4f}, 할당 ₩{krw_alloc:,.0f} qty_pre={qty_pre:.6f}')
+        buy_res = _market_buy_krw(api, ticker, krw_alloc, coin=coin)
+        if buy_res:
+            fill_px, qty_filled_trades = buy_res
+            # 실제 qty: 잔고 diff 로 재확인 (더 정확, 수수료 반영)
+            if not api.dry_run:
+                qty_post = api.get_coin_qty(coin)
+                qty_filled = max(qty_post - qty_pre, 0.0)
+                if qty_filled <= 0:
+                    # diff 실패 → trades 합계 fallback
+                    qty_filled = qty_filled_trades
+            else:
+                qty_filled = qty_filled_trades
+            fill_result = {'coin': coin, 'fill_px': fill_px,
+                           'qty_filled': qty_filled, 'krw_spent': krw_alloc}
+        else:
+            fill_result = {'coin': coin, 'fill_px': None}
     elif intent.action == 'exit' and intent.payload:
         coin = intent.payload['coin']
         ticker = f'KRW-{coin}'
-        log(f'  C (solo) 청산 시도: {coin} ({intent.payload.get("reason")})')
-        ok = _market_sell_coin(api, ticker, coin)
+        # C 포지션의 qty만 매도 (V21 잔고 보존)
+        pos = state.get('c_sleeve', {}).get('position', {})
+        c_qty = float(pos.get('qty', 0.0) or 0.0)
+        if c_qty <= 0:
+            # qty 없으면 fallback: krw_spent / entry_px 로 계산
+            entry_px = float(pos.get('entry_px', 0) or 0)
+            krw_spent = float(pos.get('krw_spent', 0) or 0)
+            if entry_px > 0:
+                c_qty = krw_spent / entry_px
+        log(f'  C (solo) 청산 시도: {coin} ({intent.payload.get("reason")}) qty={c_qty:.6f}')
+        if c_qty > 0:
+            ok = _market_sell_qty(api, ticker, coin, c_qty)
+        else:
+            ok = _market_sell_coin(api, ticker, coin)  # fallback
         fill_result = {'coin': coin, 'sold': ok}
     alerts.extend(finalize_c_state(state, intent, fill_result))
     return alerts
@@ -641,11 +694,18 @@ def finalize_c_state(state: dict, intent, fill_result: Optional[Dict]) -> List[s
         p = intent.payload or {}
         fill_px = float(fill_result['fill_px'])
         krw_spent = float(fill_result.get('krw_spent', 0.0))
+        # qty: fill_result 의 실체결 수량 우선 (잔고 diff 로 측정됨), 없으면 추정
+        qty_filled = fill_result.get('qty_filled')
+        if qty_filled is None or qty_filled <= 0:
+            qty = krw_spent / fill_px if fill_px > 0 else 0.0
+        else:
+            qty = float(qty_filled)
         tp_px = fill_px * (1 + cle.C_SLEEVE_CFG['tp_pct'])
         c_state['position'] = {
             'coin': p['coin'],
             'entry_ts': p['entry_ts_expected'],
             'entry_px': fill_px,
+            'qty': qty,
             'tp_px': tp_px,
             'tstop_ts': p['tstop_ts'],
             'krw_spent': krw_spent,
@@ -654,7 +714,7 @@ def finalize_c_state(state: dict, intent, fill_result: Optional[Dict]) -> List[s
         c_state.pop('pending_entry', None)
         cap = cle.C_SLEEVE_CFG['cap_per_slot']
         alerts.append(
-            f'🎯 C 진입: {p["coin"]} @ ₩{fill_px:,.2f} (TP +3%, tstop 24h, 슬롯 {cap*100:.0f}%)')
+            f'🎯 C 진입: {p["coin"]} @ ₩{fill_px:,.2f} qty={qty:.6f} (TP +3%, tstop 24h, 슬롯 {cap*100:.0f}%)')
 
     elif action == 'enter' and (not fill_result or not fill_result.get('fill_px')):
         # 체결 미확정 → position 기록 안 함, pending 유지
@@ -838,15 +898,6 @@ def run_once(dry_run: bool = False) -> int:
         effective_target, gross = apply_notional_cap(target, balance, total_krw, NOTIONAL_CAP_FRACTION)
         log(f'  Notional cap {NOTIONAL_CAP_FRACTION*100:.0f}% 적용 (gross_delta={gross*100:.1f}%)')
 
-    # V22: V21 execute_delta가 C 포지션을 stray 로 보고 매도하지 않도록 merged target 구성.
-    # C 의도를 여기서 미리 계산하고 target 에 overlay.
-    c_intent_pre, _c_bars = compute_c_intent_live(state, session, result.universe)
-    c_pos_pre = state.get('c_sleeve', {}).get('position')
-    if c_intent_pre:
-        effective_target = cle.apply_c_to_target(
-            effective_target, c_pos_pre, c_intent_pre, total_krw)
-        log(f'  V22: C intent={c_intent_pre.action} → merged target={effective_target}')
-
     # 이벤트 트리거 판정 (auto_trade_binance의 rebalancing_needed 패턴 이식)
     # - target이 prev 대비 변하면 rebalancing_needed=True (카나리/스냅 회전/유의 퇴출 등)
     # - 한 번 True면 실제 포지션이 목표에 근접할 때까지 다음 실행에서도 유지
@@ -877,14 +928,54 @@ def run_once(dry_run: bool = False) -> int:
         _flush_telegram(dry_run)
         return 0
 
+    # V22: V21 이 체결 필요 확정 → C intent 계산 + merged target 구성.
+    # V21 과 C 는 별개 주문 — apply_c_to_target 은 기존 C 포지션 보호만.
+    c_intent_pre, c_bars_pre = compute_c_intent_live(state, session, result.universe)
+    c_pos_pre = state.get('c_sleeve', {}).get('position')
+    # 시가 기준 보호용 mark_price_fn: bars 우선, 실패 시 Upbit get_current_price fallback
+    def _mark_price(coin, _bars=c_bars_pre):
+        if _bars:
+            df = _bars.get(coin)
+            if df is not None and len(df) > 0:
+                try:
+                    return float(df['Close'].iloc[-1])
+                except Exception:
+                    pass
+        # fallback: Upbit 실시간 KRW 가격 (cost-basis 보다 정확)
+        try:
+            ticker = f'KRW-{coin}'
+            px = pyupbit.get_current_price(ticker)
+            if isinstance(px, (int, float)) and px > 0:
+                return float(px)
+        except Exception:
+            pass
+        return None
+    # intent 계산 실패하더라도 C position 이 있으면 반드시 보호 overlay 적용
+    # (stray-sell 방지 최우선 — intent 는 주문 결정용이지 보호 여부와 무관)
+    if c_pos_pre:
+        sentinel_intent = c_intent_pre or cle.CIntent(action='hold',
+                                                       note='intent fetch 실패 — hold 로 보호만')
+        effective_target = cle.apply_c_to_target(
+            effective_target, c_pos_pre, sentinel_intent, total_krw,
+            mark_price_fn=_mark_price)
+        log(f'  V22: C pos={c_pos_pre["coin"]} 보호 overlay → merged={effective_target}')
+    if c_intent_pre:
+        log(f'  V22: C intent={c_intent_pre.action}')
+
     # 실제 잔고 편차 체크 — 목표에 이미 근접해있고 이벤트 흔적(True)만 남았으면 클리어
     if not target_changed and not coin_needs_rebalance(effective_target, balance, total_krw):
         state['rebalancing_needed'] = False
         log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
-        # V22: V21 skip 상황에서도 C 슬리브는 매 시간 체크
-        c_alerts = handle_c_only(state, api, session, result.universe, dry_run)
-        for a in c_alerts:
-            _tg(a)
+        # V22: V21 skip — C pre-computed intent 는 state 만 finalize (enter 시 주문 필요하면 handle_c_only fallback)
+        if c_intent_pre and c_intent_pre.action in ('pending_save', 'pending_expire'):
+            alerts_f = finalize_c_state(state, c_intent_pre, None)
+            for a in alerts_f:
+                _tg(a)
+        else:
+            # enter/exit/hold 는 실 주문 필요 → handle_c_only 에 위임
+            c_alerts = handle_c_only(state, api, session, result.universe, dry_run)
+            for a in c_alerts:
+                _tg(a)
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
         _flush_telegram(dry_run)
@@ -925,7 +1016,9 @@ def run_once(dry_run: bool = False) -> int:
                 state['rebalancing_needed'] = False
                 log(f'  ✅ 목표 도달 → rebalancing_needed=False. total=₩{total_after:,.0f}')
 
-    # V22: V21 체결 후 C 슬리브 처리 (rare V21+C 동시 event는 순차 체결로 수용)
+    # V22: V21 trade 후 C 전용 주문 실행 (V21 과 완전 분리).
+    # apply_c_to_target 은 이미 C 보호 overlay만 반영했으므로 V21 execute_delta 가
+    # C 잔고를 건드리지 않음. handle_c_only 가 C enter(buy_krw)/exit(sell_qty) 처리.
     c_alerts = handle_c_only(state, api, session, result.universe, dry_run)
     for a in c_alerts:
         _tg(a)
