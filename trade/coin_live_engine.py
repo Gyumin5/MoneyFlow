@@ -127,18 +127,20 @@ BINANCE_INTERVAL_MAP = {
     '1h': '1h',
 }
 
-# ─── V22 C 슬리브 설정 (champion: s_dthr12_tp3 + A2_bounce_w1) ───
-# 2026-04-21 확정: 현물에만 적용. 선물 C는 여전히 연구 단계.
+# ─── V22 C 슬리브 설정 — 2026-04-22 비활성 (cap=0) ───
+# Upbit 재백테 결과 champion cap 0.333 에서 Cal 3.10→1.46, MDD -19%→-44%
+# 악화 확인. Binance 데이터 최적화 champion 이 Upbit 실거래 등가 아님.
+# V21 단독으로 되돌림. C 슬리브 로직은 코드 유지 (향후 재탐색용), cap=0 으로 orders 발생 안 함.
 C_SLEEVE_CFG = {
     'interval': '1h',
     'dip_bars': 24,
     'dip_thr': -0.12,
     'tp_pct': 0.03,
     'tstop_hours': 24,
-    'universe_size': 15,      # 시총 Top15 ∩ Upbit ∩ Binance (공통 필터링 후)
+    'universe_size': 15,
     'n_pick': 1,
-    'cap_per_slot': 0.15,     # 실전 초기 (백테 champion 0.333, 보수적 시작)
-    'bounce_window_hours': 1, # A2 가드: 시그널 후 1h 내 양봉 확인
+    'cap_per_slot': 0.0,     # 2026-04-22 비활성 (V21 단독 되돌림)
+    'bounce_window_hours': 1,
 }
 
 
@@ -828,7 +830,9 @@ def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
                        last_bar_ts=last_bar_ts,
                        note=f'HOLD {coin} close={latest_close:.4f} tp={tp_px:.4f}')
 
-    # ─── 2. pending_entry → enter/hold/expire 3분기 ───
+    # ─── 2. pending_entry → enter/hold/expire (grace period 지원) ───
+    # cron 지연/실패 대비: expected_entry_ts 이후 PENDING_GRACE_HOURS(3h) 까지는 지연 진입 허용.
+    PENDING_GRACE_HOURS = 3
     pending = c_state.get('pending_entry')
     if pending:
         pend_bar_ts = parse_utc_iso(pending.get('bar_ts', ''))
@@ -838,41 +842,47 @@ def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
             return CIntent(action='pending_expire',
                            last_bar_ts=last_bar_ts,
                            note='pending meta 결손 — expire')
-        # 3분기: last_ts_utc 가 expected 보다 이전 / 정확히 일치 / 이후
+        grace_deadline = expected_entry_ts + timedelta(hours=PENDING_GRACE_HOURS)
         if last_ts_utc < expected_entry_ts:
             return CIntent(action='hold',
                            last_bar_ts=last_bar_ts,
                            note=f'pending 진입 시간 대기: expected {expected_entry_ts}')
-        if last_ts_utc == expected_entry_ts:
-            cbars = bars_1h.get(pend_coin)
-            if cbars is not None and len(cbars) > 0:
-                coin_last_ts = cbars.index[-1].to_pydatetime().replace(tzinfo=timezone.utc)
-                if coin_last_ts == expected_entry_ts:
-                    entry_row = cbars.iloc[-1]
-                    entry_px = float(entry_row['Open'])
-                    tp_px = entry_px * (1 + cfg['tp_pct'])
-                    tstop_ts = expected_entry_ts + timedelta(hours=cfg['tstop_hours'])
-                    return CIntent(
-                        action='enter',
-                        payload={
-                            'coin': pend_coin,
-                            'entry_ts_expected': to_utc_iso(expected_entry_ts),
-                            'entry_px_ref': entry_px,
-                            'tp_px_ref': tp_px,
-                            'tstop_ts': to_utc_iso(tstop_ts),
-                            'dip_ret': pending.get('dip_ret'),
-                            'cap_weight': cfg['cap_per_slot'],
-                        },
-                        last_bar_ts=last_bar_ts,
-                        note=f'A2 confirmed enter: {pend_coin} @ {entry_px:.6f}')
-            # 진입 봉 데이터 없음 → pending 유지, 한 사이클 더 기다림
+        if last_ts_utc > grace_deadline:
+            return CIntent(action='pending_expire',
+                           last_bar_ts=last_bar_ts,
+                           note=f'pending grace 초과 (last={last_ts_utc}, deadline={grace_deadline})')
+        # expected 이후 grace 이내: 해당 봉 혹은 가장 가까운 available 봉 Open 으로 진입
+        cbars = bars_1h.get(pend_coin)
+        if cbars is None or len(cbars) == 0:
             return CIntent(action='hold',
                            last_bar_ts=last_bar_ts,
-                           note=f'{pend_coin} 진입 봉 데이터 없음 HOLD')
-        # last_ts_utc > expected_entry_ts → 이미 지남, 만료
-        return CIntent(action='pending_expire',
-                       last_bar_ts=last_bar_ts,
-                       note=f'pending 진입 봉 놓침 (last={last_ts_utc}, expected={expected_entry_ts})')
+                           note=f'{pend_coin} 진입 봉 데이터 없음 HOLD (grace 내)')
+        # expected_entry_ts 이상의 첫 번째 봉을 진입 봉으로 선택
+        candidate_bars = cbars[cbars.index >= expected_entry_ts]
+        if len(candidate_bars) == 0:
+            return CIntent(action='hold',
+                           last_bar_ts=last_bar_ts,
+                           note=f'{pend_coin} expected 이후 봉 없음 HOLD (grace 내)')
+        entry_row = candidate_bars.iloc[0]
+        entry_ts_pd = entry_row.name
+        entry_ts_actual = entry_ts_pd.to_pydatetime().replace(tzinfo=timezone.utc)
+        entry_px = float(entry_row['Open'])
+        tp_px = entry_px * (1 + cfg['tp_pct'])
+        tstop_ts = entry_ts_actual + timedelta(hours=cfg['tstop_hours'])
+        delayed = entry_ts_actual > expected_entry_ts
+        return CIntent(
+            action='enter',
+            payload={
+                'coin': pend_coin,
+                'entry_ts_expected': to_utc_iso(entry_ts_actual),
+                'entry_px_ref': entry_px,
+                'tp_px_ref': tp_px,
+                'tstop_ts': to_utc_iso(tstop_ts),
+                'dip_ret': pending.get('dip_ret'),
+                'cap_weight': cfg['cap_per_slot'],
+            },
+            last_bar_ts=last_bar_ts,
+            note=f'A2 {"delayed " if delayed else ""}enter: {pend_coin} @ {entry_px:.6f} ({entry_ts_actual})')
 
     # ─── 3. 신규 dip 탐지 ───
     if c_state.get('last_signal_bar_ts') == last_bar_ts:

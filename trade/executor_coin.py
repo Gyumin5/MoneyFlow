@@ -591,11 +591,15 @@ def _market_sell_coin(api: UpbitAPI, ticker: str, coin: str) -> bool:
 def handle_c_only(state: dict, api: UpbitAPI, session: requests.Session,
                   universe: List[str], dry_run: bool) -> List[str]:
     """V21이 실제 매매 안 하는 skip 경로에서 C만 단독 처리.
+    - cap_per_slot == 0 이면 즉시 return (C 슬리브 비활성).
     - intent 계산
     - action 이 enter / exit 면 해당 주문만 따로 체결 (V21 target 변화 없으므로 단독 체결 안전)
     - pending_save / pending_expire / hold 는 주문 없음, state만 갱신
     """
     alerts: List[str] = []
+    # C 슬리브 비활성 check (cap=0) — 2026-04-22 Upbit 재백테 후 V21 단독 복귀
+    if cle.C_SLEEVE_CFG.get('cap_per_slot', 0) <= 0:
+        return alerts
     intent, _bars = compute_c_intent_live(state, session, universe)
     if intent is None:
         return alerts
