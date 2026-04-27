@@ -44,61 +44,53 @@
 - 앵커일, 버퍼, 상태키, 모니터 기준통화가 다르면 "같은 전략"이라고 쓰지 않는다.
 - 현재 저장소에는 `1/10/19`와 `1/11/21` 표기가 혼재할 수 있으므로, 변경 시 관련 파일을 반드시 함께 정리한다.
 
-## 코인 현물 전략 규칙 (V22, 확정 2026-04-21)
+## 코인 현물 전략 규칙 (V22, 재정의 2026-04-27)
 
-V22 = V21 3멤버 앙상블 + Strategy C 슬리브 (champion, dip-buy mean reversion).
+V22 = 단일 sleeve combo. spot/fut 모두 1D + 4h 2멤버 EW 앙상블. C 슬리브 폐기.
 
-### V21 앙상블 (유지)
+### 코인 현물 V22 앙상블
 
-- D봉 3멤버 EW 1/3씩 앙상블 (ENS_spot_k3_4b270476, live engine)
-- Member 1 (D_SMA50):  interval=D, SMA50,  Mom20/90,  snap 90봉×3, canary hyst 1.5%
-- Member 2 (D_SMA150): interval=D, SMA150, Mom20/60,  snap 90봉×3, canary hyst 1.5%
-- Member 3 (D_SMA100): interval=D, SMA100, Mom20/120, snap 90봉×3, canary hyst 1.5%
+- 2멤버 EW 50/50, snap 60일 동기 (live engine: trade/coin_live_engine.py)
+- Member 1 (D_SMA42):   interval=D,  SMA42,  Mom20/127, snap=60봉×3,  canary hyst 1.5%
+- Member 2 (H4_SMA240): interval=4h, SMA240, Mom12/180, snap=360봉×3, canary hyst 1.5%
 - 공통: health=mom2vol (vol_cap 5%, vol_lookback 90d), universe_size=3, cap=1/3
-- 가드 없음 (2026-04-21): gap_threshold/exclusion_days 전면 제거. 앙상블 분산이 유일한 방어.
-- Upbit warning/delisting 코인은 universe 단계에서 즉시 제외 (유지).
+- 가드 없음: gap/exclusion 가드 전면 제거. 앙상블 분산이 유일 방어.
+- Upbit warning/delisting 코인은 universe 단계에서 즉시 제외.
 - TX: 0.04% (백테스트), 실매매는 Upbit 수수료
-
-### V22 C 슬리브 (신규, 실전 champion s_dthr12_tp3 + A2_bounce_w1)
-
-- Interval: 1h봉 (Binance kline). dip_bars=24, dip_thr=-0.12 (24h 누적 -12% 이하)
-- A2_bounce 가드: 시그널 봉이 양봉이어야 다음 봉 Open 진입 (pending_save → enter 2단계)
-- TP: +3%, tstop: 24시간, 스탑로스 없음
-- Universe: 시총 Top15 ∩ effective_universe (V21 warning 필터 공유), n_pick=1
-- cap_per_slot = 0.15 (실전 초기, 백테 champion 0.333). 단계적 상향 로드맵 유지
-- V21 우선 + 남는 cash 에서 C 동작. V21 trade path 는 apply_c_to_target 으로 merged target 사용해 C 포지션을 stray 로 매도 안 함
+- 단독 sleeve 성과 (BT 6.30yr, 2019-09~2025-12): CAGR 51.1%, MDD -21.2%, Cal 2.41, Sharpe 1.32
 
 ### 실행 파라미터
 
 - Executor: `trade/executor_coin.py`
 - Engine: `trade/coin_live_engine.py`
 - State: `trade_state.json`
-  - V21: `members/last_target_snapshot/last_upbit_status/last_warning_coins_alerted/rebalancing_needed`
-  - V22: `c_sleeve = {position, pending_entry, last_signal_bar_ts}` (하위호환 setdefault)
-- Cron: `5 * * * *` (한국시간 매시간 :05). V21 D봉 로직은 bar-idempotency 로 D봉 닫힘 시만 실행, C 는 매시간 시그널 체크
-- 알림: Upbit 유의 변경 알림 제거 (2026-04-21). C 진입/청산/대기 이벤트만 텔레그램 전송
+  - V22: `members/last_target_snapshot/last_upbit_status/last_warning_coins_alerted/rebalancing_needed`
+- Cron: `5 9,13,17,21,1,5 * * *` (KST 4h 봉 닫힘 시각, 선물과 동기). bar-idempotency 로 4h/D봉 닫힘 시만 리밸.
+- 알림: Upbit 유의 변경 알림 제거. 리밸런싱 시점만 텔레그램 전송.
 
-### 아키텍처 (V22 3단계 분리)
+### 아키텍처
 
-- `cle.compute_c_intent(state, bars_1h, universe, now) → CIntent` 주문 없이 의도만 반환 (hold/enter/exit/pending_save/pending_expire)
-- `cle.apply_c_to_target(v21_target, c_position, c_intent, total_pv) → merged_target` Cash 차감, 합 1.0 유지
-- `ec.finalize_c_state(state, intent, fill_result)` 체결 결과로 state 갱신
-- `ec.handle_c_only(...)` V21 skip 경로에서 C 단독 체결
+- `cle.compute_live_targets(state, session, ...)` → EngineResult (combined_target, member_targets, freshness)
+- `ec.run_once(dry_run)` → 엔진 호출 + delta 매매 + state 저장
 
-### V20 → V21 → V22 마이그레이션
+### V21 → V22 마이그레이션 (2026-04-27)
 
-- V20 → V21: 앙상블 D+4h 50:50 → D 3멤버 EW, 가드 전면 제거, 상태 스키마 정리
-- V21 → V22: C 슬리브 신규 추가 (현물만). cron 일 1회 → 매시간. 선물은 V21 그대로 (2022 bear 악화로 보류)
+- V21 (D 3멤버 EW) → V22 (1D + 4h 2멤버 EW): interval 다양성 + plateau-center cfg 채택
+- C 슬리브 (champion mean-reversion) 코드 전면 삭제 (Upbit 등가 검증 탈락)
+- KLINE_LIMITS '1h' 제거, '4h' (1500 bars) 추가
+- BINANCE_INTERVAL_MAP '1h' 제거, '4h' 추가
+- cron 4h 동기로 변경 (선물과 동일: 9/13/17/21/1/5시 :05)
+- AI 합의 (Gemini + Codex) 후 plateau-center SMA42 채택 (peak SMA44 → drift 방어 우선)
 
-## 선물 전략 규칙 (V21, 확정 2026-04-17, 가드 제거 2026-04-21)
+## 선물 전략 규칙 (V22, 재정의 2026-04-27)
 
 ### 앙상블 구성
 
-- ENS_fut_L3_k3_12652d57, 4h봉 3멤버 EW 1/3씩
-- 4h_S240_SN120: SMA240, Mom20/720, daily vol 5%, snap120
-- 4h_S240_SN30 : SMA240, Mom20/480, daily vol 5%, snap30
-- 4h_S120_SN120: SMA120, Mom20/720, daily vol 5%, snap120
+- 1D + 4h 2멤버 EW 50/50, snap 90일 동기
+- D_SMA42:   interval=D,  SMA42,  Mom18/127, snap=90봉×3
+- 4h_SMA240: interval=4h, SMA240, Mom12/180, snap=540봉×3 (=90일 동기)
 - 공통: canary_hyst=0.015, n_snapshots=3, universe_size=3, cap=1/3
+- 단독 sleeve 성과 (BT 6.30yr, L3): CAGR 187.9%, MDD -47.0%, Cal 4.00, Sharpe 0.33
 
 ### 실행 파라미터
 
