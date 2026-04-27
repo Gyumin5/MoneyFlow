@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Cap Defend 현물 라이브 엔진.
+"""Cap Defend 현물 라이브 엔진 (V22).
 
-V21: D봉 3멤버 (D_SMA50 + D_SMA150 + D_SMA100) 1/3씩 EW 앙상블.
+V22: 1D + 4h 2멤버 50/50 EW 앙상블 (snap 60일 동기).
 바이낸스 spot kline에서 신호 계산 → 업비트 KRW 체결 (executor_coin.py에서 수행).
 
-멤버 D_SMA50: 일봉, SMA50, Mom30/90, snap 30봉, Top3
-멤버 D_SMA150: 일봉, SMA150, Mom20/60, snap 90봉, Top3
-멤버 D_SMA100: 일봉, SMA100, Mom20/120, snap 90봉, Top3
+멤버 D_SMA42:  1D봉, SMA42,  Mom20/127, snap 60봉,  Top3
+멤버 H4_SMA240: 4h봉, SMA240, Mom12/180, snap 360봉, Top3
 
-가드 없음 (2026-04-21 확정): gap/exclusion 가드 전면 제거.
-앙상블 분산 + Upbit warning/delisting 필터만으로 방어.
+V22 변경 (vs V21):
+- D 3멤버 → 1D + 4h 2멤버 (interval 다양성 확보)
+- snap 90 → 60일 (1D=60봉, 4h=360봉=60일 동기)
+- C 슬리브 (champion mean-reversion) 코드 전면 제거
+- cron 매시간 :05 (4h 봉 닫힘 처리)
+
+가드 없음: gap/exclusion 가드 전면 제거. 앙상블 분산 + Upbit warning/delisting 필터.
 
 설계:
-- compute_strategy_target(): auto_trade_binance 패턴 이식 (bar-idempotency + 3-snap stagger 내장)
+- compute_member_target(): bar-idempotency + 3-snap stagger 내장
 - 엔진 내부 현금 키는 'CASH' (대문자). executor로 넘어갈 때 'Cash' (소문자) 정규화.
 - 유니버스: CoinGecko Top40 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
 - Freshness: expected_last_bar_ts 일치 체크
@@ -53,14 +57,13 @@ HARDCODED_FALLBACK = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK',
 
 UPBIT_MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all?is_details=true'
 
-# V21 멤버 설정 (ENS_spot_k3_4b270476, 2026-04-17 확정)
-# 3멤버 D봉 EW 1/3씩. 4h봉 제거.
-MEMBER_D_SMA50 = {
+# V22 멤버 설정 (1D+4h 2멤버 EW, snap 60일 동기, 2026-04-27 확정)
+MEMBER_D_SMA42 = {
     'interval': 'D',
-    'sma_bars': 50,
+    'sma_bars': 42,
     'mom_short_bars': 20,
-    'mom_long_bars': 90,
-    'snap_interval_bars': 90,
+    'mom_long_bars': 127,
+    'snap_interval_bars': 60,
     'n_snapshots': 3,
     'canary_hyst': 0.015,
     'health_mode': 'mom2vol',
@@ -71,28 +74,12 @@ MEMBER_D_SMA50 = {
     'cap': 1.0 / 3.0,
 }
 
-MEMBER_D_SMA150 = {
-    'interval': 'D',
-    'sma_bars': 150,
-    'mom_short_bars': 20,
-    'mom_long_bars': 60,
-    'snap_interval_bars': 90,
-    'n_snapshots': 3,
-    'canary_hyst': 0.015,
-    'health_mode': 'mom2vol',
-    'vol_mode': 'daily',
-    'vol_threshold': 0.05,
-    'vol_lookback_days': 90,
-    'universe_size': 3,
-    'cap': 1.0 / 3.0,
-}
-
-MEMBER_D_SMA100 = {
-    'interval': 'D',
-    'sma_bars': 100,
-    'mom_short_bars': 20,
-    'mom_long_bars': 120,
-    'snap_interval_bars': 90,
+MEMBER_H4_SMA240 = {
+    'interval': '4h',
+    'sma_bars': 240,
+    'mom_short_bars': 12,
+    'mom_long_bars': 180,
+    'snap_interval_bars': 360,   # 60일 동기 (4h × 6 × 60)
     'n_snapshots': 3,
     'canary_hyst': 0.015,
     'health_mode': 'mom2vol',
@@ -104,43 +91,25 @@ MEMBER_D_SMA100 = {
 }
 
 MEMBERS = {
-    'D_SMA50': MEMBER_D_SMA50,
-    'D_SMA150': MEMBER_D_SMA150,
-    'D_SMA100': MEMBER_D_SMA100,
+    'D_SMA42': MEMBER_D_SMA42,
+    'H4_SMA240': MEMBER_H4_SMA240,
 }
 
 ENSEMBLE_WEIGHTS = {
-    'D_SMA50': 1.0 / 3.0,
-    'D_SMA150': 1.0 / 3.0,
-    'D_SMA100': 1.0 / 3.0,
+    'D_SMA42': 0.5,
+    'H4_SMA240': 0.5,
 }
 
 # 각 interval별 최소 가져올 봉 수
 KLINE_LIMITS = {
-    'D': 500,    # SMA150 + Mom120 + vol90d → 500 충분
-    '1h': 72,    # C 슬리브: dip_bars 24 + bounce 1h + 여유
+    'D': 500,     # SMA42 + Mom127 + vol90d → 500 충분
+    '4h': 1500,   # SMA240 + Mom180 + snap360 + vol → 1500 (60+ 일치)
 }
 
 # Binance interval 매핑
 BINANCE_INTERVAL_MAP = {
     'D': '1d',
-    '1h': '1h',
-}
-
-# ─── V22 C 슬리브 설정 — 2026-04-22 비활성 (cap=0) ───
-# Upbit 재백테 결과 champion cap 0.333 에서 Cal 3.10→1.46, MDD -19%→-44%
-# 악화 확인. Binance 데이터 최적화 champion 이 Upbit 실거래 등가 아님.
-# V21 단독으로 되돌림. C 슬리브 로직은 코드 유지 (향후 재탐색용), cap=0 으로 orders 발생 안 함.
-C_SLEEVE_CFG = {
-    'interval': '1h',
-    'dip_bars': 24,
-    'dip_thr': -0.12,
-    'tp_pct': 0.03,
-    'tstop_hours': 24,
-    'universe_size': 15,
-    'n_pick': 1,
-    'cap_per_slot': 0.0,     # 2026-04-22 비활성 (V21 단독 되돌림)
-    'bounce_window_hours': 1,
+    '4h': '4h',
 }
 
 
@@ -749,284 +718,6 @@ def combine_ensemble(member_targets: Dict[str, Dict[str, float]],
         merged = {k: v / s for k, v in merged.items()}
     return merged
 
-
-# ─── V22 C 슬리브 신호 (Intent-only, 체결은 executor 가 담당) ───
-@dataclass
-class CIntent:
-    """C 슬리브 의도 (주문 X).
-
-    action:
-      'hold'           — 포지션 유지 or 아무것도 안 함
-      'enter'          — 신규 진입 (V21 target 에 coin 추가)
-      'exit'           — 포지션 청산 (coin 제거)
-      'pending_save'   — 시그널 대기 상태 저장 요청 (체결은 다음 사이클)
-      'pending_expire' — pending 만료 clear 요청
-    payload: action 별 필드
-      enter:  {coin, entry_ts_expected, tp_px, tstop_ts, dip_ret, cap_weight}
-      exit:   {coin, reason}
-      pending_save: {coin, bar_ts, dip_ret, last_signal_bar_ts}
-    """
-    action: str = 'hold'
-    payload: Optional[Dict] = None
-    last_bar_ts: Optional[str] = None
-    note: Optional[str] = None
-
-
-# 하위호환 alias (기존 compute_c_signal 호출코드가 있을 경우)
-CSignal = CIntent
-
-
-def compute_c_intent(state: Dict, bars_1h: Dict[str, pd.DataFrame],
-                     universe: List[str], now_utc: datetime) -> CIntent:
-    """C 슬리브 의도 계산 (순수 함수, 주문 X).
-
-    State machine (A2_bounce_w1 라이브 재현):
-      T   : 봉 T 닫힘 → dip 체크 + 봉 T 양봉이면 pending 저장 (pending_save)
-      T+1 : 봉 T+1 닫힘 → pending 다음 봉 도달, Open 기준 진입 의도 (enter)
-      T+N : 포지션 있으면 TP/tstop 체크 → 청산 의도 (exit)
-
-    caller는 intent에 따라:
-      - hold/pending_save/pending_expire: 주문 없음, state만 업데이트
-      - enter: merged target에 coin 포함, 체결
-      - exit: merged target에서 coin 제거, 체결
-    """
-    cfg = C_SLEEVE_CFG
-    c_state = state.setdefault('c_sleeve', {})
-    pos = c_state.get('position')
-
-    btc = bars_1h.get('BTC')
-    if btc is None or len(btc) < cfg['dip_bars'] + 2:
-        return CIntent(action='hold', note='BTC 1h 데이터 부족')
-    last_ts_pd = btc.index[-1]
-    last_ts_utc = last_ts_pd.to_pydatetime().replace(tzinfo=timezone.utc)
-    last_bar_ts = to_utc_iso(last_ts_utc)
-
-    # ─── 1. 기존 포지션 청산 체크 ───
-    if pos:
-        coin = pos.get('coin')
-        tp_px = float(pos.get('tp_px', 0))
-        tstop_ts = parse_utc_iso(pos.get('tstop_ts', ''))
-        coin_bars = bars_1h.get(coin)
-        if coin_bars is None or len(coin_bars) == 0:
-            if tstop_ts and now_utc >= tstop_ts:
-                return CIntent(action='exit',
-                               payload={'coin': coin, 'reason': 'tstop'},
-                               last_bar_ts=last_bar_ts,
-                               note=f'{coin} 데이터 없음 + tstop 경과')
-            return CIntent(action='hold',
-                           last_bar_ts=last_bar_ts,
-                           note=f'{coin} 데이터 없음 HOLD')
-        latest_high = float(coin_bars['High'].iloc[-1])
-        latest_close = float(coin_bars['Close'].iloc[-1])
-        if latest_high >= tp_px or latest_close >= tp_px:
-            return CIntent(action='exit',
-                           payload={'coin': coin, 'reason': 'tp'},
-                           last_bar_ts=last_bar_ts)
-        if tstop_ts and now_utc >= tstop_ts:
-            return CIntent(action='exit',
-                           payload={'coin': coin, 'reason': 'tstop'},
-                           last_bar_ts=last_bar_ts)
-        return CIntent(action='hold',
-                       last_bar_ts=last_bar_ts,
-                       note=f'HOLD {coin} close={latest_close:.4f} tp={tp_px:.4f}')
-
-    # ─── 2. pending_entry → enter/hold/expire (grace period 지원) ───
-    # cron 지연/실패 대비: expected_entry_ts 이후 PENDING_GRACE_HOURS(3h) 까지는 지연 진입 허용.
-    PENDING_GRACE_HOURS = 3
-    pending = c_state.get('pending_entry')
-    if pending:
-        pend_bar_ts = parse_utc_iso(pending.get('bar_ts', ''))
-        pend_coin = pending.get('coin')
-        expected_entry_ts = (pend_bar_ts + timedelta(hours=1)) if pend_bar_ts else None
-        if not (pend_bar_ts and pend_coin and expected_entry_ts):
-            return CIntent(action='pending_expire',
-                           last_bar_ts=last_bar_ts,
-                           note='pending meta 결손 — expire')
-        grace_deadline = expected_entry_ts + timedelta(hours=PENDING_GRACE_HOURS)
-        if last_ts_utc < expected_entry_ts:
-            return CIntent(action='hold',
-                           last_bar_ts=last_bar_ts,
-                           note=f'pending 진입 시간 대기: expected {expected_entry_ts}')
-        if last_ts_utc > grace_deadline:
-            return CIntent(action='pending_expire',
-                           last_bar_ts=last_bar_ts,
-                           note=f'pending grace 초과 (last={last_ts_utc}, deadline={grace_deadline})')
-        # expected 이후 grace 이내: 해당 봉 혹은 가장 가까운 available 봉 Open 으로 진입
-        cbars = bars_1h.get(pend_coin)
-        if cbars is None or len(cbars) == 0:
-            return CIntent(action='hold',
-                           last_bar_ts=last_bar_ts,
-                           note=f'{pend_coin} 진입 봉 데이터 없음 HOLD (grace 내)')
-        # expected_entry_ts 이상의 첫 번째 봉을 진입 봉으로 선택
-        candidate_bars = cbars[cbars.index >= expected_entry_ts]
-        if len(candidate_bars) == 0:
-            return CIntent(action='hold',
-                           last_bar_ts=last_bar_ts,
-                           note=f'{pend_coin} expected 이후 봉 없음 HOLD (grace 내)')
-        entry_row = candidate_bars.iloc[0]
-        entry_ts_pd = entry_row.name
-        entry_ts_actual = entry_ts_pd.to_pydatetime().replace(tzinfo=timezone.utc)
-        entry_px = float(entry_row['Open'])
-        tp_px = entry_px * (1 + cfg['tp_pct'])
-        tstop_ts = entry_ts_actual + timedelta(hours=cfg['tstop_hours'])
-        delayed = entry_ts_actual > expected_entry_ts
-        return CIntent(
-            action='enter',
-            payload={
-                'coin': pend_coin,
-                'entry_ts_expected': to_utc_iso(entry_ts_actual),
-                'entry_px_ref': entry_px,
-                'tp_px_ref': tp_px,
-                'tstop_ts': to_utc_iso(tstop_ts),
-                'dip_ret': pending.get('dip_ret'),
-                'cap_weight': cfg['cap_per_slot'],
-            },
-            last_bar_ts=last_bar_ts,
-            note=f'A2 {"delayed " if delayed else ""}enter: {pend_coin} @ {entry_px:.6f} ({entry_ts_actual})')
-
-    # ─── 3. 신규 dip 탐지 ───
-    if c_state.get('last_signal_bar_ts') == last_bar_ts:
-        return CIntent(action='hold',
-                       last_bar_ts=last_bar_ts,
-                       note='동일 봉 중복 시그널 skip')
-
-    candidates = []
-    for coin in universe:
-        cbars = bars_1h.get(coin)
-        if cbars is None or len(cbars) < cfg['dip_bars'] + 2:
-            continue
-        closes = cbars['Close'].values
-        dip_ret = float(closes[-1]) / float(closes[-1 - cfg['dip_bars']]) - 1.0
-        if dip_ret <= cfg['dip_thr']:
-            candidates.append((coin, dip_ret))
-
-    if not candidates:
-        return CIntent(action='hold',
-                       last_bar_ts=last_bar_ts,
-                       note='dip 후보 없음')
-
-    cand_set = {c[0] for c in candidates}
-    chosen = next((c for c in universe if c in cand_set), None)
-    if chosen is None:
-        return CIntent(action='hold', last_bar_ts=last_bar_ts, note='chosen 실패')
-
-    cbars = bars_1h[chosen]
-    sig_bar = cbars.iloc[-1]
-    sig_green = float(sig_bar['Close']) > float(sig_bar['Open'])
-    dip_ret = next(d for c, d in candidates if c == chosen)
-
-    if not sig_green:
-        return CIntent(action='hold',
-                       last_bar_ts=last_bar_ts,
-                       note=f'{chosen} dip={dip_ret:.1%} not green — skip')
-
-    return CIntent(
-        action='pending_save',
-        payload={
-            'coin': chosen,
-            'bar_ts': last_bar_ts,
-            'dip_ret': round(dip_ret, 4),
-            'last_signal_bar_ts': last_bar_ts,
-        },
-        last_bar_ts=last_bar_ts,
-        note=f'A2 pending: {chosen} dip={dip_ret:.1%} green → 다음 봉 진입')
-
-
-def apply_c_to_target(v21_target: Dict[str, float],
-                       c_position: Optional[Dict],
-                       c_intent: CIntent,
-                       total_pv: float,
-                       mark_price_fn=None) -> Dict[str, float]:
-    """V21 target 에 기존 C 포지션만 overlay (stray-sell 방지 전용).
-
-    V22 최종 설계 (2026-04-22):
-    - V21 과 C 는 완전히 별개의 주문으로 처리. apply_c_to_target 은 V21 execute_delta
-      가 C 포지션을 stray 로 오판해 매도하지 않도록 "현재 보유 중인 C"만 보호.
-    - intent 상관 없이 c_position 이 있으면 항상 MTM(qty × current_price) 로 overlay.
-    - enter 의도는 overlay 안 함 (handle_c_only 가 별도 매수).
-    - exit 의도도 보호 유지 (handle_c_only 가 qty 만큼만 매도. V21 잔고 보존).
-    - mark_price_fn(coin) → 현재가. None 이면 cost-basis 로 fallback.
-
-    Cash 부족 시 shrink.
-    """
-    merged = {k: float(v) for k, v in v21_target.items() if not str(k).startswith('_')}
-    if 'CASH' in merged and 'Cash' not in merged:
-        merged['Cash'] = merged.pop('CASH')
-
-    if not c_position:
-        return merged
-    add_coin = c_position.get('coin')
-    qty = float(c_position.get('qty', 0) or 0)
-    krw_spent = float(c_position.get('krw_spent', 0) or 0)
-    if not add_coin or total_pv <= 0:
-        return merged
-
-    mark_px = None
-    if mark_price_fn:
-        try:
-            mark_px = mark_price_fn(add_coin)
-        except Exception:
-            mark_px = None
-
-    if qty > 0 and mark_px and mark_px > 0:
-        add_weight = qty * mark_px / total_pv
-    elif krw_spent > 0:
-        add_weight = krw_spent / total_pv  # fallback
-    else:
-        return merged
-
-    cash_avail = merged.get('Cash', 0.0)
-    if add_weight <= cash_avail:
-        # 정상: Cash 에서 빼서 C 추가
-        merged[add_coin] = merged.get(add_coin, 0.0) + add_weight
-        merged['Cash'] = max(0.0, cash_avail - add_weight)
-    else:
-        # Cash 부족: V21 의 다른 코인 weight 를 비례 축소해 add_weight 확보
-        # 합 1.0 유지하며 C 보호 완전 달성.
-        shortfall = add_weight - cash_avail
-        v21_coin_total = sum(v for k, v in merged.items()
-                              if k not in ('Cash', add_coin))
-        if v21_coin_total > 0 and shortfall < v21_coin_total:
-            scale = (v21_coin_total - shortfall) / v21_coin_total
-            for k in list(merged.keys()):
-                if k not in ('Cash', add_coin):
-                    merged[k] = merged[k] * scale
-            merged[add_coin] = merged.get(add_coin, 0.0) + add_weight
-            merged['Cash'] = 0.0
-            log.info('apply_c_to_target: Cash 부족 (%.3f) + V21 %.3f scale down to 보호 %s %.3f',
-                     cash_avail, scale, add_coin, add_weight)
-        else:
-            # V21 자산도 부족 (very rare) → 가능한 만큼만
-            effective = cash_avail + max(0.0, v21_coin_total)
-            merged[add_coin] = merged.get(add_coin, 0.0) + effective
-            merged['Cash'] = 0.0
-            for k in list(merged.keys()):
-                if k not in ('Cash', add_coin):
-                    merged[k] = 0.0
-            log.warning('apply_c_to_target: Cash+V21 모두 부족, C 보호 %.3f (요청 %.3f)',
-                        effective, add_weight)
-
-    return merged
-
-
-# 하위호환 alias — 기존 compute_c_signal 이름으로 CIntent 반환
-compute_c_signal = compute_c_intent
-
-
-def fetch_c_bars(session: requests.Session, coins: List[str],
-                  now_utc: Optional[datetime] = None) -> Dict[str, pd.DataFrame]:
-    """C 슬리브 1h 봉 fetch + 직전 완성봉까지 slice.
-    코인별 1h 봉 (KLINE_LIMITS['1h']=72시간분) 가져와서 universe dict 반환.
-    """
-    now_utc = now_utc or utc_now()
-    limit = KLINE_LIMITS['1h']
-    out: Dict[str, pd.DataFrame] = {}
-    symbols = list(dict.fromkeys(['BTC'] + [c for c in coins if c != 'BTC']))
-    for coin in symbols:
-        df = fetch_binance_klines(session, f'{coin}USDT', '1h', limit)
-        if not df.empty:
-            out[coin] = df
-    return slice_to_last_closed(out, '1h', now_utc)
 
 
 # ─── Top-level 진입점 ───

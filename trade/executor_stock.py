@@ -52,7 +52,12 @@ SIGNAL_STATE_FILE = 'signal_state.json'
 TRADE_STATE_FILE = 'kis_trade_state.json'
 LOG_FILE = 'executor_stock.log'
 
-ANCHOR_DAYS = (1, 8, 15, 22)
+# V22 (2026-04-27): snap-based 3-tranche stagger
+# - snap_id 0/1/2, 각 126일 주기로 rebal, stagger = 42일 (=126/3)
+# - 기존 monthly anchor (1/8/15/22) 폐기
+SNAP_PERIOD_DAYS = 126
+N_SNAPS = 3
+SNAP_STAGGER_DAYS = 42  # SNAP_PERIOD_DAYS / N_SNAPS
 CASH_BUFFER_DEFAULT = 0.02
 MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
@@ -507,10 +512,47 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
     return False
 
 
+def _migrate_tranches_to_snaps(state: dict) -> None:
+    """V21 monthly tranches (1/8/15/22) → V22 snap-based (0/1/2) 1회 변환.
+    기존 picks/weights 를 모두 보존 (4 → 3 평균 EW). 첫 V22 실행 시만 트리거.
+    """
+    if 'snapshots' in state:
+        return
+    old = state.get('tranches', {})
+    today = datetime.now().date()
+    if not old:
+        # 빈 state — snapshots 만 빈 dict 로 init
+        state['snapshots'] = {}
+        return
+    # 4 monthly tranche 의 picks 평균 → 모든 snap 에 동일 picks 인계
+    merged = {}
+    n_old = len(old)
+    for tr in old.values():
+        for tk, w in (tr.get('weights', {}) or {}).items():
+            merged[tk] = merged.get(tk, 0.0) + w / n_old
+    picks = sorted(merged.keys()) if merged else []
+    weights = merged
+    # snap_id 0/1/2 staggered last_rebal_date: today, today-42d, today-84d
+    # → next rebal at today+126/+84/+42 (snap0 가 가장 늦게 rebal)
+    snapshots = {}
+    for snap_id in range(N_SNAPS):
+        last_rebal = today - timedelta(days=snap_id * SNAP_STAGGER_DAYS)
+        snapshots[str(snap_id)] = {
+            'picks': list(picks),
+            'weights': dict(weights),
+            'last_rebal_date': last_rebal.isoformat(),
+        }
+    state['snapshots'] = snapshots
+    state['_v22_migrated_from_tranches'] = today.isoformat()
+    log(f'  🔁 V22 migration: monthly tranches → 3 snaps (last_rebal staggered today/-42d/-84d)')
+
+
 def check_anchors(signal: dict, state: dict):
-    """앵커일 체크."""
-    today = datetime.now().day
-    this_month = datetime.now().strftime('%Y-%m')
+    """V22 snap-based 앵커 체크.
+    각 snap 의 (today - last_rebal_date) >= SNAP_PERIOD_DAYS 면 신규 picks 으로 rebal.
+    """
+    _migrate_tranches_to_snaps(state)
+    today = datetime.now().date()
     risk_on = signal.get('stock', {}).get('risk_on', True)
     stock_sig = signal.get('stock', {})
 
@@ -521,24 +563,46 @@ def check_anchors(signal: dict, state: dict):
         picks = stock_sig.get('defense_picks', [])
         weights = stock_sig.get('defense_weights', {})
 
-    for day in ANCHOR_DAYS:
-        day_str = str(day)
-        tr = state.setdefault('tranches', {}).setdefault(day_str, {})
-        if today >= day and tr.get('anchor_month', '') < this_month:
-            tr['picks'] = list(picks)
-            tr['weights'] = dict(weights)
-            tr['anchor_month'] = this_month
+    snapshots = state.setdefault('snapshots', {})
+    for snap_id in range(N_SNAPS):
+        key = str(snap_id)
+        snap = snapshots.setdefault(key, {})
+        last_str = snap.get('last_rebal_date')
+        if not last_str:
+            # 첫 진입: snap_id 만큼 staggered last_rebal_date 부여 (즉시 rebal 트리거)
+            snap['last_rebal_date'] = (today - timedelta(days=SNAP_PERIOD_DAYS + snap_id * SNAP_STAGGER_DAYS)).isoformat()
+            last_str = snap['last_rebal_date']
+        try:
+            last_date = datetime.fromisoformat(last_str).date()
+        except Exception:
+            last_date = today - timedelta(days=SNAP_PERIOD_DAYS + 1)
+        elapsed = (today - last_date).days
+        if elapsed >= SNAP_PERIOD_DAYS:
+            snap['picks'] = list(picks)
+            snap['weights'] = dict(weights)
+            snap['last_rebal_date'] = today.isoformat()
             state['rebalancing_needed'] = True
-            log(f'  📅 앵커 Day {day}: {picks} (month={this_month})')
+            log(f'  📅 V22 snap{snap_id} rebal (elapsed={elapsed}d ≥ {SNAP_PERIOD_DAYS}d): {picks}')
 
 
 def merge_tranches(state: dict) -> Dict[str, float]:
-    """전 트랜치 merge → 최종 target."""
-    tranches = state.get('tranches', {})
-    n = len(tranches) if tranches else 1
+    """V22 snapshots merge → 최종 target (3 snap EW 평균)."""
+    snapshots = state.get('snapshots', {})
+    if not snapshots:
+        # 하위호환: 옛 tranches 가 남아있다면 그걸로 fallback
+        old = state.get('tranches', {})
+        if old:
+            n = len(old)
+            merged = {}
+            for tr in old.values():
+                for tk, w in (tr.get('weights', {}) or {}).items():
+                    merged[tk] = merged.get(tk, 0) + w / n
+            return merged
+        return {}
+    n = len(snapshots) or 1
     merged = {}
-    for tr in tranches.values():
-        for ticker, w in tr.get('weights', {}).items():
+    for snap in snapshots.values():
+        for ticker, w in (snap.get('weights', {}) or {}).items():
             merged[ticker] = merged.get(ticker, 0) + w / n
     return merged
 
@@ -707,9 +771,10 @@ def run_once(dry_run=False):
     cash_buffer = state.get('cash_buffer', CASH_BUFFER_DEFAULT)
     log(f'  cash_buffer: {cash_buffer:.0%}')
 
-    if not state.get('tranches'):
-        log('  kis_trade_state.json 트랜치 없음 — 스킵')
-        return
+    # V22: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
+    # 단, 둘 다 없으면 신호도 없는 상태라 스킵.
+    if not state.get('tranches') and not state.get('snapshots'):
+        log('  kis_trade_state.json 트랜치/스냅 모두 없음 — 첫 실행, anchor 체크가 init')
 
     # 첫 실행 초기화
     if state.get('prev_risk_on') is None:
