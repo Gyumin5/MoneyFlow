@@ -176,19 +176,46 @@ def load_prices(tickers, start='2014-01-01'):
     for t in tickers:
         series = None
 
-        # 1. Stock cache (already adjusted via yfinance auto_adjust=True)
+        # 1. Stock cache (already adjusted via yfinance auto_adjust=True).
+        #    cache vs data 중 더 최신 series 를 선택 (stale cache regression 방지).
         f2 = os.path.join(CACHE_DIR, f'{t}.csv')
+        cache_series = None
+        cache_last = None
         if os.path.exists(f2):
             try:
                 s = pd.read_csv(f2, index_col=0, parse_dates=True).squeeze()
                 if isinstance(s, pd.Series) and len(s) > 100:
-                    age = (pd.Timestamp.now() - pd.Timestamp(os.path.getmtime(f2), unit='s')).days
-                    if age < 7:
-                        series = s
+                    cache_series = s
+                    cache_last = s.index.max()
             except Exception:
                 pass
 
         # 2. Main data dir (OHLCV format — use Adj_Close for adjusted prices)
+        data_series = None
+        data_last = None
+        f1 = os.path.join(DATA_DIR, f'{t}.csv')
+        if os.path.exists(f1):
+            try:
+                df = pd.read_csv(f1, index_col='Date', parse_dates=True)
+                if 'Adj_Close' in df.columns:
+                    s = df['Adj_Close'].dropna()
+                elif 'Close' in df.columns:
+                    s = df['Close'].dropna()
+                else:
+                    s = None
+                if s is not None and len(s) > 100:
+                    data_series = s
+                    data_last = s.index.max()
+            except Exception:
+                pass
+
+        # Pick more up-to-date source; prefer cache on tie.
+        if cache_series is not None and (data_last is None or cache_last >= data_last):
+            series = cache_series
+        elif data_series is not None:
+            series = data_series
+
+        # 2b. Legacy path (kept for fallback through yfinance download below).
         if series is None:
             f1 = os.path.join(DATA_DIR, f'{t}.csv')
             if os.path.exists(f1):
@@ -238,10 +265,10 @@ def precompute(prices):
     for t, s in prices.items():
         df = pd.DataFrame({'price': s})
         df['ret'] = df['price'].pct_change()
-        for w in (100, 150, 200, 250):
+        for w in (50, 100, 150, 200, 250, 300):
             df[f'sma{w}'] = df['price'].rolling(w).mean()
-        # EMA for canary
-        df['ema200'] = df['price'].ewm(span=200, adjust=False).mean()
+        for span in (50, 100, 150, 200, 250, 300):
+            df[f'ema{span}'] = df['price'].ewm(span=span, adjust=False).mean()
         for n in (21, 42, 63, 126, 252):
             df[f'mom{n}'] = df['price'] / df['price'].shift(n) - 1
         # Weighted momentum variants
@@ -271,14 +298,17 @@ def precompute(prices):
 
 # ─── Helpers ─────────────────────────────────────────────────────
 def get_val(ind, ticker, date, col):
-    """Safe indicator lookup."""
+    """Safe indicator lookup — last row where index <= date.
+    O(log n) searchsorted + O(1) iat (이전 O(n) mask → 100x 빠름)."""
     df = ind.get(ticker)
     if df is None:
         return np.nan
-    mask = df.index <= date
-    if mask.sum() == 0:
+    if col not in df.columns:
         return np.nan
-    return df.loc[mask, col].iloc[-1]
+    idx = df.index.searchsorted(date, side='right') - 1
+    if idx < 0:
+        return np.nan
+    return df[col].iat[idx]
 
 def get_price(ind, ticker, date):
     return get_val(ind, ticker, date, 'price')
@@ -322,7 +352,7 @@ def resolve_canary(params, ind, date, prev_on):
             hyg_p = get_val(ind, 'HYG', date, 'price')
             ief_p = get_val(ind, 'IEF', date, 'price')
             lqd_p = get_val(ind, 'LQD', date, 'price')
-            lqd_sma = get_val(ind, 'LQD', date, 'sma100')
+            lqd_sma = get_val(ind, 'LQD', date, f'sma{n}')
 
             # Check HYG/IEF ratio
             if not (np.isnan(hyg_p) or np.isnan(ief_p) or ief_p <= 0):
@@ -456,16 +486,30 @@ def select_offensive(params, ind, date, candidates):
         vol = get_val(ind, t, date, 'vol90')
         if np.isnan(wmom) or np.isnan(sh):
             continue
-        scores.append({'t': t, 'wmom': wmom, 'sh': sh,
-                       'sort': sort if not np.isnan(sort) else sh,
-                       'vol': vol if not np.isnan(vol) else 0.01})
+        row = {'t': t, 'wmom': wmom, 'sh': sh,
+               'sort': sort if not np.isnan(sort) else sh,
+               'vol': vol if not np.isnan(vol) else 0.01}
+        for per in (21, 42, 63, 126, 252):
+            v = get_val(ind, t, date, f'mom{per}')
+            row[f'mom{per}'] = v if not np.isnan(v) else -1.0
+        scores.append(row)
     if not scores:
         return {}
 
     df = pd.DataFrame(scores).set_index('t')
 
     sel = params.select
-    if sel == 'mom3_sh3':
+    # rmom{PERIOD}_{N}: pick top N by raw momentum over PERIOD days
+    # e.g. rmom126_3 → top 3 by raw mom126. Distinct from 'momN' (which is top-N by weighted wmom).
+    if sel.startswith('rmom') and '_' in sel[4:]:
+        try:
+            per_str, n_str = sel[4:].split('_', 1)
+            per_i = int(per_str); n_i = int(n_str)
+            col = f'mom{per_i}'
+            picks = df.nlargest(n_i, col).index.tolist() if col in df.columns else []
+        except (ValueError, KeyError):
+            picks = []
+    elif sel == 'mom3_sh3':
         top_m = df.nlargest(params.n_mom, 'wmom').index.tolist()
         top_s = df.nlargest(params.n_sh, 'sh').index.tolist()
         picks = list(dict.fromkeys(top_m + top_s))  # preserve order, dedupe

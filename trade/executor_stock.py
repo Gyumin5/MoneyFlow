@@ -7,11 +7,10 @@
   - 전략 신호 계산 안 함
   - signal_state 수정 안 함
 
-이벤트 우선순위:
-  1. 가드: VT Crash (-3%) → 전량 매도, 3일+SMA10 대기
-  2. 카나리 플립 → 전 트랜치 즉시 전환
-  3. 앵커 체크 (해당 트랜치에 offense/defense picks 반영)
-  4. Delta 매매
+이벤트 우선순위 (V22, 가드 없음):
+  1. 카나리 플립 → 전 트랜치 즉시 전환
+  2. 앵커 체크 (해당 snap 에 offense/defense picks 반영)
+  3. Delta 매매
 
 Usage:
   python3 executor_stock.py               # 실행
@@ -436,51 +435,14 @@ def check_signal_freshness(signal: dict) -> bool:
 
 
 def check_crash(signal: dict, api: KISAPI, state: dict) -> bool:
-    """VT Crash 체크 + 쿨다운 + SMA10 복귀 관리."""
-    guard = state.setdefault('guard_state', {})
-
-    # 이미 crash 중인 경우 → 복귀 조건 체크
+    """V22: 가드 전면 제거 (BT spec과 정합) — 항상 False."""
+    guard = state.get('guard_state') or {}
     if guard.get('crash_active'):
-        cooldown_until = guard.get('crash_cooldown_until', '')
-        today = datetime.now().strftime('%Y-%m-%d')
-        if today < cooldown_until:
-            log(f'  Crash 쿨다운 중 ({cooldown_until}까지)')
-            return True  # 아직 대기
-
-        # 쿨다운 끝남 → VT > SMA10 체크
-        vt_sma10 = signal.get('stock', {}).get('vt_sma10', 0)
-        vt_current = api.get_vt_price()
-        if vt_current > 0 and vt_sma10 > 0 and vt_current > vt_sma10:
-            log(f'  ✅ Crash 복귀: VT ${vt_current:.2f} > SMA10 ${vt_sma10:.2f}')
-            guard['crash_active'] = False
-            guard['crash_date'] = None
-            guard['crash_cooldown_until'] = None
-            state['rebalancing_needed'] = True
-            send_telegram(f'Crash 복귀: VT ${vt_current:.2f} > SMA10 ${vt_sma10:.2f}')
-            return False
-        else:
-            # SMA10 아래 → 대기 연장
-            guard['crash_cooldown_until'] = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
-            log(f'  Crash 대기 연장: VT ${vt_current:.2f} ≤ SMA10 ${vt_sma10:.2f}')
-            return True
-
-    # crash 아닌 경우 → 발동 체크
-    vt_prev = signal.get('stock', {}).get('vt_prev_close', 0)
-    if vt_prev <= 0:
-        return False
-    vt_current = api.get_vt_price()
-    if vt_current <= 0:
-        return False
-
-    if vt_current <= vt_prev * CRASH_THRESHOLD:
-        log(f'  🚨 VT CRASH: ${vt_current:.2f} ≤ ${vt_prev:.2f} × 0.97')
-        guard['crash_active'] = True
-        guard['crash_date'] = datetime.now().strftime('%Y-%m-%d')
-        guard['crash_cooldown_until'] = (datetime.now() + timedelta(days=CRASH_COOL_DAYS)).strftime('%Y-%m-%d')
-        state['rebalancing_needed'] = True
-        send_telegram(f'🚨 VT CRASH: ${vt_current:.2f} (전일 ${vt_prev:.2f})')
-        return True
-
+        guard['crash_active'] = False
+        guard['crash_date'] = None
+        guard['crash_cooldown_until'] = None
+        state['guard_state'] = guard
+        log('  V22: 잔존 crash_active 정리 (가드 spec 제거)')
     return False
 
 
@@ -795,18 +757,8 @@ def run_once(dry_run=False):
     # 1. 미체결 취소
     api.cancel_all_pending()
 
-    # 2. Crash 체크
-    crash = check_crash(signal, api, state)
-    if crash:
-        # crash_active → target = 전량 현금
-        if state.get('rebalancing_needed'):
-            target = {'Cash': 1.0}
-            log('  Crash: target = 100% 현금')
-            execute_delta(target, api, state, cash_buffer=cash_buffer)
-        if not dry_run:
-            save_json(TRADE_STATE_FILE, state)
-        log('주식 executor 완료 (Crash)')
-        return
+    # 2. V22: 가드 없음. 잔존 crash_active 만 정리.
+    check_crash(signal, api, state)
 
     if not is_fresh:
         if not dry_run:
@@ -822,10 +774,7 @@ def run_once(dry_run=False):
 
     # 5. Merge + Delta 매매
     if state.get('rebalancing_needed', False):
-        if state.get('guard_state', {}).get('crash_active'):
-            target = {'Cash': 1.0}
-        else:
-            target = merge_tranches(state)
+        target = merge_tranches(state)
         log(f'  Target: {target}')
         mode = 'DRY-RUN' if dry_run else 'LIVE'
         summary_lines = [f'📊 리밸런싱 시작 ({mode})']

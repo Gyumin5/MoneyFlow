@@ -1,0 +1,87 @@
+[20:01:48] waiting for v17_snap_v2_out/raw_combined.csv ...
+[21:57:48] v17 raw_combined.csv ready (13585 rows)
+[21:57:48] STEP stk_top500 start: python3 redesign_extract_top500.py --top 500
+[21:57:49] STEP stk_top500 ok
+[21:57:49] STEP stk_phase start: python3 redesign_rerank_phase.py --asset stock --top 500 --workers 24
+[21:58:42] STEP stk_phase ok
+[21:58:42] STEP stk_filter start: python3 redesign_filter_phase.py --asset stock
+[21:58:42] STEP stk_filter ok
+[21:58:42] STEP stk_nudge start: python3 redesign_snap_nudge.py --asset stock --workers 24
+[21:58:48] STEP stk_nudge ok
+[21:58:48] STEP stk_yearly start: python3 redesign_yearly.py --asset stock --workers 24
+[21:58:50] STEP stk_yearly ok
+[21:58:50] STEP stk_rank1 start: python3 redesign_analyze.py --asset stock
+[21:58:50] STEP stk_rank1 ok
+[21:58:50] STEP stk_plateau start: python3 redesign_plateau.py --asset stock --top 25 --workers 24
+[21:58:59] STEP stk_plateau ok
+[21:58:59] STEP stk_bootstrap start: python3 redesign_bootstrap.py --asset stock
+[21:58:59] STEP stk_bootstrap ok
+[21:58:59] STEP stk_rank2 start: python3 redesign_analyze.py --asset stock
+[21:58:59] STEP stk_rank2 ok
+[21:58:59] STEP stk_ens start: python3 redesign_ensemble_bt.py --asset stock --workers 24 --flush 50
+[21:58:59] STEP stk_ens FAILED (exit 1)
+[21:58:59] STEP stk_str start: python3 redesign_stress.py --asset stock --top 25 --workers 24
+[21:59:07] STEP stk_str ok
+[21:59:07] STEP stk_rank3 start: python3 redesign_analyze.py --asset stock
+[21:59:07] STEP stk_rank3 ok
+[21:59:07] STEP stk_drop1 start: python3 redesign_stock_drop1.py --top 3
+[21:59:15] STEP stk_drop1 ok
+[21:59:15] STEP stk_report start: python3 redesign_report.py --asset stock
+[21:59:15] STEP stk_report ok
+[21:59:15] STOCK PIPELINE DONE
+[21:59:15] STEP coin_rebuild start: python3 redesign_rebuild_univ3.py --workers 24
+[12:47:55] STEP coin_rebuild ok
+[12:47:55] STEP fut_top500 start: python3 redesign_extract_top500.py --top 500
+[12:47:56] STEP fut_top500 ok
+[12:47:56] STEP fut_phase start: python3 redesign_rerank_phase.py --asset fut --top 500 --workers 24
+[12:54:08] STEP fut_phase ok
+[12:54:08] STEP fut_filter start: python3 redesign_filter_phase.py --asset fut
+[12:54:08] STEP fut_filter ok
+[12:54:08] STEP fut_nudge start: python3 redesign_snap_nudge.py --asset fut --workers 24
+[12:55:22] STEP fut_nudge ok
+[12:55:22] STEP fut_yearly start: python3 redesign_yearly.py --asset fut --workers 24
+[12:55:40] STEP fut_yearly ok
+[12:55:40] STEP fut_rank1 start: python3 redesign_analyze.py --asset fut
+[12:55:41] STEP fut_rank1 ok
+[12:55:41] STEP fut_plateau start: python3 redesign_plateau.py --asset fut --top 25 --workers 24
+[12:56:40] STEP fut_plateau ok
+[12:56:40] STEP fut_bootstrap start: python3 redesign_bootstrap.py --asset fut
+[12:56:40] STEP fut_bootstrap ok
+[12:56:40] STEP fut_rank2 start: python3 redesign_analyze.py --asset fut
+[12:56:40] STEP fut_rank2 ok
+[12:56:40] STEP fut_ens start: python3 redesign_ensemble_bt.py --asset fut --workers 24 --flush 50
+[12:57:34] STEP fut_ens ok
+[12:57:34] STEP fut_str start: python3 redesign_stress.py --asset fut --top 25 --workers 24
+[12:58:02] STEP fut_str ok
+[12:58:02] STEP fut_rank3 start: python3 redesign_analyze.py --asset fut
+[12:58:02] STEP fut_rank3 ok
+[12:58:02] STEP fut_report start: python3 redesign_report.py --asset fut
+[12:58:02] STEP fut_report ok
+[12:58:02] STEP spot_top500 start: python3 redesign_extract_top500.py --top 500
+[12:58:02] STEP spot_top500 ok
+[12:58:02] STEP spot_phase start: python3 redesign_rerank_phase.py --asset spot --top 500 --workers 24
+[13:05:07] STEP spot_phase ok
+[13:05:07] STEP spot_filter start: python3 redesign_filter_phase.py --asset spot
+[13:05:08] STEP spot_filter ok
+[13:05:08] STEP spot_nudge start: python3 redesign_snap_nudge.py --asset spot --workers 24
+[13:06:34] STEP spot_nudge ok
+[13:06:34] STEP spot_yearly start: python3 redesign_yearly.py --asset spot --workers 24
+[13:06:55] STEP spot_yearly ok
+[13:06:55] STEP spot_rank1 start: python3 redesign_analyze.py --asset spot
+[13:06:55] STEP spot_rank1 ok
+[13:06:55] STEP spot_plateau start: python3 redesign_plateau.py --asset spot --top 25 --workers 24
+[13:07:48] STEP spot_plateau ok
+[13:07:48] STEP spot_bootstrap start: python3 redesign_bootstrap.py --asset spot
+[13:07:48] STEP spot_bootstrap ok
+[13:07:48] STEP spot_rank2 start: python3 redesign_analyze.py --asset spot
+[13:07:49] STEP spot_rank2 ok
+[13:07:49] STEP spot_ens start: python3 redesign_ensemble_bt.py --asset spot --workers 24 --flush 50
+[13:08:41] STEP spot_ens ok
+[13:08:41] STEP spot_str start: python3 redesign_stress.py --asset spot --top 25 --workers 24
+[13:09:05] STEP spot_str ok
+[13:09:05] STEP spot_rank3 start: python3 redesign_analyze.py --asset spot
+[13:09:06] STEP spot_rank3 ok
+[13:09:06] STEP spot_report start: python3 redesign_report.py --asset spot
+[13:09:06] STEP spot_report ok
+[13:09:06] COIN PIPELINE DONE
+[13:09:06] ALL DONE

@@ -225,7 +225,7 @@ VERSION_HISTORY = [
 • <b>카나리:</b> EEM &gt; SMA300 (2.0% hysteresis)
 • <b>선정:</b> Z-score Top 3 (Mom + Sharpe126 합)
 • <b>스냅:</b> 126일 주기 × 3 snap 스태거 (42일 오프셋), EW 평균
-• <b>크래시:</b> VT -3% daily → 3일 현금
+• <b>가드:</b> 없음 (앙상블 분산 단독 방어, V17 VT crash 제거)
 
 <b>▶ 자산배분:</b> 60/40/0 시작 (주식/현물/선물), sleeve r30 밴드, 리밸런싱은 수동"""),
     ("V21", "2026-04",
@@ -416,9 +416,8 @@ DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 300   # V22 (vs V17: 200)
 STOCK_CANARY_HYST = 0.020      # V22 2% (vs V17: 0.5%)
+# V22: 가드 전면 제거. STOCK_CRASH_TICKER 만 universe 가격 다운로드용으로 보존.
 STOCK_CRASH_TICKER = 'VT'
-STOCK_CRASH_THRESHOLD = -0.03  # VT daily -3%
-STOCK_CRASH_COOL_DAYS = 3
 
 # Coin Configuration
 COIN_CANARY_MA_PERIOD = 50
@@ -769,85 +768,10 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     return worst <= threshold, worst
 
 def run_stock_strategy_v15(log, all_prices, target_date):
-    """V22 Stock Strategy: SPY/VEA/EEM/EWJ/INDA/GLD/PDBC + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top3 + VT Crash."""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V22: 7자산 + EEM SMA300 hyst2% + Zscore3 Sh126d + VT Crash)</h2>")
-
-    # --- VT Crash Breaker (V17d: 동적 복귀) ---
-    # 최근 60일을 시뮬레이션하여 오늘의 Crash 상태를 stateless로 도출
-    vt = all_prices.get(STOCK_CRASH_TICKER)
-    stock_crash = False
-    crash_days_remaining = 0
-    crash_trigger_day_idx = -1
-    recovered_today = False
-
-    if vt is not None and len(vt) >= 10:
-        vt_rets = vt.pct_change()
-        vt_sma10 = vt.rolling(10).mean()
-
-        sim_len = min(60, len(vt))
-        for i in range(len(vt) - sim_len, len(vt)):
-            ret = vt_rets.iloc[i]
-            cur_vt = vt.iloc[i]
-            cur_sma = vt_sma10.iloc[i]
-            is_today = (i == len(vt) - 1)
-
-            # 새 Crash 발생 → 쿨다운 리셋
-            if not np.isnan(ret) and ret <= STOCK_CRASH_THRESHOLD:
-                stock_crash = True
-                crash_days_remaining = STOCK_CRASH_COOL_DAYS
-                crash_trigger_day_idx = i
-                if is_today:
-                    recovered_today = False
-
-            # Crash 상태 → 쿨다운 처리 + V17d 동적 연장
-            elif stock_crash:
-                if crash_days_remaining > 0:
-                    crash_days_remaining -= 1
-                if crash_days_remaining == 0:
-                    if not np.isnan(cur_sma) and cur_vt > cur_sma:
-                        stock_crash = False
-                        if is_today:
-                            recovered_today = True
-                    else:
-                        crash_days_remaining = 1  # VT ≤ SMA10 → 1일 연장
-
-        # 로그
-        vt_ret_today = vt_rets.iloc[-1] if not np.isnan(vt_rets.iloc[-1]) else 0
-        vt_cur_today = vt.iloc[-1]
-        sma_cur_today = vt_sma10.iloc[-1] if not np.isnan(vt_sma10.iloc[-1]) else 0
-
-        log.append(f"<p><b>[Crash Check]</b> {STOCK_CRASH_TICKER}: 일간 수익률 {vt_ret_today:+.2%} (임계 {STOCK_CRASH_THRESHOLD:.0%})</p>")
-
-        if stock_crash:
-            days_ago = (len(vt) - 1) - crash_trigger_day_idx if crash_trigger_day_idx >= 0 else 0
-            if days_ago == 0:
-                log.append(f"<div style='background:#fce8e6;border:2px solid #d93025;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#d93025;margin:0'>🚨 VT CRASH 발동! ({STOCK_CRASH_TICKER} {vt_ret_today:+.2%})</h3>"
-                           f"<p style='font-size:1.2em;margin:8px 0'><b>즉시 행동:</b> 주식 전량 매도</p>"
-                           f"<p><b>최소 {STOCK_CRASH_COOL_DAYS}영업일 + VT &gt; SMA10 회복 시 재진입</b></p></div>")
-            elif days_ago < STOCK_CRASH_COOL_DAYS:
-                log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#e37400;margin:0'>⏸️ Crash 쿨다운 중</h3>"
-                           f"<p>{days_ago}일 전 Crash 발동. 잔여 {crash_days_remaining}영업일 대기</p></div>")
-            else:
-                log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#e37400;margin:0'>⏸️ Crash 동적 대기 (V17d)</h3>"
-                           f"<p>VT ${vt_cur_today:.2f} &le; SMA10 ${sma_cur_today:.2f} → 현금 유지</p>"
-                           f"<p style='font-size:1.2em'><b>VT &gt; SMA10 회복 시 재진입</b></p></div>")
-        elif recovered_today:
-            log.append(f"<p style='color:#0d904f'><b>✅ Crash 복귀 (V17d):</b> VT ${vt_cur_today:.2f} &gt; SMA10 ${sma_cur_today:.2f}</p>")
-
-    # VT 기준가 계산 (executor가 Crash 판단에 사용)
-    _vt_prev_close = float(vt.iloc[-1]) if vt is not None and len(vt) >= 1 else 0
-    _vt_sma10 = float(vt.rolling(10).mean().iloc[-1]) if vt is not None and len(vt) >= 10 else 0
-
-    # NOTE: Crash 판단은 executor가 함. recommend는 기준가만 제공.
-    # stock_crash 변수는 HTML 리포트 표시용으로만 유지.
-    if stock_crash:
-        return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)", {'signal_dist': {}, 'next_candidates': [], '_vt_prev_close': _vt_prev_close, '_vt_sma10': _vt_sma10}
-
+    """V22 Stock Strategy: R7B universe (SPY/QQQ/VEA/EEM/EWJ/GLD/PDBC) + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top2. 가드 없음 (앙상블 분산 단독 방어)."""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V22: R7B + EEM SMA300 hyst2% + Zscore3 Sh126d, 가드 없음)</h2>")
     eem = all_prices.get('EEM')
-    meta = {'signal_dist': {}, 'next_candidates': [], '_vt_prev_close': _vt_prev_close, '_vt_sma10': _vt_sma10}
+    meta = {'signal_dist': {}, 'next_candidates': []}
     # 이전 추천 종목 (HTML 리포트 비교 표시용)
     stock_holdings: list = []
     signal_flipped = False
@@ -2156,9 +2080,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         container.innerHTML += card;
                     }}
 
-                    // Chart
-                    const labels = rows.map(r => (r.snapshot_date||r.month));
-                    const totals = rows.map(r => r.total_krw / 1e8);
+                    // Chart: 월별 1점, 그 달 마지막(가장 최근) snapshot 사용
+                    const monthsAsc = [...months].sort();
+                    const labels = monthsAsc.map(ym => ym);
+                    const totals = monthsAsc.map(ym => monthRows[ym][0].total_krw / 1e8);
                     if (chartTotal) chartTotal.destroy();
                     chartTotal = new Chart(document.getElementById('chartTotal'), {{
                         type: 'line',
@@ -2398,10 +2323,6 @@ if __name__ == "__main__":
                 offense_picks = []
                 offense_weights = {'Cash': 1.0}
 
-        # VT 기준가
-        vt_prev = s_meta.get('_vt_prev_close', 0) if isinstance(s_meta, dict) else 0
-        vt_sma10_val = s_meta.get('_vt_sma10', 0) if isinstance(s_meta, dict) else 0
-
         # 코인: guard_refs 계산 (KRW 기준 — executor가 KRW 현재가와 비교)
         # 보유 중인 코인 + 추천 코인 모두 포함 (보유중이지만 추천에서 빠진 종목도 가드 필요)
         coin_guard_refs = {}
@@ -2433,8 +2354,6 @@ if __name__ == "__main__":
                 'defense_picks': defense_picks,
                 'defense_weights': defense_weights,
                 'risk_on': is_stock_risk_on,
-                'vt_prev_close': vt_prev,
-                'vt_sma10': vt_sma10_val,
             },
             'coin': {
                 'picks': sorted([t.replace('-USD', '') for t in c_port.keys() if t != 'Cash']),
