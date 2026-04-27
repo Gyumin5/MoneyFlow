@@ -1,14 +1,23 @@
 """
-Cap Defend V21 Recommendation Script
+Cap Defend V22 Recommendation Script
 ===================================
-Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
-Coin V21: D_SMA50 + D_SMA150 + D_SMA100 1/3씩 EW 앙상블 (live engine: trade/coin_live_engine.py)
-  - D_SMA50: 1D봉, SMA50, Mom20/90, snap 90봉, gap stop -15%, 제외 30일
-  - D_SMA150: 1D봉, SMA150, Mom20/60, snap 90봉, gap stop -15%, 제외 30일
-  - D_SMA100: 1D봉, SMA100, Mom20/120, snap 90봉, gap stop -15%, 제외 30일
-  - 리포트는 trade_state.json(V21 live state) 스냅샷을 읽어 표시합니다.
-Futures: d005 4전략 앙상블 EW + 5x 동적 레버리지
-Asset Allocation: 주식60 / 업비트35 / 바이낸스5, 8pp 밴드
+V22 (2026-04-27 확정): 단일 sleeve combo (3자산 모두 단순 ensemble).
+
+Stock V22 (단독 cfg, csma300 zscore3 SN126 — recommend_personal 표시용 V17 logic 유지):
+  - V22 stock 신규 cfg 채택 위해서는 별도 refactor 필요 (Phase 2).
+  - 현재 recommend_personal.py 의 stock 로직은 V17 그대로 유지.
+
+Coin V22: 1D + 4h 2멤버 50/50 EW 앙상블 (live engine: trade/coin_live_engine.py)
+  - D_SMA42:  1D봉, SMA42,  Mom20/127, snap 60봉,  Top3 (Cal 0.92~2.41)
+  - H4_SMA240: 4h봉, SMA240, Mom12/180, snap 360봉(=60일), Top3
+  - C 슬리브 전면 제거 (Upbit 등가 검증 탈락)
+
+Futures V22: 1D + 4h 2멤버 50/50 EW + L3 고정 (auto_trade_binance.py)
+  - D_SMA42:    1D봉, SMA42,  Mom18/127, snap 90봉
+  - 4h_SMA240:  4h봉, SMA240, Mom12/180, snap 540봉(=90일)
+  - 가드 없음, 스탑 없음
+
+Asset Allocation: 60/40/0 (사용자 수동 조정), rel 30% drift band
 """
 
 import os
@@ -84,17 +93,15 @@ except ImportError:
     CONFIG_HTML_NAME = "portfolio_result_gmoh.html"
 PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME") or CONFIG_HTML_NAME
 PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORTFOLIO_PUBLIC_URL
-STOCK_ANCHOR_DAYS = (1, 8, 15, 22)
+STOCK_ANCHOR_DAYS = (1, 43, 85)  # V22: snap-based 3 staggered (offset days, period 126)
 COIN_ANCHOR_DAYS = (1, 11, 21)
 FUTURES_TRANCHE_META = {
-    "4h_S240_SN120": {"interval_hours": 4, "snap_interval_bars": 120, "n_snapshots": 3},
-    "4h_S240_SN30":  {"interval_hours": 4, "snap_interval_bars": 30,  "n_snapshots": 3},
-    "4h_S120_SN120": {"interval_hours": 4, "snap_interval_bars": 120, "n_snapshots": 3},
+    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 90,  "n_snapshots": 3},
+    "4h_SMA240": {"interval_hours": 4,  "snap_interval_bars": 540, "n_snapshots": 3},
 }
 COIN_MEMBER_META = {
-    "D_SMA50":  {"interval_hours": 24, "snap_interval_bars": 90, "n_snapshots": 3},
-    "D_SMA150": {"interval_hours": 24, "snap_interval_bars": 90, "n_snapshots": 3},
-    "D_SMA100": {"interval_hours": 24, "snap_interval_bars": 90, "n_snapshots": 3},
+    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 60,  "n_snapshots": 3},
+    "H4_SMA240": {"interval_hours": 4,  "snap_interval_bars": 360, "n_snapshots": 3},
 }
 
 def _save_signal_state(data):
@@ -197,8 +204,30 @@ def save_daily_live_snapshot():
         "cash_krw": cash_krw,
         "total_krw": total_krw,
     }
-STRATEGY_VERSION = "V21"
+STRATEGY_VERSION = "V22"
 VERSION_HISTORY = [
+    ("V22", "2026-04-27",
+     "전 자산 V22: 코인/선물 1D+4h 2멤버 EW, 주식 snap-based stagger (126d × 3 snap). 가드 없음, 자산배분 60/40/0 (수동 조정).",
+     """<b>▶ 코인 현물 (V22 — 1D+4h 2멤버 EW)</b>
+• <b>멤버1 D_SMA42:</b> 일봉 · SMA42 · Mom20/127 · snap 60봉×3 · canary hyst 1.5%
+• <b>멤버2 H4_SMA240:</b> 4시간봉 · SMA240 · Mom12/180 · snap 360봉×3 · canary hyst 1.5%
+• <b>앙상블:</b> 50:50 EW
+• <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND daily Vol≤5%
+• <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py
+
+<b>▶ 선물 (V22 — 1D+4h 2멤버 EW)</b>
+• <b>D_SMA42:</b> 일봉 · SMA42 · Mom18/127 · snap 90봉
+• <b>4h_SMA240:</b> 4시간봉 · SMA240 · Mom12/180 · snap 540봉
+• 50:50 EW · 고정 3x · 가드 없음
+
+<b>▶ 주식 (V22 — snap-based stagger)</b>
+• <b>유니버스:</b> SPY, QQQ, VEA, EEM, EWJ, GLD, PDBC (7종, R7B)
+• <b>카나리:</b> EEM &gt; SMA300 (2.0% hysteresis)
+• <b>선정:</b> Z-score Top 3 (Mom + Sharpe126 합)
+• <b>스냅:</b> 126일 주기 × 3 snap 스태거 (42일 오프셋), EW 평균
+• <b>크래시:</b> VT -3% daily → 3일 현금
+
+<b>▶ 자산배분:</b> 60/40/0 시작 (주식/현물/선물), sleeve r30 밴드, 리밸런싱은 수동"""),
     ("V21", "2026-04",
      "코인 현물: D_SMA50 + D_SMA150 + D_SMA100 1/3 EW (D봉 3멤버 앙상블). 선물: L3 3멤버 EW. 가드 없음.",
      """<b>▶ 코인 현물 (V21 — k3_4b270476 D봉 3멤버 앙상블)</b>
@@ -360,15 +389,15 @@ VERSION_HISTORY = [
 \u2022 \uc6d4\uac04 \uc2a4\ucf00\uc904 \uae30\ubc18"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.40, 0.00  # V21: 60/40/0 (선물 0 시작, 수동 이동)
-SLEEVE_RATIO = 0.30  # V21 sleeve r30: 자산별 밴드 = weight * 30%
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.40, 0.00  # V22: 60/40/0 (사용자 수동 조정)
+SLEEVE_RATIO = 0.30  # V22 sleeve r30: 자산별 밴드 = weight * 30%
 SLEEVE_MIN_BAND = 0.02  # 선물 0% 같은 경우 최소 밴드 2%p (sleeve 0 방지)
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
 
 def get_cash_buffer():
-    """현금 버퍼 비율. V21 trade_state에서 읽기 (HTML 표시용)."""
+    """현금 버퍼 비율. V22 trade_state에서 읽기 (HTML 표시용)."""
     for _p in (
         os.path.join(APP_HOME, 'trade_state.json'),
         'trade_state.json',
@@ -381,12 +410,12 @@ def get_cash_buffer():
     return CASH_BUFFER_PERCENT_DEFAULT
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock Configuration (V15: R7 Universe + EEM-only Canary)
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ']
+# Stock Configuration (V22 R7B: B안 universe — 11yr rs=58, 5yr Cal 0.84)
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'EWJ', 'GLD', 'PDBC']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
-STOCK_CANARY_MA_PERIOD = 200
-STOCK_CANARY_HYST = 0.005  # 0.5% hysteresis
+STOCK_CANARY_MA_PERIOD = 300   # V22 (vs V17: 200)
+STOCK_CANARY_HYST = 0.020      # V22 2% (vs V17: 0.5%)
 STOCK_CRASH_TICKER = 'VT'
 STOCK_CRASH_THRESHOLD = -0.03  # VT daily -3%
 STOCK_CRASH_COOL_DAYS = 3
@@ -407,7 +436,7 @@ CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V21: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V22: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -740,8 +769,8 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     return worst <= threshold, worst
 
 def run_stock_strategy_v15(log, all_prices, target_date):
-    """V17 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V17: R7+EEM+Zscore3+Sh252+VT Crash)</h2>")
+    """V22 Stock Strategy: SPY/VEA/EEM/EWJ/INDA/GLD/PDBC + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top3 + VT Crash."""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V22: 7자산 + EEM SMA300 hyst2% + Zscore3 Sh126d + VT Crash)</h2>")
 
     # --- VT Crash Breaker (V17d: 동적 복귀) ---
     # 최근 60일을 시뮬레이션하여 오늘의 Crash 상태를 stateless로 도출
@@ -864,23 +893,23 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드 (Z-score Top 3 + Sharpe252d + EW)</h4>")
+        log.append("<h4>🚀 공격 모드 (V22: Z-score Top 3 + Sharpe126d + EW)</h4>")
         scores = []
         for t in OFFENSIVE_STOCK_UNIVERSE:
             p = all_prices.get(t)
             if p is None or len(p) < 253: continue
-            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe252': calc_sharpe(p, 252)})
+            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe126': calc_sharpe(p, 126)})
 
         if not scores:
             log.append("<p class='warning'>공격 ETF 데이터 부족 → 수비 전환</p>")
         else:
             df = pd.DataFrame(scores).set_index('Ticker')
 
-            # Z-score composite: zscore(12M_mom) + zscore(Sharpe252d)
+            # V22 Z-score composite: zscore(12M_mom) + zscore(Sharpe126d)
             m_std = df['Mom12M'].std()
-            s_std = df['Sharpe252'].std()
+            s_std = df['Sharpe126'].std()
             df['Z_Mom'] = (df['Mom12M'] - df['Mom12M'].mean()) / m_std if m_std > 0 else 0
-            df['Z_Sh'] = (df['Sharpe252'] - df['Sharpe252'].mean()) / s_std if s_std > 0 else 0
+            df['Z_Sh'] = (df['Sharpe126'] - df['Sharpe126'].mean()) / s_std if s_std > 0 else 0
             df['ZScore'] = df['Z_Mom'] + df['Z_Sh']
 
             try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
@@ -931,7 +960,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})", meta
 
 def _load_v20_state_personal():
-    """V21 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
+    """V22 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
     candidates = [
         os.path.join(os.getcwd(), 'trade_state.json'),
         '/home/ubuntu/trade_state.json',
@@ -946,18 +975,18 @@ def _load_v20_state_personal():
     return None, None
 
 def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=True):
-    """V21 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
+    """V22 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
 
     시그니처는 V19 버전과 호환 (caller가 5-tuple 언팩).
     coin_universe / all_prices / is_today는 현재 미사용(engine이 자체 데이터 사용).
     """
     date_str = target_date.date() if hasattr(target_date, 'date') else target_date
-    log.append(f"<h3>🪙 코인 포트폴리오 (V21: D봉 3멤버 EW 앙상블) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V22: 1D+4h 2멤버 EW 앙상블) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     state, path = _load_v20_state_personal()
     if state is None:
-        log.append("<p class='error'>V21 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
+        log.append("<p class='error'>V22 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
         return {CASH_ASSET: 1.0}, "상태 로드 실패", meta, log, []
 
     log.append(f"<p class='info'>상태: {path} · 마지막 실행 {state.get('last_run_ts', 'N/A')}</p>")
@@ -970,7 +999,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
     # 멤버별 상태 테이블
     mrows = []
     healthy_union = []
-    for m_name in ('D_SMA50', 'D_SMA150', 'D_SMA100'):
+    for m_name in ('D_SMA42', 'H4_SMA240'):
         m_st = members.get(m_name, {})
         m_tgt = {k: v for k, v in (last_member_targets.get(m_name, {}) or {}).items() if k != '_ts'}
         m_ex = list((excluded.get(m_name, {}) or {}).keys())
@@ -991,7 +1020,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
     except Exception:
         pass
 
-    # 결합 타겟 (1/3씩 EW, V21)
+    # 결합 타겟 (1/2씩 EW, V22)
     weights = {k: v for k, v in combined_snap.items() if k != '_ts'}
     if not weights:
         weights = {CASH_ASSET: 1.0}
@@ -1002,19 +1031,17 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
 
     w_rows = [{'자산': t, '비중': f"{w*100:.2f}%"} for t, w in sorted(weights.items(), key=lambda x: -x[1])]
     try:
-        log.append("<p><b>[결합 타겟]</b> D봉 3멤버 1/3씩 EW 합산 (V21, executor가 이 비중으로 실행)</p>")
+        log.append("<p><b>[결합 타겟]</b> 1D + 4h 2멤버 50/50 EW 합산 (V22, executor가 이 비중으로 실행)</p>")
         log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except Exception:
         pass
 
     # 카나리 상태 요약 (signal_dist meta 채우기 — 기존 UI 호환)
-    d50_canary = members.get('D_SMA50', {}).get('canary_on')
-    d150_canary = members.get('D_SMA150', {}).get('canary_on')
-    d100_canary = members.get('D_SMA100', {}).get('canary_on')
+    d42_canary = members.get('D_SMA42', {}).get('canary_on')
+    h4_canary = members.get('H4_SMA240', {}).get('canary_on')
     meta['signal_dist'] = {
-        'D_SMA50_canary': d50_canary,
-        'D_SMA150_canary': d150_canary,
-        'D_SMA100_canary': d100_canary,
+        'D_SMA42_canary': d42_canary,
+        'H4_SMA240_canary': h4_canary,
     }
 
     invested = sum(v for k, v in weights.items() if k != CASH_ASSET)
@@ -1105,7 +1132,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const TARGET_STOCK_RATIO = 0.60;
             const TARGET_COIN_RATIO = 0.40;
             const TARGET_FUTURES_RATIO = 0.00;
-            const SLEEVE_RATIO = 0.30;       // V21 sleeve r30: 자산 밴드 = weight × 30%
+            const SLEEVE_RATIO = 0.30;       // V22 sleeve r30: 자산 밴드 = weight × 30%
             const SLEEVE_MIN_BAND = 0.02;    // 선물 0% 같은 경우 최소 밴드 2%p
             const BAND_STOCK = Math.max(TARGET_STOCK_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
             const BAND_COIN = Math.max(TARGET_COIN_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
@@ -1467,6 +1494,13 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 merged[ticker] = merged.get(ticker, 0.0) + float(weight) / n
         return {k: v for k, v in merged.items() if v > 0}
 
+    def _merge_stock_state(state: dict) -> dict:
+        """V22: snapshots 우선, 없으면 V21 tranches 폴백."""
+        snapshots = state.get('snapshots', {}) or {}
+        if snapshots:
+            return _merge_tranches(snapshots)
+        return _merge_tranches(state.get('tranches', {}) or {})
+
     def _next_anchor_str(anchor_days) -> str:
         now = datetime.now()
         year, month = now.year, now.month
@@ -1552,7 +1586,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             os.path.join(_base_dir, SIGNAL_STATE_FILE),
         ])
         _stk = _stock_signal.get("stock", {}) or {}
-        _stock_exec_target = _merge_tranches(_stock_state.get("tranches", {}) or {})
+        _stock_exec_target = _merge_stock_state(_stock_state)
         _stock_summary = [
             f"<b>리스크 상태:</b> {'Risk-On' if _stk.get('risk_on', True) else 'Risk-Off'}",
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_stock_state.get('rebalancing_needed'))}",
@@ -1566,25 +1600,42 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 "<b>카나리 거리:</b> " + ", ".join(f"{k}:{float(v):+.2%}" for k, v in _dist.items())
             )
         _stock_tr_rows = []
-        for _anchor in sorted((_stock_state.get("tranches", {}) or {}).keys(), key=lambda x: int(x)):
-            _tr = (_stock_state.get("tranches", {}) or {}).get(_anchor, {}) or {}
-            _status, _picks_text, _weights_text = _tranche_status(
-                _tr.get("anchor_month", "-"),
-                _tr.get("weights", {}),
-                _tr.get("picks", []),
-            )
-            _stock_tr_rows.append({
-                "트랜치": f"D{_anchor}",
-                "상태": _status,
-                "기준월": _tr.get("anchor_month", "-"),
-                "종목": _picks_text,
-                "비중": _weights_text,
-            })
+        _v22_snaps = _stock_state.get("snapshots", {}) or {}
+        if _v22_snaps:
+            for _sid in sorted(_v22_snaps.keys(), key=lambda x: int(x)):
+                _sn = _v22_snaps.get(_sid, {}) or {}
+                _w = _sn.get("weights", {}) or {}
+                _p = _sn.get("picks", []) or []
+                _status, _picks_text, _weights_text = _tranche_status(
+                    _sn.get("last_rebal_date", "-"), _w, _p,
+                )
+                _stock_tr_rows.append({
+                    "스냅": f"S{_sid}",
+                    "상태": _status,
+                    "마지막리밸": _sn.get("last_rebal_date", "-"),
+                    "종목": _picks_text,
+                    "비중": _weights_text,
+                })
+        else:
+            for _anchor in sorted((_stock_state.get("tranches", {}) or {}).keys(), key=lambda x: int(x)):
+                _tr = (_stock_state.get("tranches", {}) or {}).get(_anchor, {}) or {}
+                _status, _picks_text, _weights_text = _tranche_status(
+                    _tr.get("anchor_month", "-"),
+                    _tr.get("weights", {}),
+                    _tr.get("picks", []),
+                )
+                _stock_tr_rows.append({
+                    "트랜치": f"D{_anchor}",
+                    "상태": _status,
+                    "기준월": _tr.get("anchor_month", "-"),
+                    "종목": _picks_text,
+                    "비중": _weights_text,
+                })
         state_sections.append(_strategy_block("📘 주식 실행 상태", _stock_summary, _stock_tr_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 주식 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
-    # ── 현물 코인 실행 상태 (V21 앙상블) ──
+    # ── 현물 코인 실행 상태 (V22 앙상블) ──
     try:
         _coin_state, _coin_path = _load_first_json([
             os.path.join(APP_HOME, "trade_state.json"),
@@ -1600,7 +1651,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         _coin_summary = [
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_coin_state.get('rebalancing_needed'))}",
             f"<b>마지막 실행:</b> {_fmt_run_ts(_coin_state.get('last_run_ts', '-'))}",
-            f"<b>합산 목표 (V21 1/3 EW):</b><br>{_fmt_alloc_lines(_last_target_clean)}",
+            f"<b>합산 목표 (V22 1/2 EW):</b><br>{_fmt_alloc_lines(_last_target_clean)}",
         ]
         if _warning_coins:
             _coin_summary.append(f"<b>Upbit 유의/상폐:</b> {', '.join(_warning_coins)}")
@@ -1624,7 +1675,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 "현재 목표": _fmt_alloc_lines(_ms.get("last_combined", {}) or {}),
                 "제외 코인": _ex_text,
             })
-        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V21)", _coin_summary, _coin_rows))
+        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V22)", _coin_summary, _coin_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 업비트 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
@@ -1951,7 +2002,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (V21: 60/40/0, sleeve r30 밴드 — 리밸런싱은 수동) ===
+                // === 3자산 배분 체크 (V22: 60/40/0, sleeve r30 밴드 — 리밸런싱은 수동) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
@@ -2430,7 +2481,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
 
-    # ─── 3자산 배분 체크 (V21: sleeve r30 밴드) ───
+    # ─── 3자산 배분 체크 (V22: sleeve r30 밴드) ───
     try:
         api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
         ov = requests.get(f"{api}/api/assets/live_overview", timeout=60).json()
@@ -2461,7 +2512,7 @@ if __name__ == "__main__":
 
             alloc_line = (
                 f"⚖️ 자산배분: 주식 {p_stock:.1%}(밴드±{b_stock:.1%}) / 업비트 {p_spot:.1%}(밴드±{b_spot:.1%}) / 바이낸스 {p_fut:.1%}(밴드±{b_fut:.1%})"
-                f" — V21 목표 60/40/0 sleeve r30"
+                f" — V22 목표 60/40/0 sleeve r30"
             )
             print(alloc_line)
 
@@ -2474,7 +2525,7 @@ if __name__ == "__main__":
                     if abs(delta) > 10000:
                         moves.append(f"  {name}: {delta:+,.0f}원")
                 alert_msg = (
-                    f"⚠️ 자산배분 리밸런싱 필요 (V21 sleeve r30)\n"
+                    f"⚠️ 자산배분 리밸런싱 필요 (V22 sleeve r30)\n"
                     f"밴드 초과: {', '.join(breached_assets)}\n\n"
                     f"주식 {p_stock:.1%} (목표 60%, 밴드 ±{b_stock:.1%})\n"
                     f"업비트 {p_spot:.1%} (목표 40%, 밴드 ±{b_spot:.1%})\n"
