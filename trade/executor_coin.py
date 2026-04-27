@@ -645,6 +645,7 @@ def run_once(dry_run: bool = False) -> int:
     if not result.any_new_bar:
         log('  ℹ 새 봉 없음 (idempotent) → 리밸런싱 스킵.')
         _save_state_unless_dry(state_path, state, dry_run)
+        _tg(f'⏸ 새 봉 없음 → 스킵 (다음 봉 닫힘 대기)')
         _flush_telegram(dry_run)
         return 0
 
@@ -695,6 +696,9 @@ def run_once(dry_run: bool = False) -> int:
         log(f'  ℹ target 불변 + rebalancing_needed=False → 스킵. prev={prev_combined}')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
+        # heartbeat: 매매 없어도 매 실행마다 요약 알림
+        _tg(format_target_summary(result.combined_target, result.member_targets))
+        _tg(f'⏸ 스킵 (target 불변) total=₩{total_krw:,.0f}')
         _flush_telegram(dry_run)
         return 0
 
@@ -704,6 +708,8 @@ def run_once(dry_run: bool = False) -> int:
         log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
+        _tg(format_target_summary(result.combined_target, result.member_targets))
+        _tg(f'⏸ 스킵 (포지션 근접) total=₩{total_krw:,.0f}')
         _flush_telegram(dry_run)
         return 0
 
