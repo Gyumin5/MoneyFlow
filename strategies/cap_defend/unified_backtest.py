@@ -235,6 +235,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         vol_threshold=0.05,  # vol_mode='daily' 기본. bar mode면 연환산 기준 (예: 0.80)
         n_snapshots=3,  # 스냅샷 수 (3=월3회, 6=월6회, 12=거의매일)
         snap_interval_bars=0,  # 0=달력 기반, >0=봉 기반 앵커 간격
+        phase_offset_bars=0,  # 봉 기반 앵커 위상 오프셋 (0=기존 동작)
         crash_threshold=-0.10,
         crash_lookback_bars=0,  # 0=bpd(일간), >0=N봉 누적 수익률
         crash_cool_override=0,  # 0=3*bpd, >0=직접 봉 수
@@ -245,6 +246,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
         stop_lookback_bars=0,
         initial_capital=10000.0,
         start_date='2020-10-01', end_date='2026-03-28',
+        # --- 2026-04-24 추가 (Step 7 stress 용) ---
+        execution_delay_bars=0,  # 0=즉시 체결, N>0=signal 에서 N bar 뒤 체결
+        exclude_assets=None,  # {asset_name} 제외할 자산 set (drop_top_contributor 용)
+        # ------------------------------------------
         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
     """시간봉 통합 백테스트. spot/fut 공통."""
 
@@ -310,6 +315,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
     pfd_done = True
     crash_cooldown = 0
     rebal_count = 0
+    pending_rebalance = None  # execution_delay_bars 용 (signal bar 에서 N bar 뒤 체결)
     liq_count = 0
     trade_count = 0
     stop_count = 0
@@ -521,9 +527,12 @@ def run(bars, funding, interval='1h', leverage=1.0,
 
         healthy = []
         min_bars = max(mom30, mom90, _vol_bars, sma_period)
+        _excluded = exclude_assets or frozenset()
         for coin in mcap_order:
             if coin in blacklist:
                 continue
+            if coin in _excluded:
+                continue  # drop_top_contributor 시 제외
             df = bars.get(coin)
             if df is None:
                 continue
@@ -794,7 +803,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 # 봉 기반 앵커: bar_i % interval로 트리거
                 for si in range(n_snapshots):
                     offset = int(si * snap_interval_bars / n_snapshots)
-                    if bar_i % snap_interval_bars == offset:
+                    if (bar_i + phase_offset_bars) % snap_interval_bars == offset:
                         new_w = _compute_weights(prev_date)
                         if new_w != snapshots[si]:
                             snapshots[si] = new_w
@@ -830,10 +839,20 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 'stop_pct': stop_pct,
             })
 
-        # ── 리밸런싱 실행 ──
-        if need_rebal:
-            _execute_rebalance(combined, date)
+        # ── 리밸런싱 실행 (execution_delay_bars 지원) ──
+        # pending queue: 이전에 예약된 리밸런스가 있으면 due bar 에 실행
+        if pending_rebalance is not None and bar_i >= pending_rebalance['due_i']:
+            _execute_rebalance(pending_rebalance['target'], date)
             rebal_count += 1
+            pending_rebalance = None
+        if need_rebal:
+            if execution_delay_bars <= 0:
+                _execute_rebalance(combined, date)
+                rebal_count += 1
+            else:
+                # N bar 뒤에 현재 combined target 체결 예약
+                pending_rebalance = {'due_i': bar_i + int(execution_delay_bars),
+                                      'target': dict(combined)}
 
         pv_list.append({'Date': date, 'Value': _port_val(date)})
         prev_canary = canary_on

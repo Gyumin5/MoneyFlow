@@ -36,10 +36,17 @@ from coin_live_engine import (
     MemberState,
     combine_ensemble,
     compute_member_target,
-    prune_expired_exclusions,
     slice_to_last_closed,
-    update_excluded_after_gap,
 )
+
+
+# V21 (2026-04-21) 에서 가드/exclusion 제거됨. 기존 시그널 호출자 호환 no-op.
+def prune_expired_exclusions(*args, **kwargs):
+    return None
+
+
+def update_excluded_after_gap(*args, **kwargs):
+    return None
 
 
 DATA_DIR = os.path.join(ROOT, "data", "futures")
@@ -235,6 +242,7 @@ def run_backtest(
     tx_cost: float = TX_COST,
     buffer_pct: float = CASH_BUFFER_PCT,
     top_n: int = 40,
+    initial_phases: Dict[str, int] = None,
 ):
     universe_map = load_universe(top_n=top_n)
     bars = load_price_bars(universe_map)
@@ -248,7 +256,11 @@ def run_backtest(
     start_ts = pd.Timestamp(start, tz="UTC")
     end_ts = pd.Timestamp(end, tz="UTC")
     exec_dates = btc_4h.index[(btc_4h.index >= start_ts) & (btc_4h.index <= end_ts)]
+    _phases = initial_phases or {}
     member_states = {name: MemberState() for name in MEMBERS}
+    for _mname, _phase in _phases.items():
+        if _mname in member_states:
+            member_states[_mname].bar_counter = int(_phase)
     excluded_all = {name: {} for name in MEMBERS}
     holdings: Dict[str, float] = {}
     cash = float(initial_capital)
@@ -270,30 +282,16 @@ def run_backtest(
                 continue
 
             mem_state = member_states[mname]
-            mem_excluded = excluded_all[mname]
-            prune_expired_exclusions(mem_excluded, mem_state.snap_id, now_utc)
 
+            # V21 (2026-04-21): compute_member_target 시그니처 변경 — mem_excluded 제거.
             res = compute_member_target(
                 mname,
                 cfg,
                 sliced,
                 universe,
                 mem_state,
-                mem_excluded,
                 now_utc,
             )
-            if res.gap_coins:
-                update_excluded_after_gap(
-                    mem_excluded,
-                    res.gap_coins,
-                    cfg["exclusion_days"],
-                    res.new_state.snap_id,
-                    now_utc,
-                )
-                removed = sum(v for k, v in res.target.items() if k in res.gap_coins)
-                res.target = {k: v for k, v in res.target.items() if k not in res.gap_coins}
-                if removed > 0:
-                    res.target["CASH"] = res.target.get("CASH", 0.0) + removed
 
             member_states[mname] = res.new_state
             member_targets[mname] = res.target

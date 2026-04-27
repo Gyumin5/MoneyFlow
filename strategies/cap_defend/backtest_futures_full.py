@@ -206,6 +206,8 @@ def calc_vol_bars(close_arr, lookback_bars, bars_per_year=8760):
 
 
 # ─── 메인 엔진 ───
+# ⚠ V21 (ENS_fut_L3_k3_12652d57) 재현 시 반드시 universe_size=3 명시할 것 (실전 live: UNIVERSE_SIZE=3).
+# 기본값 5는 V18/V19 시절 호환. V21 관련 스크립트에서 3으로 override 필수.
 def run(bars, funding, interval='1h', leverage=1.0,
         universe_size=5, selection='greedy', cap=1/3,
         tx_cost=0.0004, maint_rate=0.004,
@@ -224,6 +226,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         vol_threshold=0.05,  # vol_mode='daily' 기본. bar mode면 연환산 기준 (예: 0.80)
         n_snapshots=3,  # 스냅샷 수 (3=월3회, 6=월6회, 12=거의매일)
         snap_interval_bars=0,  # 0=달력 기반, >0=봉 기반 앵커 간격
+        phase_offset_bars=0,  # bar_i 에 더할 위상 오프셋 (멤버별 비동기화 테스트용, 기본 0 = 기존 동작)
         crash_threshold=-0.10,
         crash_lookback_bars=0,  # 0=bpd(일간), >0=N봉 누적 수익률
         crash_cool_override=0,  # 0=3*bpd, >0=직접 봉 수
@@ -762,7 +765,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 # 봉 기반 앵커: bar_i % interval로 트리거
                 for si in range(n_snapshots):
                     offset = int(si * snap_interval_bars / n_snapshots)
-                    if bar_i % snap_interval_bars == offset:
+                    if (bar_i + phase_offset_bars) % snap_interval_bars == offset:
                         new_w = _compute_weights(prev_date)
                         if new_w != snapshots[si]:
                             snapshots[si] = new_w
@@ -839,7 +842,7 @@ if __name__ == '__main__':
     print("전략: V18 Cap Defend 코인 (바이낸스 선물 포팅)")
     print("  카나리: BTC > SMA(50일) + 1.5% hyst")
     print("  헬스: Mom30>0 AND Mom90>0 AND Vol90≤5%")
-    print("  선정: 시총순 Top5 → Greedy Absorption")
+    print("  선정: 시총순 Top5 → Greedy Absorption  (V18 기본값, V21은 Top3 필수 → 이 main 블록 아님)")
     print("  비중: EW + Cap 33%")
     print("  리스크: DD -25%(60d), BL -15%(7d), Crash BTC-10%(3d)")
     print("  3-snapshot Day 1/10/19, Drift 10%, PFD 5d")
