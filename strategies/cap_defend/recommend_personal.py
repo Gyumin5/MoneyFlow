@@ -3,9 +3,9 @@ Cap Defend V22 Recommendation Script
 ===================================
 V22 (2026-04-27 확정): 단일 sleeve combo (3자산 모두 단순 ensemble).
 
-Stock V22 (단독 cfg, csma300 zscore3 SN126 — recommend_personal 표시용 V17 logic 유지):
-  - V22 stock 신규 cfg 채택 위해서는 별도 refactor 필요 (Phase 2).
-  - 현재 recommend_personal.py 의 stock 로직은 V17 그대로 유지.
+Stock V22 (단독 cfg, csma300 zscore3 SN126):
+  - signal 생성은 recommend_personal.py 단계, executor 가 snap-based 3-tranche stagger 적용.
+  - 가드 없음 (앙상블 분산 단독 방어).
 
 Coin V22: 1D + 4h 2멤버 50/50 EW 앙상블 (live engine: trade/coin_live_engine.py)
   - D_SMA42:  1D봉, SMA42,  Mom20/127, snap 60봉,  Top3 (Cal 0.92~2.41)
@@ -225,168 +225,9 @@ VERSION_HISTORY = [
 • <b>카나리:</b> EEM &gt; SMA300 (2.0% hysteresis)
 • <b>선정:</b> Z-score Top 3 (Mom + Sharpe126 합)
 • <b>스냅:</b> 126일 주기 × 3 snap 스태거 (42일 오프셋), EW 평균
-• <b>가드:</b> 없음 (앙상블 분산 단독 방어, V17 VT crash 제거)
+• <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
 <b>▶ 자산배분:</b> 60/40/0 시작 (주식/현물/선물), sleeve r30 밴드, 리밸런싱은 수동"""),
-    ("V21", "2026-04",
-     "코인 현물: D_SMA50 + D_SMA150 + D_SMA100 1/3 EW (D봉 3멤버 앙상블). 선물: L3 3멤버 EW. 가드 없음.",
-     """<b>▶ 코인 현물 (V21 — k3_4b270476 D봉 3멤버 앙상블)</b>
-• <b>멤버1 D_SMA50:</b> 일봉 · SMA50 · Mom20/90 · snap 90봉 · gap stop -15% · 제외 30일
-• <b>멤버2 D_SMA150:</b> 일봉 · SMA150 · Mom20/60 · snap 90봉 · gap stop -15% · 제외 30일
-• <b>멤버3 D_SMA100:</b> 일봉 · SMA100 · Mom20/120 · snap 90봉 · gap stop -15% · 제외 30일
-• <b>앙상블:</b> 1/3씩 EW (combined target은 live engine이 자동 산출)
-• <b>카나리:</b> 멤버별 BTC &gt; SMA + 1.5% hysteresis
-• <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND Vol≤5% (멤버 내부)
-• <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py, 매일 09:05 cron
-• <b>선물 (V21 — L3 12652d57):</b> 4h봉 3멤버(S240_SN120, S240_SN30, S120_SN120) EW 1/3씩, 고정 3x, 가드 없음
-• <b>자산배분:</b> 60/40/0 시작 (주식/현물/선물), sleeve r30 밴드, 리밸런싱은 수동
-
-<b>▶ 주식: V17 동일, 선물: V19 동일, 자산배분: 60/25/15</b>"""),
-
-    ("V19", "2026-04",
-     "선물 추가 + 자산배분 60/25/15 + 밴드 8pp",
-     """<b>▶ 자산배분 (V19)</b>
-• 주식 <span style='color:#d93025;'>60%</span> / 업비트 <span style='color:#d93025;'>35%</span> / 바이낸스 <span style='color:#d93025;'>5%</span>
-• 밴드 리밸런싱: 편차 <span style='color:#d93025;'>±8%p</span> 초과 시만 (매일 자동체크)
-• 포트폴리오: Sharpe 2.12, CAGR +39%, MDD -12.2%
-
-<b>▶ 선물 (V19 신규)</b>
-• d005 4전략 앙상블 (EW 25%씩)
-• 4h_d005 / 2h_S240 / 2h_S120 / 4h_M20
-• 5x 동적 레버리지 (cap_mom_blend_543_cash)
-• 단독: Sharpe 2.08, CAGR +227%, MDD -34%
-
-<b>▶ 주식: V17 동일, 코인: V18 동일</b>"""),
-
-    ("V18", "2026-03",
-     "코인: SMA50+1.5%hyst, Greedy Absorption, EW+33%Cap",
-     """<b>▶ 코인 카나리 (V18)</b>
-• BTC > SMA(<span style='color:#d93025;'>50</span>) + <span style='color:#d93025;'>1.5%</span> Hysteresis
-• MDD 4.4%p 개선, Calmar 27% 개선
-
-<b>▶ 코인 선정 (V18)</b>
-• 시총순 Top 5 → <span style='color:#d93025;'>Greedy Absorption</span>
-• 시총 큰 코인이 Mom30 높으면 작은 코인 제거
-• 비중: EW + <span style='color:#d93025;'>33% Cap</span> (V17: 20%)
-• 통합 MDD -24.8% (V17: -29.0%)"""),
-
-    ("V17", "2026-03",
-     "주식: Zscore3+Sh252+VT Crash, 코인: 모니터 USD 전환",
-     """<b>▶ 주식 변경 (V17)</b>
-• <b>선정:</b> Z-score <span style='color:#d93025;'>Top 3</span> (Sharpe <span style='color:#d93025;'>252d</span>)
-• <b>Crash:</b> <span style='color:#d93025;'>VT -3%</span> daily → 3일 현금
-• <b>백테스트:</b> 11-anchor 평균 Sharpe 1.037, CAGR +12.1%, MDD -13.2%, Calmar 0.94
-
-<b>▶ 코인 모니터 수정 (V17)</b>
-• 카나리/Crash를 <span style='color:#d93025;'>USD 기준</span>으로 비교 (환율 왜곡 방지)
-• DD Exit: CSV 60일 rolling peak 직접 조회
-• HOLD 시에도 캐시 갱신, cron :05/:35"""),
-
-    ("V16", "2026-03",
-     "코인: Mom30+25%Cap, 주식: V15 동일, hysteresis 수정",
-     """<b>▶ 코인 변경 (V16)</b>
-• <b>Health:</b> <span style='color:#d93025;'>Mom(30)</span>>0 AND Mom(90)>0 AND Vol(90)≤5% (Mom30→30으로 변경)
-• <b>비중 캡:</b> <span style='color:#d93025;'>20% Cap</span> — 1종목 최대 20%, 나머지 현금 (붕괴 리스크 방어)
-• <b>백테스트:</b> 10-anchor 3트랜치 평균 Sharpe 1.451, CAGR +64.5%, MDD -33.2%, Calmar 1.94
-• <b>카나리아:</b> Hysteresis dead zone에서 signal_state.json 이전 상태 참조 (stateless 수정)
-
-<b>▶ 주식: V15 동일</b>"""),
-
-    ("V15", "2026-03",
-     "R7 universe, Z-score4 selection, M+D2 trigger rebalancing, delta trading",
-     """<b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
-
-<b>▶ 주식 전략 (V15 변경)</b>
-• <b>유니버스:</b> <span style='color:#d93025;'>R7</span> (SPY, QQQ, VEA, EEM, GLD, PDBC, <b>VNQ</b> — REIT 추가로 사이클 분산)
-• <b>Canary:</b> EEM > SMA200 (0.5% Hysteresis)
-• <b>Health:</b> 없음 (카나리아가 시장 방어 담당)
-• <b>공격:</b> <span style='color:#d93025;'>Z-score Top 4</span> = zscore(12M Mom) + zscore(Sharpe63), 균등배분
-• <b>수비:</b> 5종 중 6M 수익률 Top 3 (음수면 현금), 균등배분
-• <b>백테스트:</b> 11-anchor 평균 Sharpe 1.281 (σ=0.033), CAGR +15.2%, MDD -13.2%
-
-<b>▶ 코인 전략 (V14 동일)</b>
-• <b>유니버스:</b> CoinGecko Top 40 시총순 → Upbit KRW 필터
-• <b>Canary:</b> BTC > SMA(50) → 투자, 아니면 현금 (1.5% Hysteresis)
-• <b>Health Filter:</b> Mom(30)>0 AND Mom(90)>0 AND Vol(90)≤5%
-• <b>선정:</b> 시총순 Top 5, 균등배분 (EW)
-• <b>DD Exit:</b> 60일 고점 대비 -25% 하락 → 매도 (매일 체크)
-• <b>Blacklist:</b> 일일 -15% 하락 → 7일 제외
-• <b>Crash Breaker:</b> BTC 일일 -10% → 3일 현금
-
-<b>▶ 리밸런싱</b>
-• 주식: <span style='color:#d93025;'>M+D2</span> — 월간 정기 + 매일 Z-score Top4 체크, 2종목 이상 변경 시 즉시 리밸런싱
-• 코인: 월간 정기 + DD Exit/Blacklist/Crash 시 즉시
-• <span style='color:#d93025;'>Delta-based trading</span>: 변경된 비중만 거래 (TX 비용 61% 절감)"""),
-
-    ("V14", "2026-03",
-     "SMA(50) canary, Mom+Mom+Vol5% health, EW, DD Exit, Blacklist, Crash Breaker",
-     """<b>▶ 코인:</b> K:SMA(50)+1.5%hyst, H:Mom30+Mom90+Vol5%, Greedy Absorption EW+33%Cap, DD Exit(-25%), Blacklist(-15%), Crash(-10%)
-<b>▶ 주식:</b> R6 (SPY,QQQ,VEA,EEM,GLD,PDBC), EEM>SMA200, Mom3+Sh3 union EW, Defense Top3"""),
-
-    ("V13", "2026-03",
-     "Multi Bonus scoring, 1% Hysteresis signal flip, monthly rebalancing",
-     """<b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
-
-<b>\u25b6 주식 전략 (V11 기반)</b>
-\u2022 <b>유니버스:</b> 공격 12종 (SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC, QUAL, MTUM, IQLT, IMTM) / 수비 5종 (IEF, BIL, BNDX, GLD, PDBC)
-\u2022 <b>Canary Signal:</b> VT AND EEM \u003e SMA200 \u2192 Risk-On / \uc544\ub2c8\uba74 Risk-Off
-\u2022 <b>Signal Flip Guard (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>1% Hysteresis</span> \u2014 SMA200\xd71.01 \uc774\uc0c1\uc77c \ub54c Risk-On \uc9c4\uc785, SMA200\xd70.99 \uc774\ud558\uc77c \ub54c Risk-Off \uc9c4\uc785. \ud718\uc18c (\ube48\ubc88\ud55c \uc2e0\ud638 \uc804\ud658) 62% \uac10\uc18c
-\u2022 <b>\uacf5\uaca9 \ubaa8\ub4dc:</b> \uac00\uc911 \ubaa8\uba58\ud140(50/30/20% for 3M/6M/12M) Top 3 + Sharpe(126d) Top 3 \ud569\uc9d1\ud569 \u2192 \uade0\ub4f1\ubc30\ubd84
-\u2022 <b>\uc218\ube44 \ubaa8\ub4dc:</b> \uc218\ube44 5\uc885 \uc911 6\uac1c\uc6d4 \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
-\u2022 <b>\uc885\ubaa9 \ub9ac\ubc38\ub7f0\uc2f1:</b> \uc6d4\uac04 \uc815\uae30 \ub9ac\ubc38\ub7f0\uc2f1 (\uc6d4\ub9d0 \uad8c\uc7a5). \ubc31\ud14c\uc2a4\ud2b8 \uacb0\uacfc \uc6d4\ub9d0 \ub9ac\ubc38\ub7f0\uc2f1\uc774 Sharpe 1.001\ub85c \ucd5c\uc801
-
-<b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uae30\ubc18)</b>
-\u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 \uc2dc\uac00\ucd1d\uc561\uc21c \u2192 Upbit KRW \uc0c1\uc7a5 + 253\uc77c \ud788\uc2a4\ud1a0\ub9ac + 30\uc77c \ud3c9\uade0 \uac70\ub798\ub300\uae08 10\uc5b5\uc6d0\uc774\uc0c1 \ud544\ud130
-\u2022 <b>Canary:</b> BTC \u003e SMA50 \u2192 \ud22c\uc790, \uc544\ub2c8\uba74 \ud604\uae08
-\u2022 <b>Health Filter:</b> Price \u003e SMA30 AND Mom30 \u003e 0 AND Vol90 \u2264 10%
-\u2022 <b>Scoring (V13 \uc2e0\uaddc):</b> <span style='color:#d93025;'>Multi Bonus</span> = Sharpe(126d)+Sharpe(252d) + RSI(45~70 \u2192 +0.2) + MACD hist\u003e0 \u2192 +0.2 + BB %B\u003e0.5 \u2192 +0.2
-\u2022 <b>\uc120\uc815:</b> Multi Bonus Score Top 5
-\u2022 <b>\ubc30\ubd84:</b> 90\uc77c \uc5ed\ubcc0\ub3d9\uc131 \uac00\uc911 (1/Vol)
-
-<b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1 \uaddc\uce59</b>
-\u2022 \ucf54\uc778: \uc6d4\uac04 \uc2a4\ucf00\uc904 + \ud134\uc624\ubc84 30%\u2191 \ub610\ub294 Health \uc2e4\ud328 \uc2dc \uc989\uc2dc
-\u2022 \uc8fc\uc2dd: \uc6d4\uac04 \uc815\uae30 \ub9ac\ubc38\ub7f0\uc2f1 (\uc6d4\ub9d0 \uad8c\uc7a5) + Signal Flip(1% Hysteresis)"""),
-
-    ("V12", "2026-01",
-     "Weighted momentum, Sharpe quality, inverse volatility weighting, health check",
-     """<b>\uc790\uc0b0\ubc30\ubd84:</b> \uc8fc\uc2dd 60% / \ucf54\uc778 40% (\ud604\uae08 \ubc84\ud37c 2%)
-
-<b>\u25b6 \uc8fc\uc2dd \uc804\ub7b5 (V11 \ub3d9\uc77c)</b>
-\u2022 <b>Canary:</b> VT AND EEM \u003e SMA200 \u2192 Risk-On
-\u2022 <b>\uacf5\uaca9:</b> 12\uc885 \uc720\ub2c8\ubc84\uc2a4, \uac00\uc911 \ubaa8\uba58\ud140(50/30/20%) Top 3 + Sharpe(126d) Top 3 \ud569\uc9d1\ud569, \uade0\ub4f1\ubc30\ubd84
-\u2022 <b>\uc218\ube44:</b> 5\uc885 \uc911 6M \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
-\u2022 Signal flip guard \uc5c6\uc74c (SMA200 \uc790\uccb4 \ub2e8\uc21c \ube44\uad50)
-
-<b>\u25b6 \ucf54\uc778 \uc804\ub7b5 (V12 \uc2e0\uaddc)</b>
-\u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 + Upbit KRW \ud544\ud130 (253\uc77c \ud788\uc2a4\ud1a0\ub9ac, 10\uc5b5\uc6d0 \uac70\ub798\ub300\uae08)
-\u2022 <b>Canary:</b> BTC \u003e SMA50
-\u2022 <b>Health Filter (V12 \uc2e0\uaddc):</b> Price \u003e SMA30 AND Mom30 \u003e 0 AND Vol90 \u2264 10%
-\u2022 <b>Scoring:</b> Sharpe(126d) + Sharpe(252d) (\ubcf4\ub108\uc2a4 \uc5c6\uc74c)
-\u2022 <b>\uc120\uc815:</b> Top 5
-\u2022 <b>\ubc30\ubd84 (V12 \uc2e0\uaddc):</b> 90\uc77c \uc5ed\ubcc0\ub3d9\uc131 \uac00\uc911 (1/Vol)
-
-<b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1</b>
-\u2022 \uc6d4\uac04 + \ud134\uc624\ubc84 30%\u2191 \ub610\ub294 Health \uc2e4\ud328 \uc2dc"""),
-
-    ("V11", "2025-12",
-     "Dual canary, offensive Top3+Top3 union, defensive 6M best",
-     """<b>\uc790\uc0b0\ubc30\ubd84:</b> \uc8fc\uc2dd 60% / \ucf54\uc778 40% (\ud604\uae08 \ubc84\ud37c 2%)
-
-<b>\u25b6 \uc8fc\uc2dd \uc804\ub7b5 (V11 \uc2e0\uaddc)</b>
-\u2022 <b>Canary (V11 \uc2e0\uaddc):</b> Dual Canary \u2014 VT AND EEM \ub458 \ub2e4 SMA200 \uc774\uc0c1\uc774\uc5b4\uc57c Risk-On
-\u2022 <b>\uacf5\uaca9 \uc720\ub2c8\ubc84\uc2a4:</b> SPY, QQQ, EFA, EEM, VT, VEA, GLD, PDBC, QUAL, MTUM, IQLT, IMTM (12\uc885)
-\u2022 <b>\uacf5\uaca9 \uc120\uc815 (V11 \uc2e0\uaddc):</b> \uac00\uc911\ubaa8\uba58\ud140(50/30/20%) Top 3 + Sharpe(126d) Top 3 \u2192 \ud569\uc9d1\ud569 (3~6\uc885), \uade0\ub4f1\ubc30\ubd84
-\u2022 <b>\uc218\ube44 \uc720\ub2c8\ubc84\uc2a4:</b> IEF, BIL, BNDX, GLD, PDBC (5\uc885)
-\u2022 <b>\uc218\ube44 \uc120\uc815 (V11 \uc2e0\uaddc):</b> 6\uac1c\uc6d4 \uc218\uc775\ub960 \ucd5c\uace0 1\uac1c (\uc74c\uc218\uba74 \ud604\uae08)
-
-<b>\u25b6 \ucf54\uc778 \uc804\ub7b5</b>
-\u2022 <b>\uc720\ub2c8\ubc84\uc2a4:</b> CoinGecko Top 50 + Upbit KRW
-\u2022 <b>Canary:</b> BTC \u003e SMA50
-\u2022 <b>Health Filter:</b> \uc5c6\uc74c (V12\uc5d0\uc11c \ucd94\uac00)
-\u2022 <b>Scoring:</b> Sharpe(126d) + Sharpe(252d), Top 5 \uade0\ub4f1\ubc30\ubd84
-
-<b>\u25b6 \ub9ac\ubc38\ub7f0\uc2f1</b>
-\u2022 \uc6d4\uac04 \uc2a4\ucf00\uc904 \uae30\ubc18"""),
 ]
 
 STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.40, 0.00  # V22: 60/40/0 (사용자 수동 조정)
@@ -414,8 +255,8 @@ STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRA
 OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'EWJ', 'GLD', 'PDBC']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
-STOCK_CANARY_MA_PERIOD = 300   # V22 (vs V17: 200)
-STOCK_CANARY_HYST = 0.020      # V22 2% (vs V17: 0.5%)
+STOCK_CANARY_MA_PERIOD = 300   # V22
+STOCK_CANARY_HYST = 0.020      # V22 (2%)
 # V22: 가드 전면 제거. STOCK_CRASH_TICKER 만 universe 가격 다운로드용으로 보존.
 STOCK_CRASH_TICKER = 'VT'
 
@@ -901,7 +742,7 @@ def _load_v20_state_personal():
 def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=True):
     """V22 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
 
-    시그니처는 V19 버전과 호환 (caller가 5-tuple 언팩).
+    시그니처는 5-tuple 언팩 caller 호환.
     coin_universe / all_prices / is_today는 현재 미사용(engine이 자체 데이터 사용).
     """
     date_str = target_date.date() if hasattr(target_date, 'date') else target_date
@@ -1642,6 +1483,44 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         state_sections.append(_strategy_block("📘 바이낸스 실행 상태", _fut_summary, _fut_tr_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 바이낸스 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
+
+    # === 자산배분 BT 비교 (V22 sweep 결과 2026-04-27, 5.3yr 2020-10~2025-12) ===
+    _alloc_bt_html = """
+    <h2>📊 자산배분 BT 비교 (V22 sleeve r30, 5.3yr 정합)</h2>
+    <p style='color:#5f6368;font-size:0.9em'>BT 기간: 2020-10-01 ~ 2025-12-31 · 자산: 주식 V22 R7B / 현물 V22 1D+4h / 선물 V22 1D+4h L3</p>
+
+    <h3>현재 60/40/0 baseline</h3>
+    <div class='summary-list'>
+      <div class='summary-item'><b>Sharpe:</b> 1.69</div>
+      <div class='summary-item'><b>Calmar:</b> 2.70</div>
+      <div class='summary-item'><b>CAGR:</b> +36.5%</div>
+      <div class='summary-item'><b>MDD:</b> -13.5%</div>
+      <div class='summary-item'><b>제약 내 Cal rank:</b> 107/154</div>
+      <div class='summary-item'><b>rs rank:</b> 47/154</div>
+    </div>
+
+    <h3>제약 내 (st≥co≥fu) 추천 자산배분</h3>
+    <div class='table-wrap'>
+    <table class='dataframe small-table'>
+    <thead><tr><th>비중 (st/co/fu)</th><th>Sh</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>rs</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td><b>60/40/0</b></td><td>1.69</td><td>2.70</td><td>+36.5%</td><td>-13.5%</td><td>411</td><td>현재 baseline</td></tr>
+      <tr><td>60/30/10</td><td>1.67</td><td>3.43</td><td>+46.6%</td><td>-13.6%</td><td>397</td><td>fut 10% 추가, MDD 동일, CAGR +10%pp</td></tr>
+      <tr><td>55/35/10</td><td>1.67</td><td>3.58</td><td>+49.4%</td><td>-13.8%</td><td>429</td><td>균형형</td></tr>
+      <tr><td>50/40/10</td><td>1.67</td><td>3.74</td><td>+52.4%</td><td>-14.0%</td><td>474</td><td>현물 비중 유지 + fut 10%</td></tr>
+      <tr><td>50/30/20</td><td>1.64</td><td>4.13</td><td>+67.3%</td><td>-16.3%</td><td>377</td><td>공격형</td></tr>
+      <tr><td>55/25/20</td><td>1.67</td><td>4.10</td><td>+65.9%</td><td>-15.4%</td><td><b>342</b></td><td>제약 내 robust 1위</td></tr>
+      <tr><td>52.5/27.5/20</td><td>1.67</td><td>4.15</td><td>+67.3%</td><td>-16.2%</td><td>352</td><td>robust 2위</td></tr>
+      <tr><td>40/37.5/22.5</td><td>1.62</td><td>4.38</td><td>+75.7%</td><td>-17.3%</td><td>406</td><td>제약 내 Cal 1위</td></tr>
+    </tbody>
+    </table>
+    </div>
+    <p style='color:#5f6368;font-size:0.85em'>
+    제약: 주식 ≥ 현물 ≥ 선물 (사용자 우선순위). rs = yearly Calmar rank_sum (낮을수록 robust).
+    BT 결과는 과거 데이터 기반이며 미래 보장 아님. 자산배분 결정은 사용자 영역.
+    </p>
+    """
+    state_sections.append(_alloc_bt_html)
 
     execution_state_html = "".join(state_sections)
 
