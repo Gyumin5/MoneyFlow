@@ -1,19 +1,19 @@
 """
-Cap Defend V20 Recommendation Script (Standard Version)
+Cap Defend V22 Recommendation Script (Standard Version)
 =======================================================
-Stock V17: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash(-3%/3d)
+주식 V22: snap-based 3-tranche stagger (SNAP_PERIOD=126d, STAGGER=42d, N_SNAPS=3)
 - Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs)
-- Canary: EEM > SMA200 (0.5% hysteresis)
+- Canary: EEM > SMA200 (2% hysteresis)
 - Selection: Z-score Top 3 (zscore(12M_mom) + zscore(Sharpe252d)), Equal Weight
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
-- Crash Breaker: VT daily -3% → 3 days cash
+- 가드 없음 (앙상블 분산이 유일 방어)
 
-Coin V20: D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine: trade/coin_live_engine.py)
-- D_SMA50: 1D봉, SMA50, Mom30/90, snap 30봉, gap stop -15%, 제외 30일
-- 4h_SMA240: 4h봉, SMA240, Mom30/120, snap 60봉, gap stop -10%, 제외 10일
-- 카나리: 멤버별 BTC > SMA + 1.5% hysteresis
-- 헬스: Mom_short>0 AND Mom_long>0 AND Vol≤5% (멤버 내부)
-- 리포트는 trade_state.json(V20 live state) 스냅샷을 읽어 표시합니다.
+코인 V22: D_SMA42 + H4_SMA240 2멤버 EW 앙상블 (live engine: trade/coin_live_engine.py)
+- D_SMA42:   1D봉, SMA42, Mom20/127, snap 60봉×3, canary hyst 1.5%
+- H4_SMA240: 4h봉, SMA240, Mom12/180, snap 360봉×3, canary hyst 1.5%
+- 헬스: mom2vol (vol_cap 5%, vol_lookback 90d), universe_size=3, cap=1/3
+- 가드 없음 (Upbit warning/delisting 코인은 universe 단계 제외만)
+- 리포트는 trade_state.json(V22 live state) 스냅샷을 읽어 표시합니다.
 """
 
 import os
@@ -59,8 +59,8 @@ COIN_CANARY_HYST = 0.015  # 1.5% hysteresis band
 
 # --- 2. Dynamic Coin Universe ---
 def get_dynamic_coin_universe(log: list) -> (list, dict):
-    print("\n--- 🛰️ Step 1: Coin Universe Selection (V15) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V20: Live CoinGecko Top 40)</h2>")
+    print("\n--- 🛰️ Step 1: Coin Universe Selection (V22) ---")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V22: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 100 
@@ -296,10 +296,10 @@ def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
     return worst <= threshold, worst
 
 def run_stock_strategy_v15(log, all_prices):
-    """V17 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 + VT Crash"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V17: R7+EEM+Zscore3+Sh252+VT Crash)</h2>")
+    """V22 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 (executor 단계 가드 없음)"""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V22: R7+EEM+Zscore3+Sh252)</h2>")
 
-    # --- VT Crash Breaker (V17d: 동적 복귀) ---
+    # --- Crash Breaker (legacy 신호용 — V22 executor 는 무시) ---
     vt = all_prices.get(STOCK_CRASH_TICKER)
     stock_crash = False
     crash_days_remaining = 0
@@ -350,9 +350,9 @@ def run_stock_strategy_v15(log, all_prices):
                            f"<h3 style='color:#e37400;margin:0'>⏸️ 쿨다운 중 ({crash_days_remaining}일)</h3></div>")
             else:
                 log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#e37400;margin:0'>⏸️ V17d 대기: VT &le; SMA10</h3></div>")
+                           f"<h3 style='color:#e37400;margin:0'>⏸️ 대기: VT &le; SMA10</h3></div>")
         elif recovered_today:
-            log.append(f"<p style='color:#0d904f'><b>✅ Crash 복귀 (V17d)</b></p>")
+            log.append(f"<p style='color:#0d904f'><b>✅ Crash 복귀</b></p>")
 
     if stock_crash:
         return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)"
@@ -444,7 +444,7 @@ def run_stock_strategy_v15(log, all_prices):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})"
 
 def _load_v20_state():
-    """V20 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
+    """V22 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
     candidates = [
         os.path.join(os.getcwd(), 'trade_state.json'),
         '/home/ubuntu/trade_state.json',
@@ -459,12 +459,12 @@ def _load_v20_state():
     return None, None
 
 def run_coin_strategy_v20(coin_universe, all_prices, target_date, log):
-    """V20 앙상블 표시: trade_state.json의 last_target_snapshot + 멤버 상태를 렌더링."""
-    log.append("<h2>🪙 코인 포트폴리오 (V20: D_SMA50 + 4h_SMA240 50:50 앙상블)</h2>")
+    """V22 앙상블 표시: trade_state.json의 last_target_snapshot + 멤버 상태를 렌더링."""
+    log.append("<h2>🪙 코인 포트폴리오 (V22: D_SMA42 + H4_SMA240 2멤버 EW 앙상블)</h2>")
 
     state, path = _load_v20_state()
     if state is None:
-        log.append("<p class='error'>V20 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
+        log.append("<p class='error'>V22 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
         return {CASH_ASSET: 1.0}, "상태 로드 실패"
 
     log.append(f"<p class='info'>상태 파일: {path} · 마지막 실행 {state.get('last_run_ts', 'N/A')}</p>")
@@ -561,7 +561,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, date_today
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Cap Defend V20</h1>
+            <h1>🚀 Cap Defend V22</h1>
             <p>리포트 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 종가 기준일: {date_today.strftime('%Y-%m-%d')}</p>
 
             <div class="status-bar">

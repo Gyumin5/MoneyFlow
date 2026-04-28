@@ -1,15 +1,24 @@
-- [2026-04-17] V21 실매매 배포 완료. 코인 V20(D_SMA50+4h_SMA240 50:50) → V21(D_SMA50+D_SMA150+D_SMA100 1/3 EW, snap 90봉). 선물 V20 d005 4전략(동적 3~5x + stop -15% + cash_guard) → V21 L3 12652d57 3전략(고정 3x, 가드 없음). `auto_trade_binance.py:sync_stop_orders()`에 `STOP_PCT<=0` early return 추가(Codex 지적: STOP_PCT=0만 설정하면 entry 근처 STOP 주문 들어가는 버그). 자산배분 60/35/5 → 60/40/0 (선물 0에서 시작, 리밸런싱 수동). 배포 순서: cron 중단 → state 백업 → 포지션 전량 청산(Upbit BTC/ETH/TRX + Binance 5개) → scp → state 초기화 → V21 executor 첫 실행(canary OFF→ON 전환으로 TRX 진입) → cron 교체(코인 `5 9 * * *`, 선물 `5 9,13,17,21,1,5 * * *`). 서버 정보는 개인 운영 매뉴얼 참조.
-- [2026-04-17] Leverage L2/L3/L4 비교 + 현물 앙상블 고정 + AI 3자 종합 검토. Sub-period rank-sum(10 semi-annual windows)으로 L3가 robustness 1~3위 독점 확인. L4 제외 결정 (청산 위험 + rank-sum 밀림). 현물 앙상블 `ENS_spot_k3_4b270476` (SMA50+100+150, D봉, vol5%, snap90, k=3 EW)로 고정 — AI 3자 만장일치. 가드 전략 없음 확인 (stop_kind=none, 앙상블 분산만 방어). True blind holdout(2024~2026) 결과 train Cal 75%가 선택편향(5~7→1.3~1.8), 전 후보 holdout Cal>1.0 (BTC 0.53 대비 2.5~3.3배). 최종 추천 B안 `60/30/10 L3 sleeve` (Cal 3.41/CAGR 43.2%/MDD -12.7%, 선물 L3 12652d57, 밴드 st18/sp9/fu3). 3자 공통 우려: holdout이 bear 부재, 최종 1개 선택 시 data reuse, 가드 없음 tail risk (코로나빔/루나 같은 전방위 붕괴). 권고 추가 검증: 블록 부트스트랩 bear 스트레스, crash week/exchange outage/partial fill stress, B+C 병행 shadow paper 2~3개월, 포트폴리오 레벨 시스템 서킷브레이커(-20% 등) 도입.
-- [2026-04-16] iter_refine 파이프라인 확정 + AI 리뷰 반영. d005 4전략 대신 iter_refine 5-stage peak refinement(D+4h만, 2h 제거)로 전환. plateau_check(±10% perturbation) + bridge + phase3(dual floor 0.30/0.40) + phase4(sleeve-relative band 추가) 체인 구성. AI 리뷰(Gemini+Codex): snap 매칭 버그(raw→wall-clock), diversity gate(near-dup proxy), yearly consistency(subperiod jackknife), sleeve-relative band 4건 반영. OOS 없는 IS-only 구조의 약점은 인지하되 plateau+diversity+yearly check 로 부분 보상.
-- [2026-04-15] iter_refine.py 3-step 수정(AXIS_CAP=7 하드캡, orphan 필터, reinstated 제거 — AI 토론에서 합의). plateau_check.py 신규 작성(버킷별 top-100 × 4축 perturbation). run_phase_chain.sh v3 체인(iter_refine→plateau→bridge→phase3→phase4). phase3 dual floor 실행(0.30/0.40 별도). corr 게이팅 전면 제거. phase2_extract/phase2_oos10 대체됨.
-- [2026-04-13] V20 코인 현물 앙상블 배포. D_SMA50 + 4h_SMA240 50:50 EW 앙상블 (live engine). 상태파일 `trade_state.json`, 매시간 :05 cron (bar-idempotency). Upbit 유의/상폐 알림 스팸 수정 (delta 기반 set 비교). recommend.py / recommend_personal.py V20 상태 렌더링, CLAUDE.md + MEMORY.md 전파. V19 legacy 코인 현물 중단, backtest_official.py에 V20 포인터 주석 추가 (legacy 엔진으로 표현 불가).
-- [2026-04-11] 캐스케이드 봉별 그리드 탐색 시작. D coarse grid 4,480조합 x 2모드(현물+선물5x) 실행 중. health='HK'/canary='K8' 버그 수정, 기간 통일(2020.10~). AI 실험 설계 토론(Gemini+Codex): 구조적 패턴 제거 + 봉별 독립 탐색 합의. D→4h→2h→1h 자동 진행 예정.
-- [2026-04-10] 봉주기별 그리드서치 완료 (D/4h/2h/1h × 1620조합, 현물+선물3x). D/4h 압도적 우위 확인 (Sh 1.85~1.90 vs 2h 1.59, 1h 1.33). vol_cap 스케일 미스매치 발견: bar 5%가 2h/1h에서 사실상 OFF. 일간 등가 vol_cap sweep 실행 → 4h Sh 1.85→2.21, 2h 1.59→1.83, 1h 1.33→1.59 대폭 개선. 최적 daily vol_cap 6~7% 공통. 2h 앙상블 후보 재부상. 다음: 10-anchor 검증, ablation, d005 엔진 재현.
-- [2026-04-06] V19 표기 업데이트 (recommend/personal V18→V19). HTML 출력 경로 config.py 기반으로 변경. 서버 동기화 (api_server.py 하드코딩 제거, serve.py 허용목록 동기화). AI 협업: V19 개선 방향 토론 (Gemini+Claude, 결론: 현재 최적, TLT만 검토 가치). V12~V19 전 버전 백테스트+밴드 리밸런싱 포트폴리오 비교 완료. PFD ablation 테스트 → 포트폴리오 레벨 무차별 확인 → PFD 제거 (post_flip_delay 5→0). 서버 배포 + 커밋.
-- [2026-04-05] V19 확정. 선물 4전략 앙상블(d005) 확정 + 자산배분 60/25/15 확정. README 전면 재작성, 연구파일 68개 research/ 정리. 선물 전략: 4h_d005/2h_S240/2h_S120/4h_M20 EW 25%. 자산배분: 주식60/현물코인25/선물15, 밴드 8pp (매일 자동체크 + 텔레그램 알림). 4,928개 조합 연구, 동적 방법론(InvVol/카나리/밴드) 비교. auto_trade_binance.py 4전략 교체 + 서버 배포. recommend_personal.py 3자산 배분 모니터 구현.
-- [2026-04-01] 선물 전략 재탐색 완료 후 실거래 전략 교체. 최종: `1h_09(snap=27) + 4h_01(snap=120) + 4h_09(snap=21)` + `cap_mom_blend_543_cash` + `prev_close 15% + cash_guard(34%)`. 기존 `4h1+4h2+1h1` 대비 Cal `4.30 -> 4.98`, MDD `-58.2% -> -44.4%`, Liq `7 -> 4`. 라이브 코드 버그 수정(포지션 조회, OHLCV pagination, 주문 재시도, 매 실행 stop 재동기화, 텔레그램 정리) 및 서버 배포 완료.
-- [2026-03-31] 선물 전략 확정 + 실매매 배포. 순수 봉 기반 엔진, 38코인, 2282조합 최적화, 63개 앙상블 조합 검증. 확정: 4h1+4h2+1h1 앙상블 2x (Cal 3.39, WF Cal 3.19). AI 코드 리뷰 8개 버그 수정. 바이낸스 API 연동, 서버 배포, 크론 설정 완료. $942 운용 시작.
-- [2026-03-30] 선물 시간봉 엔진 완성 + 최적화. backtest_futures_full.py 8개 버그 수정 (인덱싱, leverage 이중적용, 격리마진, look-ahead 등). AI 코드 리뷰 (Gemini+Codex). D/4h/1h 576조합 최적화: D(SMA40 Mom15/90) Cal 2.54가 최적, 혼합보다 D 단독 우위. Codex 권고: D 1.5x 시작, SMA plateau 검증 필요.
-- [2026-03-29] V18: Greedy Absorption + Cap 33%. MDD -25.6% (V17 -30.0%), Calmar 2.70 (V17 2.34). ~50개 변형 테스트, AI 3자 협의.
-- [2026-03-28] V17 카나리 업데이트: SMA(60)+1%hyst → SMA(50)+1.5%hyst. MDD -35.2%→-30.8%, Calmar 2.02→2.17. 10-anchor/3기간/plateau 검증, Gemini+Codex 코드 리뷰 (3건 불일치 수정). 방어자산(PAXG) 연구 완료 (프레임워크 보류, 유니버스 확장 후 재검토).
-- [2026-03-25] 아키텍처 리팩토링 완료: executor 단일모드(run_once) + recommend 순수화 + 새 스키마(signal/coin_trade/kis_trade). AI 리뷰 3회 15개+서버3개 버그 수정. cron 교체 완료.
+## [2026-04-28] V22 일괄 적용 정합성 정리
+tags: V22, 운영, 문서정리
+- 결정: 모든 자산 (주식/코인/선물) V22 단일 표기. 이전 버전 표기 제거 (progress/history active 영역, MEMORY, recommend docstring 등)
+- 근거: 사용자 명시 — 운영은 모두 V22, 옛 버전 표기는 혼선만 야기
+- 되돌릴 조건: 새로운 버전(V23) 적용 시점에 동일 절차로 갱신
+- archive: 03/04-early 월별로 history/ 하위 이동 (보관)
+
+## [2026-04-27] V22 마이그레이션 (코인/선물/주식 동기)
+tags: V22, 마이그레이션, 코인, 선물, 주식
+- 결정: 코인·선물·주식 모두 V22 통일. 코인/선물 = 1D + 4h 2멤버 EW (snap 60일/90일 동기), 주식 = snap-based 3-tranche stagger (SNAP_PERIOD=126, STAGGER=42, N_SNAPS=3)
+- 근거: AI 합의 (Gemini+Codex) — interval 다양성, plateau-center cfg 채택, 가드 분산방어 일원화. 자산배분 60/40/0 수동 유지 (선물 0%)
+- 되돌릴 조건: 다음 라운드 백테스트에서 단일 interval 회귀가 robust 하다고 입증되면
+
+## [2026-04-22] V22 코인 C 슬리브 비활성
+tags: V22, 코인, C슬리브
+- 결정: V22 C 슬리브(champion mean-reversion) cap=0 으로 비활성. 코드/문서 유지, 단독 sleeve 운용 안 함
+- 근거: Upbit 1h 등가 백테스트 탈락 — 단독 Cal 3.10(가드없음 D ensemble) 대비 C+D 등가 Cal 1.46, MDD -19% → -44%. champion 이 Binance 1h 기반이라 Upbit 등가 검증 불가
+- 되돌릴 조건: Upbit-aware champion 재탐색 결과 등가 sleeve 가 robust 하면 cap_per_slot 복원
+
+## [2026-04-21] V22 가드 전면 제거
+tags: V22, 가드, 분산방어
+- 결정: stop/cash_guard 본체 코드 삭제, 앙상블 분산이 유일 방어. rebalancing_needed 플래그로 통일
+- 근거: 가드 ON/OFF ablation 에서 ON 시 OOS Cal 손실 일관 관찰. 분산방어가 더 robust
+- 되돌릴 조건: 시스템 서킷브레이커(-20%) 도입 검토 시 별도 layer 로 추가
