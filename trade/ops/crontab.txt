@@ -1,0 +1,31 @@
+# 서버 재부팅시 자동 시작
+@reboot cd /home/ubuntu && nohup python3 serve.py > http.log 2>&1 &
+@reboot export TRADE_PIN=0318 && nohup python3 /home/ubuntu/trade_api_server.py > /home/ubuntu/api_server.log 2>&1 &
+
+# 매일 9:15 KST 포트폴리오 추천
+15 9 * * * /home/ubuntu/run_recommend.sh general >> /home/ubuntu/recommend.log 2>&1
+15 9 * * * /home/ubuntu/run_recommend.sh personal >> /home/ubuntu/recommend_personal.log 2>&1
+
+# 5분마다 serve.py 생존 체크
+*/5 * * * * /home/ubuntu/watchdog_serve.sh >> /home/ubuntu/watchdog.log 2>&1
+
+# ═══ executor (단일 모드 + 랜덤 지연) ═══
+# 코인: 09:20 이후 매 10분 (24시간, 급락 대응)
+
+
+
+# 주식: 23:35 이후 매 30분 (~06:05, 월~금/화~토)
+35 23 * * 1-5 /home/ubuntu/run_executor.sh stock > /dev/null 2>&1
+05,35 0-4 * * 2-6 /home/ubuntu/run_executor.sh stock > /dev/null 2>&1
+
+# ═══ 바이낸스 선물 (Cap Defend Futures Ensemble) ═══
+# 매 1시간: 시그널 체크 + 매매
+
+# 매일 09:00 KST: 일일 리포트
+#0 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --report >> /home/ubuntu/binance_trade.log 2>&1
+
+
+# V22 선물: 4h마다 6회 (9/13/17/21/1/5시 KST)
+5 9,13,17,21,1,5 * * * cd /home/ubuntu && python3 auto_trade_binance.py --trade >> /home/ubuntu/binance_trade.log 2>&1
+# V22 코인: 4h마다 6회 (9/13/17/21/1/5시 KST) — 선물과 동기
+5 9,13,17,21,1,5 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1
