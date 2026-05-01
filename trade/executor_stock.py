@@ -7,7 +7,7 @@
   - 전략 신호 계산 안 함
   - signal_state 수정 안 함
 
-이벤트 우선순위 (V22, 가드 없음):
+이벤트 우선순위 (V23, 가드 없음):
   1. 카나리 플립 → 전 트랜치 즉시 전환
   2. 앵커 체크 (해당 snap 에 offense/defense picks 반영)
   3. Delta 매매
@@ -51,12 +51,12 @@ SIGNAL_STATE_FILE = 'signal_state.json'
 TRADE_STATE_FILE = 'kis_trade_state.json'
 LOG_FILE = 'executor_stock.log'
 
-# V22 (2026-04-27): snap-based 3-tranche stagger
-# - snap_id 0/1/2, 각 126일 주기로 rebal, stagger = 42일 (=126/3)
-# - 기존 monthly anchor (1/8/15/22) 폐기
-SNAP_PERIOD_DAYS = 126
+# V23 (2026-04-30): snap-based 3-tranche stagger (snap=69, stagger=23)
+# - snap_id 0/1/2, 각 69일 주기로 rebal, stagger = 23일 (3*23, prime stagger)
+# - V22(126/42) → V23(69/23): rank-sum BT 검증 결과 반영 (Cal 1.16 ymin +0.59)
+SNAP_PERIOD_DAYS = 69
 N_SNAPS = 3
-SNAP_STAGGER_DAYS = 42  # SNAP_PERIOD_DAYS / N_SNAPS
+SNAP_STAGGER_DAYS = 23  # SNAP_PERIOD_DAYS / N_SNAPS
 CASH_BUFFER_DEFAULT = 0.02
 MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
@@ -394,7 +394,13 @@ class KISAPI:
         return success
 
     def get_max_buy_qty(self, ticker: str, price: float) -> int:
-        """매수 가능 수량 조회 (psamount API). -1이면 조회 실패."""
+        """매수 가능 수량 조회 (psamount API). -1이면 조회 실패.
+
+        KIS 해외주식 inquire-psamount 필드 우선순위
+        - ovrs_max_ord_psbl_qty: 외화 기준 최대 매수가능수량 (정확)
+        - frcr_ord_psbl_amt1: 외화 매수가능금액 → /price 로 qty 환산
+        - ord_psbl_qty / ovrs_ord_psbl_amt: 원화 환산 잔액 (외화 잔고는 미반영, 매우 작음)
+        """
         if self.dry_run:
             return -1
         data = _get('/uapi/overseas-stock/v1/trading/inquire-psamount', 'TTTS3007R', {
@@ -406,6 +412,18 @@ class KISAPI:
         output = data.get('output', {})
         if not output:
             return -1
+        try:
+            qty = int(float(output.get('ovrs_max_ord_psbl_qty', 0)))
+            if qty > 0:
+                return qty
+        except (ValueError, TypeError):
+            pass
+        try:
+            amt = float(output.get('frcr_ord_psbl_amt1', 0))
+            if amt > 0 and price > 0:
+                return int(amt / price)
+        except (ValueError, TypeError):
+            pass
         try:
             qty = int(float(output.get('ord_psbl_qty', 0)))
             if qty > 0:
@@ -435,14 +453,14 @@ def check_signal_freshness(signal: dict) -> bool:
 
 
 def check_crash(signal: dict, api: KISAPI, state: dict) -> bool:
-    """V22: 가드 전면 제거 (BT spec과 정합) — 항상 False."""
+    """V23: 가드 전면 제거 (BT spec과 정합) — 항상 False."""
     guard = state.get('guard_state') or {}
     if guard.get('crash_active'):
         guard['crash_active'] = False
         guard['crash_date'] = None
         guard['crash_cooldown_until'] = None
         state['guard_state'] = guard
-        log('  V22: 잔존 crash_active 정리 (가드 spec 제거)')
+        log('  V23: 잔존 crash_active 정리 (가드 spec 제거)')
     return False
 
 
@@ -475,8 +493,8 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
 
 
 def _migrate_tranches_to_snaps(state: dict) -> None:
-    """V21 monthly tranches (1/8/15/22) → V22 snap-based (0/1/2) 1회 변환.
-    기존 picks/weights 를 모두 보존 (4 → 3 평균 EW). 첫 V22 실행 시만 트리거.
+    """V21 monthly tranches (1/8/15/22) → V22/V23 snap-based (0/1/2) 1회 변환.
+    기존 picks/weights 를 모두 보존 (4 → 3 평균 EW). 첫 snap-based 실행 시만 트리거.
     """
     if 'snapshots' in state:
         return
@@ -506,11 +524,11 @@ def _migrate_tranches_to_snaps(state: dict) -> None:
         }
     state['snapshots'] = snapshots
     state['_v22_migrated_from_tranches'] = today.isoformat()
-    log(f'  🔁 V22 migration: monthly tranches → 3 snaps (last_rebal staggered today/-42d/-84d)')
+    log(f'  🔁 V23 migration: monthly tranches → 3 snaps (last_rebal staggered today/-42d/-84d)')
 
 
 def check_anchors(signal: dict, state: dict):
-    """V22 snap-based 앵커 체크.
+    """V23 snap-based 앵커 체크.
     각 snap 의 (today - last_rebal_date) >= SNAP_PERIOD_DAYS 면 신규 picks 으로 rebal.
     """
     _migrate_tranches_to_snaps(state)
@@ -544,11 +562,11 @@ def check_anchors(signal: dict, state: dict):
             snap['weights'] = dict(weights)
             snap['last_rebal_date'] = today.isoformat()
             state['rebalancing_needed'] = True
-            log(f'  📅 V22 snap{snap_id} rebal (elapsed={elapsed}d ≥ {SNAP_PERIOD_DAYS}d): {picks}')
+            log(f'  📅 V23 snap{snap_id} rebal (elapsed={elapsed}d ≥ {SNAP_PERIOD_DAYS}d): {picks}')
 
 
 def merge_tranches(state: dict) -> Dict[str, float]:
-    """V22 snapshots merge → 최종 target (3 snap EW 평균)."""
+    """V23 snapshots merge → 최종 target (3 snap EW 평균)."""
     snapshots = state.get('snapshots', {})
     if not snapshots:
         # 하위호환: 옛 tranches 가 남아있다면 그걸로 fallback
@@ -733,7 +751,7 @@ def run_once(dry_run=False):
     cash_buffer = state.get('cash_buffer', CASH_BUFFER_DEFAULT)
     log(f'  cash_buffer: {cash_buffer:.0%}')
 
-    # V22: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
+    # V23: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
     # 단, 둘 다 없으면 신호도 없는 상태라 스킵.
     if not state.get('tranches') and not state.get('snapshots'):
         log('  kis_trade_state.json 트랜치/스냅 모두 없음 — 첫 실행, anchor 체크가 init')
@@ -757,7 +775,7 @@ def run_once(dry_run=False):
     # 1. 미체결 취소
     api.cancel_all_pending()
 
-    # 2. V22: 가드 없음. 잔존 crash_active 만 정리.
+    # 2. V23: 가드 없음. 잔존 crash_active 만 정리.
     check_crash(signal, api, state)
 
     if not is_fresh:
