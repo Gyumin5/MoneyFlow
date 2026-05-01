@@ -14,9 +14,8 @@
 
 
 
-# 주식: 23:35 이후 매 30분 (~06:05, 월~금/화~토)
+# V23 주식: 1d 1회 (US 정규장 개장 후 23:35 KST, 월~금)
 35 23 * * 1-5 /home/ubuntu/run_executor.sh stock > /dev/null 2>&1
-05,35 0-4 * * 2-6 /home/ubuntu/run_executor.sh stock > /dev/null 2>&1
 
 # ═══ 바이낸스 선물 (Cap Defend Futures Ensemble) ═══
 # 매 1시간: 시그널 체크 + 매매
