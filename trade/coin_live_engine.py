@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
-"""Cap Defend 현물 라이브 엔진 (V22).
+"""Cap Defend 현물 라이브 엔진 (V23).
 
-V22: 1D + 4h 2멤버 50/50 EW 앙상블 (snap 60일 동기).
+V23 (2026-04-30): 1D 단일 멤버 D_SMA42 (snap=217봉, n_snap=7, drift_threshold=0.10).
 바이낸스 spot kline에서 신호 계산 → 업비트 KRW 체결 (executor_coin.py에서 수행).
 
-멤버 D_SMA42:  1D봉, SMA42,  Mom20/127, snap 60봉,  Top3
-멤버 H4_SMA240: 4h봉, SMA240, Mom12/180, snap 360봉, Top3
-
-V22 변경 (vs V21):
-- D 3멤버 → 1D + 4h 2멤버 (interval 다양성 확보)
-- snap 90 → 60일 (1D=60봉, 4h=360봉=60일 동기)
-- C 슬리브 (champion mean-reversion) 코드 전면 제거
-- cron 매시간 :05 (4h 봉 닫힘 처리)
+V23 변경 (vs V22):
+- 1D + 4h 2멤버 → 1D 단일 멤버 (4h 멤버 제거)
+- snap_interval_bars 60 → 217 (3.6배 확장, 7-tranche stagger)
+- n_snapshots 3 → 7
+- drift_threshold 0.0 → 0.10 (sleeve-level half-turnover 트리거 도입)
+- cron 4h x 6 (9,13,17,21,1,5시) → 1d x 1 (09시)
+- ensemble framework 유지: ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}
 
 가드 없음: gap/exclusion 가드 전면 제거. 앙상블 분산 + Upbit warning/delisting 필터.
 
+drift 트리거 (V23 신규):
+- 매 D봉 닫힘 시각 cur_w 와 target_w 의 half_turnover 계산
+- half_turnover >= drift_threshold(0.10) AND canary_on AND not crash_cooldown 시 추가 발화
+- snap_fire OR drift_fire 면 리밸 발화 (기존: snap_fire 만)
+- cur_w 는 자본금 기준 비중 (executor 가 잔고에서 산출 후 engine 에 주입)
+
 설계:
-- compute_member_target(): bar-idempotency + 3-snap stagger 내장
+- compute_member_target(): bar-idempotency + n-snap stagger 내장 (n=7 도 동일 메커니즘)
 - 엔진 내부 현금 키는 'CASH' (대문자). executor로 넘어갈 때 'Cash' (소문자) 정규화.
 - 유니버스: CoinGecko Top40 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
 - Freshness: expected_last_bar_ts 일치 체크
+- Schema version: V23 (state['schema_version'] = 'V23')
 """
 
 from __future__ import annotations
@@ -57,30 +63,18 @@ HARDCODED_FALLBACK = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK',
 
 UPBIT_MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all?is_details=true'
 
-# V22 멤버 설정 (1D+4h 2멤버 EW, snap 60일 동기, 2026-04-27 확정)
+# V23 멤버 설정 (1D 단일, snap=217봉×7, drift 0.10, 2026-04-30 확정)
+SCHEMA_VERSION = 'V23'
+DRIFT_THRESHOLD_SPOT = 0.10  # half-turnover 트리거 임계값
+DRIFT_ENABLED = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
+
 MEMBER_D_SMA42 = {
     'interval': 'D',
     'sma_bars': 42,
     'mom_short_bars': 20,
     'mom_long_bars': 127,
-    'snap_interval_bars': 60,
-    'n_snapshots': 3,
-    'canary_hyst': 0.015,
-    'health_mode': 'mom2vol',
-    'vol_mode': 'daily',
-    'vol_threshold': 0.05,
-    'vol_lookback_days': 90,
-    'universe_size': 3,
-    'cap': 1.0 / 3.0,
-}
-
-MEMBER_H4_SMA240 = {
-    'interval': '4h',
-    'sma_bars': 240,
-    'mom_short_bars': 12,
-    'mom_long_bars': 180,
-    'snap_interval_bars': 360,   # 60일 동기 (4h × 6 × 60)
-    'n_snapshots': 3,
+    'snap_interval_bars': 217,   # V23: 7*31 (stagger 31)
+    'n_snapshots': 7,            # V23: 3 → 7
     'canary_hyst': 0.015,
     'health_mode': 'mom2vol',
     'vol_mode': 'daily',
@@ -92,24 +86,21 @@ MEMBER_H4_SMA240 = {
 
 MEMBERS = {
     'D_SMA42': MEMBER_D_SMA42,
-    'H4_SMA240': MEMBER_H4_SMA240,
 }
 
 ENSEMBLE_WEIGHTS = {
-    'D_SMA42': 0.5,
-    'H4_SMA240': 0.5,
+    'D_SMA42': 1.0,
 }
 
 # 각 interval별 최소 가져올 봉 수
+# V23: D 단일 (4h 제거). SMA42 + Mom127 + snap217 + vol90 → 최소 ~344. 500 충분
 KLINE_LIMITS = {
-    'D': 500,     # SMA42 + Mom127 + vol90d → 500 충분
-    '4h': 1500,   # SMA240 + Mom180 + snap360 + vol → 1500 (60+ 일치)
+    'D': 500,
 }
 
 # Binance interval 매핑
 BINANCE_INTERVAL_MAP = {
     'D': '1d',
-    '4h': '4h',
 }
 
 
@@ -720,6 +711,33 @@ def combine_ensemble(member_targets: Dict[str, Dict[str, float]],
 
 
 
+# ─── V23 drift 트리거 유틸 ───
+def half_turnover(cur_w: Dict[str, float], tgt_w: Dict[str, float]) -> float:
+    """sleeve-level half-turnover. Cash/CASH 모두 동일 키로 정규화 후 계산.
+
+    cur_w, tgt_w 는 같은 universe (자본금 기준 비중). 합 ≈ 1.0
+    """
+    def _norm(d: Dict[str, float]) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for k, v in d.items():
+            kk = 'Cash' if k.upper() == 'CASH' else k
+            out[kk] = out.get(kk, 0.0) + float(v)
+        return out
+    a, b = _norm(cur_w), _norm(tgt_w)
+    keys = set(a) | set(b)
+    return sum(abs(b.get(k, 0.0) - a.get(k, 0.0)) for k in keys) / 2
+
+
+def evaluate_drift_fire(cur_w: Dict[str, float], tgt_w: Dict[str, float],
+                         threshold: float = DRIFT_THRESHOLD_SPOT) -> Tuple[bool, float]:
+    """drift trigger 평가. (fire, ht) 반환.
+
+    fire = ht >= threshold. canary_on/crash_cooldown 같은 외부 조건은 호출자가 결합.
+    """
+    ht = half_turnover(cur_w, tgt_w)
+    return (ht >= threshold, ht)
+
+
 # ─── Top-level 진입점 ───
 @dataclass
 class EngineResult:
@@ -733,12 +751,17 @@ class EngineResult:
     universe: List[str]
     universe_meta: Dict
     alerts: List[str]
+    # V23 신규: drift 트리거 평가 결과 (cur_w 주어진 경우만)
+    drift_fire: bool = False
+    drift_half_turnover: float = 0.0
+    drift_threshold: float = DRIFT_THRESHOLD_SPOT
 
 
 def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
                           now_utc: Optional[datetime] = None,
                           upbit_price_fn=None,
-                          upbit_status: Optional[Dict[str, Dict]] = None) -> EngineResult:
+                          upbit_status: Optional[Dict[str, Dict]] = None,
+                          cur_w: Optional[Dict[str, float]] = None) -> EngineResult:
     """한 사이클의 전체 계산: 유니버스 → 데이터 → 멤버 target → 앙상블.
 
     state는 dict in/out (mutate됨). 호출자가 save_state로 저장.
@@ -894,9 +917,20 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     }
     state['last_target_snapshot'] = {**combined, '_ts': to_utc_iso(now_utc)}
     state['last_run_ts'] = to_utc_iso(now_utc)
+    state['schema_version'] = SCHEMA_VERSION  # V23 마이그레이션 마크
 
     all_fresh = all(fresh_map.values()) if fresh_map else False
     any_new = any(new_bar_map.values()) if new_bar_map else False
+
+    # 6) V23 drift 트리거 평가 (cur_w 주어진 경우만, 정보용; 실제 발화 결정은 호출자)
+    drift_fire_b = False
+    drift_ht = 0.0
+    if cur_w is not None:
+        drift_fire_b, drift_ht = evaluate_drift_fire(cur_w, combined, DRIFT_THRESHOLD_SPOT)
+        log.info('drift eval: half_turnover=%.4f threshold=%.2f fire=%s enabled=%s',
+                 drift_ht, DRIFT_THRESHOLD_SPOT, drift_fire_b, DRIFT_ENABLED)
+        if not DRIFT_ENABLED:
+            drift_fire_b = False  # snap-only fallback
 
     return EngineResult(
         combined_target=combined,
@@ -909,4 +943,7 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         universe=universe,
         universe_meta=u_meta,
         alerts=alerts,
+        drift_fire=drift_fire_b,
+        drift_half_turnover=drift_ht,
+        drift_threshold=DRIFT_THRESHOLD_SPOT,
     )
