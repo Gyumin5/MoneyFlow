@@ -3,9 +3,9 @@
 
 구조:
   - 신호: coin_live_engine.compute_live_targets
-          (Binance spot kline → V22 1D+4h 2멤버 D_SMA42/H4_SMA240 1/2씩 EW 앙상블)
+          (V23: Binance spot kline → 1D 단일 멤버 D_SMA42, snap=217×7, drift=0.10)
   - 체결: Upbit KRW (pyupbit)
-  - 상태: trade_state.json
+  - 상태: trade_state.json (schema_version=V23)
 
 실행 순서:
   1. flock /tmp/coin_executor.lock
@@ -616,12 +616,23 @@ def run_once(dry_run: bool = False) -> int:
         except Exception:
             return None
 
+    # V23: cur_w 산출 (자본금 기준 비중) — drift 트리거 평가용
+    # balance: {'KRW': float, 'BTC': float, ...} 모두 KRW 평가액
+    cur_balance_for_w = api.get_balance() or {}
+    total_for_w = sum(cur_balance_for_w.values()) if cur_balance_for_w else 0.0
+    cur_w_input: Dict[str, float] = {}
+    if total_for_w > 0:
+        for k, v in cur_balance_for_w.items():
+            key = 'Cash' if k == 'KRW' else k
+            cur_w_input[key] = cur_w_input.get(key, 0.0) + (float(v) / total_for_w)
+
     # 엔진 호출
     try:
         result = cle.compute_live_targets(
             state, session, CACHE_DIR, now_utc=now,
             upbit_price_fn=_upbit_ohlcv,
             upbit_status=upbit_status,
+            cur_w=cur_w_input or None,
         )
     except Exception as e:
         log(f'❌ 엔진 호출 실패: {e}\n{traceback.format_exc()}')
@@ -690,6 +701,20 @@ def run_once(dry_run: bool = False) -> int:
     if target_changed:
         state['rebalancing_needed'] = True
         log(f'  🔔 target 변경 감지 → rebalancing_needed=True. prev={prev_combined}, new={result.combined_target}')
+
+    # V23 drift 트리거: target 불변이어도 cur_w 와 ht 차이 >= threshold 면 발화
+    # crash_cooldown 체크는 엔진이 이미 처리 (canary_on 만 추가 게이트로 가정)
+    if not target_changed and result.drift_fire:
+        state['rebalancing_needed'] = True
+        state['last_rebal_reason'] = 'drift'
+        log(f'  🔔 V23 drift 발화 → rebalancing_needed=True. half_turnover={result.drift_half_turnover:.4f} '
+            f'>= threshold={result.drift_threshold:.2f}')
+        _tg(f'⚠ V23 drift 트리거 발화: ht={result.drift_half_turnover:.3f} ≥ {result.drift_threshold:.2f} → 리밸')
+    elif target_changed:
+        state['last_rebal_reason'] = 'snap_or_signal'
+    log(f'  V23 debug: schema_version={state.get("schema_version", "N/A")} '
+        f'cur_w_count={len(cur_w_input)} ht={result.drift_half_turnover:.4f} '
+        f'drift_fire={result.drift_fire} target_changed={target_changed}')
 
     rebalance_needed = bool(state.get('rebalancing_needed', False))
     if not rebalance_needed:

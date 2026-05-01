@@ -25,7 +25,7 @@
 #0 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --report >> /home/ubuntu/binance_trade.log 2>&1
 
 
-# V22 선물: 4h마다 6회 (9/13/17/21/1/5시 KST)
-5 9,13,17,21,1,5 * * * cd /home/ubuntu && python3 auto_trade_binance.py --trade >> /home/ubuntu/binance_trade.log 2>&1
-# V22 코인: 4h마다 6회 (9/13/17/21/1/5시 KST) — 선물과 동기
-5 9,13,17,21,1,5 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1
+# V23 선물: 1d 1회 (09:05 KST, D봉 닫힘 직후)
+5 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --trade >> /home/ubuntu/binance_trade.log 2>&1
+# V23 코인: 1d 1회 (09:05 KST, D봉 닫힘 직후) — 선물과 동기
+5 9 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1

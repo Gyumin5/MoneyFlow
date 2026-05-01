@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-바이낸스 선물 자동매매 — V22 L3 앙상블 (1D+4h 2멤버, 2026-04-27 확정)
+바이낸스 선물 자동매매 — V23 L3 단일 멤버 (2026-04-30 확정)
 ========================================
-확정 신호 조합:
-- D_SMA42:    (interval=D,  SMA=42,  Mom=18/127, mom2vol, daily vol 5%, Snap=90 bars)
-- 4h_SMA240:  (interval=4h, SMA=240, Mom=12/180, mom2vol, daily vol 5%, Snap=540 bars = 90일 동기)
+V23 신호:
+- D_SMA42:    (interval=D, SMA=42, Mom=18/127, mom2vol, daily vol 5%, Snap=57 bars, n_snap=3, drift=0.05)
 
-V22 변경 (vs V21):
-- 4h 3멤버 → 1D + 4h 2멤버 (interval 다양성, 운영 단순화)
-- snap 30/120 → 90일 동기 (1D=90봉, 4h=540봉)
-- AI 합의 후 plateau-center cfg 채택 (peak SMA44 → SMA42, parameter drift 방어)
+V23 변경 (vs V22):
+- 1D + 4h 2멤버 → 1D 단일 멤버 (4h 제거, snap=90→57)
+- drift_threshold = 0.05 도입 (sleeve-level half-turnover 트리거)
+- ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}
+- cron 4h x 6 → 1d x 1 (09:05)
 
 실행층:
 - 고정 3배 레버리지 (L3)
@@ -17,13 +17,16 @@ V22 변경 (vs V21):
 - 캐시 게이트: 없음 (STOP_GATE_CASH_THRESHOLD=0)
 - 앙상블 분산만으로 방어
 
-실행: 4h마다 (cron "5 9,13,17,21,1,5 * * *" 한국시간)
-1. 바이낸스에서 D+4h OHLCV 수집
-2. 2전략 각각 목표 비중 계산
-3. 가중 합산 (1/2씩) → 단일 포트폴리오
-4. 고정 3x 레버리지로 매핑
-5. 현재 포지션과 비교 → delta 리밸런싱
-6. STOP 주문 없음 (sync_stop_orders는 early return)
+실행: 1일 1회 (cron "5 9 * * *" 한국시간)
+1. 바이낸스에서 D OHLCV 수집
+2. 단일 전략 목표 비중 계산
+3. 고정 3x 레버리지로 매핑
+4. cur_w (자본금 기준 비중) vs target_w 의 half_turnover 계산
+5. snap_fire OR (canary_on AND ht >= 0.05) 시 리밸 발화
+6. 현재 포지션과 비교 → delta 리밸런싱
+7. STOP 주문 없음 (sync_stop_orders는 early return)
+
+Schema version: V23 (state['schema_version'])
 """
 
 import argparse
@@ -53,8 +56,8 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.py')
 STATE_PATH = os.path.join(SCRIPT_DIR, 'binance_state.json')
 LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
 
-# V22 전략/실행 파라미터 (1D+4h 2멤버 EW, 2026-04-27 확정)
-# 고정 3배 레버리지, 가드 없음, snap 90일 동기
+# V23 전략/실행 파라미터 (1D 단일 멤버, drift=0.05, 2026-04-30 확정)
+# 고정 3배 레버리지, 가드 없음
 LEVERAGE_FLOOR = 3
 LEVERAGE_MID = 3
 LEVERAGE_CEILING = 3
@@ -62,7 +65,11 @@ STOP_PCT = 0.0            # 가드 비활성
 STOP_GATE_CASH_THRESHOLD = 0.0  # cash_guard 비활성
 LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30  # 동적 lev 비활성이지만 상수 유지
 
-ENSEMBLE_WEIGHTS = {'D_SMA42': 0.5, '4h_SMA240': 0.5}
+SCHEMA_VERSION = 'V23'
+DRIFT_THRESHOLD_FUT = 0.05  # half-turnover 트리거 임계값
+DRIFT_ENABLED_FUT = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
+
+ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}  # V23: 단일 멤버
 
 STRATEGIES = {
     'D_SMA42': {
@@ -73,21 +80,9 @@ STRATEGIES = {
         'health_mode': 'mom2vol',
         'vol_mode': 'daily',
         'vol_threshold': 0.05,
-        'snap_interval_bars': 90,
+        'snap_interval_bars': 57,    # V23: 90 → 57 (3*19, stagger 19)
         'canary_hyst': 0.015,
-        'n_snapshots': 3,
-    },
-    '4h_SMA240': {
-        'interval': '4h',
-        'sma_bars': 240,
-        'mom_short_bars': 12,
-        'mom_long_bars': 180,
-        'health_mode': 'mom2vol',
-        'vol_mode': 'daily',
-        'vol_threshold': 0.05,
-        'snap_interval_bars': 540,    # 90일 동기 (4h × 6 × 90)
-        'canary_hyst': 0.015,
-        'n_snapshots': 3,
+        'n_snapshots': 3,            # V23: 유지
     },
 }
 
@@ -328,16 +323,14 @@ def refresh_universe(client: Client, cache_dir: str = '/tmp') -> List[str]:
 
 
 def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
-    """모든 심볼의 1h, D, 4h OHLCV 수집.
-    V22: D + 4h 전략 + 1h (동적 레버리지 backup, 현재 비활성).
+    """모든 심볼의 D OHLCV 수집 + 1h (동적 레버리지 backup, 현재 비활성).
+    V23: D 단일 전략 (SMA42+mom127+snap57+vol90 → 500 bars 충분).
+    1h 는 동적 레버리지 백업용, 비활성이지만 호환 위해 fetch 유지.
     """
-    data = {'1h': {}, 'D': {}, '4h': {}}
+    data = {'1h': {}, 'D': {}}
     for sym in UNIVERSE:
-        for iv in ['1h', 'D', '4h']:
-            # D 전략: SMA42+mom127 → 500 bars 충분
-            # 4h 전략: SMA240+mom180+snap540 → 1800 bars
-            # 1h: 동적 레버리지 backup (현재 비활성), 1500 bars
-            limit = {'1h': 1500, 'D': 500, '4h': 1800}[iv]
+        for iv in ['1h', 'D']:
+            limit = {'1h': 1500, 'D': 500}[iv]
             iv_api = '1d' if iv == 'D' else iv
             df = fetch_klines(client, sym, iv_api, limit)
             if not df.empty:
@@ -1239,7 +1232,7 @@ def count_stop_orders(client: Client, symbols: Optional[List[str]] = None) -> in
 def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[str, pd.DataFrame],
                      target: Dict[str, float], order_alerts: Optional[List[str]] = None,
                      error_alerts: Optional[List[str]] = None):
-    """V22 (가드 완전 제거): 스탑 주문 로직 없음.
+    """V22/V23 (가드 완전 제거): 스탑 주문 로직 없음.
 
     이전 배포에서 남았을 수 있는 잔존 스탑을 정리하고 즉시 반환.
     현재 UNIVERSE 밖 심볼에도 stale 스탑이 있을 수 있으므로
@@ -1252,7 +1245,7 @@ def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[s
         if sym:
             cleanup_symbols.add(sym)
     cancel_stop_orders(client, sorted(cleanup_symbols))
-    log.info("STOP OFF (V22: 가드 완전 제거, 잔존 스탑 정리 %d심볼)", len(cleanup_symbols))
+    log.info("STOP OFF (V23: 가드 완전 제거, 잔존 스탑 정리 %d심볼)", len(cleanup_symbols))
 
 
 # ─── SQLite 자산 기록 ───
@@ -1328,7 +1321,7 @@ def main():
 
         lines = [f"📊 바이낸스 선물 일일 리포트 ({now})"]
         lines.append(f"총 자산: ${pv:.2f} ({pnl_pct:+.1f}%)")
-        lines.append(f"레버리지: 고정 3x (V22 1D+4h 2멤버 EW)")
+        lines.append(f"레버리지: 고정 3x (V23 1D 단일 D_SMA42 sn=57 n=3 drift=0.05)")
 
         if positions:
             lines.append("\n포지션 (실질금액, notional/lev):")
@@ -1413,17 +1406,16 @@ def main():
         data = fetch_all_data(client)
         n_1h = len(data['1h'])
         n_d = len(data['D'])
-        n_4h = len(data['4h'])
-        log.info(f"수집 완료: 1h {n_1h}개, D {n_d}개, 4h {n_4h}개 ({time.time()-t_start:.1f}s)")
+        log.info(f"수집 완료: 1h {n_1h}개, D {n_d}개 ({time.time()-t_start:.1f}s)")
 
         # 데이터 장애 방어
-        if 'BTC' not in data['1h'] or 'BTC' not in data['D'] or 'BTC' not in data['4h']:
+        if 'BTC' not in data['1h'] or 'BTC' not in data['D']:
             log.error("BTC 데이터 누락! 매매 중단. 이전 포지션 유지.")
             send_telegram("⚠️ BTC 데이터 누락 — 매매 중단")
             return
-        if n_1h < len(UNIVERSE) // 2 or n_d < len(UNIVERSE) // 2 or n_4h < len(UNIVERSE) // 2:
-            log.error(f"데이터 부족 ({n_1h}/{n_d}/{n_4h}). 매매 중단.")
-            send_telegram(f"⚠️ 데이터 부족 ({n_1h}/{n_d}/{n_4h}) — 매매 중단")
+        if n_1h < len(UNIVERSE) // 2 or n_d < len(UNIVERSE) // 2:
+            log.error(f"데이터 부족 ({n_1h}/{n_d}). 매매 중단.")
+            send_telegram(f"⚠️ 데이터 부족 ({n_1h}/{n_d}) — 매매 중단")
             return
 
         # 2. 현재 포지션 (리밸런싱 전)
@@ -1451,6 +1443,30 @@ def main():
         combined = combine_ensemble(targets, ENSEMBLE_WEIGHTS)
         coins_combined = {k: f"{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0}
         log.info(f"합산: {coins_combined or 'CASH 100%'}")
+
+        # V23 drift 트리거: cur_w (자본금 기준 비중, real_weight 사용) vs target_w
+        # half_turnover >= DRIFT_THRESHOLD_FUT(0.05) 이면 rebalancing_needed=True
+        cur_w_fut: Dict[str, float] = {}
+        for coin, pos in positions_before.items():
+            cur_w_fut[coin] = float(pos.get('real_weight', 0.0))
+        cash_w = max(0.0, 1.0 - sum(cur_w_fut.values()))
+        cur_w_fut['CASH'] = cash_w
+        # target normalize: dict with 'CASH' key
+        tgt_w_norm = {k: v for k, v in combined.items()}
+        # drift compute
+        _all_keys = set(cur_w_fut) | set(tgt_w_norm)
+        ht_fut = sum(abs(tgt_w_norm.get(k, 0.0) - cur_w_fut.get(k, 0.0)) for k in _all_keys) / 2
+        drift_fire_fut = ht_fut >= DRIFT_THRESHOLD_FUT
+        if not DRIFT_ENABLED_FUT:
+            drift_fire_fut = False  # snap-only fallback
+        log.info(f"V23 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.2f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT}")
+        if drift_fire_fut and not state.get('rebalancing_needed', False):
+            state['rebalancing_needed'] = True
+            state['last_rebal_reason'] = 'drift'
+            log.info(f"  🔔 V23 drift 발화 → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
+            send_telegram(f'⚠ V23 fut drift: ht={ht_fut:.3f} ≥ {DRIFT_THRESHOLD_FUT:.2f} → 리밸')
+        # schema_version 마크
+        state['schema_version'] = SCHEMA_VERSION
 
         # 5. 리밸런싱
         target_lev_map = get_coin_leverage_map(combined, data['1h'])
