@@ -489,8 +489,70 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
 
 
 # ═══ 사전 알림 ═══
+import v23_report as v23r  # noqa: E402
+
+KRW_PER_COIN_DUST = 5_000  # 5천원 미만 보유는 표시 생략
+
+
+def _build_coin_holdings(balance: Dict[str, float], total_krw: float,
+                          api_get_price=None) -> list:
+    """balance(KRW 환산) → 보유 list[{ticker, value_str, weight}]."""
+    if total_krw <= 0:
+        return []
+    out = []
+    for k, v_krw in sorted(balance.items(), key=lambda kv: -kv[1]):
+        if v_krw < KRW_PER_COIN_DUST:
+            continue
+        ticker = 'Cash' if k == 'KRW' else k
+        out.append({'ticker': ticker, 'value_str': f'₩{v_krw:,.0f}',
+                    'weight': v_krw / total_krw})
+    return out
+
+
+def _build_coin_canary_lines(result) -> list:
+    lines = []
+    for mname, info in (result.canary_info or {}).items():
+        if not info:
+            continue
+        on = info.get('on', False)
+        ratio = info.get('ratio', 0.0)
+        cur = info.get('cur', 0.0)
+        sma = info.get('sma_val', 0.0)
+        sma_p = info.get('sma_p', 0)
+        flipped = result.canary_flipped.get(mname, False)
+        flip_mark = ' *FLIP*' if flipped else ''
+        lines.append(f"{mname}: {'ON 🟢' if on else 'OFF 🔴'} "
+                     f"BTC ${cur:,.0f} vs SMA{sma_p} ${sma:,.0f} ratio={ratio:.4f}{flip_mark}")
+    return lines
+
+
+def build_coin_report(result, balance: Dict[str, float], total_krw: float,
+                      orders_text: str, status_extra: Optional[Dict[str, str]] = None) -> str:
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    ts = datetime.now(KST).strftime('%Y-%m-%d %H:%M KST')
+    target = {('Cash' if k == 'CASH' else k): v
+              for k, v in result.combined_target.items() if not k.startswith('_')}
+    canary_lines = _build_coin_canary_lines(result)
+    status = {
+        'schema': 'V23',
+        'ht': f'{result.drift_half_turnover:.4f}',
+        'drift_threshold': f'{result.drift_threshold:.2f}',
+        'drift_fire': '예 🔔' if result.drift_fire else '아니오',
+        '총 평가액': f'₩{total_krw:,.0f}',
+    }
+    if status_extra:
+        status.update(status_extra)
+    return v23r.build_report(
+        asset_label='코인 spot', emoji='🪙', name='Cap Defend Spot',
+        ts_str=ts, target=target,
+        holdings=_build_coin_holdings(balance, total_krw),
+        orders_text=orders_text, canary_lines=canary_lines, status=status)
+
+
 def format_target_summary(combined: Dict[str, float],
                            member_targets: Dict[str, Dict[str, float]]) -> str:
+    """레거시 헬퍼 — 일부 사전 알림 경로에서 호출. unified report 미사용."""
     lines = ['목표 (앙상블):']
     for k, v in sorted(combined.items(), key=lambda kv: -kv[1]):
         if k.startswith('_'):
@@ -721,9 +783,9 @@ def run_once(dry_run: bool = False) -> int:
         log(f'  ℹ target 불변 + rebalancing_needed=False → 스킵. prev={prev_combined}')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
-        # heartbeat: 매매 없어도 매 실행마다 요약 알림
-        _tg(format_target_summary(result.combined_target, result.member_targets))
-        _tg(f'⏸ 스킵 (target 불변) total=₩{total_krw:,.0f}')
+        _tg(build_coin_report(result, balance, total_krw,
+                              orders_text='없음 (target 불변)',
+                              status_extra={'리밸 대기': '아니오'}))
         _flush_telegram(dry_run)
         return 0
 
@@ -733,8 +795,9 @@ def run_once(dry_run: bool = False) -> int:
         log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
-        _tg(format_target_summary(result.combined_target, result.member_targets))
-        _tg(f'⏸ 스킵 (포지션 근접) total=₩{total_krw:,.0f}')
+        _tg(build_coin_report(result, balance, total_krw,
+                              orders_text='없음 (포지션 이미 근접)',
+                              status_extra={'리밸 대기': '아니오'}))
         _flush_telegram(dry_run)
         return 0
 
@@ -757,9 +820,11 @@ def run_once(dry_run: bool = False) -> int:
     execute_delta(effective_target, api, permanent_block, dry_run)
 
     # 체결 후 잔고 재조회 → 여전히 편차 남으면 다음 실행에서 재시도 (부분체결 대응)
+    balance_after = balance
+    total_after = total_krw
     if not dry_run:
-        balance_after = api.get_balance()
-        total_after = sum(balance_after.values()) if balance_after else 0.0
+        balance_after = api.get_balance() or balance
+        total_after = sum(balance_after.values()) if balance_after else total_krw
         # 잔고 조회 실패(빈 dict) 또는 total 0 → 판정 보류, 플래그 유지
         if not balance_after or total_after <= 0:
             state['rebalancing_needed'] = True
@@ -778,7 +843,11 @@ def run_once(dry_run: bool = False) -> int:
     _save_state_unless_dry(state_path, state, dry_run)
     log(f'  상태 저장: {STATE_FILE}')
 
-    _tg(f'✅ 실행 완료 ({"DRY" if dry_run else "LIVE"}) total=₩{total_krw:,.0f}')
+    # 최종 통일 보고
+    rebal_done = not bool(state.get('rebalancing_needed', False))
+    _tg(build_coin_report(result, balance_after, total_after,
+                          orders_text=f'완료 ({"DRY" if dry_run else "LIVE"}) — 매도/매수 실행',
+                          status_extra={'리밸 결과': '✅ 완료' if rebal_done else '⏳ 잔존 (다음 cron 재시도)'}))
     _flush_telegram(dry_run)
     return 0
 

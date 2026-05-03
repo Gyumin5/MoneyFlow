@@ -490,6 +490,7 @@ class MemberComputeResult:
     new_bar: bool                      # 새 봉이어서 재계산 수행했는지
     canary_flipped: bool
     alerts: List[str]                  # 텔레그램 알림용 메시지
+    canary_info: Optional[Dict] = None  # {'on', 'ratio', 'cur', 'sma_val', 'sma_p'}
 
 
 def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFrame],
@@ -666,7 +667,9 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
 
     return MemberComputeResult(target=dict(combined), new_state=state,
                                fresh=fresh, new_bar=True,
-                               canary_flipped=canary_flipped, alerts=alerts)
+                               canary_flipped=canary_flipped, alerts=alerts,
+                               canary_info={'on': canary_on, 'ratio': ratio,
+                                            'cur': cur, 'sma_val': sma_val, 'sma_p': sma_p})
 
 
 # ─── 앙상블 + 데이터 슬라이스 ───
@@ -755,6 +758,7 @@ class EngineResult:
     drift_fire: bool = False
     drift_half_turnover: float = 0.0
     drift_threshold: float = DRIFT_THRESHOLD_SPOT
+    canary_info: Dict[str, Dict] = field(default_factory=dict)  # 멤버별 카나리 상세
 
 
 def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
@@ -863,6 +867,7 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     fresh_map: Dict[str, bool] = {}
     new_bar_map: Dict[str, bool] = {}
     flipped_map: Dict[str, bool] = {}
+    canary_info_map: Dict[str, Dict] = {}
 
     ms_all = state.setdefault('members', {})
     # 가드 제거 (2026-04-21): 기존 state의 excluded_coins는 이후 save 때 자연 소거.
@@ -903,6 +908,8 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         fresh_map[mname] = res.fresh
         new_bar_map[mname] = res.new_bar
         flipped_map[mname] = res.canary_flipped
+        if res.canary_info:
+            canary_info_map[mname] = res.canary_info
         ms_all[mname] = res.new_state.to_dict()
         alerts.extend(res.alerts)
 
@@ -946,4 +953,5 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         drift_fire=drift_fire_b,
         drift_half_turnover=drift_ht,
         drift_threshold=DRIFT_THRESHOLD_SPOT,
+        canary_info=canary_info_map,
     )
