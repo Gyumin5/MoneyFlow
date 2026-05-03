@@ -2253,16 +2253,30 @@ if __name__ == "__main__":
             btc_dist_pct = f"{(btc_cur/btc_sma-1)*100:+.1f}%"
 
         coin_picks_str = ', '.join(t.replace('-USD','') for t in c_port.keys() if t != 'Cash')
-        coin_weights_str = ' / '.join(f"{t.replace('-USD','')} {w:.0%}" for t, w in c_port.items())
 
+        # V23 통일 포맷 (Daily Report — 신호 요약, 실행 보고와 별개)
+        date_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]
+        c_lines = ['🎯 코인 목표']
+        for t, w in sorted(c_port.items(), key=lambda kv: -kv[1]):
+            tk = t.replace('-USD', '')
+            if w < 1e-4 and tk.lower() != 'cash':
+                continue
+            c_lines.append(f'  {tk}: {w*100:.1f}%')
+        s_lines = ['🎯 주식 목표']
+        for t, w in sorted(s_port.items(), key=lambda kv: -kv[1]):
+            if w < 1e-4 and t.lower() != 'cash':
+                continue
+            s_lines.append(f'  {t}: {w*100:.1f}%')
         summary = (
-            f"📊 Daily Report ({target_date.strftime('%m/%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]})\n"
-            f"\n🪙 코인: {c_stat}\n"
-            f"  BTC vs SMA50: {btc_dist_pct}\n"
-            f"  선정: {coin_picks_str or '없음'}\n"
-            f"  비중: {coin_weights_str}\n"
-            f"\n📈 주식: {s_stat}\n"
-            f"  비중: {', '.join(f'{t} {w:.0%}' for t,w in s_port.items())}"
+            f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
+            + '\n'.join(c_lines) + "\n\n"
+            + '\n'.join(s_lines) + "\n\n"
+            + "🦅 카나리\n"
+            + f"  코인 (BTC vs SMA{COIN_CANARY_MA_PERIOD}): {c_stat} ({btc_dist_pct or 'n/a'})\n"
+            + f"  주식: {s_stat}\n\n"
+            + "📊 상태\n"
+            + f"  코인 선정: {coin_picks_str or '없음'}\n"
+            + f"  schema: V23"
         )
         if PORTFOLIO_PUBLIC_URL:
             send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)

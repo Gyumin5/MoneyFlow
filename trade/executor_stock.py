@@ -795,42 +795,67 @@ def run_once(dry_run=False):
         target = merge_tranches(state)
         log(f'  Target: {target}')
         mode = 'DRY-RUN' if dry_run else 'LIVE'
-        summary_lines = [f'📊 리밸런싱 시작 ({mode})']
-        summary_lines.append(f"Risk: {'ON' if signal.get('stock', {}).get('risk_on', True) else 'OFF'}")
-        summary_lines.append(
-            '목표: ' + ', '.join(f'{k}:{v:.1%}' for k, v in target.items())
-        )
-        # 디버그: 현재 잔고 상세
-        _bal = api.get_balance() if hasattr(api, 'get_balance') else {}
-        log(f'  Balance: {_bal}')
-        holdings = _bal[0] if isinstance(_bal, tuple) and len(_bal) >= 1 else {}
-        if holdings:
-            summary_lines.append(
-                '현재 보유: ' + ', '.join(f'{k}:{v}주' for k, v in holdings.items())
-            )
-        else:
-            summary_lines.append('현재 보유: 없음')
-        send_telegram('\n'.join(summary_lines))
         result = execute_delta(target, api, state, cash_buffer=cash_buffer)
         sells = result.get('sells', [])
         buys = result.get('buys', [])
         max_diff = result.get('max_diff')
         failed_orders = result.get('failed_orders', [])
-        finish_lines = ['✅ 리밸런싱 완료' if result.get('completed') else '⏳ 리밸런싱 미완료']
-        if not sells and not buys:
-            finish_lines.append('주문 계산: 없음')
+
+        # V23 통일 보고
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        import v23_report as v23r
+        from datetime import timezone, timedelta
+        kst_now = datetime.now(timezone(timedelta(hours=9)))
+
+        _bal_after = api.get_balance() if hasattr(api, 'get_balance') else None
+        if isinstance(_bal_after, tuple) and len(_bal_after) >= 2:
+            holdings_q, total_usd, fx = _bal_after[0], _bal_after[1], (_bal_after[2] if len(_bal_after) > 2 else 1.0)
         else:
-            if sells:
-                finish_lines.append('매도 계획: ' + ', '.join(f'{t} {q}주' for t, q, _ in sells))
-            if buys:
-                finish_lines.append('매수 계획: ' + ', '.join(f'{t} {q}주' for t, q, _ in buys))
+            holdings_q, total_usd, fx = {}, 0.0, 1.0
+
+        holdings_list = []
+        for tk, qty in holdings_q.items():
+            try:
+                p = api.get_current_price(tk)
+            except Exception:
+                p = 0.0
+            v = qty * p
+            if v < 100:  # $100 미만 dust
+                continue
+            holdings_list.append({
+                'ticker': tk,
+                'value_str': f'${v:,.0f}',
+                'weight': (v / total_usd) if total_usd > 0 else 0.0,
+            })
+        holdings_list.sort(key=lambda h: -h['weight'])
+
+        order_parts = []
+        if sells:
+            order_parts.append('매도: ' + ', '.join(f'{t} {q}주' for t, q, _ in sells))
+        if buys:
+            order_parts.append('매수: ' + ', '.join(f'{t} {q}주' for t, q, _ in buys))
         if failed_orders:
-            finish_lines.append(
-                '실패 주문: ' + ', '.join(f'{side} {ticker} {qty}주' for side, ticker, qty in failed_orders)
-            )
-        if max_diff is not None:
-            finish_lines.append(f'잔여 편차: {max_diff:.1%}')
-        send_telegram('\n'.join(finish_lines))
+            order_parts.append('실패: ' + ', '.join(f'{side} {ticker} {qty}주'
+                                                     for side, ticker, qty in failed_orders))
+        orders_text = ('\n  ' + '\n  '.join(order_parts)) if order_parts else '없음'
+
+        risk_on = signal.get('stock', {}).get('risk_on', True)
+        canary_lines = [f"Stock canary: {'ON 🟢 (공격)' if risk_on else 'OFF 🔴 (방어)'}"]
+
+        status = {
+            'schema': 'V23',
+            'mode': mode,
+            '리밸 결과': '✅ 완료' if result.get('completed') else '⏳ 미완료',
+            '잔여 편차': f'{max_diff:.1%}' if max_diff is not None else 'N/A',
+            '총자산': f'${total_usd:,.0f} (환율 {fx:,.0f})',
+        }
+        target_norm = {('Cash' if k == 'Cash' else k): v for k, v in target.items()}
+        send_telegram(v23r.build_report(
+            asset_label='주식', emoji='📈', name='Cap Defend Stock',
+            ts_str=kst_now.strftime('%Y-%m-%d %H:%M KST'),
+            target=target_norm, holdings=holdings_list, orders_text=orders_text,
+            canary_lines=canary_lines, status=status))
 
     # 6. 저장
     state['last_action'] = 'executor'

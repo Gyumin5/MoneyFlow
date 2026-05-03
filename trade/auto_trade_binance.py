@@ -640,6 +640,14 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
         'last_bar_ts': latest_bar_ts,
         'snapshots': snapshots,
         'last_combined': combined,
+        'canary_info': {
+            'on': canary_on,
+            'flipped': canary_flipped,
+            'ratio': ratio,
+            'cur': float(c_prev[-1]),
+            'sma_val': float(sma_val),
+            'sma_p': sma_p,
+        },
     }
     if 'strategies' not in state:
         state['strategies'] = {}
@@ -1535,61 +1543,66 @@ def main():
 
         elapsed = time.time() - t_start
         if args.trade:
-            strat_lines = []
-            for strat_name in STRATEGIES:
-                target = targets.get(strat_name, {})
-                if not target or target.get('CASH', 0.0) >= 0.999:
-                    strat_lines.append(f"{strat_name}: CASH")
-                else:
-                    coins = ', '.join(f"{k}:{v:.1%}" for k, v in target.items() if k != 'CASH' and v > 0)
-                    cash_w = target.get('CASH', 0.0)
-                    if cash_w > 0:
-                        coins = f"{coins}, CASH:{cash_w:.1%}"
-                    strat_lines.append(f"{strat_name}: {coins}")
+            # V23 통일 보고
+            import sys as _sys, os as _os
+            _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+            import v23_report as v23r
 
-            summary = [
-                f"📘 바이낸스 선물 실행 ({datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')})",
-                *strat_lines,
-                "",
-                f"합산 목표: {', '.join(f'{k}:{v:.1%}' for k, v in combined.items() if v > 0) if combined else '없음'}",
-            ]
-            if canary_alerts:
-                summary.append("")
-                summary.append("카나리:")
-                summary.extend(f"  - {msg}" for msg in canary_alerts)
+            kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
+            target_norm = {('Cash' if k == 'CASH' else k): v
+                           for k, v in (combined or {}).items() if v > 1e-4}
+
+            holdings = []
+            for coin, pos in positions_after.items():
+                if pos.get('notional', 0.0) < DISPLAY_DUST_NOTIONAL:
+                    continue
+                holdings.append({
+                    'ticker': coin,
+                    'value_str': f"${pos['notional']:.0f}",
+                    'weight': pos.get('weight', 0.0),
+                    'pnl': pos.get('pnl', 0.0),
+                })
+
             if order_alerts:
-                summary.append("")
-                summary.append("주문:")
-                summary.extend(f"  - {msg}" for msg in order_alerts)
+                orders_text = '\n  - '.join([''] + list(order_alerts)).lstrip('\n').lstrip()
+                orders_text = '\n  - ' + '\n  - '.join(order_alerts)
             else:
-                summary.append("")
-                summary.append("주문: 없음")
-            if positions_after:
-                summary.append("")
-                summary.append("현재 포지션:")
-                shown = 0
-                for coin, pos in positions_after.items():
-                    if pos.get('notional', 0.0) < DISPLAY_DUST_NOTIONAL:
-                        continue
-                    shown += 1
-                    summary.append(f"  - {coin}: ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pos.get('pnl', 0.0):+.2f})")
-                if shown == 0:
-                    summary[-1] = "현재 포지션: 없음 (현금)"
-            else:
-                summary.append("")
-                summary.append("현재 포지션: 없음 (현금)")
-            if error_alerts:
-                summary.append("")
-                summary.append("오류:")
-                summary.extend(f"  - {msg}" for msg in error_alerts[:10])
+                orders_text = '없음'
+
+            canary_lines = []
+            for strat_name in STRATEGIES:
+                ss = state.get('strategies', {}).get(strat_name, {})
+                ci = ss.get('canary_info', {})
+                if ci:
+                    on = ci.get('on', False)
+                    flip_mark = ' *FLIP*' if ci.get('flipped') else ''
+                    canary_lines.append(
+                        f"{strat_name}: {'ON 🟢' if on else 'OFF 🔴'} "
+                        f"BTC ${ci.get('cur', 0):,.0f} vs SMA{ci.get('sma_p', 0)} "
+                        f"${ci.get('sma_val', 0):,.0f} ratio={ci.get('ratio', 0):.4f}{flip_mark}"
+                    )
+                else:
+                    canary_lines.append(f"{strat_name}: {'ON 🟢' if ss.get('canary_on') else 'OFF 🔴'}")
+
             stop_count = count_stop_orders(client, list(UNIVERSE))
-            visible_positions = sum(1 for pos in positions_after.values() if pos.get('notional', 0.0) >= DISPLAY_DUST_NOTIONAL)
-            summary.append("")
-            summary.append("헬스:")
-            summary.append(f"  - 리밸런싱 대기: {'예' if state.get('rebalancing_needed', False) else '아니오'}")
-            summary.append(f"  - 포지션 수: {visible_positions}")
-            summary.append(f"  - 활성 스탑 수: {stop_count}")
-            send_telegram("\n".join(summary))
+            visible_positions = sum(1 for pos in positions_after.values()
+                                     if pos.get('notional', 0.0) >= DISPLAY_DUST_NOTIONAL)
+            status = {
+                'schema': 'V23',
+                'PV': f'${pv_after:.2f}',
+                '리밸 대기': '예' if state.get('rebalancing_needed', False) else '아니오',
+                '포지션 수': str(visible_positions),
+                '활성 스탑 수': str(stop_count),
+            }
+            extra = None
+            if error_alerts:
+                extra = "⚠ 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10])
+
+            send_telegram(v23r.build_report(
+                asset_label='선물', emoji='📘', name='Cap Defend Futures',
+                ts_str=kst_now.strftime('%Y-%m-%d %H:%M KST'),
+                target=target_norm, holdings=holdings, orders_text=orders_text,
+                canary_lines=canary_lines, status=status, extra=extra))
         log.info(f"=== 완료 ({elapsed:.1f}s) ===")
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
