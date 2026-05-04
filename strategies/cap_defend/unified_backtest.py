@@ -834,6 +834,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             _trace.append({
                 'date': date,
                 'target': dict(combined),
+                'snapshots': [dict(s) for s in snapshots],
                 'rebal': need_rebal,
                 'stop_kind': stop_kind,
                 'stop_pct': stop_pct,

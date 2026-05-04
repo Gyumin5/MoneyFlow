@@ -20,7 +20,7 @@ AI 합의 (gemini + codex)
 |---|---|---|
 | stock | sd=125, n=3, stagger=42 | sd=69, n=3, stagger=23 |
 | coin spot | D_SMA42 + H4_SMA240 EW (sn=60+360 동기) | D_SMA42 단일 sn=217×7 drift=0.10 |
-| coin fut | D_SMA42 + 4h_SMA240 EW (sn=90+540 동기, L3) | D_SMA42 단일 sn=57×3 drift=0.05 (L3) |
+| coin fut | D_SMA42 + 4h_SMA240 EW (sn=90+540 동기, L3) | D_SMA42 단일 sn=95×5 drift=0.03 (L3) — 05-04 갱신 |
 | 자산배분 | 60/40/0 | 60/40/0 (변경 없음) |
 | cron | 4h x 6 (9,13,17,21,1,5시) | 1d x 1 (09시) |
 
@@ -34,7 +34,7 @@ AI 합의 (gemini + codex)
 |---|---|---|---|---|---|
 | stock sd=69 n=3 | 1.16 | +17% | -15% | +0.59 | (snap 기준) |
 | spot sn=217 n=7 d=0.10 | 4.63 | +82% | -18% | -0.14 | 27 |
-| fut sn=57 n=3 d=0.05 | 10.74 | +450% | -42% | -0.23 | 119 |
+| fut sn=95 n=5 d=0.03 | 13.41 | +505% | -37.7% | -3.9% | (05-04 갱신) |
 
 ## 포트폴리오 성능
 
@@ -71,7 +71,7 @@ threshold
 라이브 엔진
 - trade/coin_live_engine.py: MEMBER_H4_SMA240 제거. MEMBER_D_SMA42 = {snap=217, n_snap=7}. ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}. half_turnover/evaluate_drift_fire utility 추가. EngineResult.drift_fire/drift_half_turnover/drift_threshold 필드 추가. SCHEMA_VERSION='V23'. KLINE_LIMITS '4h' 제거.
 - trade/executor_coin.py: cur_w 자본금 비중 산출 (Upbit 잔고 → KRW 비중) → engine 에 주입. result.drift_fire 시 rebalancing_needed=True. V23 debug log.
-- trade/auto_trade_binance.py: STRATEGIES 단일 (D_SMA42 sn=57 n=3). ENSEMBLE_WEIGHTS={'D_SMA42':1.0}. fetch_all_data 에서 4h 제거. drift 트리거 로직 (cur_w fut = real_weight). DRIFT_THRESHOLD_FUT=0.05. SCHEMA_VERSION='V23'.
+- trade/auto_trade_binance.py: STRATEGIES 단일 (D_SMA42 sn=95 n=5, 05-04 갱신). ENSEMBLE_WEIGHTS={'D_SMA42':1.0}. fetch_all_data 에서 4h 제거. drift 트리거 로직 (cur_w fut = real_weight). DRIFT_THRESHOLD_FUT=0.03. SCHEMA_VERSION='V23'.
 - trade/executor_stock.py: SNAP_PERIOD_DAYS=69, SNAP_STAGGER_DAYS=23.
 
 권고
@@ -79,7 +79,7 @@ threshold
 - strategies/cap_defend/recommend_personal.py: STRATEGY_VERSION='V23', VERSION_HISTORY 추가, FUTURES/COIN_MEMBER_META V23 갱신, STOCK_ANCHOR_DAYS = (1, 24, 47).
 
 설정
-- strategies/cap_defend/futures_live_config.py: 단일 strategy, snap_interval_bars=57, drift_threshold=0.05.
+- strategies/cap_defend/futures_live_config.py: 단일 strategy, snap_interval_bars=95, n_snapshots=5, drift_threshold=0.03 (05-04 갱신).
 - trade/ops/crontab.txt: 4h x 6 → 1d x 1 (5 9 * * *).
 
 마이그레이션
