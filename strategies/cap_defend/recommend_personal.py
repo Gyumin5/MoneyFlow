@@ -12,7 +12,7 @@ Coin V23: 1D 단일 멤버 D_SMA42 (live engine: trade/coin_live_engine.py)
   - 이전 H4_SMA240 멤버 제거 (4h 데이터 fetch 제거)
 
 Futures V23: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
-  - D_SMA42: 1D봉, SMA42, Mom18/127, snap 57봉×3, drift_threshold=0.05
+  - D_SMA42: 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (05-04 갱신)
   - 가드 없음, 스탑 없음
 
 Asset Allocation: 60/40/0 (사용자 수동 조정), rel 30% drift band
@@ -94,7 +94,7 @@ PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORT
 STOCK_ANCHOR_DAYS = (1, 24, 47)  # V23: snap-based 3 staggered (offset days, period 69, stagger 23)
 COIN_ANCHOR_DAYS = (1, 11, 21)   # legacy 표시용
 FUTURES_TRANCHE_META = {
-    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 57,  "n_snapshots": 3},  # V23
+    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 95,  "n_snapshots": 5},  # V23 갱신 05-04
 }
 COIN_MEMBER_META = {
     "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 217, "n_snapshots": 7},  # V23
@@ -210,7 +210,7 @@ VERSION_HISTORY = [
 • <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py
 
 <b>▶ 선물 (V23 — 1D 단일 D_SMA42 + drift)</b>
-• <b>D_SMA42:</b> 일봉 · SMA42 · Mom18/127 · snap 57봉×3 · drift_threshold 0.05
+• <b>D_SMA42:</b> 일봉 · SMA42 · Mom18/127 · snap 95봉×5 · drift_threshold 0.03
 • 고정 3x · 가드 없음
 
 <b>▶ 주식 (V23 — snap-based stagger sd=69)</b>
@@ -1480,7 +1480,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # === 자산배분 BT 비교 (V23 sweep 결과 2026-04-27, 5.3yr 2020-10~2025-12) ===
     _alloc_bt_html = """
     <h2>📊 자산배분 BT 비교 (V23 sleeve r30, 5.3yr 정합)</h2>
-    <p style='color:#5f6368;font-size:0.9em'>BT 기간: 2020-10-01 ~ 2026-04-27 · 자산: 주식 V23 sd=69 / 현물 V23 1D sn=217 drift=0.10 / 선물 V23 1D sn=57 drift=0.05 L3</p>
+    <p style='color:#5f6368;font-size:0.9em'>BT 기간: 2020-10-01 ~ 2026-05-04 · 자산: 주식 V23 sd=69 / 현물 V23 1D sn=217 drift=0.10 / 선물 V23 1D sn=95 n=5 drift=0.03 L3 (05-04 갱신)</p>
 
     <h3>현재 60/40/0 baseline</h3>
     <div class='summary-list'>
