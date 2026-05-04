@@ -3,11 +3,11 @@
 바이낸스 선물 자동매매 — V23 L3 단일 멤버 (2026-04-30 확정)
 ========================================
 V23 신호:
-- D_SMA42:    (interval=D, SMA=42, Mom=18/127, mom2vol, daily vol 5%, Snap=57 bars, n_snap=3, drift=0.05)
+- D_SMA42:    (interval=D, SMA=42, Mom=18/127, mom2vol, daily vol 5%, Snap=95 bars, n_snap=5, drift=0.03)
 
 V23 변경 (vs V22):
 - 1D + 4h 2멤버 → 1D 단일 멤버 (4h 제거, snap=90→57)
-- drift_threshold = 0.05 도입 (sleeve-level half-turnover 트리거)
+- drift_threshold = 0.03 (V23 갱신 05-04, 0.05 → 0.03 반응성 ↑)
 - ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}
 - cron 4h x 6 → 1d x 1 (09:05)
 
@@ -66,7 +66,7 @@ STOP_GATE_CASH_THRESHOLD = 0.0  # cash_guard 비활성
 LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30  # 동적 lev 비활성이지만 상수 유지
 
 SCHEMA_VERSION = 'V23'
-DRIFT_THRESHOLD_FUT = 0.05  # half-turnover 트리거 임계값
+DRIFT_THRESHOLD_FUT = 0.03  # V23 갱신 (05-04): 0.05 → 0.03
 DRIFT_ENABLED_FUT = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
 
 ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}  # V23: 단일 멤버
@@ -80,9 +80,9 @@ STRATEGIES = {
         'health_mode': 'mom2vol',
         'vol_mode': 'daily',
         'vol_threshold': 0.05,
-        'snap_interval_bars': 57,    # V23: 90 → 57 (3*19, stagger 19)
+        'snap_interval_bars': 95,    # V23 갱신 (05-04): 57 → 95 (5*19, stagger 19 유지)
         'canary_hyst': 0.015,
-        'n_snapshots': 3,            # V23: 유지
+        'n_snapshots': 5,            # V23 갱신 (05-04): 3 → 5
     },
 }
 
@@ -1329,7 +1329,7 @@ def main():
 
         lines = [f"📊 바이낸스 선물 일일 리포트 ({now})"]
         lines.append(f"총 자산: ${pv:.2f} ({pnl_pct:+.1f}%)")
-        lines.append(f"레버리지: 고정 3x (V23 1D 단일 D_SMA42 sn=57 n=3 drift=0.05)")
+        lines.append(f"레버리지: 고정 3x (V23 1D 단일 D_SMA42 sn=95 n=5 drift=0.03)")
 
         if positions:
             lines.append("\n포지션 (실질금액, notional/lev):")
