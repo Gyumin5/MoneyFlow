@@ -15,7 +15,7 @@ Futures V23: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
   - D_SMA42: 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (05-04 갱신)
   - 가드 없음, 스탑 없음
 
-Asset Allocation: 60/40/0 (사용자 수동 조정), rel 30% drift band
+Asset Allocation: 70/15/15 (V23 갱신 05-04, AI 균형 권고), rel 30% drift band
 """
 
 import os
@@ -203,7 +203,7 @@ def save_daily_live_snapshot():
 STRATEGY_VERSION = "V23"
 VERSION_HISTORY = [
     ("V23", "2026-04-30",
-     "전 자산 V23: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 60/40/0 (수동 조정).",
+     "전 자산 V23: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 70/15/15 (V23 갱신 05-04, AI 균형 권고).",
      """<b>▶ 코인 현물 (V23 — 1D 단일 D_SMA42 + drift)</b>
 • <b>D_SMA42:</b> 일봉 · SMA42 · Mom20/127 · snap 217봉×7 · canary hyst 1.5% · drift_threshold 0.10
 • <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND daily Vol≤5%
@@ -220,12 +220,11 @@ VERSION_HISTORY = [
 • <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
-<b>▶ 자산배분:</b> 60/40/0 시작 (주식/현물/선물), sleeve r30 밴드, 리밸런싱은 수동"""),
+<b>▶ 자산배분:</b> 70/15/15 (주식/현물/선물, V23 갱신 05-04), half_turnover ≥15pp 트리거, 리밸런싱은 수동"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.40, 0.00  # V23: 60/40/0 (사용자 수동 조정)
-SLEEVE_RATIO = 0.30  # V23 sleeve r30: 자산별 밴드 = weight * 30%
-SLEEVE_MIN_BAND = 0.02  # 선물 0% 같은 경우 최소 밴드 2%p (sleeve 0 방지)
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.70, 0.15, 0.15  # V23 갱신 (05-04): 60/40/0 → 70/15/15 (AI 균형 권고)
+REBAL_HT_THRESHOLD = 0.15  # V23 갱신 (05-05): half_turnover (sum|cur-tgt|/2) ≥ 15pp 시 리밸 — 2D sweep robust 1위
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
@@ -254,7 +253,7 @@ STOCK_CANARY_HYST = 0.020      # V23 (2%)
 STOCK_CRASH_TICKER = 'VT'
 
 # Coin Configuration
-COIN_CANARY_MA_PERIOD = 50
+COIN_CANARY_MA_PERIOD = 42  # V23: D_SMA42 (이전 V22 = 50)
 COIN_CANARY_HYST = 0.015  # 1.5% Hysteresis: enter Risk-On at SMA*1.015, exit at SMA*0.985
 N_SELECTED_COINS = 5
 VOLATILITY_WINDOW = 90
@@ -887,14 +886,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
-            const TARGET_STOCK_RATIO = 0.60;
-            const TARGET_COIN_RATIO = 0.40;
-            const TARGET_FUTURES_RATIO = 0.00;
-            const SLEEVE_RATIO = 0.30;       // V23 sleeve r30: 자산 밴드 = weight × 30%
-            const SLEEVE_MIN_BAND = 0.02;    // 선물 0% 같은 경우 최소 밴드 2%p
-            const BAND_STOCK = Math.max(TARGET_STOCK_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
-            const BAND_COIN = Math.max(TARGET_COIN_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
-            const BAND_FUTURES = Math.max(TARGET_FUTURES_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND);
+            const TARGET_STOCK_RATIO = 0.70;
+            const TARGET_COIN_RATIO = 0.15;
+            const TARGET_FUTURES_RATIO = 0.15;
+            const REBAL_HT = 0.15;           // V23 갱신 (05-05): half_turnover ≥ 15pp 시 리밸 트리거
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1065,36 +1060,33 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const driftStock = Math.abs(curStockPct - TARGET_STOCK_RATIO);
                 const driftCoin = Math.abs(curCoinPct - TARGET_COIN_RATIO);
                 const driftFutures = Math.abs(curFuturesPct - TARGET_FUTURES_RATIO);
-                const breachStock = driftStock >= BAND_STOCK;
-                const breachCoin = driftCoin >= BAND_COIN;
-                const breachFutures = driftFutures >= BAND_FUTURES;
-                const needRebal = breachStock || breachCoin || breachFutures;
+                const halfTurnover = (driftStock + driftCoin + driftFutures) / 2;
+                const needRebal = halfTurnover >= REBAL_HT;
 
                 // 2. 목표 금액
                 const targetStockKRW = totalAsset * TARGET_STOCK_RATIO;
                 const targetCoinKRW = totalAsset * TARGET_COIN_RATIO;
                 const targetFuturesKRW = totalAsset * TARGET_FUTURES_RATIO;
 
-                // 3. 비중 카드 (3열, sleeve 밴드 기준)
-                function pctColor(cur, target, band) {
-                    return Math.abs(cur - target) >= band ? '#d93025' : '#0d904f';
-                }
-                function assetCard(label, krw, cur, target, band) {
+                // 3. 비중 카드 (3열, half_turnover 기준)
+                const htColor = needRebal ? '#d93025' : '#0d904f';
+                function assetCard(label, krw, cur, target) {
                     return '<div style="padding:14px; background:#f8f9fa; border-radius:10px;">'
                         + '<div style="font-size:0.85em; color:#666;">' + label + '</div>'
                         + '<div style="font-size:1.25em; font-weight:700;">' + Math.round(krw).toLocaleString() + '\\uc6d0</div>'
-                        + '<div style="color:' + pctColor(cur, target, band) + '; font-weight:600;">'
-                        + (cur * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (target * 100).toFixed(0) + '% \\u00b1' + (band * 100).toFixed(1) + '%)</div></div>';
+                        + '<div style="color:#444; font-weight:600;">'
+                        + (cur * 100).toFixed(1) + '% (\\ubaa9\\ud45c ' + (target * 100).toFixed(0) + '%)</div></div>';
                 }
 
                 let html = '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:16px;">';
-                html += assetCard('\\uc8fc\\uc2dd', stockKRW, curStockPct, TARGET_STOCK_RATIO, BAND_STOCK);
-                html += assetCard('\\ud604\\ubb3c\\ucf54\\uc778', coinKRW, curCoinPct, TARGET_COIN_RATIO, BAND_COIN);
-                html += assetCard('\\uc120\\ubb3c', futuresKRW, curFuturesPct, TARGET_FUTURES_RATIO, BAND_FUTURES);
+                html += assetCard('\\uc8fc\\uc2dd', stockKRW, curStockPct, TARGET_STOCK_RATIO);
+                html += assetCard('\\ud604\\ubb3c\\ucf54\\uc778', coinKRW, curCoinPct, TARGET_COIN_RATIO);
+                html += assetCard('\\uc120\\ubb3c', futuresKRW, curFuturesPct, TARGET_FUTURES_RATIO);
                 html += '</div>';
 
                 html += '<div style="padding:8px 14px; background:#e8eaf6; border-radius:8px; margin-bottom:12px;">'
-                    + '<b>\\ucd1d \\uc790\\uc0b0:</b> ' + Math.round(totalAsset).toLocaleString() + '\\uc6d0</div>';
+                    + '<b>\\ucd1d \\uc790\\uc0b0:</b> ' + Math.round(totalAsset).toLocaleString() + '\\uc6d0'
+                    + ' &nbsp;|&nbsp; <span style="color:' + htColor + ';font-weight:600;">half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp / 트리거 ' + (REBAL_HT * 100).toFixed(0) + 'pp</span></div>';
 
                 // 4. 리밸런싱 판단
                 if (needRebal) {
@@ -1110,17 +1102,13 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             moves.push(d.name + ' ' + sign + Math.round(d.delta).toLocaleString() + '\\uc6d0');
                         }
                     });
-                    const breached = [];
-                    if (breachStock) breached.push('\\uc8fc\\uc2dd');
-                    if (breachCoin) breached.push('\\ud604\\ubb3c');
-                    if (breachFutures) breached.push('\\uc120\\ubb3c');
                     html += '<div style="padding:14px; background:#fce8e6; border:2px solid #d93025; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 — sleeve r30 \\ubc34\\ub4dc \\ucd08\\uacfc: ' + breached.join(', ') + '</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 — half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp \\u2265 ' + (REBAL_HT * 100).toFixed(0) + 'pp</div>'
                         + '<div style="font-size:1.05em;">' + moves.join('<br>') + '</div>'
                         + '</div>';
                 } else {
                     html += '<div style="padding:14px; background:#e8f5e9; border:1px solid #0d904f; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (sleeve r30 \\ubc34\\ub4dc \\ub0b4)</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp &lt; ' + (REBAL_HT * 100).toFixed(0) + 'pp)</div>'
                         + '</div>';
                 }
 
@@ -1479,7 +1467,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
     # === 자산배분 BT 비교 (V23 sweep 결과 2026-04-27, 5.3yr 2020-10~2025-12) ===
     _alloc_bt_html = """
-    <h2>📊 자산배분 BT 비교 (V23 sleeve r30, 5.3yr 정합)</h2>
+    <h2>📊 자산배분 BT 비교 (V23 half_turnover 15pp, 5.4yr)</h2>
     <p style='color:#5f6368;font-size:0.9em'>BT 기간: 2020-10-01 ~ 2026-05-04 · 자산: 주식 V23 sd=69 / 현물 V23 1D sn=217 drift=0.10 / 선물 V23 1D sn=95 n=5 drift=0.03 L3 (05-04 갱신)</p>
 
     <h3>현재 60/40/0 baseline</h3>
@@ -1798,49 +1786,39 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (V23: 60/40/0, sleeve r30 밴드 — 리밸런싱은 수동) ===
+                // === 3자산 배분 체크 (V23 갱신 05-05: 70/15/15, half_turnover ≥15pp 트리거 — 리밸런싱은 수동) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.60, T_SPOT = 0.40, T_FUT = 0.00;
-                    const SLEEVE = 0.30, MIN_BAND = 0.02;
-                    const B_STOCK = Math.max(T_STOCK * SLEEVE, MIN_BAND);
-                    const B_SPOT = Math.max(T_SPOT * SLEEVE, MIN_BAND);
-                    const B_FUT = Math.max(T_FUT * SLEEVE, MIN_BAND);
+                    const T_STOCK = 0.70, T_SPOT = 0.15, T_FUT = 0.15;
+                    const REBAL_HT = 0.15;
                     const pStock = stockKrw / allocTotal;
                     const pSpot = spotKrw / allocTotal;
                     const pFut = futKrw / allocTotal;
                     const dStock = Math.abs(pStock - T_STOCK);
                     const dSpot = Math.abs(pSpot - T_SPOT);
                     const dFut = Math.abs(pFut - T_FUT);
-                    const breachStock = dStock >= B_STOCK;
-                    const breachSpot = dSpot >= B_SPOT;
-                    const breachFut = dFut >= B_FUT;
-                    const need = breachStock || breachSpot || breachFut;
+                    const halfTurnover = (dStock + dSpot + dFut) / 2;
+                    const need = halfTurnover >= REBAL_HT;
 
-                    const pctColor = (d, b) => d >= b ? '#d93025' : '#0d904f';
-                    const pctBar = (label, cur, target, drift, band) => {{
+                    const pctBar = (label, cur, target, drift) => {{
                         return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;">'
                             + '<span>' + label + '</span>'
-                            + '<span style="color:' + pctColor(drift, band) + ';font-weight:600;">'
+                            + '<span style="color:#444;font-weight:600;">'
                             + (cur * 100).toFixed(1) + '% (목표 ' + (target * 100).toFixed(0) + '%'
-                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p / 밴드 ±' + (band * 100).toFixed(1) + '%p)</span></div>';
+                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p)</span></div>';
                     }};
-
-                    const breached = [];
-                    if (breachStock) breached.push('주식');
-                    if (breachSpot) breached.push('업비트');
-                    if (breachFut) breached.push('바이낸스');
 
                     html += '<div class="card" style="margin-top:12px;border:2px solid ' + (need ? '#d93025' : '#0d904f') + ';">';
                     html += '<div style="font-weight:700;font-size:1.05em;color:' + (need ? '#d93025' : '#0d904f') + ';margin-bottom:8px;">'
-                        + (need ? ('⚠️ 리밸런싱 필요 — sleeve r30 밴드 초과: ' + breached.join(', ')) : '✅ 리밸런싱 불필요 (sleeve r30 밴드 내)')
+                        + (need ? ('⚠️ 리밸런싱 필요 — half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp ≥ ' + (REBAL_HT * 100).toFixed(0) + 'pp')
+                                : ('✅ 리밸런싱 불필요 — half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp < ' + (REBAL_HT * 100).toFixed(0) + 'pp'))
                         + '</div>';
-                    html += pctBar('주식', pStock, T_STOCK, dStock, B_STOCK);
-                    html += pctBar('업비트', pSpot, T_SPOT, dSpot, B_SPOT);
-                    html += pctBar('바이낸스', pFut, T_FUT, dFut, B_FUT);
+                    html += pctBar('주식', pStock, T_STOCK, dStock);
+                    html += pctBar('업비트', pSpot, T_SPOT, dSpot);
+                    html += pctBar('바이낸스', pFut, T_FUT, dFut);
 
                     if (need) {{
                         const tgtStock = allocTotal * T_STOCK;
@@ -2244,19 +2222,57 @@ if __name__ == "__main__":
 
     # ─── 텔레그램 일간 리포트 ───
     try:
-        # 요약 텍스트
+        # 코인 카나리 (BTC vs SMA42, hyst 1.5%)
         btc_data = prices.get('BTC-USD')
-        btc_dist_pct = ""
+        btc_cur = btc_sma = None; btc_ratio = None; btc_dist_pct = "n/a"
         if btc_data is not None and len(btc_data) >= COIN_CANARY_MA_PERIOD:
             btc_cur = float(btc_data.iloc[-1])
             btc_sma = float(btc_data.rolling(COIN_CANARY_MA_PERIOD).mean().iloc[-1])
-            btc_dist_pct = f"{(btc_cur/btc_sma-1)*100:+.1f}%"
+            btc_ratio = btc_cur / btc_sma
+            btc_dist_pct = f"{(btc_ratio-1)*100:+.2f}%"
 
         coin_picks_str = ', '.join(t.replace('-USD','') for t in c_port.keys() if t != 'Cash')
 
+        # 선물 state 읽기 (binance_state.json)
+        fut_lines = ['🎯 선물 목표']
+        fut_canary_lines = []
+        try:
+            bn_state_path = os.environ.get('BINANCE_STATE', '/home/ubuntu/binance_state.json')
+            if not os.path.exists(bn_state_path):
+                bn_state_path = os.path.join(APP_HOME, 'binance_state.json')
+            if os.path.exists(bn_state_path):
+                with open(bn_state_path) as fh:
+                    bn = json.load(fh)
+                strat = bn.get('strategies', {}).get('D_SMA42', {})
+                last_combined = strat.get('last_combined') or bn.get('last_target') or {}
+                if last_combined:
+                    for t, w in sorted(last_combined.items(), key=lambda kv: -kv[1]):
+                        if w < 1e-4 and t.lower() not in ('cash',):
+                            continue
+                        fut_lines.append(f'  {t}: {w*100:.1f}%')
+                else:
+                    fut_lines.append('  (목표 없음)')
+                # canary detail
+                ci = strat.get('canary_info') or {}
+                if ci:
+                    fut_canary_lines.append(
+                        f"  선물 (BTC perp vs SMA{ci.get('sma_p',42)}): "
+                        f"{'ON 공격' if ci.get('on') else 'OFF 캐시'} "
+                        f"(ratio {ci.get('ratio',0):.4f}, cur ${ci.get('cur',0):,.0f}, sma ${ci.get('sma_val',0):,.0f})"
+                    )
+                else:
+                    fut_canary_lines.append(f"  선물 카나리: {'ON' if strat.get('canary_on') else 'OFF'} (info 없음)")
+                fut_combined_str = ', '.join(t for t in last_combined.keys() if t.lower() != 'cash')
+            else:
+                fut_lines.append('  (state 없음)')
+                fut_combined_str = ''
+        except Exception as ex_fut:
+            fut_lines.append(f'  (읽기 실패: {ex_fut})')
+            fut_combined_str = ''
+
         # V23 통일 포맷 (Daily Report — 신호 요약, 실행 보고와 별개)
         date_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]
-        c_lines = ['🎯 코인 목표']
+        c_lines = ['🎯 코인 (현물) 목표']
         for t, w in sorted(c_port.items(), key=lambda kv: -kv[1]):
             tk = t.replace('-USD', '')
             if w < 1e-4 and tk.lower() != 'cash':
@@ -2267,16 +2283,33 @@ if __name__ == "__main__":
             if w < 1e-4 and t.lower() != 'cash':
                 continue
             s_lines.append(f'  {t}: {w*100:.1f}%')
+
+        # 카나리 상세
+        canary_lines = ['🦅 카나리']
+        if btc_cur is not None:
+            canary_lines.append(
+                f"  현물 (BTC vs SMA{COIN_CANARY_MA_PERIOD}, hyst 1.5%): "
+                f"{c_stat} (ratio {btc_ratio:.4f}, cur ${btc_cur:,.0f}, sma ${btc_sma:,.0f}, dist {btc_dist_pct})"
+            )
+        else:
+            canary_lines.append(f"  현물: {c_stat} (BTC 데이터 부족)")
+        canary_lines.extend(fut_canary_lines)
+        canary_lines.append(f"  주식: {s_stat} (KIS sd=69 stagger=23 n=3)")
+
+        # 상태 상세
+        status_lines = ['📊 상태']
+        status_lines.append(f"  현물 선정: {coin_picks_str or '없음'} (D_SMA42 sn=217 n=7 d=0.10, universe top40)")
+        status_lines.append(f"  선물 선정: {fut_combined_str or '없음'} (D_SMA42 sn=95 n=5 d=0.03 L3)")
+        status_lines.append(f"  자산배분: 70/15/15 주식/현물/선물 (V23 갱신 05-04)")
+        status_lines.append(f"  schema: V23")
+
         summary = (
             f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
             + '\n'.join(c_lines) + "\n\n"
+            + '\n'.join(fut_lines) + "\n\n"
             + '\n'.join(s_lines) + "\n\n"
-            + "🦅 카나리\n"
-            + f"  코인 (BTC vs SMA{COIN_CANARY_MA_PERIOD}): {c_stat} ({btc_dist_pct or 'n/a'})\n"
-            + f"  주식: {s_stat}\n\n"
-            + "📊 상태\n"
-            + f"  코인 선정: {coin_picks_str or '없음'}\n"
-            + f"  schema: V23"
+            + '\n'.join(canary_lines) + "\n\n"
+            + '\n'.join(status_lines)
         )
         if PORTFOLIO_PUBLIC_URL:
             send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)
@@ -2286,7 +2319,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
 
-    # ─── 3자산 배분 체크 (V23: sleeve r30 밴드) ───
+    # ─── 3자산 배분 체크 (V23: half_turnover ≥ 15pp 트리거) ───
     try:
         api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
         ov = requests.get(f"{api}/api/assets/live_overview", timeout=60).json()
@@ -2303,25 +2336,16 @@ if __name__ == "__main__":
             d_stock = abs(p_stock - STOCK_RATIO)
             d_spot = abs(p_spot - COIN_RATIO)
             d_fut = abs(p_fut - FUTURES_RATIO)
-            # sleeve r30: 자산별 밴드 = weight × SLEEVE_RATIO (최소 SLEEVE_MIN_BAND)
-            b_stock = max(STOCK_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND)
-            b_spot = max(COIN_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND)
-            b_fut = max(FUTURES_RATIO * SLEEVE_RATIO, SLEEVE_MIN_BAND)
-            breached_assets = []
-            if d_stock >= b_stock:
-                breached_assets.append(f"주식(편차{d_stock:.1%}/밴드{b_stock:.1%})")
-            if d_spot >= b_spot:
-                breached_assets.append(f"업비트(편차{d_spot:.1%}/밴드{b_spot:.1%})")
-            if d_fut >= b_fut:
-                breached_assets.append(f"바이낸스(편차{d_fut:.1%}/밴드{b_fut:.1%})")
+            half_turnover = (d_stock + d_spot + d_fut) / 2
+            need_rebal = half_turnover >= REBAL_HT_THRESHOLD
 
             alloc_line = (
-                f"⚖️ 자산배분: 주식 {p_stock:.1%}(밴드±{b_stock:.1%}) / 업비트 {p_spot:.1%}(밴드±{b_spot:.1%}) / 바이낸스 {p_fut:.1%}(밴드±{b_fut:.1%})"
-                f" — V23 목표 60/40/0 sleeve r30"
+                f"⚖️ 자산배분: 주식 {p_stock:.1%} / 업비트 {p_spot:.1%} / 바이낸스 {p_fut:.1%}"
+                f" — V23 목표 70/15/15, half_turnover {half_turnover:.1%} (트리거 {REBAL_HT_THRESHOLD:.0%})"
             )
             print(alloc_line)
 
-            if breached_assets:
+            if need_rebal:
                 moves = []
                 for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
                                         ("업비트", spot_krw, alloc_total * COIN_RATIO),
@@ -2330,16 +2354,15 @@ if __name__ == "__main__":
                     if abs(delta) > 10000:
                         moves.append(f"  {name}: {delta:+,.0f}원")
                 alert_msg = (
-                    f"⚠️ 자산배분 리밸런싱 필요 (V23 sleeve r30)\n"
-                    f"밴드 초과: {', '.join(breached_assets)}\n\n"
-                    f"주식 {p_stock:.1%} (목표 60%, 밴드 ±{b_stock:.1%})\n"
-                    f"업비트 {p_spot:.1%} (목표 40%, 밴드 ±{b_spot:.1%})\n"
-                    f"바이낸스 {p_fut:.1%} (목표 0%, 밴드 ±{b_fut:.1%})\n\n"
+                    f"⚠️ 자산배분 리밸런싱 필요 (V23 half_turnover {half_turnover:.1%} ≥ {REBAL_HT_THRESHOLD:.0%})\n\n"
+                    f"주식 {p_stock:.1%} (목표 70%, 편차 {d_stock:.1%})\n"
+                    f"업비트 {p_spot:.1%} (목표 15%, 편차 {d_spot:.1%})\n"
+                    f"바이낸스 {p_fut:.1%} (목표 15%, 편차 {d_fut:.1%})\n\n"
                     f"수동 조정 필요:\n" + "\n".join(moves)
                 )
                 send_telegram(alert_msg)
-                print(f"🚨 자산배분 리밸런싱 알림 전송 (breached: {breached_assets})")
+                print(f"🚨 자산배분 리밸런싱 알림 전송 (half_turnover {half_turnover:.1%})")
             else:
-                print("✅ 자산배분 sleeve 밴드 내 (리밸런싱 불필요)")
+                print(f"✅ 자산배분 트리거 내 (half_turnover {half_turnover:.1%} < {REBAL_HT_THRESHOLD:.0%})")
     except Exception as e:
         print(f"⚠️ 자산배분 체크 실패: {e}")

@@ -249,6 +249,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         # --- 2026-04-24 추가 (Step 7 stress 용) ---
         execution_delay_bars=0,  # 0=즉시 체결, N>0=signal 에서 N bar 뒤 체결
         exclude_assets=None,  # {asset_name} 제외할 자산 set (drop_top_contributor 용)
+        daily_health_exit=False,  # True 시 매일 보유 코인 헬스 체크. 탈락 코인은 combined target 에서 0 → CASH
         # ------------------------------------------
         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
     """시간봉 통합 백테스트. spot/fut 공통."""
@@ -598,15 +599,58 @@ def run(bars, funding, interval='1h', leverage=1.0,
             weights['CASH'] = 1.0 - total
         return weights
 
-    def _merge_snapshots():
+    def _is_healthy(coin, sig_date):
+        """daily health re-check (하나의 코인). _compute_weights 와 동일 헬스 로직."""
+        if coin == 'CASH' or coin == 'Cash':
+            return True
+        df = bars.get(coin)
+        if df is None:
+            return False
+        ci = df.index.get_indexer([sig_date], method='ffill')[0]
+        min_bars_local = max(mom30, mom90, _vol_bars, sma_period)
+        if ci < 0 or ci < min_bars_local:
+            return False
+        c = df['Close'].values[:ci + 1]
+        if health_mode == 'none':
+            return True
+        m_short = calc_mom(c, mom30) if 'mom' in health_mode else 999
+        m_long = calc_mom(c, mom90) if 'mom2' in health_mode else 999
+        if 'vol' in health_mode:
+            if vol_mode == 'bar':
+                vol = calc_vol_bars(c, _vol_bars, bars_per_year)
+            else:
+                vol = calc_vol_daily(c, bpd, lookback_bars=_vol_bars)
+        else:
+            vol = 0
+        if health_mode == 'mom2vol':
+            return m_short > 0 and m_long > 0 and vol <= vol_threshold
+        elif health_mode == 'mom1vol':
+            return m_short > 0 and vol <= vol_threshold
+        elif health_mode == 'mom1':
+            return m_short > 0
+        elif health_mode == 'mom2':
+            return m_short > 0 and m_long > 0
+        elif health_mode == 'vol':
+            return vol <= vol_threshold
+        return True
+
+    def _merge_snapshots(sig_date_for_health=None):
         combined = {}
         n = len(snapshots)
         for snap in snapshots:
             for t, w in snap.items():
                 combined[t] = combined.get(t, 0) + w / n
+        # daily health filter overlay (V23 실험)
+        if daily_health_exit and sig_date_for_health is not None:
+            for t in list(combined.keys()):
+                if t in ('CASH', 'Cash'):
+                    continue
+                if not _is_healthy(t, sig_date_for_health):
+                    combined['CASH'] = combined.get('CASH', 0) + combined[t]
+                    combined[t] = 0
         total = sum(combined.values())
         if total > 0:
-            return {t: w / total for t, w in combined.items()}
+            return {t: w / total for t, w in combined.items() if w > 0}
         return {'CASH': 1.0}
 
     def _half_turnover(cur_w, tgt_w):
@@ -821,7 +865,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                             need_rebal = True
 
         # ── Drift (daily_gate 시 일 1회만) ──
-        combined = _merge_snapshots()
+        combined = _merge_snapshots(sig_date_for_health=prev_date)
         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
             if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
                 need_rebal = True

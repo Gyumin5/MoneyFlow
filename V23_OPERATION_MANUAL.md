@@ -21,7 +21,7 @@ AI 합의 (gemini + codex)
 | stock | sd=125, n=3, stagger=42 | sd=69, n=3, stagger=23 |
 | coin spot | D_SMA42 + H4_SMA240 EW (sn=60+360 동기) | D_SMA42 단일 sn=217×7 drift=0.10 |
 | coin fut | D_SMA42 + 4h_SMA240 EW (sn=90+540 동기, L3) | D_SMA42 단일 sn=95×5 drift=0.03 (L3) — 05-04 갱신 |
-| 자산배분 | 60/40/0 | 60/40/0 (변경 없음) |
+| 자산배분 | 60/40/0 | 70/15/15 (V23 갱신 05-04, AI 균형 권고) |
 | cron | 4h x 6 (9,13,17,21,1,5시) | 1d x 1 (09시) |
 
 차별화·서로소 충족
