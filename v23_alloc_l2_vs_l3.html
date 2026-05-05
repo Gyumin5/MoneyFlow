@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang=ko><head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>V23 자산배분 — L2 vs L3</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;margin:0;padding:12px;background:#f5f5f7;color:#1d1d1f;font-size:15px;line-height:1.4}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:18px;margin:24px 0 8px;border-bottom:2px solid #007aff;padding-bottom:4px}
+.subtitle{color:#86868b;font-size:13px;margin-bottom:16px}
+.summary{background:#fff;border-radius:12px;padding:14px;margin-bottom:16px;font-size:14px}
+.summary b{color:#007aff}
+.card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.card.baseline{background:#fffbe6;border:2px solid #ffd60a}
+.lbl{font-size:13px;color:#86868b;font-weight:600}
+.alloc{font-size:20px;font-weight:700;margin:4px 0 10px}
+.sub{font-size:12px;color:#86868b;font-weight:400}
+table{width:100%;border-collapse:collapse;font-size:13px}
+table.comp th,table.comp td{padding:5px 4px;text-align:center;border-bottom:1px solid #eee}
+.comp .l2{background:#e8f4ff;color:#0050b3}
+.comp .l3{background:#fff1e6;color:#ad4e00}
+.comp tr.tot{background:#fafafa;font-weight:600}
+td.mdd{color:#d70015}
+.meta{font-size:11px;color:#86868b;margin-top:8px;line-height:1.6}
+.tbl{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;overflow-x:auto}
+.tbl h3{margin:0 0 8px;font-size:15px}
+.tbl table th{background:#f5f5f7;font-weight:600;padding:6px 4px;font-size:12px;text-align:center}
+.tbl table td{padding:5px 4px;text-align:center;border-bottom:1px solid #f0f0f0;font-size:12.5px}
+.tbl tr.bl{background:#fffbe6}
+.notes{font-size:12px;color:#666;background:#fff;padding:12px;border-radius:12px;line-height:1.6}
+.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;margin-right:4px}
+.tag.l2{background:#e8f4ff;color:#0050b3}
+.tag.l3{background:#fff1e6;color:#ad4e00}
+</style></head>
+<body>
+
+<h1>V23 자산배분 — L2 vs L3</h1>
+<div class=subtitle>선물 레버리지 2배(L2) vs 3배(L3) 비교 · 동일 sleeve · BT 5.4yr (2021~2026 YTD) · 154 grid</div>
+
+<div class=summary>
+<b>핵심 결론</b><br>
+1. <b>L3 는 모든 비중에서 L2 대비 Cal/CAGR 우위</b> (예: 65/20/15 L2 4.05 → L3 4.66, +15%)<br>
+2. <b>L2 는 MDD 가 살짝 작음</b> (동일 비중 평균 1~2pp). worst-year Cal 도 비슷하거나 약간 양호<br>
+3. <b>선물 sleeve 단독</b>: L2 CAGR +218% MDD -29.6% Cal 7.38 (ymin -4.3%) / L3 CAGR +450% MDD -42% Cal 10.74 (ymin -23%)<br>
+4. <b>실무 시사</b>: 선물 비중이 5~15% 영역에서는 L2/L3 차이가 전체 포트폴리오 MDD 에 1~2pp 만 영향. <b>위험허용 작으면 L2, 수익 우선이면 L3</b><br>
+5. <b>베이스라인 (60/40/0)</b> 은 선물 0% 라 L2/L3 가 동일 (Cal 3.37 / MDD -12.0% / wo 0.57)<br>
+</div>
+
+<h2>주요 비중 — L2 vs L3 직접 비교</h2>
+<div class="card baseline">
+  <div class="lbl">베이스라인</div>
+  <div class="alloc">60/40/0<span class="sub"> 주식/현물/선물 %</span></div>
+  <table class="comp">
+    <tr><th></th><th colspan=3 class=l2>L2 (2배)</th><th colspan=3 class=l3>L3 (3배)</th></tr>
+    <tr><th></th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Cal</th><th>CAGR</th><th>MDD</th></tr>
+    <tr class=tot><td>전체</td>
+      <td><b>3.37</b></td><td>+40.4%</td><td class=mdd>-12.0%</td>
+      <td><b>3.37</b></td><td>+40.4%</td><td class=mdd>-12.0%</td></tr>
+    <tr><td>2021</td><td>9.52</td><td>+68.8%</td><td class=mdd>-7.2%</td><td>9.52</td><td>+68.8%</td><td class=mdd>-7.2%</td></tr><tr><td>2022</td><td>0.57</td><td>+5.2%</td><td class=mdd>-9.1%</td><td>0.57</td><td>+5.2%</td><td class=mdd>-9.1%</td></tr><tr><td>2023</td><td>8.01</td><td>+54.2%</td><td class=mdd>-6.8%</td><td>8.01</td><td>+54.2%</td><td class=mdd>-6.8%</td></tr><tr><td>2024</td><td>10.16</td><td>+63.4%</td><td class=mdd>-6.2%</td><td>10.16</td><td>+63.4%</td><td class=mdd>-6.2%</td></tr><tr><td>2025</td><td>1.23</td><td>+12.5%</td><td class=mdd>-10.1%</td><td>1.23</td><td>+12.5%</td><td class=mdd>-10.1%</td></tr><tr><td>2026</td><td>4.37</td><td>+30.8%</td><td class=mdd>-7.0%</td><td>4.37</td><td>+30.8%</td><td class=mdd>-7.0%</td></tr>
+  </table>
+  <div class="meta">
+    <span>L2 worst-yr Cal 0.57 · ymin +5.1% · rank-sum 547</span><br>
+    <span>L3 worst-yr Cal 0.57 · ymin +5.1% · rank-sum 548</span>
+  </div>
+</div>
+<div class="card">
+  <div class="lbl">L2 종합 1위</div>
+  <div class="alloc">65/20/15<span class="sub"> 주식/현물/선물 %</span></div>
+  <table class="comp">
+    <tr><th></th><th colspan=3 class=l2>L2 (2배)</th><th colspan=3 class=l3>L3 (3배)</th></tr>
+    <tr><th></th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Cal</th><th>CAGR</th><th>MDD</th></tr>
+    <tr class=tot><td>전체</td>
+      <td><b>4.05</b></td><td>+52.3%</td><td class=mdd>-12.9%</td>
+      <td><b>4.66</b></td><td>+69.0%</td><td class=mdd>-14.8%</td></tr>
+    <tr><td>2021</td><td>11.92</td><td>+91.7%</td><td class=mdd>-7.7%</td><td>15.63</td><td>+132.0%</td><td class=mdd>-8.4%</td></tr><tr><td>2022</td><td>1.59</td><td>+15.6%</td><td class=mdd>-9.8%</td><td>2.07</td><td>+20.3%</td><td class=mdd>-9.8%</td></tr><tr><td>2023</td><td>11.99</td><td>+69.9%</td><td class=mdd>-5.8%</td><td>14.38</td><td>+97.3%</td><td class=mdd>-6.8%</td></tr><tr><td>2024</td><td>6.90</td><td>+49.7%</td><td class=mdd>-7.2%</td><td>7.25</td><td>+62.4%</td><td class=mdd>-8.6%</td></tr><tr><td>2025</td><td>1.19</td><td>+13.7%</td><td class=mdd>-11.5%</td><td>1.09</td><td>+14.0%</td><td class=mdd>-12.9%</td></tr><tr><td>2026</td><td>4.87</td><td>+36.4%</td><td class=mdd>-7.5%</td><td>6.09</td><td>+43.8%</td><td class=mdd>-7.2%</td></tr>
+  </table>
+  <div class="meta">
+    <span>L2 worst-yr Cal 1.19 · ymin +11.2% · rank-sum 172</span><br>
+    <span>L3 worst-yr Cal 1.09 · ymin +13.2% · rank-sum 189</span>
+  </div>
+</div>
+<div class="card">
+  <div class="lbl">L3 종합 1위</div>
+  <div class="alloc">70/17.5/12.5<span class="sub"> 주식/현물/선물 %</span></div>
+  <table class="comp">
+    <tr><th></th><th colspan=3 class=l2>L2 (2배)</th><th colspan=3 class=l3>L3 (3배)</th></tr>
+    <tr><th></th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Cal</th><th>CAGR</th><th>MDD</th></tr>
+    <tr class=tot><td>전체</td>
+      <td><b>3.78</b></td><td>+46.3%</td><td class=mdd>-12.3%</td>
+      <td><b>4.32</b></td><td>+59.8%</td><td class=mdd>-13.8%</td></tr>
+    <tr><td>2021</td><td>10.31</td><td>+78.2%</td><td class=mdd>-7.6%</td><td>13.45</td><td>+109.3%</td><td class=mdd>-8.1%</td></tr><tr><td>2022</td><td>1.37</td><td>+14.4%</td><td class=mdd>-10.5%</td><td>1.74</td><td>+18.3%</td><td class=mdd>-10.5%</td></tr><tr><td>2023</td><td>9.95</td><td>+58.1%</td><td class=mdd>-5.8%</td><td>12.99</td><td>+79.4%</td><td class=mdd>-6.1%</td></tr><tr><td>2024</td><td>6.61</td><td>+45.5%</td><td class=mdd>-6.9%</td><td>6.95</td><td>+55.9%</td><td class=mdd>-8.0%</td></tr><tr><td>2025</td><td>1.33</td><td>+14.9%</td><td class=mdd>-11.2%</td><td>1.23</td><td>+15.2%</td><td class=mdd>-12.4%</td></tr><tr><td>2026</td><td>4.33</td><td>+35.7%</td><td class=mdd>-8.2%</td><td>5.22</td><td>+41.9%</td><td class=mdd>-8.0%</td></tr>
+  </table>
+  <div class="meta">
+    <span>L2 worst-yr Cal 1.33 · ymin +11.1% · rank-sum 188</span><br>
+    <span>L3 worst-yr Cal 1.23 · ymin +12.7% · rank-sum 173</span>
+  </div>
+</div>
+<div class="card">
+  <div class="lbl">L2 안정 1위</div>
+  <div class="alloc">75/12.5/12.5<span class="sub"> 주식/현물/선물 %</span></div>
+  <table class="comp">
+    <tr><th></th><th colspan=3 class=l2>L2 (2배)</th><th colspan=3 class=l3>L3 (3배)</th></tr>
+    <tr><th></th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Cal</th><th>CAGR</th><th>MDD</th></tr>
+    <tr class=tot><td>전체</td>
+      <td><b>3.63</b></td><td>+43.0%</td><td class=mdd>-11.8%</td>
+      <td><b>4.19</b></td><td>+56.2%</td><td class=mdd>-13.4%</td></tr>
+    <tr><td>2021</td><td>9.17</td><td>+70.3%</td><td class=mdd>-7.7%</td><td>12.35</td><td>+100.3%</td><td class=mdd>-8.1%</td></tr><tr><td>2022</td><td>1.33</td><td>+14.9%</td><td class=mdd>-11.2%</td><td>1.67</td><td>+18.8%</td><td class=mdd>-11.2%</td></tr><tr><td>2023</td><td>8.86</td><td>+50.7%</td><td class=mdd>-5.7%</td><td>12.17</td><td>+71.1%</td><td class=mdd>-5.8%</td></tr><tr><td>2024</td><td>5.83</td><td>+40.2%</td><td class=mdd>-6.9%</td><td>6.24</td><td>+50.3%</td><td class=mdd>-8.1%</td></tr><tr><td>2025</td><td>1.44</td><td>+16.1%</td><td class=mdd>-11.2%</td><td>1.33</td><td>+16.4%</td><td class=mdd>-12.3%</td></tr><tr><td>2026</td><td>4.01</td><td>+35.9%</td><td class=mdd>-9.0%</td><td>4.82</td><td>+42.0%</td><td class=mdd>-8.7%</td></tr>
+  </table>
+  <div class="meta">
+    <span>L2 worst-yr Cal 1.33 · ymin +11.2% · rank-sum 226</span><br>
+    <span>L3 worst-yr Cal 1.33 · ymin +12.8% · rank-sum 180</span>
+  </div>
+</div>
+<div class="card">
+  <div class="lbl">L3 안정 1위</div>
+  <div class="alloc">80/12.5/7.5<span class="sub"> 주식/현물/선물 %</span></div>
+  <table class="comp">
+    <tr><th></th><th colspan=3 class=l2>L2 (2배)</th><th colspan=3 class=l3>L3 (3배)</th></tr>
+    <tr><th></th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Cal</th><th>CAGR</th><th>MDD</th></tr>
+    <tr class=tot><td>전체</td>
+      <td><b>2.91</b></td><td>+34.9%</td><td class=mdd>-12.0%</td>
+      <td><b>3.54</b></td><td>+42.3%</td><td class=mdd>-12.0%</td></tr>
+    <tr><td>2021</td><td>6.97</td><td>+53.6%</td><td class=mdd>-7.7%</td><td>8.85</td><td>+69.5%</td><td class=mdd>-7.9%</td></tr><tr><td>2022</td><td>1.00</td><td>+12.0%</td><td class=mdd>-12.0%</td><td>1.20</td><td>+14.3%</td><td class=mdd>-12.0%</td></tr><tr><td>2023</td><td>6.25</td><td>+36.8%</td><td class=mdd>-5.9%</td><td>8.36</td><td>+47.7%</td><td class=mdd>-5.7%</td></tr><tr><td>2024</td><td>5.79</td><td>+37.4%</td><td class=mdd>-6.5%</td><td>6.13</td><td>+43.3%</td><td class=mdd>-7.1%</td></tr><tr><td>2025</td><td>1.61</td><td>+17.3%</td><td class=mdd>-10.7%</td><td>1.54</td><td>+17.5%</td><td class=mdd>-11.4%</td></tr><tr><td>2026</td><td>3.50</td><td>+34.2%</td><td class=mdd>-9.8%</td><td>3.93</td><td>+37.8%</td><td class=mdd>-9.6%</td></tr>
+  </table>
+  <div class="meta">
+    <span>L2 worst-yr Cal 1.00 · ymin +10.8% · rank-sum 360</span><br>
+    <span>L3 worst-yr Cal 1.20 · ymin +11.7% · rank-sum 284</span>
+  </div>
+</div>
+
+<h2>L2 종합 rank-sum top10</h2>
+<div class=tbl>
+<table><tr><th>비중</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>wo-yr</th><th>ymin</th><th>rs</th></tr><tr><td>65/20/15</td><td>4.05</td><td>+52%</td><td class=mdd>-12.9%</td><td>1.19</td><td>+11.2%</td><td>172</td></tr><tr><td>65/22.5/12.5</td><td>3.92</td><td>+50%</td><td class=mdd>-12.7%</td><td>1.22</td><td>+11.0%</td><td>174</td></tr><tr><td>67.5/17.5/15</td><td>3.98</td><td>+51%</td><td class=mdd>-12.7%</td><td>1.25</td><td>+11.3%</td><td>176</td></tr><tr><td>67.5/20/12.5</td><td>3.85</td><td>+48%</td><td class=mdd>-12.5%</td><td>1.27</td><td>+11.0%</td><td>177</td></tr><tr><td>62.5/22.5/15</td><td>4.11</td><td>+54%</td><td class=mdd>-13.1%</td><td>1.14</td><td>+11.2%</td><td>178</td></tr><tr><td>62.5/25/12.5</td><td>3.98</td><td>+51%</td><td class=mdd>-12.9%</td><td>1.16</td><td>+10.9%</td><td>180</td></tr><tr><td>62.5/20/17.5</td><td>4.23</td><td>+57%</td><td class=mdd>-13.4%</td><td>1.11</td><td>+11.4%</td><td>183</td></tr><tr><td>65/17.5/17.5</td><td>4.17</td><td>+55%</td><td class=mdd>-13.2%</td><td>1.17</td><td>+11.5%</td><td>184</td></tr><tr><td>70/15/15</td><td>3.91</td><td>+49%</td><td class=mdd>-12.5%</td><td>1.30</td><td>+11.3%</td><td>186</td></tr><tr><td>60/25/15</td><td>4.17</td><td>+56%</td><td class=mdd>-13.4%</td><td>1.08</td><td>+11.1%</td><td>186</td></tr></table>
+<div class=meta style="margin-top:8px">5개 metric (Cal, Sharpe, ymin, worst-yr Cal, MDD) 순위 합. 작을수록 robust.</div>
+</div>
+
+<h2>L3 종합 rank-sum top10</h2>
+<div class=tbl>
+<table><tr><th>비중</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>wo-yr</th><th>ymin</th><th>rs</th></tr><tr><td>70/17.5/12.5</td><td>4.32</td><td>+60%</td><td class=mdd>-13.8%</td><td>1.23</td><td>+12.7%</td><td>173</td></tr><tr><td>72.5/15/12.5</td><td>4.26</td><td>+58%</td><td class=mdd>-13.6%</td><td>1.28</td><td>+12.8%</td><td>175</td></tr><tr><td>75/12.5/12.5</td><td>4.19</td><td>+56%</td><td class=mdd>-13.4%</td><td>1.33</td><td>+12.8%</td><td>180</td></tr><tr><td>67.5/20/12.5</td><td>4.39</td><td>+62%</td><td class=mdd>-14.0%</td><td>1.18</td><td>+12.7%</td><td>180</td></tr><tr><td>70/15/15</td><td>4.54</td><td>+65%</td><td class=mdd>-14.4%</td><td>1.19</td><td>+13.3%</td><td>180</td></tr><tr><td>67.5/17.5/15</td><td>4.60</td><td>+67%</td><td class=mdd>-14.6%</td><td>1.14</td><td>+13.2%</td><td>185</td></tr><tr><td>70/20/10</td><td>4.09</td><td>+54%</td><td class=mdd>-13.3%</td><td>1.27</td><td>+12.1%</td><td>187</td></tr><tr><td>65/22.5/12.5</td><td>4.45</td><td>+63%</td><td class=mdd>-14.3%</td><td>1.13</td><td>+12.6%</td><td>188</td></tr><tr><td>65/20/15</td><td>4.66</td><td>+69%</td><td class=mdd>-14.8%</td><td>1.09</td><td>+13.2%</td><td>189</td></tr><tr><td>72.5/17.5/10</td><td>4.03</td><td>+53%</td><td class=mdd>-13.1%</td><td>1.33</td><td>+12.2%</td><td>193</td></tr></table>
+</div>
+
+<h2>MDD ≤ BL(-12%) 이면서 BL Cal(3.37) 초과 — 안정 후보</h2>
+<div class=tbl>
+<h3><span class="tag l2">L2</span> 6개 후보</h3>
+<table><tr><th>비중</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>wo</th></tr><tr><td>75/12.5/12.5</td><td>3.63</td><td>+43%</td><td class=mdd>-11.8%</td><td>1.33</td></tr><tr><td>72.5/17.5/10</td><td>3.57</td><td>+42%</td><td class=mdd>-11.8%</td><td>1.19</td></tr><tr><td>70/22.5/7.5</td><td>3.51</td><td>+41%</td><td class=mdd>-11.8%</td><td>1.05</td></tr><tr><td>75/15/10</td><td>3.50</td><td>+41%</td><td class=mdd>-11.6%</td><td>1.17</td></tr><tr><td>67.5/27.5/5</td><td>3.44</td><td>+41%</td><td class=mdd>-11.8%</td><td>0.90</td></tr><tr><td>72.5/20/7.5</td><td>3.43</td><td>+40%</td><td class=mdd>-11.6%</td><td>1.04</td></tr></table>
+</div>
+<div class=tbl>
+<h3><span class="tag l3">L3</span> 4개 후보</h3>
+<table><tr><th>비중</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>wo</th></tr><tr><td>80/12.5/7.5</td><td>3.54</td><td>+42%</td><td class=mdd>-12.0%</td><td>1.20</td></tr><tr><td>72.5/22.5/5</td><td>3.53</td><td>+42%</td><td class=mdd>-12.0%</td><td>1.02</td></tr><tr><td>75/20/5</td><td>3.46</td><td>+41%</td><td class=mdd>-11.8%</td><td>1.01</td></tr><tr><td>67.5/30/2.5</td><td>3.42</td><td>+41%</td><td class=mdd>-11.9%</td><td>0.81</td></tr></table>
+</div>
+
+<h2>참고</h2>
+<div class=notes>
+· 데이터: V23 sleeve 결과를 alloc 비중으로 합성. tx 코인 0.04% / 주식 0.1% / 선물 0.04%<br>
+· L2 와 L3 의 차이는 <b>선물 비중 × (L3-L2) 단독 성과 차이</b> 로 거의 분해됨<br>
+· 베이스라인 (60/40/0) 은 선물 0% 이므로 L2≡L3<br>
+· worst-year Cal: 6년 중 가장 안 좋은 해의 Calmar (작을수록 약세장 약함)<br>
+· ymin: 6년 중 가장 안 좋은 해의 CAGR<br>
+· rank-sum: 5개 metric 순위 합 (5~770, 작을수록 robust)<br>
+</div>
+
+</body></html>
