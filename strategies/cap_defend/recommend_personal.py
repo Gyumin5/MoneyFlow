@@ -620,6 +620,9 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         eem_cur = eem.iloc[-1]
         dist = eem_cur / eem_sma - 1
         meta['signal_dist'] = {'EEM': dist}
+        meta['canary_eem_cur'] = float(eem_cur)
+        meta['canary_eem_sma'] = float(eem_sma)
+        meta['canary_sma_period'] = STOCK_CANARY_MA_PERIOD
 
         # EEM-only canary with 0.5% hysteresis
         if dist > STOCK_CANARY_HYST:
@@ -2284,32 +2287,144 @@ if __name__ == "__main__":
                 continue
             s_lines.append(f'  {t}: {w*100:.1f}%')
 
-        # 카나리 상세
+        # 카나리 상세 — 비교대상 / 현재값 / SMA값 / 비율
         canary_lines = ['🦅 카나리']
         if btc_cur is not None:
             canary_lines.append(
-                f"  현물 (BTC vs SMA{COIN_CANARY_MA_PERIOD}, hyst 1.5%): "
-                f"{c_stat} (ratio {btc_ratio:.4f}, cur ${btc_cur:,.0f}, sma ${btc_sma:,.0f}, dist {btc_dist_pct})"
+                f"  현물: BTC vs SMA{COIN_CANARY_MA_PERIOD} — cur ${btc_cur:,.0f} / sma ${btc_sma:,.0f} / ratio {btc_ratio:.4f}"
             )
         else:
-            canary_lines.append(f"  현물: {c_stat} (BTC 데이터 부족)")
-        canary_lines.extend(fut_canary_lines)
-        canary_lines.append(f"  주식: {s_stat} (KIS sd=69 stagger=23 n=3)")
+            canary_lines.append(f"  현물: BTC 데이터 부족")
+        try:
+            ci = strat.get('canary_info') if 'strat' in locals() else None
+        except Exception:
+            ci = None
+        if ci:
+            canary_lines.append(
+                f"  선물: BTC vs SMA{ci.get('sma_p',42)} — "
+                f"cur ${ci.get('cur',0):,.0f} / sma ${ci.get('sma_val',0):,.0f} / ratio {ci.get('ratio',0):.4f}"
+            )
+        else:
+            canary_lines.extend(fut_canary_lines)
+        eem_cur_v = s_meta.get('canary_eem_cur')
+        eem_sma_v = s_meta.get('canary_eem_sma')
+        eem_p = s_meta.get('canary_sma_period', 300)
+        if eem_cur_v and eem_sma_v:
+            ratio_s = eem_cur_v / eem_sma_v if eem_sma_v else 0
+            canary_lines.append(
+                f"  주식: EEM vs SMA{eem_p} — cur ${eem_cur_v:.2f} / sma ${eem_sma_v:.2f} / ratio {ratio_s:.4f}"
+            )
+        else:
+            canary_lines.append(f"  주식: EEM 데이터 부족")
 
-        # 상태 상세
-        status_lines = ['📊 상태']
-        status_lines.append(f"  현물 선정: {coin_picks_str or '없음'} (D_SMA42 sn=217 n=7 d=0.10, universe top40)")
-        status_lines.append(f"  선물 선정: {fut_combined_str or '없음'} (D_SMA42 sn=95 n=5 d=0.03 L3)")
-        status_lines.append(f"  자산배분: 70/15/15 주식/현물/선물 (V23 갱신 05-04)")
-        status_lines.append(f"  schema: V23")
+        # 보유/드리프트/자산배분 — live_overview + state 파일에서 조립
+        holdings_lines = ['💼 보유']
+        drift_lines = ['🌊 드리프트']
+        alloc_lines = ['⚖️ 자산배분']
+        try:
+            api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
+            ov = requests.get(f"{api}/api/assets/live_overview", timeout=60).json()
+            accts = ov.get("accounts", {})
+            stock_acct = accts.get("stock_kis") or {}
+            spot_acct = accts.get("coin_upbit") or {}
+            fut_acct = accts.get("coin_binance") or {}
+            stock_krw = float(stock_acct.get("total_krw", 0))
+            spot_krw = float(spot_acct.get("total_krw", 0))
+            fut_krw = float(fut_acct.get("total_krw", 0))
+            alloc_total = stock_krw + spot_krw + fut_krw
+
+            # 보유 (티커 비중 — sleeve 내부)
+            def _hold_lines(label, acct, total):
+                lines = [f"  [{label}] 평가액 ₩{total:,.0f}"]
+                hs = acct.get("holdings") or []
+                if not hs:
+                    lines.append("    (보유 없음)")
+                    return lines
+                for h in sorted(hs, key=lambda x: -float(x.get("krw", 0) or 0)):
+                    krw = float(h.get("krw", 0) or 0)
+                    if krw < 5000:
+                        continue
+                    tk = h.get("ticker") or h.get("symbol") or "?"
+                    w = krw / total if total > 0 else 0
+                    lines.append(f"    {tk}: ₩{krw:,.0f} ({w*100:.1f}%)")
+                return lines
+            holdings_lines[0] = f"💼 보유 (총 ₩{alloc_total:,.0f})"
+            holdings_lines.extend(_hold_lines("주식", stock_acct, stock_krw))
+            holdings_lines.extend(_hold_lines("현물", spot_acct, spot_krw))
+            holdings_lines.extend(_hold_lines("선물", fut_acct, fut_krw))
+
+            # 자산배분
+            if alloc_total > 0:
+                p_stock = stock_krw / alloc_total
+                p_spot = spot_krw / alloc_total
+                p_fut = fut_krw / alloc_total
+                d_stock = abs(p_stock - STOCK_RATIO)
+                d_spot = abs(p_spot - COIN_RATIO)
+                d_fut = abs(p_fut - FUTURES_RATIO)
+                ht = (d_stock + d_spot + d_fut) / 2
+                fire = ht >= REBAL_HT_THRESHOLD
+                alloc_lines.append(f"  주식 {p_stock:.1%} (목표 {STOCK_RATIO:.0%}, 편차 {d_stock:.1%})")
+                alloc_lines.append(f"  현물 {p_spot:.1%} (목표 {COIN_RATIO:.0%}, 편차 {d_spot:.1%})")
+                alloc_lines.append(f"  선물 {p_fut:.1%} (목표 {FUTURES_RATIO:.0%}, 편차 {d_fut:.1%})")
+                alloc_lines.append(f"  half_turnover {ht*100:.2f}pp (트리거 {REBAL_HT_THRESHOLD*100:.0f}pp) {'🔔 리밸 필요' if fire else '✅ 트리거 내'}")
+                if fire:
+                    moves = []
+                    for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
+                                            ("현물", spot_krw, alloc_total * COIN_RATIO),
+                                            ("선물", fut_krw, alloc_total * FUTURES_RATIO)]:
+                        delta = tgt - cur
+                        if abs(delta) > 10000:
+                            moves.append(f"    {name} {delta:+,.0f}원")
+                    if moves:
+                        alloc_lines.append("  수동 조정:")
+                        alloc_lines.extend(moves)
+            else:
+                alloc_lines.append("  (live_overview 0)")
+        except Exception as ex_ov:
+            holdings_lines.append(f"  (조회 실패: {ex_ov})")
+            alloc_lines.append(f"  (조회 실패: {ex_ov})")
+
+        # 드리프트 — trade_state.json (현물) + binance_state.json (선물)
+        try:
+            ts_path = os.environ.get('TRADE_STATE', '/home/ubuntu/trade_state.json')
+            if not os.path.exists(ts_path):
+                ts_path = os.path.join(APP_HOME, 'trade_state.json')
+            if os.path.exists(ts_path):
+                with open(ts_path) as fh:
+                    ts = json.load(fh)
+                ht_sp = ts.get('drift_half_turnover') or ts.get('last_drift_ht') or 0
+                thr_sp = ts.get('drift_threshold', 0.10)
+                fire_sp = ht_sp >= thr_sp
+                drift_lines.append(f"  현물: ht {ht_sp*100:.2f}pp / 트리거 {thr_sp*100:.0f}pp {'🔔 fire' if fire_sp else '✅ 내'}")
+            else:
+                drift_lines.append("  현물: state 없음")
+        except Exception as ex_ds:
+            drift_lines.append(f"  현물: 읽기 실패 ({ex_ds})")
+        try:
+            bn_state_path2 = os.environ.get('BINANCE_STATE', '/home/ubuntu/binance_state.json')
+            if not os.path.exists(bn_state_path2):
+                bn_state_path2 = os.path.join(APP_HOME, 'binance_state.json')
+            if os.path.exists(bn_state_path2):
+                with open(bn_state_path2) as fh:
+                    bn2 = json.load(fh)
+                ht_f = bn2.get('last_drift_ht') or 0
+                thr_f = bn2.get('drift_threshold', 0.03)
+                fire_f = ht_f >= thr_f
+                drift_lines.append(f"  선물: ht {ht_f*100:.2f}pp / 트리거 {thr_f*100:.0f}pp {'🔔 fire' if fire_f else '✅ 내'}")
+            else:
+                drift_lines.append("  선물: state 없음")
+        except Exception as ex_df:
+            drift_lines.append(f"  선물: 읽기 실패 ({ex_df})")
 
         summary = (
             f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
             + '\n'.join(c_lines) + "\n\n"
             + '\n'.join(fut_lines) + "\n\n"
             + '\n'.join(s_lines) + "\n\n"
+            + '\n'.join(holdings_lines) + "\n\n"
             + '\n'.join(canary_lines) + "\n\n"
-            + '\n'.join(status_lines)
+            + '\n'.join(drift_lines) + "\n\n"
+            + '\n'.join(alloc_lines)
         )
         if PORTFOLIO_PUBLIC_URL:
             send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)
@@ -2319,50 +2434,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
 
-    # ─── 3자산 배분 체크 (V23: half_turnover ≥ 15pp 트리거) ───
-    try:
-        api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
-        ov = requests.get(f"{api}/api/assets/live_overview", timeout=60).json()
-        accts = ov.get("accounts", {})
-        stock_krw = float((accts.get("stock_kis") or {}).get("total_krw", 0))
-        spot_krw = float((accts.get("coin_upbit") or {}).get("total_krw", 0))
-        fut_krw = float((accts.get("coin_binance") or {}).get("total_krw", 0))
-        alloc_total = stock_krw + spot_krw + fut_krw
-
-        if alloc_total > 0:
-            p_stock = stock_krw / alloc_total
-            p_spot = spot_krw / alloc_total
-            p_fut = fut_krw / alloc_total
-            d_stock = abs(p_stock - STOCK_RATIO)
-            d_spot = abs(p_spot - COIN_RATIO)
-            d_fut = abs(p_fut - FUTURES_RATIO)
-            half_turnover = (d_stock + d_spot + d_fut) / 2
-            need_rebal = half_turnover >= REBAL_HT_THRESHOLD
-
-            alloc_line = (
-                f"⚖️ 자산배분: 주식 {p_stock:.1%} / 업비트 {p_spot:.1%} / 바이낸스 {p_fut:.1%}"
-                f" — V23 목표 70/15/15, half_turnover {half_turnover:.1%} (트리거 {REBAL_HT_THRESHOLD:.0%})"
-            )
-            print(alloc_line)
-
-            if need_rebal:
-                moves = []
-                for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
-                                        ("업비트", spot_krw, alloc_total * COIN_RATIO),
-                                        ("바이낸스", fut_krw, alloc_total * FUTURES_RATIO)]:
-                    delta = tgt - cur
-                    if abs(delta) > 10000:
-                        moves.append(f"  {name}: {delta:+,.0f}원")
-                alert_msg = (
-                    f"⚠️ 자산배분 리밸런싱 필요 (V23 half_turnover {half_turnover:.1%} ≥ {REBAL_HT_THRESHOLD:.0%})\n\n"
-                    f"주식 {p_stock:.1%} (목표 70%, 편차 {d_stock:.1%})\n"
-                    f"업비트 {p_spot:.1%} (목표 15%, 편차 {d_spot:.1%})\n"
-                    f"바이낸스 {p_fut:.1%} (목표 15%, 편차 {d_fut:.1%})\n\n"
-                    f"수동 조정 필요:\n" + "\n".join(moves)
-                )
-                send_telegram(alert_msg)
-                print(f"🚨 자산배분 리밸런싱 알림 전송 (half_turnover {half_turnover:.1%})")
-            else:
-                print(f"✅ 자산배분 트리거 내 (half_turnover {half_turnover:.1%} < {REBAL_HT_THRESHOLD:.0%})")
-    except Exception as e:
-        print(f"⚠️ 자산배분 체크 실패: {e}")
+    # 3자산 배분 체크는 위 Daily Report 안 ⚖️ 자산배분 섹션으로 통합됨 (별도 알림 제거)
