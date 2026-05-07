@@ -485,7 +485,7 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
 
         state['prev_risk_on'] = risk_on
         state['rebalancing_needed'] = True
-        send_telegram(f'카나리 플립: {"Risk-On 🟢" if risk_on else "Risk-Off 🔴"}')
+        log(f'카나리 플립 (silent): {"Risk-On" if risk_on else "Risk-Off"}')
         return True
 
     state['prev_risk_on'] = risk_on
@@ -699,7 +699,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         if max_diff < REBALANCE_TOLERANCE and not failed_orders:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
-            send_telegram('✅ 리밸런싱 완료')
+            log('✅ 리밸런싱 완료 (silent)')
         else:
             state['rebalancing_needed'] = True
             log(f'  ⏳ 미달 (max diff={max_diff:.1%}), 다음 실행에서 재시도')
@@ -850,12 +850,9 @@ def run_once(dry_run=False):
             '잔여 편차': f'{max_diff:.1%}' if max_diff is not None else 'N/A',
             '총자산': f'${total_usd:,.0f} (환율 {fx:,.0f})',
         }
+        # V23: 정상 보고 silent — Daily Report 09:15 가 통합 보고
         target_norm = {('Cash' if k == 'Cash' else k): v for k, v in target.items()}
-        send_telegram(v23r.build_report(
-            asset_label='주식', emoji='📈', name='Cap Defend Stock',
-            ts_str=kst_now.strftime('%Y-%m-%d %H:%M KST'),
-            target=target_norm, holdings=holdings_list, orders_text=orders_text,
-            canary_lines=canary_lines, status=status))
+        log(f'주식 보고 (silent): target={target_norm} max_diff={max_diff} mode={mode}')
 
     # 6. 저장
     state['last_action'] = 'executor'

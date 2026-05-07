@@ -230,7 +230,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
         bl_bars_override=0,
         drift_threshold=0.10, post_flip_delay=5,
         daily_gate=False,
-        health_mode='mom2vol',  # 'mom2vol'(기본), 'mom1vol', 'mom1', 'mom2', 'vol', 'none'
+        health_mode='mom2vol',  # 'mom2vol'(기본), 'mom1vol', 'mom1', 'mom2', 'vol', 'sma', 'smavol', 'none'
+        health_sma_days=0,  # 0이면 sma_days(카나리) 와 동일. 헬스 SMA 와 카나리 SMA 분리용.
         vol_mode='daily',  # 'daily'(일봉 리샘플) or 'bar'(순수 봉 기반 연환산)
         vol_threshold=0.05,  # vol_mode='daily' 기본. bar mode면 연환산 기준 (예: 0.80)
         n_snapshots=3,  # 스냅샷 수 (3=월3회, 6=월6회, 12=거의매일)
@@ -285,6 +286,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
 
     # 봉 단위 우선, 없으면 일 단위 × bpd
     sma_period = sma_bars if sma_bars > 0 else sma_days * bpd
+    health_sma_period = (health_sma_days * bpd) if health_sma_days and health_sma_days > 0 else sma_period
     mom30 = mom_short_bars if mom_short_bars > 0 else mom_short_days * bpd
     mom90 = mom_long_bars if mom_long_bars > 0 else mom_long_days * bpd
     _vol_bars = vol_bars if vol_bars > 0 else vol_days * bpd
@@ -527,7 +529,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
 
         healthy = []
-        min_bars = max(mom30, mom90, _vol_bars, sma_period)
+        min_bars = max(mom30, mom90, _vol_bars, sma_period, health_sma_period)
         _excluded = exclude_assets or frozenset()
         for coin in mcap_order:
             if coin in blacklist:
@@ -556,6 +558,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
             else:
                 vol = 0
 
+            sma_ok = True
+            if 'sma' in health_mode and len(c) >= health_sma_period:
+                sma_val = float(np.mean(c[-health_sma_period:]))
+                sma_ok = c[-1] > sma_val
+
             if health_mode == 'mom2vol':
                 ok = m_short > 0 and m_long > 0 and vol <= vol_threshold
             elif health_mode == 'mom1vol':
@@ -566,6 +573,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 ok = m_short > 0 and m_long > 0
             elif health_mode == 'vol':
                 ok = vol <= vol_threshold
+            elif health_mode == 'sma':
+                ok = sma_ok
+            elif health_mode == 'smavol':
+                ok = sma_ok and vol <= vol_threshold
             else:
                 ok = True
             if ok:
@@ -607,7 +618,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         if df is None:
             return False
         ci = df.index.get_indexer([sig_date], method='ffill')[0]
-        min_bars_local = max(mom30, mom90, _vol_bars, sma_period)
+        min_bars_local = max(mom30, mom90, _vol_bars, sma_period, health_sma_period)
         if ci < 0 or ci < min_bars_local:
             return False
         c = df['Close'].values[:ci + 1]
@@ -622,6 +633,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 vol = calc_vol_daily(c, bpd, lookback_bars=_vol_bars)
         else:
             vol = 0
+        sma_ok = True
+        if 'sma' in health_mode and len(c) >= health_sma_period:
+            sma_val = float(np.mean(c[-health_sma_period:]))
+            sma_ok = c[-1] > sma_val
         if health_mode == 'mom2vol':
             return m_short > 0 and m_long > 0 and vol <= vol_threshold
         elif health_mode == 'mom1vol':
@@ -632,6 +647,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
             return m_short > 0 and m_long > 0
         elif health_mode == 'vol':
             return vol <= vol_threshold
+        elif health_mode == 'sma':
+            return sma_ok
+        elif health_mode == 'smavol':
+            return sma_ok and vol <= vol_threshold
         return True
 
     def _merge_snapshots(sig_date_for_health=None):

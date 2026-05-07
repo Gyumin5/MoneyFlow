@@ -11,7 +11,8 @@ def fmt_pct(v: float) -> str:
 
 
 def build_header(asset_label: str, emoji: str, name: str, ts_str: str) -> str:
-    return f"[{asset_label}] {emoji} {name} V23 ({ts_str})"
+    prefix = f"[{asset_label}] " if asset_label else ""
+    return f"{prefix}{emoji} {name} V23 ({ts_str})"
 
 
 def build_target_section(target: Dict[str, float]) -> str:

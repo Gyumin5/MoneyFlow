@@ -1471,8 +1471,8 @@ def main():
         if drift_fire_fut and not state.get('rebalancing_needed', False):
             state['rebalancing_needed'] = True
             state['last_rebal_reason'] = 'drift'
-            log.info(f"  🔔 V23 drift 발화 → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
-            send_telegram(f'⚠ V23 fut drift: ht={ht_fut:.3f} ≥ {DRIFT_THRESHOLD_FUT:.2f} → 리밸')
+            log.info(f"  🔔 V23 drift 발화 (silent) → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
+            # V23: drift 알림 silent — Daily Report 09:15 가 통합 보고
         # schema_version 마크
         state['schema_version'] = SCHEMA_VERSION
 
@@ -1556,11 +1556,11 @@ def main():
             for coin, pos in positions_after.items():
                 if pos.get('notional', 0.0) < DISPLAY_DUST_NOTIONAL:
                     continue
+                margin = pos.get('real_notional', pos['notional'])
                 holdings.append({
                     'ticker': coin,
-                    'value_str': f"${pos['notional']:.0f}",
-                    'weight': pos.get('weight', 0.0),
-                    'pnl': pos.get('pnl', 0.0),
+                    'value_str': f"${margin:.0f}",
+                    'weight': pos.get('real_weight', pos.get('weight', 0.0)),
                 })
 
             if order_alerts:
@@ -1589,7 +1589,10 @@ def main():
                                      if pos.get('notional', 0.0) >= DISPLAY_DUST_NOTIONAL)
             status = {
                 'schema': 'V23',
-                'PV': f'${pv_after:.2f}',
+                '평가액': f'${pv_after:.2f}',
+                'ht': f'{ht_fut:.4f}',
+                'drift_threshold': f'{DRIFT_THRESHOLD_FUT:.2f}',
+                'drift_fire': '예 🔔' if drift_fire_fut else '아니오',
                 '리밸 대기': '예' if state.get('rebalancing_needed', False) else '아니오',
                 '포지션 수': str(visible_positions),
                 '활성 스탑 수': str(stop_count),
@@ -1598,11 +1601,10 @@ def main():
             if error_alerts:
                 extra = "⚠ 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10])
 
-            send_telegram(v23r.build_report(
-                asset_label='선물', emoji='📘', name='Cap Defend Futures',
-                ts_str=kst_now.strftime('%Y-%m-%d %H:%M KST'),
-                target=target_norm, holdings=holdings, orders_text=orders_text,
-                canary_lines=canary_lines, status=status, extra=extra))
+            # V23: 정상 보고 silent — Daily Report 09:15 가 통합 보고. 오류만 즉시 알림.
+            if error_alerts:
+                send_telegram("⚠ 선물 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10]))
+            log.info(f"V23 fut report (silent): targets={target_norm} ht={ht_fut:.4f} fire={drift_fire_fut} pv=${pv_after:.2f}")
         log.info(f"=== 완료 ({elapsed:.1f}s) ===")
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)

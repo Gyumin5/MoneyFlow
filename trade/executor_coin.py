@@ -534,19 +534,23 @@ def build_coin_report(result, balance: Dict[str, float], total_krw: float,
     target = {('Cash' if k == 'CASH' else k): v
               for k, v in result.combined_target.items() if not k.startswith('_')}
     canary_lines = _build_coin_canary_lines(result)
+    holdings = _build_coin_holdings(balance, total_krw)
+    visible_positions = sum(1 for h in holdings if h['ticker'] != 'Cash')
     status = {
         'schema': 'V23',
+        '평가액': f'₩{total_krw:,.0f}',
         'ht': f'{result.drift_half_turnover:.4f}',
         'drift_threshold': f'{result.drift_threshold:.2f}',
         'drift_fire': '예 🔔' if result.drift_fire else '아니오',
-        '총 평가액': f'₩{total_krw:,.0f}',
+        '리밸 대기': '아니오',
+        '포지션 수': str(visible_positions),
     }
     if status_extra:
         status.update(status_extra)
     return v23r.build_report(
-        asset_label='코인 spot', emoji='🪙', name='Cap Defend Spot',
+        asset_label='', emoji='🪙', name='Cap Defend Spot',
         ts_str=ts, target=target,
-        holdings=_build_coin_holdings(balance, total_krw),
+        holdings=holdings,
         orders_text=orders_text, canary_lines=canary_lines, status=status)
 
 
@@ -771,7 +775,8 @@ def run_once(dry_run: bool = False) -> int:
         state['last_rebal_reason'] = 'drift'
         log(f'  🔔 V23 drift 발화 → rebalancing_needed=True. half_turnover={result.drift_half_turnover:.4f} '
             f'>= threshold={result.drift_threshold:.2f}')
-        _tg(f'⚠ V23 drift 트리거 발화: ht={result.drift_half_turnover:.3f} ≥ {result.drift_threshold:.2f} → 리밸')
+        # V23: 정상 운영 알림 silent (Daily Report 09:15 이 통합 보고). 운영자 즉시 알림은 오류만.
+        log(f'  ℹ V23 drift 트리거 발화 (silent): ht={result.drift_half_turnover:.3f} ≥ {result.drift_threshold:.2f}')
     elif target_changed:
         state['last_rebal_reason'] = 'snap_or_signal'
     log(f'  V23 debug: schema_version={state.get("schema_version", "N/A")} '
@@ -783,9 +788,7 @@ def run_once(dry_run: bool = False) -> int:
         log(f'  ℹ target 불변 + rebalancing_needed=False → 스킵. prev={prev_combined}')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
-        _tg(build_coin_report(result, balance, total_krw,
-                              orders_text='없음 (target 불변)',
-                              status_extra={'리밸 대기': '아니오'}))
+        # V23: 정상 no-op 보고 silent (Daily Report 09:15 이 통합 보고)
         _flush_telegram(dry_run)
         return 0
 
@@ -795,9 +798,7 @@ def run_once(dry_run: bool = False) -> int:
         log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
-        _tg(build_coin_report(result, balance, total_krw,
-                              orders_text='없음 (포지션 이미 근접)',
-                              status_extra={'리밸 대기': '아니오'}))
+        # V23: 정상 no-op 보고 silent
         _flush_telegram(dry_run)
         return 0
 
@@ -808,12 +809,11 @@ def run_once(dry_run: bool = False) -> int:
         universe_sample = ', '.join(result.universe[:8])
         if len(result.universe) > 8:
             universe_sample += f' ... (+{len(result.universe) - 8})'
-        _tg(summary)
-        _tg(delta_preview)
-        _tg(f'유니버스 {len(result.universe)}: {universe_sample}')
+        # V23: 사전 알림 silent (Daily Report 가 통합)
+        log(f'  사전 알림 (silent): {summary[:80]}... / delta {delta_preview[:60]} / universe {result.universe[:5]}')
         flips = [m for m, f in result.canary_flipped.items() if f]
         if flips:
-            _tg(f'🔄 카나리 플립: {flips}')
+            log(f'  카나리 플립 (silent): {flips}')
 
     # Delta 매매
     permanent_block = state.get('permanent_block', [])
@@ -843,11 +843,9 @@ def run_once(dry_run: bool = False) -> int:
     _save_state_unless_dry(state_path, state, dry_run)
     log(f'  상태 저장: {STATE_FILE}')
 
-    # 최종 통일 보고
+    # V23: 최종 정상 보고 silent. 거래 결과는 Daily Report 09:15 가 통합.
     rebal_done = not bool(state.get('rebalancing_needed', False))
-    _tg(build_coin_report(result, balance_after, total_after,
-                          orders_text=f'완료 ({"DRY" if dry_run else "LIVE"}) — 매도/매수 실행',
-                          status_extra={'리밸 결과': '✅ 완료' if rebal_done else '⏳ 잔존 (다음 cron 재시도)'}))
+    log(f'  ✅ 거래 완료 (silent). 결과={rebal_done}, 다음 Daily Report 에 반영')
     _flush_telegram(dry_run)
     return 0
 
