@@ -77,6 +77,10 @@ DUST_KRW = 5000                     # 이보다 작은 잔여는 전량 매도
 LIMIT_PRICE_SLIP = 0.003            # 매수 지정가 +0.3%
 ORDER_WAIT_SEC = 5                  # 매수 후 미체결 취소 대기
 LIQUIDATION_MAX_RETRIES = 3
+# V23 매도 robust retry — 코인 spot 매도 무조건 성공 보장 (2026-05-08)
+SELL_RETRY_DELAYS = [1, 3, 5, 10]
+SELL_MAX_ATTEMPTS = 5
+SELL_TIMEOUT_SEC = 60
 
 
 def _patch_pyupbit_remaining_req_parser():
@@ -253,6 +257,75 @@ class UpbitAPI:
                     except Exception as e:
                         log(f'  취소 오류 {o.get("uuid")}: {e}')
             log(f'  미체결 {len(orders)}건 취소')
+
+    def _get_order_fill(self, uuid: str) -> Tuple[float, float]:
+        """주문 체결 조회. Returns (executed_volume, remaining_volume)."""
+        try:
+            order = self.upbit.get_order(uuid)
+            if not isinstance(order, dict):
+                return 0.0, 0.0
+            executed = float(order.get('executed_volume', 0) or 0)
+            remaining = float(order.get('remaining_volume', 0) or 0)
+            return executed, remaining
+        except Exception as e:
+            log(f'  주문 조회 실패 uuid={uuid}: {e}')
+            return 0.0, 0.0
+
+    def sell_market_robust(self, coin: str, target_qty: float) -> Tuple[bool, float]:
+        """V23 robust 매도. 재시도 + fill 검증 + 잔량 재주문. Returns (success, total_filled)."""
+        if target_qty <= 0:
+            return True, 0.0
+        if self.dry_run:
+            log(f'  [DRY] robust sell {coin} qty={target_qty:.8f}')
+            return True, target_qty
+        total_filled = 0.0
+        t0 = time.time()
+        last_err = None
+        for attempt in range(1, SELL_MAX_ATTEMPTS + 1):
+            if time.time() - t0 > SELL_TIMEOUT_SEC:
+                log(f'  ⚠ {coin} 매도 타임아웃 ({SELL_TIMEOUT_SEC}s) — filled={total_filled:.8f}/{target_qty:.8f}')
+                break
+            actual_qty = self.get_coin_qty(coin)
+            try_qty = min(max(0.0, target_qty - total_filled), actual_qty)
+            if try_qty <= 0:
+                log(f'  매도 잔량 없음 ({coin}) 종료 (filled={total_filled:.8f})')
+                return True, total_filled
+            price = self.get_current_price(coin)
+            if price > 0 and try_qty * price < MIN_ORDER_KRW:
+                log(f'  매도 잔량 dust ({coin}) — try_qty*price=₩{try_qty*price:,.0f} < {MIN_ORDER_KRW:,} 종료')
+                return True, total_filled
+            try:
+                ticker = f'KRW-{coin}'
+                result = self.upbit.sell_market_order(ticker, try_qty)
+            except Exception as e:
+                last_err = e
+                err_l = str(e).lower()
+                retryable = any(k in err_l for k in ['timeout', 'connection', 'too many', 'rate', '429', '500', '502', '503', '504'])
+                log(f'  매도 attempt {attempt} 오류 {coin}: {e} (retryable={retryable})')
+                if not retryable or attempt >= SELL_MAX_ATTEMPTS:
+                    break
+                time.sleep(SELL_RETRY_DELAYS[min(attempt - 1, len(SELL_RETRY_DELAYS) - 1)])
+                continue
+            if not isinstance(result, dict) or 'uuid' not in result:
+                last_err = f'응답 이상: {result}'
+                log(f'  매도 attempt {attempt} 응답 이상 {coin}: {result}')
+                time.sleep(SELL_RETRY_DELAYS[min(attempt - 1, len(SELL_RETRY_DELAYS) - 1)])
+                continue
+            uuid = result['uuid']
+            time.sleep(2)
+            executed, remaining = self._get_order_fill(uuid)
+            if executed <= 0 and remaining <= 0:
+                bal_after = self.get_coin_qty(coin)
+                executed = max(0.0, actual_qty - bal_after)
+                log(f'  주문 조회 실패 → 잔고 차이 추정: executed={executed:.8f}')
+            total_filled += executed
+            log(f'  매도 attempt {attempt} {coin}: try={try_qty:.8f} executed={executed:.8f} cumul_filled={total_filled:.8f}/{target_qty:.8f}')
+            if total_filled >= target_qty * 0.999:
+                return True, total_filled
+            time.sleep(1)
+        ok = total_filled >= target_qty * 0.999
+        log(f'  ⚠ 매도 robust 종료 {coin}: ok={ok} filled={total_filled:.8f}/{target_qty:.8f} last_err={last_err}')
+        return ok, total_filled
 
     def sell_market(self, coin: str, qty: float) -> bool:
         if qty <= 0:
@@ -442,7 +515,8 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
                 continue
             buys.append((ticker, delta_v))
 
-    # 매도 — sell_all은 시세 API 장애와 무관하게 전량 청산 (fail-closed)
+    # 매도 — V23 robust retry + fill 검증 (sell_market_robust). 실패 시 즉시 텔레그램 alert.
+    sell_failures: List[str] = []
     for coin, sell_krw, sell_all in sells:
         qty_owned = api.get_coin_qty(coin)
         if qty_owned <= 0 and not dry_run:
@@ -470,8 +544,19 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
         if est_krw < MIN_ORDER_KRW:
             log(f'  매도 스킵 {coin}: est_krw=₩{est_krw:,.0f} < 최소주문 ₩{MIN_ORDER_KRW:,} (Upbit 거부)')
             continue
-        log(f'  매도 {coin} qty={sell_qty:.8f} ≈ ₩{est_krw:,.0f} ({"전량" if sell_all else "부분"})')
-        api.sell_market(coin, sell_qty)
+        log(f'  매도 시작 {coin} qty={sell_qty:.8f} ≈ ₩{est_krw:,.0f} ({"전량" if sell_all else "부분"})')
+        ok, filled = api.sell_market_robust(coin, sell_qty)
+        if not ok:
+            short_qty = max(0.0, sell_qty - filled)
+            short_krw = short_qty * price if price > 0 else 0
+            sell_failures.append(f'{coin}: 요청 {sell_qty:.6f} / 체결 {filled:.6f} (잔량 ₩{short_krw:,.0f})')
+            log(f'  ⚠ 매도 미완 {coin}: filled {filled:.8f}/{sell_qty:.8f}')
+    if sell_failures and not dry_run:
+        alert = '🚨 V23 spot 매도 실패/부분체결 (다음 cron 재시도)\n' + '\n'.join(f'  - {m}' for m in sell_failures)
+        try:
+            _send_tg(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, alert)
+        except Exception as e:
+            log(f'  매도 실패 alert 전송 오류: {e}')
 
     if buys:
         time.sleep(1)

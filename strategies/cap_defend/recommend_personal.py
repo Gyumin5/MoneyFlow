@@ -1337,17 +1337,12 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         _stk = _stock_signal.get("stock", {}) or {}
         _stock_exec_target = _merge_stock_state(_stock_state)
         _stock_summary = [
-            f"<b>리스크 상태:</b> {'Risk-On' if _stk.get('risk_on', True) else 'Risk-Off'}",
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_stock_state.get('rebalancing_needed'))}",
-            f"<b>마지막 실행일:</b> {_stock_state.get('last_trade_date', '-')}",
-            f"<b>실행 목표:</b> {_fmt_alloc(_stock_exec_target)}",
-            f"<b>다음 앵커:</b> {_next_anchor_str(STOCK_ANCHOR_DAYS)}",
+            f"<b>마지막 실행:</b> {_stock_state.get('last_trade_date', '-')}",
+            f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_stock_exec_target)}",
+            f"<b>전략 KIS_V23:</b> Canary {'ON' if _stk.get('risk_on', True) else 'OFF'}, "
+            f"다음 트랜치 {_next_anchor_str(STOCK_ANCHOR_DAYS)}",
         ]
-        if s_meta.get('signal_dist'):
-            _dist = s_meta['signal_dist']
-            _stock_summary.append(
-                "<b>카나리 거리:</b> " + ", ".join(f"{k}:{float(v):+.2%}" for k, v in _dist.items())
-            )
         _stock_tr_rows = []
         _v22_snaps = _stock_state.get("snapshots", {}) or {}
         if _v22_snaps:
@@ -1361,7 +1356,6 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 _stock_tr_rows.append({
                     "스냅": f"S{_sid}",
                     "상태": _status,
-                    "마지막리밸": _sn.get("last_rebal_date", "-"),
                     "종목": _picks_text,
                     "비중": _weights_text,
                 })
@@ -1400,7 +1394,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         _coin_summary = [
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_coin_state.get('rebalancing_needed'))}",
             f"<b>마지막 실행:</b> {_fmt_run_ts(_coin_state.get('last_run_ts', '-'))}",
-            f"<b>합산 목표 (V23 1/2 EW):</b><br>{_fmt_alloc_lines(_last_target_clean)}",
+            f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_last_target_clean)}",
         ]
         if _warning_coins:
             _coin_summary.append(f"<b>Upbit 유의/상폐:</b> {', '.join(_warning_coins)}")
@@ -1410,20 +1404,21 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             _meta = COIN_MEMBER_META.get(_name, {})
             _ex = (_excl_all.get(_name, {}) or {})
             _ex_text = ", ".join(sorted(_ex.keys())) if _ex else "없음"
-            _coin_rows.append({
-                "전략": _name,
-                "Canary": "ON" if _ms.get("canary_on") else "OFF",
-                "마지막 봉": _ms.get("last_bar_ts", "-") or "-",
-                "다음 트랜치 일정": _next_tranche_refresh_str(
-                    _ms.get("last_bar_ts", "-"),
-                    _meta.get("interval_hours", 1),
-                    _ms.get("bar_counter", 0),
-                    _meta.get("snap_interval_bars", 0),
-                    _meta.get("n_snapshots", 0),
-                ),
-                "현재 목표": _fmt_alloc_lines(_ms.get("last_combined", {}) or {}),
-                "제외 코인": _ex_text,
-            })
+            _coin_summary.append(
+                f"<b>전략 {_name}:</b> Canary {'ON' if _ms.get('canary_on') else 'OFF'}, "
+                f"다음 트랜치 {_next_tranche_refresh_str(_ms.get('last_bar_ts','-'), _meta.get('interval_hours',1), _ms.get('bar_counter',0), _meta.get('snap_interval_bars',0), _meta.get('n_snapshots',0))}, "
+                f"제외 코인 {_ex_text}"
+            )
+            for _idx, _snap in enumerate((_ms.get("snapshots", []) or []), start=1):
+                _w = _snap if isinstance(_snap, dict) else {}
+                _picks = [k for k, v in _w.items() if k.lower() != 'cash' and float(v) > 1e-4]
+                _status, _picks_text, _weights_text = _tranche_status("-", _w, _picks)
+                _coin_rows.append({
+                    "스냅": f"S{_idx}",
+                    "상태": _status,
+                    "종목": _picks_text,
+                    "비중": _weights_text,
+                })
         state_sections.append(_strategy_block("📘 업비트 실행 상태 (V23)", _coin_summary, _coin_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 업비트 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
@@ -1440,71 +1435,33 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         _fut_summary = [
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_fut.get('rebalancing_needed'))}",
             f"<b>마지막 실행:</b> {_fmt_run_ts(_fut.get('last_run', '-'))}",
-            f"<b>비상 정지:</b> {_fmt_bool(_fut.get('kill_switch'))}" + (f" ({_fut.get('kill_switch_reason')})" if _fut.get('kill_switch') else ""),
             f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_last_target)}",
         ]
+        if _fut.get('kill_switch'):
+            _fut_summary.append(f"<b>⚠ 비상 정지:</b> {_fut.get('kill_switch_reason', 'unknown')}")
         _fut_tr_rows = []
         for _name in list(FUTURES_TRANCHE_META.keys()):
             _st = _strategies.get(_name, {}) or {}
             _meta = FUTURES_TRANCHE_META.get(_name, {})
-            _snapshots_text = "<br><br>".join(
-                f"<b>S{idx}</b><br>{_fmt_alloc_lines(snap)}"
-                for idx, snap in enumerate((_st.get("snapshots", []) or []), start=1)
-            ) or "없음"
-            _fut_tr_rows.append({
-                "전략": _name,
-                "Canary": "ON" if _st.get("canary_on") else "OFF",
-                "다음 트랜치 일정": _next_tranche_refresh_str(
-                    _st.get("last_bar_ts", "-"),
-                    _meta.get("interval_hours", 1),
-                    _st.get("bar_counter", 0),
-                    _meta.get("snap_interval_bars", 0),
-                    _meta.get("n_snapshots", 0),
-                ),
-                "현재 합산": _fmt_alloc_lines(_st.get("last_combined", {})),
-                "트랜치": _snapshots_text,
-            })
+            _fut_summary.append(
+                f"<b>전략 {_name}:</b> Canary {'ON' if _st.get('canary_on') else 'OFF'}, "
+                f"다음 트랜치 {_next_tranche_refresh_str(_st.get('last_bar_ts','-'), _meta.get('interval_hours',1), _st.get('bar_counter',0), _meta.get('snap_interval_bars',0), _meta.get('n_snapshots',0))}"
+            )
+            for _idx, _snap in enumerate((_st.get("snapshots", []) or []), start=1):
+                _w = _snap if isinstance(_snap, dict) else {}
+                _picks = [k for k, v in _w.items() if k.lower() != 'cash' and float(v) > 1e-4]
+                _status, _picks_text, _weights_text = _tranche_status("-", _w, _picks)
+                _fut_tr_rows.append({
+                    "스냅": f"S{_idx}",
+                    "상태": _status,
+                    "종목": _picks_text,
+                    "비중": _weights_text,
+                })
         state_sections.append(_strategy_block("📘 바이낸스 실행 상태", _fut_summary, _fut_tr_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 바이낸스 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
-    # === 자산배분 BT 비교 (V23 sweep 결과 2026-04-27, 5.3yr 2020-10~2025-12) ===
-    _alloc_bt_html = """
-    <h2>📊 자산배분 BT 비교 (V23 half_turnover 15pp, 5.4yr)</h2>
-    <p style='color:#5f6368;font-size:0.9em'>BT 기간: 2020-10-01 ~ 2026-05-04 · 자산: 주식 V23 sd=69 / 현물 V23 1D sn=217 drift=0.10 / 선물 V23 1D sn=95 n=5 drift=0.03 L3 (05-04 갱신)</p>
-
-    <h3>현재 60/40/0 baseline</h3>
-    <div class='summary-list'>
-      <div class='summary-item'><b>Sharpe:</b> 1.69</div>
-      <div class='summary-item'><b>Calmar:</b> 2.70</div>
-      <div class='summary-item'><b>CAGR:</b> +36.5%</div>
-      <div class='summary-item'><b>MDD:</b> -13.5%</div>
-      <div class='summary-item'><b>제약 내 Cal rank:</b> 107/154</div>
-      <div class='summary-item'><b>rs rank:</b> 47/154</div>
-    </div>
-
-    <h3>제약 내 (st≥co≥fu) 추천 자산배분</h3>
-    <div class='table-wrap'>
-    <table class='dataframe small-table'>
-    <thead><tr><th>비중 (st/co/fu)</th><th>Sh</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>rs</th><th>비고</th></tr></thead>
-    <tbody>
-      <tr><td><b>60/40/0</b></td><td>1.69</td><td>2.70</td><td>+36.5%</td><td>-13.5%</td><td>411</td><td>현재 baseline</td></tr>
-      <tr><td>60/30/10</td><td>1.67</td><td>3.43</td><td>+46.6%</td><td>-13.6%</td><td>397</td><td>fut 10% 추가, MDD 동일, CAGR +10%pp</td></tr>
-      <tr><td>55/35/10</td><td>1.67</td><td>3.58</td><td>+49.4%</td><td>-13.8%</td><td>429</td><td>균형형</td></tr>
-      <tr><td>50/40/10</td><td>1.67</td><td>3.74</td><td>+52.4%</td><td>-14.0%</td><td>474</td><td>현물 비중 유지 + fut 10%</td></tr>
-      <tr><td>50/30/20</td><td>1.64</td><td>4.13</td><td>+67.3%</td><td>-16.3%</td><td>377</td><td>공격형</td></tr>
-      <tr><td>55/25/20</td><td>1.67</td><td>4.10</td><td>+65.9%</td><td>-15.4%</td><td><b>342</b></td><td>제약 내 robust 1위</td></tr>
-      <tr><td>52.5/27.5/20</td><td>1.67</td><td>4.15</td><td>+67.3%</td><td>-16.2%</td><td>352</td><td>robust 2위</td></tr>
-      <tr><td>40/37.5/22.5</td><td>1.62</td><td>4.38</td><td>+75.7%</td><td>-17.3%</td><td>406</td><td>제약 내 Cal 1위</td></tr>
-    </tbody>
-    </table>
-    </div>
-    <p style='color:#5f6368;font-size:0.85em'>
-    제약: 주식 ≥ 현물 ≥ 선물 (사용자 우선순위). rs = yearly Calmar rank_sum (낮을수록 robust).
-    BT 결과는 과거 데이터 기반이며 미래 보장 아님. 자산배분 결정은 사용자 영역.
-    </p>
-    """
-    state_sections.append(_alloc_bt_html)
+    # 자산배분 BT 비교 표 제거 (사용자 요청 2026-05-08)
 
     execution_state_html = "".join(state_sections)
 
@@ -2237,7 +2194,7 @@ if __name__ == "__main__":
         coin_picks_str = ', '.join(t.replace('-USD','') for t in c_port.keys() if t != 'Cash')
 
         # 선물 state 읽기 (binance_state.json)
-        fut_lines = ['🎯 선물 목표']
+        fut_lines = ['🎯 바이낸스 목표']
         fut_canary_lines = []
         try:
             bn_state_path = os.environ.get('BINANCE_STATE', '/home/ubuntu/binance_state.json')
@@ -2259,12 +2216,12 @@ if __name__ == "__main__":
                 ci = strat.get('canary_info') or {}
                 if ci:
                     fut_canary_lines.append(
-                        f"  선물 (BTC perp vs SMA{ci.get('sma_p',42)}): "
+                        f"  바이낸스 (BTC perp vs SMA{ci.get('sma_p',42)}): "
                         f"{'ON 공격' if ci.get('on') else 'OFF 캐시'} "
                         f"(ratio {ci.get('ratio',0):.4f}, cur ${ci.get('cur',0):,.0f}, sma ${ci.get('sma_val',0):,.0f})"
                     )
                 else:
-                    fut_canary_lines.append(f"  선물 카나리: {'ON' if strat.get('canary_on') else 'OFF'} (info 없음)")
+                    fut_canary_lines.append(f"  바이낸스 카나리: {'ON' if strat.get('canary_on') else 'OFF'} (info 없음)")
                 fut_combined_str = ', '.join(t for t in last_combined.keys() if t.lower() != 'cash')
             else:
                 fut_lines.append('  (state 없음)')
@@ -2275,7 +2232,7 @@ if __name__ == "__main__":
 
         # V23 통일 포맷 (Daily Report — 신호 요약, 실행 보고와 별개)
         date_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]
-        c_lines = ['🎯 코인 (현물) 목표']
+        c_lines = ['🎯 업비트 목표']
         for t, w in sorted(c_port.items(), key=lambda kv: -kv[1]):
             tk = t.replace('-USD', '')
             if w < 1e-4 and tk.lower() != 'cash':
@@ -2291,17 +2248,17 @@ if __name__ == "__main__":
         canary_lines = ['🦅 카나리']
         if btc_cur is not None:
             canary_lines.append(
-                f"  현물: BTC vs SMA{COIN_CANARY_MA_PERIOD} — cur ${btc_cur:,.0f} / sma ${btc_sma:,.0f} / ratio {btc_ratio:.4f}"
+                f"  업비트: BTC vs SMA{COIN_CANARY_MA_PERIOD} — cur ${btc_cur:,.0f} / sma ${btc_sma:,.0f} / ratio {btc_ratio:.4f}"
             )
         else:
-            canary_lines.append(f"  현물: BTC 데이터 부족")
+            canary_lines.append(f"  업비트: BTC 데이터 부족")
         try:
             ci = strat.get('canary_info') if 'strat' in locals() else None
         except Exception:
             ci = None
         if ci:
             canary_lines.append(
-                f"  선물: BTC vs SMA{ci.get('sma_p',42)} — "
+                f"  바이낸스: BTC vs SMA{ci.get('sma_p',42)} — "
                 f"cur ${ci.get('cur',0):,.0f} / sma ${ci.get('sma_val',0):,.0f} / ratio {ci.get('ratio',0):.4f}"
             )
         else:
@@ -2350,8 +2307,8 @@ if __name__ == "__main__":
                 return lines
             holdings_lines[0] = f"💼 보유 (총 ₩{alloc_total:,.0f})"
             holdings_lines.extend(_hold_lines("주식", stock_acct, stock_krw))
-            holdings_lines.extend(_hold_lines("현물", spot_acct, spot_krw))
-            holdings_lines.extend(_hold_lines("선물", fut_acct, fut_krw))
+            holdings_lines.extend(_hold_lines("업비트", spot_acct, spot_krw))
+            holdings_lines.extend(_hold_lines("바이낸스", fut_acct, fut_krw))
 
             # 자산배분
             if alloc_total > 0:
@@ -2364,14 +2321,14 @@ if __name__ == "__main__":
                 ht = (d_stock + d_spot + d_fut) / 2
                 fire = ht >= REBAL_HT_THRESHOLD
                 alloc_lines.append(f"  주식 {p_stock:.1%} (목표 {STOCK_RATIO:.0%}, 편차 {d_stock:.1%})")
-                alloc_lines.append(f"  현물 {p_spot:.1%} (목표 {COIN_RATIO:.0%}, 편차 {d_spot:.1%})")
-                alloc_lines.append(f"  선물 {p_fut:.1%} (목표 {FUTURES_RATIO:.0%}, 편차 {d_fut:.1%})")
+                alloc_lines.append(f"  업비트 {p_spot:.1%} (목표 {COIN_RATIO:.0%}, 편차 {d_spot:.1%})")
+                alloc_lines.append(f"  바이낸스 {p_fut:.1%} (목표 {FUTURES_RATIO:.0%}, 편차 {d_fut:.1%})")
                 alloc_lines.append(f"  half_turnover {ht*100:.2f}pp (트리거 {REBAL_HT_THRESHOLD*100:.0f}pp) {'🔔 리밸 필요' if fire else '✅ 트리거 내'}")
                 if fire:
                     moves = []
                     for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
-                                            ("현물", spot_krw, alloc_total * COIN_RATIO),
-                                            ("선물", fut_krw, alloc_total * FUTURES_RATIO)]:
+                                            ("업비트", spot_krw, alloc_total * COIN_RATIO),
+                                            ("바이낸스", fut_krw, alloc_total * FUTURES_RATIO)]:
                         delta = tgt - cur
                         if abs(delta) > 10000:
                             moves.append(f"    {name} {delta:+,.0f}원")
@@ -2395,11 +2352,11 @@ if __name__ == "__main__":
                 ht_sp = ts.get('drift_half_turnover') or ts.get('last_drift_ht') or 0
                 thr_sp = ts.get('drift_threshold', 0.10)
                 fire_sp = ht_sp >= thr_sp
-                drift_lines.append(f"  현물: ht {ht_sp*100:.2f}pp / 트리거 {thr_sp*100:.0f}pp {'🔔 fire' if fire_sp else '✅ 내'}")
+                drift_lines.append(f"  업비트: ht {ht_sp*100:.2f}pp / 트리거 {thr_sp*100:.0f}pp {'🔔 fire' if fire_sp else '✅ 내'}")
             else:
-                drift_lines.append("  현물: state 없음")
+                drift_lines.append("  업비트: state 없음")
         except Exception as ex_ds:
-            drift_lines.append(f"  현물: 읽기 실패 ({ex_ds})")
+            drift_lines.append(f"  업비트: 읽기 실패 ({ex_ds})")
         try:
             bn_state_path2 = os.environ.get('BINANCE_STATE', '/home/ubuntu/binance_state.json')
             if not os.path.exists(bn_state_path2):
@@ -2410,11 +2367,11 @@ if __name__ == "__main__":
                 ht_f = bn2.get('last_drift_ht') or 0
                 thr_f = bn2.get('drift_threshold', 0.03)
                 fire_f = ht_f >= thr_f
-                drift_lines.append(f"  선물: ht {ht_f*100:.2f}pp / 트리거 {thr_f*100:.0f}pp {'🔔 fire' if fire_f else '✅ 내'}")
+                drift_lines.append(f"  바이낸스: ht {ht_f*100:.2f}pp / 트리거 {thr_f*100:.0f}pp {'🔔 fire' if fire_f else '✅ 내'}")
             else:
-                drift_lines.append("  선물: state 없음")
+                drift_lines.append("  바이낸스: state 없음")
         except Exception as ex_df:
-            drift_lines.append(f"  선물: 읽기 실패 ({ex_df})")
+            drift_lines.append(f"  바이낸스: 읽기 실패 ({ex_df})")
 
         summary = (
             f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
