@@ -2341,37 +2341,53 @@ if __name__ == "__main__":
             holdings_lines.append(f"  (조회 실패: {ex_ov})")
             alloc_lines.append(f"  (조회 실패: {ex_ov})")
 
-        # 드리프트 — trade_state.json (현물) + binance_state.json (선물)
+        # 드리프트 — 현재 보유 비중 vs 목표 비중에서 직접 계산 (state file 미사용)
+        def _ht_from_holdings(acct, total_krw, target_dict):
+            """half_turnover = sum(|cur_w - tgt_w|) / 2. cash 포함."""
+            if total_krw <= 0:
+                return None
+            cur_w = {}
+            for h in (acct.get('holdings') or []):
+                tk = (h.get('ticker') or '').upper()
+                v = float(h.get('value_krw', h.get('weight_value_krw', 0)) or 0)
+                if tk and v > 0:
+                    cur_w[tk] = v / total_krw
+            cur_w_sum = sum(cur_w.values())
+            cur_w['CASH'] = max(0.0, 1.0 - cur_w_sum)
+            tgt = {}
+            for k, v in target_dict.items():
+                tk = 'CASH' if str(k).lower() == 'cash' else str(k).replace('-USD', '').upper()
+                tgt[tk] = float(v)
+            keys = set(cur_w) | set(tgt)
+            return sum(abs(cur_w.get(k, 0) - tgt.get(k, 0)) for k in keys) / 2
+
         try:
-            ts_path = os.environ.get('TRADE_STATE', '/home/ubuntu/trade_state.json')
-            if not os.path.exists(ts_path):
-                ts_path = os.path.join(APP_HOME, 'trade_state.json')
-            if os.path.exists(ts_path):
-                with open(ts_path) as fh:
-                    ts = json.load(fh)
-                ht_sp = ts.get('drift_half_turnover') or ts.get('last_drift_ht') or 0
-                thr_sp = ts.get('drift_threshold', 0.10)
+            spot_acct_d = (accts.get("coin_upbit") or {}) if 'accts' in locals() else {}
+            spot_total_d = float(spot_acct_d.get("total_krw", 0))
+            ht_sp = _ht_from_holdings(spot_acct_d, spot_total_d, c_port or {})
+            thr_sp = 0.10
+            if ht_sp is None:
+                drift_lines.append("  업비트: 잔고 없음")
+            else:
                 fire_sp = ht_sp >= thr_sp
                 drift_lines.append(f"  업비트: ht {ht_sp*100:.2f}pp / 트리거 {thr_sp*100:.0f}pp {'🔔 fire' if fire_sp else '✅ 내'}")
-            else:
-                drift_lines.append("  업비트: state 없음")
         except Exception as ex_ds:
-            drift_lines.append(f"  업비트: 읽기 실패 ({ex_ds})")
+            drift_lines.append(f"  업비트: 계산 실패 ({ex_ds})")
         try:
-            bn_state_path2 = os.environ.get('BINANCE_STATE', '/home/ubuntu/binance_state.json')
-            if not os.path.exists(bn_state_path2):
-                bn_state_path2 = os.path.join(APP_HOME, 'binance_state.json')
-            if os.path.exists(bn_state_path2):
-                with open(bn_state_path2) as fh:
-                    bn2 = json.load(fh)
-                ht_f = bn2.get('last_drift_ht') or 0
-                thr_f = bn2.get('drift_threshold', 0.03)
+            fut_acct_d = (accts.get("coin_binance") or {}) if 'accts' in locals() else {}
+            fut_total_d = float(fut_acct_d.get("total_krw", 0))
+            fut_target = last_combined if 'last_combined' in locals() and last_combined else {}
+            ht_f = _ht_from_holdings(fut_acct_d, fut_total_d, fut_target)
+            thr_f = 0.03
+            if ht_f is None:
+                drift_lines.append("  바이낸스: 잔고 없음")
+            elif not fut_target:
+                drift_lines.append("  바이낸스: 목표 없음")
+            else:
                 fire_f = ht_f >= thr_f
                 drift_lines.append(f"  바이낸스: ht {ht_f*100:.2f}pp / 트리거 {thr_f*100:.0f}pp {'🔔 fire' if fire_f else '✅ 내'}")
-            else:
-                drift_lines.append("  바이낸스: state 없음")
         except Exception as ex_df:
-            drift_lines.append(f"  바이낸스: 읽기 실패 ({ex_df})")
+            drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
 
         summary = (
             f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
