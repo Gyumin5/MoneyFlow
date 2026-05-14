@@ -238,6 +238,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         initial_capital=10000.0,
         start_date='2020-10-01', end_date='2026-03-28',
         fill_mode='open',  # 'open'(unified_backtest 기준) | 'close'(legacy)
+        external_target_schedule=None,  # dict[date -> {'target':dict, 'rebal':bool}] (앙상블 BT 용)
         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
     """시간봉 완전 선물 백테스트. 봉 단위 파라미터 지원."""
 
@@ -636,19 +637,21 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 entry_bar_index.pop(coin, None)
                 liq_count += 1
 
-        # ── 펀딩비 ──
+        # ── 펀딩비 (prev_date < t <= date 윈도우 합산: D봉=3회, 4h=1~2회, 1h=0~1회) ──
         for coin in list(holdings.keys()):
             fr_series = funding.get(coin)
             if fr_series is None:
                 continue
-            if date in fr_series.index:
-                fr = float(fr_series.loc[date])
-                if fr != 0 and not np.isnan(fr):
-                    cur = get_close(bars, coin, btc_idx_map.get(date, -1) if coin == 'BTC' else
-                                    bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1)
-                    if cur > 0:
-                        # 롱: notional × rate
-                        capital -= holdings[coin] * cur * fr
+            window = fr_series.loc[(fr_series.index > prev_date) & (fr_series.index <= date)]
+            if len(window) == 0:
+                continue
+            fr_sum = float(window.sum())
+            if fr_sum != 0 and not np.isnan(fr_sum):
+                cur = get_close(bars, coin, btc_idx_map.get(date, -1) if coin == 'BTC' else
+                                bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1)
+                if cur > 0:
+                    # 롱: notional × sum(rate)
+                    capital -= holdings[coin] * cur * fr_sum
         capital = max(capital, 0)
 
         # ── 카나리 (t-1 기준) ──
@@ -737,53 +740,81 @@ def run(bars, funding, interval='1h', leverage=1.0,
         # ── 시그널 → 스냅샷 갱신 ──
         need_rebal = False
 
-        if bar_i <= sma_period + 1:
-            # 첫 바
-            for si in range(n_snapshots):
-                if canary_on:
-                    snapshots[si] = _compute_weights(prev_date)
-                else:
-                    snapshots[si] = {'CASH': 1.0}
-            need_rebal = True
-        elif canary_flipped:
-            for si in range(n_snapshots):
-                if canary_on:
-                    snapshots[si] = _compute_weights(prev_date)
-                else:
-                    snapshots[si] = {'CASH': 1.0}
-            need_rebal = True
-        elif pfd_bars > 0 and canary_on:
-            if canary_on_bar and not pfd_done and (bar_i - canary_on_bar) >= pfd_bars:
-                pfd_done = True
+        if external_target_schedule is None:
+            # 내부 시그널 모드 (기존)
+            if bar_i <= sma_period + 1:
+                # 첫 바
                 for si in range(n_snapshots):
-                    snapshots[si] = _compute_weights(prev_date)
+                    if canary_on:
+                        snapshots[si] = _compute_weights(prev_date)
+                    else:
+                        snapshots[si] = {'CASH': 1.0}
                 need_rebal = True
-
-        # ── 앵커 리밸런싱 (Risk-On + 미플립) ──
-        if canary_on and not canary_flipped:
-            if snap_interval_bars > 0:
-                # 봉 기반 앵커: bar_i % interval로 트리거
+            elif canary_flipped:
                 for si in range(n_snapshots):
-                    offset = int(si * snap_interval_bars / n_snapshots)
-                    if (bar_i + phase_offset_bars) % snap_interval_bars == offset:
-                        new_w = _compute_weights(prev_date)
-                        if new_w != snapshots[si]:
-                            snapshots[si] = new_w
-                            need_rebal = True
+                    if canary_on:
+                        snapshots[si] = _compute_weights(prev_date)
+                    else:
+                        snapshots[si] = {'CASH': 1.0}
+                need_rebal = True
+            elif pfd_bars > 0 and canary_on:
+                if canary_on_bar and not pfd_done and (bar_i - canary_on_bar) >= pfd_bars:
+                    pfd_done = True
+                    for si in range(n_snapshots):
+                        snapshots[si] = _compute_weights(prev_date)
+                    need_rebal = True
+
+            # ── 앵커 리밸런싱 (Risk-On + 미플립) ──
+            if canary_on and not canary_flipped:
+                if snap_interval_bars > 0:
+                    for si in range(n_snapshots):
+                        offset = int(si * snap_interval_bars / n_snapshots)
+                        if (bar_i + phase_offset_bars) % snap_interval_bars == offset:
+                            new_w = _compute_weights(prev_date)
+                            if new_w != snapshots[si]:
+                                snapshots[si] = new_w
+                                need_rebal = True
+                else:
+                    day_of_month = date.day
+                    for si, anchor in enumerate(snap_days):
+                        key = f"{cur_month}_snap{si}"
+                        if day_of_month >= anchor and key not in snap_done:
+                            snap_done[key] = True
+                            new_w = _compute_weights(prev_date)
+                            if new_w != snapshots[si]:
+                                snapshots[si] = new_w
+                                need_rebal = True
+
+            combined = _merge_snapshots()
+        else:
+            # 외부 schedule 모드 (앙상블 BT 용)
+            raw = external_target_schedule.get(date, None)
+            if raw is None:
+                combined = {'CASH': 1.0}
+                ext_rebal = False
             else:
-                # 달력 기반 앵커 (기존)
-                day_of_month = date.day
-                for si, anchor in enumerate(snap_days):
-                    key = f"{cur_month}_snap{si}"
-                    if day_of_month >= anchor and key not in snap_done:
-                        snap_done[key] = True
-                        new_w = _compute_weights(prev_date)
-                        if new_w != snapshots[si]:
-                            snapshots[si] = new_w
-                            need_rebal = True
+                raw_target = dict(raw.get('target', {}))
+                ext_rebal = bool(raw.get('rebal', False))
+                # NaN/음수/미존재 코인 제거 (제거분은 CASH 로)
+                # 참고: BL 필터는 적용 안함 — 기존 run() 도 snapshot 에 BL 코인 잔존 허용
+                bad = 0.0
+                for coin in list(raw_target.keys()):
+                    v = raw_target[coin]
+                    if v is None or (isinstance(v, float) and (v != v)) or v < 0:
+                        bad += max(0.0, raw_target.pop(coin))
+                    elif coin != 'CASH' and coin not in bars:
+                        bad += raw_target.pop(coin)
+                if bad > 0:
+                    raw_target['CASH'] = raw_target.get('CASH', 0.0) + bad
+                # 정규화 (합이 0이면 CASH 1)
+                s = sum(raw_target.values())
+                if s > 0:
+                    combined = {k: v/s for k, v in raw_target.items() if v > 0}
+                else:
+                    combined = {'CASH': 1.0}
+            need_rebal = ext_rebal
 
         # ── Drift (daily_gate 시 일 1회만) ──
-        combined = _merge_snapshots()
         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
             if _half_turnover(_current_weights(date), combined) >= drift_threshold:
                 need_rebal = True
