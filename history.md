@@ -1,3 +1,11 @@
+## [2026-05-14] 선물 sleeve 재최적화 — V23 유지 + 펀딩 BT 버그 fix
+tags: V23, 선물, 펀딩, BT, plateau
+- 결정: V23 그대로 유지 (변경 없음). C1/EW 후보 모두 채택하지 않음.
+- 근거: 펀딩 BT 버그 fix 후 V23 정식 (sma=42 ms=18 ml=127 live 파라미터) Cal 4.05 확인. C1 (sma=38 ms=20 ml=122) Cal 5.32 우위지만 SMA narrow peak (sma -10% Cal -69%) plateau 결격. EW 50/50 Cal 3.96 으로 V23 보다 낮음 (이전 잘못된 V23 Cal 3.32 기준일 때 EW +12% 매력 있었으나, live 정식 V23 기준일 때 매력 사라짐).
+- 코드 변경: backtest_futures_full.py 의 펀딩 매칭 fix (prev_date < t ≤ date 윈도우 sum, D 봉 3회 funding 정확 반영) + external_target_schedule 파라미터 추가 (앙상블 BT 가능, V23/C1 replay parity 0%). 모든 결과 strategies/cap_defend/research/fut_reopt_2026_05/.
+- 실험/실패: (1) simulate() 별도 작성 → 청산/crash/DD/BL forced exit 누락으로 EW Cal 7.22 가짜 결과 (재시도 금지, backtest_futures_full.py 의 external_target_schedule 모드 사용). (2) phase_b1 의 라운드 5배수 grid → geom-mid 작동 안함 (비율 ≥1.2 stride 필요). (3) live V23 파라미터 (ms=18 ml=127) 와 BT 기본값 (ms=30 ml=90) 혼동 → 결론 뒤집힘. live 정합성 먼저 확인.
+- 되돌릴 조건: 향후 펀딩 데이터/시장 regime 크게 변하면 재실행 (현재 grid + iter_refine 파이프라인 활용).
+
 ## [2026-04-30] V23 도입 (모든 자산 1D 단일 + drift trigger)
 tags: V23, 마이그레이션, 코인, 선물, 주식, drift
 - 결정: 모든 자산 V23 통일. spot D_SMA42 sn=217 n=7 drift=0.10, fut D_SMA42 sn=57 n=3 drift=0.05 L3, stock SNAP_PERIOD=69 STAGGER=23 N_SNAPS=3. 4h 멤버 제거, cron 4h x 6 → 1d x 1 (5 9 * * *)
