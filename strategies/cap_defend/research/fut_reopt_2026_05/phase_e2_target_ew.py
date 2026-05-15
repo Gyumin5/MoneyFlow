@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""Phase E2 — Target-weight EW 앙상블 BT.
+"""DEPRECATED — DO NOT RUN. simulate() 가 backtest_futures_full.py 의 forced exit 로직 누락.
 
+Phase E2 — Target-weight EW 앙상블 BT.
 V23 와 C1 의 target weight history 를 trace 로 얻고,
-EW merge 된 target 으로 단일 capital pool 에서 실집행 시뮬레이션.
+EW merge 된 target 으로 단일 capital pool 에서 자체 simulate() 실집행 시뮬레이션.
+
+실패 이유: simulate() 가 청산 (격리마진), crash breaker, DD exit, blacklist forced exit,
+stop, maint_rate 로직 미구현. 결과 Cal 7.22 는 가짜 (실제 정식 BT 는 Cal 3.73).
+ai-debate 코드 리뷰에서 신뢰 불가 판정.
+
+정식 경로: phase_e3_target_ew_proper.py
+- backtest_futures_full.py 의 external_target_schedule 모드 사용
+- 청산/crash/DD/BL/stop/펀딩/tx/slip/drift 모두 기존 run() 내부 로직으로 처리
+- V23/C1 replay parity 0% 검증 통과
 """
 import os, sys
 sys.path.insert(0, '/home/gmoh/mon/251229/strategies/cap_defend')
