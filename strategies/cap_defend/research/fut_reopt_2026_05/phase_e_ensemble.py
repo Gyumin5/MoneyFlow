@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Phase E — V23 + C1 EW 앙상블 시뮬레이션 (equity curve EW)."""
+"""DEPRECATED — DO NOT RUN. 잘못된 시뮬 방식 (equity-curve EW).
+
+Phase E — V23 + C1 EW 앙상블 시뮬레이션 (equity curve EW).
+
+실패 이유: 두 단독 BT 의 equity 곡선을 EW 평균만 함. 단일 capital pool 효과,
+target merge 시 netting, universe 합집합 효과 등을 반영 못함. 실제 ensemble 운영
+모델과 다름.
+
+정식 경로: phase_e3_target_ew_proper.py
+- backtest_futures_full.py 의 external_target_schedule 모드 사용
+- 청산/crash/DD/BL forced exit + 펀딩 + tx + slip + drift 모두 정확
+- V23/C1 replay parity 0% 검증 통과
+"""
 import os, sys
 sys.path.insert(0, '/home/gmoh/mon/251229/strategies/cap_defend')
 import pandas as pd
