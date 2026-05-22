@@ -15,7 +15,7 @@ Futures V23: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
   - D_SMA42: 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (05-04 갱신)
   - 가드 없음, 스탑 없음
 
-Asset Allocation: 70/15/15 (V23 갱신 05-04, AI 균형 권고), rel 30% drift band
+Asset Allocation: 60/25/15 (V23 갱신 2026-05-22), 리밸 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% & sleeve canary ON)
 """
 
 import os
@@ -203,7 +203,7 @@ def save_daily_live_snapshot():
 STRATEGY_VERSION = "V23"
 VERSION_HISTORY = [
     ("V23", "2026-04-30",
-     "전 자산 V23: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 70/15/15 (V23 갱신 05-04, AI 균형 권고).",
+     "전 자산 V23: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 60/25/15 (V23 갱신 2026-05-22, M 안).",
      """<b>▶ 코인 현물 (V23 — 1D 단일 D_SMA42 + drift)</b>
 • <b>D_SMA42:</b> 일봉 · SMA42 · Mom20/127 · snap 217봉×7 · canary hyst 1.5% · drift_threshold 0.10
 • <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND daily Vol≤5%
@@ -220,11 +220,12 @@ VERSION_HISTORY = [
 • <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
-<b>▶ 자산배분:</b> 70/15/15 (주식/현물/선물, V23 갱신 05-04), half_turnover ≥15pp 트리거, 리밸런싱은 수동"""),
+<b>▶ 자산배분:</b> 60/25/15 (주식/현물/선물, V23 갱신 2026-05-22). 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 리밸런싱은 수동"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.70, 0.15, 0.15  # V23 갱신 (05-04): 60/40/0 → 70/15/15 (AI 균형 권고)
-REBAL_HT_THRESHOLD = 0.15  # V23 갱신 (05-05): half_turnover (sum|cur-tgt|/2) ≥ 15pp 시 리밸 — 2D sweep robust 1위
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15  # V23 갱신 (2026-05-22): 70/15/15 → 60/25/15 (M 안 채택, broad plateau Cal 3.97 MDD -17.8)
+REBAL_HT_THRESHOLD = 0.13  # V23 갱신 (2026-05-22): T1 = half_turnover (sum|cur-tgt|/2) ≥ 13pp — M 안 (unified rank champ)
+REBAL_T3U_REL = 0.20  # V23 추가 (2026-05-22): T3U_can = max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
 CASH_ASSET = 'Cash'
 CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
@@ -889,10 +890,11 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
-            const TARGET_STOCK_RATIO = 0.70;
-            const TARGET_COIN_RATIO = 0.15;
+            const TARGET_STOCK_RATIO = 0.60;
+            const TARGET_COIN_RATIO = 0.25;
             const TARGET_FUTURES_RATIO = 0.15;
-            const REBAL_HT = 0.15;           // V23 갱신 (05-05): half_turnover ≥ 15pp 시 리밸 트리거
+            const REBAL_HT = 0.13;           // V23 갱신 (2026-05-22): T1 = half_turnover ≥ 13pp
+            const REBAL_T3U_REL = 0.20;      // V23 추가 (2026-05-22): T3U_can = max rel underweight ≥ 20% + sleeve canary ON
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1064,7 +1066,14 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const driftCoin = Math.abs(curCoinPct - TARGET_COIN_RATIO);
                 const driftFutures = Math.abs(curFuturesPct - TARGET_FUTURES_RATIO);
                 const halfTurnover = (driftStock + driftCoin + driftFutures) / 2;
-                const needRebal = halfTurnover >= REBAL_HT;
+                // T3U_can: max relative underweight per asset (canary ON 가정 — daily report 가 정확한 gate)
+                const relUnderStock = Math.max(0, (TARGET_STOCK_RATIO - curStockPct) / TARGET_STOCK_RATIO);
+                const relUnderCoin = Math.max(0, (TARGET_COIN_RATIO - curCoinPct) / TARGET_COIN_RATIO);
+                const relUnderFut = Math.max(0, (TARGET_FUTURES_RATIO - curFuturesPct) / TARGET_FUTURES_RATIO);
+                const maxRelUnder = Math.max(relUnderStock, relUnderCoin, relUnderFut);
+                const t1Fire = halfTurnover >= REBAL_HT;
+                const t3uFire = maxRelUnder >= REBAL_T3U_REL;  // canary ON 가정
+                const needRebal = t1Fire || t3uFire;
 
                 // 2. 목표 금액
                 const targetStockKRW = totalAsset * TARGET_STOCK_RATIO;
@@ -1089,7 +1098,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
 
                 html += '<div style="padding:8px 14px; background:#e8eaf6; border-radius:8px; margin-bottom:12px;">'
                     + '<b>\\ucd1d \\uc790\\uc0b0:</b> ' + Math.round(totalAsset).toLocaleString() + '\\uc6d0'
-                    + ' &nbsp;|&nbsp; <span style="color:' + htColor + ';font-weight:600;">half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp / 트리거 ' + (REBAL_HT * 100).toFixed(0) + 'pp</span></div>';
+                    + ' &nbsp;|&nbsp; <span style="color:' + htColor + ';font-weight:600;">T1 ht ' + (halfTurnover * 100).toFixed(1) + 'pp / ' + (REBAL_HT * 100).toFixed(0) + 'pp</span>'
+                    + ' &nbsp;|&nbsp; <span style="color:' + (t3uFire?'#d93025':'#0d904f') + ';font-weight:600;">T3U_can max-under ' + (maxRelUnder * 100).toFixed(0) + '% / ' + (REBAL_T3U_REL * 100).toFixed(0) + '%</span>'
+                    + '</div>';
 
                 // 4. 리밸런싱 판단
                 if (needRebal) {
@@ -1105,13 +1116,16 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             moves.push(d.name + ' ' + sign + Math.round(d.delta).toLocaleString() + '\\uc6d0');
                         }
                     });
+                    let reasons = [];
+                    if (t1Fire) reasons.push('T1(ht ' + (halfTurnover*100).toFixed(1) + 'pp ≥ ' + (REBAL_HT*100).toFixed(0) + 'pp)');
+                    if (t3uFire) reasons.push('T3U_can(max-under ' + (maxRelUnder*100).toFixed(0) + '% ≥ ' + (REBAL_T3U_REL*100).toFixed(0) + '% — canary 확인 필요)');
                     html += '<div style="padding:14px; background:#fce8e6; border:2px solid #d93025; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 — half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp \\u2265 ' + (REBAL_HT * 100).toFixed(0) + 'pp</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#d93025; margin-bottom:6px;">\\u26a0\\ufe0f \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ud544\\uc694 — ' + reasons.join(' | ') + '</div>'
                         + '<div style="font-size:1.05em;">' + moves.join('<br>') + '</div>'
                         + '</div>';
                 } else {
                     html += '<div style="padding:14px; background:#e8f5e9; border:1px solid #0d904f; border-radius:10px; margin-bottom:16px;">'
-                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp &lt; ' + (REBAL_HT * 100).toFixed(0) + 'pp)</div>'
+                        + '<div style="font-size:1.1em; font-weight:700; color:#0d904f;">\\u2705 \\ub9ac\\ubc38\\ub7f0\\uc2f1 \\ubd88\\ud544\\uc694 (T1 ' + (halfTurnover*100).toFixed(1) + 'pp / T3U_can ' + (maxRelUnder*100).toFixed(0) + '%)</div>'
                         + '</div>';
                 }
 
@@ -1746,14 +1760,15 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (V23 갱신 05-05: 70/15/15, half_turnover ≥15pp 트리거 — 리밸런싱은 수동) ===
+                // === 3자산 배분 체크 (V23 갱신 2026-05-22: 60/25/15, T1(ht≥13pp) OR T3U_can(max rel-under≥20% + canary ON) 트리거 — 리밸런싱은 수동) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.70, T_SPOT = 0.15, T_FUT = 0.15;
-                    const REBAL_HT = 0.15;
+                    const T_STOCK = 0.60, T_SPOT = 0.25, T_FUT = 0.15;
+                    const REBAL_HT = 0.13;
+                    const REBAL_T3U = 0.20;
                     const pStock = stockKrw / allocTotal;
                     const pSpot = spotKrw / allocTotal;
                     const pFut = futKrw / allocTotal;
@@ -1761,24 +1776,33 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     const dSpot = Math.abs(pSpot - T_SPOT);
                     const dFut = Math.abs(pFut - T_FUT);
                     const halfTurnover = (dStock + dSpot + dFut) / 2;
-                    const need = halfTurnover >= REBAL_HT;
+                    const relUnderStock = Math.max(0, (T_STOCK - pStock) / T_STOCK);
+                    const relUnderSpot = Math.max(0, (T_SPOT - pSpot) / T_SPOT);
+                    const relUnderFut = Math.max(0, (T_FUT - pFut) / T_FUT);
+                    const maxRelUnder = Math.max(relUnderStock, relUnderSpot, relUnderFut);
+                    const t1Fire = halfTurnover >= REBAL_HT;
+                    const t3uFire = maxRelUnder >= REBAL_T3U;  // canary ON 가정 — 정확한 gate 는 daily report
+                    const need = t1Fire || t3uFire;
 
-                    const pctBar = (label, cur, target, drift) => {{
+                    const pctBar = (label, cur, target, drift, relU) => {{
                         return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0;">'
                             + '<span>' + label + '</span>'
                             + '<span style="color:#444;font-weight:600;">'
                             + (cur * 100).toFixed(1) + '% (목표 ' + (target * 100).toFixed(0) + '%'
-                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p)</span></div>';
+                            + ', 편차 ' + (drift * 100).toFixed(1) + '%p, rel-under ' + (relU * 100).toFixed(0) + '%)</span></div>';
                     }};
 
                     html += '<div class="card" style="margin-top:12px;border:2px solid ' + (need ? '#d93025' : '#0d904f') + ';">';
+                    let triggerLines = [];
+                    if (t1Fire) triggerLines.push('T1(ht ' + (halfTurnover*100).toFixed(1) + 'pp ≥ ' + (REBAL_HT*100).toFixed(0) + 'pp)');
+                    if (t3uFire) triggerLines.push('T3U_can(max-under ' + (maxRelUnder*100).toFixed(0) + '% ≥ ' + (REBAL_T3U*100).toFixed(0) + '% — canary 확인 필요)');
                     html += '<div style="font-weight:700;font-size:1.05em;color:' + (need ? '#d93025' : '#0d904f') + ';margin-bottom:8px;">'
-                        + (need ? ('⚠️ 리밸런싱 필요 — half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp ≥ ' + (REBAL_HT * 100).toFixed(0) + 'pp')
-                                : ('✅ 리밸런싱 불필요 — half_turnover ' + (halfTurnover * 100).toFixed(1) + 'pp < ' + (REBAL_HT * 100).toFixed(0) + 'pp'))
+                        + (need ? ('⚠️ 리밸런싱 필요 — ' + triggerLines.join(' | '))
+                                : ('✅ 리밸런싱 불필요 — T1 ' + (halfTurnover*100).toFixed(1) + 'pp / T3U_can max-under ' + (maxRelUnder*100).toFixed(0) + '%'))
                         + '</div>';
-                    html += pctBar('주식', pStock, T_STOCK, dStock);
-                    html += pctBar('업비트', pSpot, T_SPOT, dSpot);
-                    html += pctBar('바이낸스', pFut, T_FUT, dFut);
+                    html += pctBar('주식', pStock, T_STOCK, dStock, relUnderStock);
+                    html += pctBar('업비트', pSpot, T_SPOT, dSpot, relUnderSpot);
+                    html += pctBar('바이낸스', pFut, T_FUT, dFut, relUnderFut);
 
                     if (need) {{
                         const tgtStock = allocTotal * T_STOCK;
@@ -2319,11 +2343,40 @@ if __name__ == "__main__":
                 d_spot = abs(p_spot - COIN_RATIO)
                 d_fut = abs(p_fut - FUTURES_RATIO)
                 ht = (d_stock + d_spot + d_fut) / 2
-                fire = ht >= REBAL_HT_THRESHOLD
+                # T3U_can: max relative underweight per asset + sleeve canary gate
+                rel_under_stock = max(0.0, (STOCK_RATIO - p_stock) / STOCK_RATIO)
+                rel_under_spot = max(0.0, (COIN_RATIO - p_spot) / COIN_RATIO)
+                rel_under_fut = max(0.0, (FUTURES_RATIO - p_fut) / FUTURES_RATIO)
+                # sleeve canary states
+                _spot_canary_on = (btc_ratio is not None and btc_ratio > 1.0 + COIN_CANARY_HYST)
+                try:
+                    _fut_canary_on = bool(strat.get('canary_on')) if 'strat' in locals() else _spot_canary_on
+                except Exception:
+                    _fut_canary_on = _spot_canary_on
+                _stock_canary_on = bool(is_stock_risk_on) if 'is_stock_risk_on' in locals() else True
+                t3u_stock = rel_under_stock >= REBAL_T3U_REL and _stock_canary_on
+                t3u_spot = rel_under_spot >= REBAL_T3U_REL and _spot_canary_on
+                t3u_fut = rel_under_fut >= REBAL_T3U_REL and _fut_canary_on
+                t1_fire = ht >= REBAL_HT_THRESHOLD
+                t3u_fire = t3u_stock or t3u_spot or t3u_fut
+                fire = t1_fire or t3u_fire
+                fire_reason = []
+                if t1_fire: fire_reason.append(f"T1(ht {ht*100:.1f}pp ≥ {REBAL_HT_THRESHOLD*100:.0f}pp)")
+                if t3u_fire:
+                    parts = []
+                    if t3u_stock: parts.append(f"주식 {rel_under_stock*100:.0f}%↓")
+                    if t3u_spot: parts.append(f"업비트 {rel_under_spot*100:.0f}%↓")
+                    if t3u_fut: parts.append(f"바이낸스 {rel_under_fut*100:.0f}%↓")
+                    fire_reason.append(f"T3U_can({', '.join(parts)})")
                 alloc_lines.append(f"  주식 {p_stock:.1%} (목표 {STOCK_RATIO:.0%}, 편차 {d_stock:.1%})")
                 alloc_lines.append(f"  업비트 {p_spot:.1%} (목표 {COIN_RATIO:.0%}, 편차 {d_spot:.1%})")
                 alloc_lines.append(f"  바이낸스 {p_fut:.1%} (목표 {FUTURES_RATIO:.0%}, 편차 {d_fut:.1%})")
-                alloc_lines.append(f"  half_turnover {ht*100:.2f}pp (트리거 {REBAL_HT_THRESHOLD*100:.0f}pp) {'🔔 리밸 필요' if fire else '✅ 트리거 내'}")
+                alloc_lines.append(f"  T1 half_turnover {ht*100:.2f}pp (트리거 {REBAL_HT_THRESHOLD*100:.0f}pp)")
+                alloc_lines.append(f"  T3U_can max rel-under: 주식 {rel_under_stock*100:.0f}% / 업비트 {rel_under_spot*100:.0f}% / 바이낸스 {rel_under_fut*100:.0f}% (트리거 {REBAL_T3U_REL*100:.0f}% + canary ON)")
+                if fire:
+                    alloc_lines.append(f"  🔔 리밸 필요 — {' | '.join(fire_reason)}")
+                else:
+                    alloc_lines.append(f"  ✅ 트리거 내")
                 if fire:
                     moves = []
                     for name, cur, tgt in [("주식", stock_krw, alloc_total * STOCK_RATIO),
@@ -2389,6 +2442,31 @@ if __name__ == "__main__":
         except Exception as ex_df:
             drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
 
+        # V23 params drift check (live ↔ canonical)
+        params_drift_lines = ["🧭 params drift check"]
+        try:
+            import subprocess
+            # 서버 (flat /home/ubuntu/) vs 로컬 (mon/251229/trade/ops/) 양쪽 지원
+            _here = os.path.dirname(os.path.abspath(__file__))
+            _candidates = [
+                os.path.join(_here, 'check_params_drift.py'),  # 서버 flat
+                os.path.abspath(os.path.join(_here, '..', '..', 'trade', 'ops', 'check_params_drift.py')),  # 로컬
+            ]
+            _check_path = next((p for p in _candidates if os.path.exists(p)), None)
+            if _check_path is None:
+                raise FileNotFoundError("check_params_drift.py not found")
+            _r = subprocess.run(['python3', _check_path], capture_output=True, text=True, timeout=30)
+            if _r.returncode == 0:
+                params_drift_lines.append("  ✅ 3자산 canonical 일치")
+            else:
+                params_drift_lines.append("  ⚠️ drift 발견:")
+                for ln in (_r.stdout or '').splitlines():
+                    ln = ln.strip()
+                    if ln and not ln.startswith('⚠️'):
+                        params_drift_lines.append(f"  {ln}")
+        except Exception as ex_pd:
+            params_drift_lines.append(f"  (체크 실패: {ex_pd})")
+
         summary = (
             f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
             + '\n'.join(c_lines) + "\n\n"
@@ -2397,6 +2475,7 @@ if __name__ == "__main__":
             + '\n'.join(holdings_lines) + "\n\n"
             + '\n'.join(canary_lines) + "\n\n"
             + '\n'.join(drift_lines) + "\n\n"
+            + '\n'.join(params_drift_lines) + "\n\n"
             + '\n'.join(alloc_lines)
         )
         if PORTFOLIO_PUBLIC_URL:
