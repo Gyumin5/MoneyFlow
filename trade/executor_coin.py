@@ -29,7 +29,7 @@ import argparse
 import fcntl
 import logging
 import math
-import os
+import os, json
 import sys
 import time
 import traceback
@@ -66,6 +66,7 @@ except ImportError:
 
 # ═══ 상수 ═══
 STATE_FILE = 'trade_state.json'
+ALLOC_SPOT_RATIO = 0.25  # V23 (옵션 D, 2026-05-23)
 LOCK_FILE = '/tmp/coin_executor.lock'
 LOG_FILE = 'executor_coin.log'
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -102,6 +103,22 @@ def _patch_pyupbit_remaining_req_parser():
 
 
 _patch_pyupbit_remaining_req_parser()
+
+
+def _read_alloc_transit_cap_ratio_spot():
+    """trade_state.json 의 alloc_transit active 면 spot cap_ratio (≤1.0) 반환. 아니면 None."""
+    _p = os.path.join(CACHE_DIR, STATE_FILE)
+    try:
+        if not os.path.exists(_p):
+            return None
+        with open(_p, 'r') as f:
+            obj = json.load(f)
+        at = obj.get('alloc_transit')
+        if not at or not at.get('active'):
+            return None
+        return float((at.get('cap_ratio') or {}).get('spot', 1.0))
+    except Exception:
+        return None
 
 
 # ═══ 로거 ═══
@@ -476,16 +493,23 @@ def apply_notional_cap(target: Dict[str, float], balance: Dict[str, float],
 
 # ═══ Delta 매매 ═══
 def execute_delta(target: Dict[str, float], api: UpbitAPI,
-                   permanent_block: List[str], dry_run: bool):
+                   permanent_block: List[str], dry_run: bool,
+                   effective_pv_krw: float = None):
     """target vs 현재 잔고 비교 → 매도 먼저, 매수 나중.
     - dust (<5000 KRW) 잔여 → 비율 매도 대신 전량 매도
     - permanent_block 코인은 신규 매수 금지
+    - effective_pv_krw: alloc_transit cap (옵션 D). None 이면 actual total 사용.
     """
     balance = api.get_balance()
     total = sum(balance.values())
     if total <= 0:
         log('  잔고 없음')
         return
+
+    # alloc_transit cap 적용
+    pv_for_target = total if effective_pv_krw is None else min(total, effective_pv_krw)
+    if effective_pv_krw is not None and effective_pv_krw < total:
+        log(f'  🔴 execute_delta alloc_transit cap: ₩{total:,.0f} → ₩{pv_for_target:,.0f}')
 
     current_value: Dict[str, float] = {k: v for k, v in balance.items() if k != 'KRW'}
 
@@ -498,7 +522,7 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
             continue
         tgt_w = target.get(ticker, 0.0)
         cur_v = current_value.get(ticker, 0.0)
-        tgt_v = tgt_w * total
+        tgt_v = tgt_w * pv_for_target
         delta_v = tgt_v - cur_v
 
         if tgt_w <= 0 and cur_v > 0:
@@ -771,11 +795,19 @@ def run_once(dry_run: bool = False) -> int:
     # balance: {'KRW': float, 'BTC': float, ...} 모두 KRW 평가액
     cur_balance_for_w = api.get_balance() or {}
     total_for_w = sum(cur_balance_for_w.values()) if cur_balance_for_w else 0.0
+
+    # alloc_transit cap (옵션 D pure, 2026-05-23)
+    _spot_cap_ratio = _read_alloc_transit_cap_ratio_spot()
+    _pv_basis = total_for_w
+    if _spot_cap_ratio is not None and _spot_cap_ratio < 1.0:
+        _pv_basis = total_for_w * _spot_cap_ratio
+        log(f'  🔴 alloc_transit cap_ratio={_spot_cap_ratio:.3f} → pv ₩{total_for_w:,.0f} → ₩{_pv_basis:,.0f}')
+
     cur_w_input: Dict[str, float] = {}
-    if total_for_w > 0:
+    if _pv_basis > 0:
         for k, v in cur_balance_for_w.items():
             key = 'Cash' if k == 'KRW' else k
-            cur_w_input[key] = cur_w_input.get(key, 0.0) + (float(v) / total_for_w)
+            cur_w_input[key] = cur_w_input.get(key, 0.0) + (float(v) / _pv_basis)
 
     # 엔진 호출
     try:
@@ -830,6 +862,9 @@ def run_once(dry_run: bool = False) -> int:
     # Notional cap
     balance = api.get_balance()
     total_krw = sum(balance.values())
+    # alloc_transit pv cap 재조회 (engine 호출 사이 잔고 변동 가능)
+    _spot_cap_ratio2 = _read_alloc_transit_cap_ratio_spot()
+    _pv_basis_exec = total_krw if (_spot_cap_ratio2 is None or _spot_cap_ratio2 >= 1.0) else (total_krw * _spot_cap_ratio2)
     effective_target = dict(target)
     if total_krw > 0 and 0 < NOTIONAL_CAP_FRACTION < 1:
         effective_target, gross = apply_notional_cap(target, balance, total_krw, NOTIONAL_CAP_FRACTION)
@@ -902,7 +937,7 @@ def run_once(dry_run: bool = False) -> int:
 
     # Delta 매매
     permanent_block = state.get('permanent_block', [])
-    execute_delta(effective_target, api, permanent_block, dry_run)
+    execute_delta(effective_target, api, permanent_block, dry_run, effective_pv_krw=_pv_basis_exec)
 
     # 체결 후 잔고 재조회 → 여전히 편차 남으면 다음 실행에서 재시도 (부분체결 대응)
     balance_after = balance
