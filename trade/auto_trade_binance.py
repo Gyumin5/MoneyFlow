@@ -54,7 +54,26 @@ from common.notify import send_telegram as _send_tg_common
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.py')
 STATE_PATH = os.path.join(SCRIPT_DIR, 'binance_state.json')
+ALLOC_TRANSIT_STATE_PATH = os.path.join(SCRIPT_DIR, 'trade_state.json')  # 코인 state (alloc_transit flag)
 LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
+
+
+def _read_alloc_transit_cap_ratio_fut():
+    """trade_state.json 의 alloc_transit active 면 fut cap_ratio (≤1.0) 반환. 아니면 None."""
+    for _p in (
+        os.path.expanduser('~/trade_state.json'),
+        ALLOC_TRANSIT_STATE_PATH,
+    ):
+        try:
+            if os.path.exists(_p):
+                with open(_p, 'r') as f:
+                    obj = json.load(f)
+                at = obj.get('alloc_transit')
+                if at and at.get('active'):
+                    return float((at.get('cap_ratio') or {}).get('fut', 1.0))
+        except Exception:
+            continue
+    return None
 
 # V23 전략/실행 파라미터 (1D 단일 멤버, drift=0.05, 2026-04-30 확정)
 # 고정 3배 레버리지, 가드 없음
@@ -1454,9 +1473,12 @@ def main():
 
         # V23 drift 트리거: cur_w (자본금 기준 비중, real_weight 사용) vs target_w
         # half_turnover >= DRIFT_THRESHOLD_FUT(0.05) 이면 rebalancing_needed=True
+        # alloc_transit cap (옵션 D): real_weight 분모를 effective_pv 로 scale
+        _drift_cap_ratio = _read_alloc_transit_cap_ratio_fut()
+        _drift_scale = (1.0 / _drift_cap_ratio) if (_drift_cap_ratio is not None and 0 < _drift_cap_ratio < 1.0) else 1.0
         cur_w_fut: Dict[str, float] = {}
         for coin, pos in positions_before.items():
-            cur_w_fut[coin] = float(pos.get('real_weight', 0.0))
+            cur_w_fut[coin] = float(pos.get('real_weight', 0.0)) * _drift_scale
         cash_w = max(0.0, 1.0 - sum(cur_w_fut.values()))
         cur_w_fut['CASH'] = cash_w
         # target normalize: dict with 'CASH' key
@@ -1494,8 +1516,15 @@ def main():
                 set_leverage(client, sym, lev)
                 set_margin_type(client, sym, 'ISOLATED')
 
+            # alloc_transit cap (옵션 D, 2026-05-23): effective_pv = pv_before × cap_ratio (< 1.0)
+            _fut_cap_ratio = _read_alloc_transit_cap_ratio_fut()
+            if _fut_cap_ratio is not None and _fut_cap_ratio < 1.0:
+                _effective_pv = pv_before * _fut_cap_ratio
+                log.info(f"🔴 alloc_transit cap_ratio={_fut_cap_ratio:.3f} → pv ${pv_before:,.2f} → ${_effective_pv:,.2f}")
+            else:
+                _effective_pv = pv_before
             execute_rebalance(
-                client, combined, pv_before, target_lev_map,
+                client, combined, _effective_pv, target_lev_map,
                 order_alerts=order_alerts, error_alerts=error_alerts,
             )
 

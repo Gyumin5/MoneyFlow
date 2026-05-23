@@ -2360,6 +2360,84 @@ if __name__ == "__main__":
                 t1_fire = ht >= REBAL_HT_THRESHOLD
                 t3u_fire = t3u_stock or t3u_spot or t3u_fut
                 fire = t1_fire or t3u_fire
+
+                # ── alloc_transit flag (옵션 D pure, 2026-05-23) ──
+                # set: flag OFF + fire ON → ON
+                # clear: flag ON + ht ≤ 0.05 → OFF
+                # ON 동안 각 executor 가 cap_ratio (sleeve 별) 로 effective_pv = actual × ratio 적용
+                # cap_ratio = min(1.0, target_sleeve_krw / current_sleeve_krw)
+                # cap_ratio 매일 재계산 (cron 마다 갱신)
+                _alloc_transit_active = False
+                _KST = timezone(timedelta(hours=9))
+
+                def _compute_cap_ratios(_tot, _sk, _spk, _fk):
+                    tgt_stock_krw = _tot * STOCK_RATIO
+                    tgt_spot_krw = _tot * COIN_RATIO
+                    tgt_fut_krw = _tot * FUTURES_RATIO
+                    return {
+                        'stock': min(1.0, tgt_stock_krw / _sk) if _sk > 0 else 1.0,
+                        'spot': min(1.0, tgt_spot_krw / _spk) if _spk > 0 else 1.0,
+                        'fut': min(1.0, tgt_fut_krw / _fk) if _fk > 0 else 1.0,
+                    }
+                try:
+                    _ts_path = None
+                    for _p in (os.path.join(APP_HOME, 'trade_state.json'), 'trade_state.json'):
+                        if os.path.exists(_p):
+                            _ts_path = _p
+                            break
+                    _ts_obj = {}
+                    if _ts_path:
+                        with open(_ts_path, 'r') as _f:
+                            _ts_obj = json.load(_f)
+                    _at = _ts_obj.get('alloc_transit') or {}
+                    _was_active = bool(_at.get('active', False))
+                    _ALLOC_CLEAR_HT = 0.05
+                    _now_str = datetime.now(_KST).strftime('%Y-%m-%d %H:%M KST')
+                    _cap_ratios = _compute_cap_ratios(alloc_total, stock_krw, spot_krw, fut_krw)
+                    if _was_active and ht <= _ALLOC_CLEAR_HT:
+                        _ts_obj['alloc_transit'] = {
+                            'active': False,
+                            'cleared_at': _now_str,
+                            'last_ht': float(ht),
+                            'last_total_krw': float(alloc_total),
+                        }
+                        _alloc_transit_active = False
+                        alloc_lines.append(f"  🟢 alloc_transit CLEAR (ht {ht*100:.2f}pp ≤ 5pp)")
+                    elif (not _was_active) and fire:
+                        _ts_obj['alloc_transit'] = {
+                            'active': True,
+                            'set_at': _now_str,
+                            'updated_at': _now_str,
+                            'target_ratios': {'stock': STOCK_RATIO, 'spot': COIN_RATIO, 'fut': FUTURES_RATIO},
+                            'total_krw_current': float(alloc_total),
+                            'sleeve_krw_current': {'stock': float(stock_krw), 'spot': float(spot_krw), 'fut': float(fut_krw)},
+                            'cap_ratio': _cap_ratios,
+                            'last_ht': float(ht),
+                            'reason': ' | '.join(([f'T1 ht {ht*100:.1f}pp'] if t1_fire else []) +
+                                                  ([f'T3U_can'] if t3u_fire else [])),
+                        }
+                        _alloc_transit_active = True
+                        alloc_lines.append(
+                            f"  🔴 alloc_transit SET — cap_ratio stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}")
+                    elif _was_active:
+                        _alloc_transit_active = True
+                        _ts_obj['alloc_transit'].update({
+                            'updated_at': _now_str,
+                            'total_krw_current': float(alloc_total),
+                            'sleeve_krw_current': {'stock': float(stock_krw), 'spot': float(spot_krw), 'fut': float(fut_krw)},
+                            'cap_ratio': _cap_ratios,
+                            'last_ht': float(ht),
+                        })
+                        alloc_lines.append(
+                            f"  🟡 alloc_transit ON — cap_ratio stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}")
+                    if _ts_path and (_was_active or _alloc_transit_active):
+                        _tmp = _ts_path + '.tmp'
+                        with open(_tmp, 'w') as _f:
+                            json.dump(_ts_obj, _f, ensure_ascii=False, indent=2)
+                        os.replace(_tmp, _ts_path)
+                except Exception as _ex_at:
+                    alloc_lines.append(f"  ⚠️ alloc_transit 처리 실패: {_ex_at}")
+
                 fire_reason = []
                 if t1_fire: fire_reason.append(f"T1(ht {ht*100:.1f}pp ≥ {REBAL_HT_THRESHOLD*100:.0f}pp)")
                 if t3u_fire:
