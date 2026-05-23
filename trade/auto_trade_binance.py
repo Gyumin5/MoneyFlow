@@ -31,6 +31,7 @@ Schema version: V23 (state['schema_version'])
 
 import argparse
 import json
+import math
 import os
 import random
 import sys
@@ -58,19 +59,55 @@ ALLOC_TRANSIT_STATE_PATH = os.path.join(SCRIPT_DIR, 'trade_state.json')  # 코�
 LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
 
 
+CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor → 거래 중단 fallback
+
+
+def _validate_cap_ratio(val, sleeve_name: str):
+    """cap_ratio 검증. invalid → 1.0 fallback + ERROR 로그."""
+    try:
+        cr = float(val)
+    except Exception:
+        log.error(f'alloc_transit cap_ratio[{sleeve_name}] parse 실패 ({val!r}) → fallback 1.0')
+        return 1.0
+    if not math.isfinite(cr) or cr <= 0:
+        log.error(f'alloc_transit cap_ratio[{sleeve_name}]={cr} invalid → fallback 1.0')
+        return 1.0
+    if cr < CAP_RATIO_FLOOR:
+        log.error(f'alloc_transit cap_ratio[{sleeve_name}]={cr:.4f} < floor {CAP_RATIO_FLOOR} → SKIP (fallback 1.0)')
+        return 1.0
+    if cr > 1.0:
+        return 1.0
+    return cr
+
+
 def _read_alloc_transit_cap_ratio_fut():
-    """trade_state.json 의 alloc_transit active 면 fut cap_ratio (≤1.0) 반환. 아니면 None."""
+    """trade_state.json 의 alloc_transit active 면 fut cap_ratio (≤1.0) 반환. 아니면 None.
+
+    schema/parse 실패 → fallback 1.0 + ERROR 로그.
+    """
     for _p in (
         os.path.expanduser('~/trade_state.json'),
         ALLOC_TRANSIT_STATE_PATH,
     ):
         try:
-            if os.path.exists(_p):
-                with open(_p, 'r') as f:
-                    obj = json.load(f)
-                at = obj.get('alloc_transit')
-                if at and at.get('active'):
-                    return float((at.get('cap_ratio') or {}).get('fut', 1.0))
+            if not os.path.exists(_p):
+                continue
+            with open(_p, 'r') as f:
+                obj = json.load(f)
+            at = obj.get('alloc_transit')
+            if not at or not at.get('active'):
+                return None
+            cr_raw = (at.get('cap_ratio') or {}).get('fut')
+            if cr_raw is None:
+                log.error('alloc_transit active 하나 cap_ratio[fut] missing → fallback 1.0')
+                return 1.0
+            cr = _validate_cap_ratio(cr_raw, 'fut')
+            mtime_age = (time.time() - os.path.getmtime(_p)) / 3600 if os.path.exists(_p) else -1
+            log.info(f'alloc_transit cap_ratio[fut]={cr:.4f} (state mtime age {mtime_age:.1f}h)')
+            return cr
+        except json.JSONDecodeError as ex:
+            log.error(f'alloc_transit JSON parse 실패 ({_p}): {ex} → fallback')
+            return None
         except Exception:
             continue
     return None

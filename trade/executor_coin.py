@@ -29,7 +29,7 @@ import argparse
 import fcntl
 import logging
 import math
-import os, json
+import os, json, math
 import sys
 import time
 import traceback
@@ -105,8 +105,33 @@ def _patch_pyupbit_remaining_req_parser():
 _patch_pyupbit_remaining_req_parser()
 
 
+CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor → 거래 중단 fallback (1.0 처리)
+
+
+def _validate_cap_ratio(val, sleeve_name: str, log_fn=None):
+    """cap_ratio 검증. 0 < cr ≤ 1, finite. invalid → 1.0 fallback + ERROR 로그."""
+    _l = log_fn if log_fn else (lambda m: None)
+    try:
+        cr = float(val)
+    except Exception:
+        _l(f'  🚨 alloc_transit cap_ratio[{sleeve_name}] parse 실패 ({val!r}) → fallback 1.0')
+        return 1.0
+    if not math.isfinite(cr) or cr <= 0:
+        _l(f'  🚨 alloc_transit cap_ratio[{sleeve_name}]={cr} invalid → fallback 1.0')
+        return 1.0
+    if cr < CAP_RATIO_FLOOR:
+        _l(f'  🚨 alloc_transit cap_ratio[{sleeve_name}]={cr:.4f} < floor {CAP_RATIO_FLOOR} → SKIP (fallback 1.0)')
+        return 1.0
+    if cr > 1.0:
+        return 1.0
+    return cr
+
+
 def _read_alloc_transit_cap_ratio_spot():
-    """trade_state.json 의 alloc_transit active 면 spot cap_ratio (≤1.0) 반환. 아니면 None."""
+    """trade_state.json 의 alloc_transit active 면 spot cap_ratio (≤1.0) 반환. 아니면 None.
+
+    schema 손상 / parse 실패 / cap_ratio invalid → 1.0 fallback + ERROR 로그.
+    """
     _p = os.path.join(CACHE_DIR, STATE_FILE)
     try:
         if not os.path.exists(_p):
@@ -116,7 +141,21 @@ def _read_alloc_transit_cap_ratio_spot():
         at = obj.get('alloc_transit')
         if not at or not at.get('active'):
             return None
-        return float((at.get('cap_ratio') or {}).get('spot', 1.0))
+        cr_raw = (at.get('cap_ratio') or {}).get('spot')
+        if cr_raw is None:
+            try:
+                log('  🚨 alloc_transit active 하나 cap_ratio[spot] missing → fallback 1.0')
+            except Exception:
+                pass
+            return 1.0
+        cr = _validate_cap_ratio(cr_raw, 'spot', log_fn=(lambda m: log(m)))
+        return cr
+    except json.JSONDecodeError as ex:
+        try:
+            log(f'  🚨 alloc_transit JSON parse 실패: {ex} → fallback (cap 없음)')
+        except Exception:
+            pass
+        return None
     except Exception:
         return None
 
