@@ -106,6 +106,7 @@ _patch_pyupbit_remaining_req_parser()
 
 
 CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor → 거래 중단 fallback (1.0 처리)
+ALLOC_TRANSIT_STALE_HOURS = 26
 
 
 def _validate_cap_ratio(val, sleeve_name: str, log_fn=None):
@@ -149,6 +150,16 @@ def _read_alloc_transit_cap_ratio_spot():
                 pass
             return 1.0
         cr = _validate_cap_ratio(cr_raw, 'spot', log_fn=(lambda m: log(m)))
+        # stale guard
+        try:
+            import time as _t
+            age_h = (_t.time() - os.path.getmtime(_p)) / 3600
+            if age_h > ALLOC_TRANSIT_STALE_HOURS:
+                log(f'  🚨 alloc_transit state stale (age {age_h:.1f}h) → cap 무시')
+                return None
+            log(f'  alloc_transit cap_ratio[spot]={cr:.4f} (mtime age {age_h:.1f}h)')
+        except Exception:
+            pass
         return cr
     except json.JSONDecodeError as ex:
         try:

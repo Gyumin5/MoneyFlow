@@ -55,6 +55,7 @@ LOG_FILE = 'executor_stock.log'
 
 
 CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor 면 거래 중단 fallback (1.0 으로 처리)
+ALLOC_TRANSIT_STALE_HOURS = 26  # state mtime > 26h 면 stale → cap 적용 안 함
 
 
 def _validate_cap_ratio(val, sleeve_name: str):
@@ -102,12 +103,11 @@ def _read_alloc_transit_cap_ratio(sleeve: str = 'stock'):
                 log(f'  🚨 alloc_transit active 하나 cap_ratio[{sleeve}] missing → fallback 1.0')
                 return 1.0
             cr = _validate_cap_ratio(cr_raw, sleeve)
-            # cap age 로그
-            try:
-                age_h = (time.time() - mtime) / 3600
-                log(f'  alloc_transit cap_ratio[{sleeve}]={cr:.4f} (state mtime age {age_h:.1f}h)')
-            except Exception:
-                pass
+            age_h = (time.time() - mtime) / 3600
+            if age_h > ALLOC_TRANSIT_STALE_HOURS:
+                log(f'  🚨 alloc_transit state stale (age {age_h:.1f}h > {ALLOC_TRANSIT_STALE_HOURS}h) → cap 무시 (fallback 없음)')
+                return None
+            log(f'  alloc_transit cap_ratio[{sleeve}]={cr:.4f} (state mtime age {age_h:.1f}h)')
             return cr
         except json.JSONDecodeError as ex:
             log(f'  🚨 alloc_transit JSON parse 실패 ({_p}): {ex} → fallback (cap 없음)')
