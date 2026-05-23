@@ -17,7 +17,7 @@ Usage:
   python3 executor_stock.py --dry-run     # 주문 없이 로그만
 """
 
-import json, os, sys, time, argparse, logging, uuid
+import json, os, sys, time, argparse, logging, uuid, math
 from datetime import datetime, timedelta
 from typing import Dict, Tuple
 
@@ -54,11 +54,34 @@ ALLOC_STOCK_RATIO = 0.60
 LOG_FILE = 'executor_stock.log'
 
 
+CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor 면 거래 중단 fallback (1.0 으로 처리)
+
+
+def _validate_cap_ratio(val, sleeve_name: str):
+    """cap_ratio 검증: 0 < cr ≤ 1, finite 보장. invalid 면 1.0 fallback + ERROR 로그."""
+    try:
+        cr = float(val)
+    except Exception:
+        log(f'  🚨 alloc_transit cap_ratio[{sleeve_name}] parse 실패 ({val!r}) → fallback 1.0')
+        return 1.0
+    if not math.isfinite(cr) or cr <= 0:
+        log(f'  🚨 alloc_transit cap_ratio[{sleeve_name}]={cr} invalid (≤0/NaN/inf) → fallback 1.0')
+        return 1.0
+    if cr < CAP_RATIO_FLOOR:
+        log(f'  🚨 alloc_transit cap_ratio[{sleeve_name}]={cr:.4f} < floor {CAP_RATIO_FLOOR} → SKIP (fallback 1.0)')
+        return 1.0
+    if cr > 1.0:
+        return 1.0
+    return cr
+
+
 def _read_alloc_transit_cap_ratio(sleeve: str = 'stock'):
     """trade_state.json 의 alloc_transit active 면 sleeve cap_ratio (≤1.0) 반환. 아니면 None.
 
     cap_ratio = min(1.0, target_sleeve_krw / current_sleeve_krw)
     effective_pv_local = actual_pv_local × cap_ratio (cap_ratio < 1.0 일 때만 의미)
+
+    schema 손상 / parse 실패 / cap_ratio invalid → fallback 1.0 (cap 없음과 동일) + ERROR 로그.
     """
     for _p in (
         os.path.expanduser('~/trade_state.json'),
@@ -66,14 +89,31 @@ def _read_alloc_transit_cap_ratio(sleeve: str = 'stock'):
         os.path.join(os.getcwd(), ALLOC_TRANSIT_STATE_FILE),
     ):
         try:
-            if os.path.exists(_p):
-                with open(_p, 'r') as f:
-                    obj = json.load(f)
-                at = obj.get('alloc_transit')
-                if at and at.get('active'):
-                    cr = float((at.get('cap_ratio') or {}).get(sleeve, 1.0))
-                    return cr
-        except Exception:
+            if not os.path.exists(_p):
+                continue
+            mtime = os.path.getmtime(_p)
+            with open(_p, 'r') as f:
+                obj = json.load(f)
+            at = obj.get('alloc_transit')
+            if not at or not at.get('active'):
+                return None
+            cr_raw = (at.get('cap_ratio') or {}).get(sleeve)
+            if cr_raw is None:
+                log(f'  🚨 alloc_transit active 하나 cap_ratio[{sleeve}] missing → fallback 1.0')
+                return 1.0
+            cr = _validate_cap_ratio(cr_raw, sleeve)
+            # cap age 로그
+            try:
+                age_h = (time.time() - mtime) / 3600
+                log(f'  alloc_transit cap_ratio[{sleeve}]={cr:.4f} (state mtime age {age_h:.1f}h)')
+            except Exception:
+                pass
+            return cr
+        except json.JSONDecodeError as ex:
+            log(f'  🚨 alloc_transit JSON parse 실패 ({_p}): {ex} → fallback (cap 없음)')
+            return None
+        except Exception as ex:
+            log(f'  ⚠️ alloc_transit read 실패 ({_p}): {ex}')
             continue
     return None
 
