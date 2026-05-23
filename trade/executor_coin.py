@@ -195,8 +195,12 @@ def _tg(msg: str):
 def _flush_telegram(dry_run: bool = False):
     if not _tg_events:
         return
-    prefix = '[DRY] ' if dry_run else ''
-    payload = prefix + '[코인]\n' + '\n'.join(_tg_events)
+    # dry_run 시 텔레그램 silent (로그에만 출력)
+    if dry_run:
+        log('  [DRY] telegram silent — events: ' + ' | '.join(_tg_events))
+        _tg_events.clear()
+        return
+    payload = '[코인]\n' + '\n'.join(_tg_events)
     try:
         _send_tg(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, payload)
     except Exception as e:
