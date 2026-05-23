@@ -56,6 +56,7 @@ LOG_FILE = 'executor_stock.log'
 
 CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor 면 거래 중단 fallback (1.0 으로 처리)
 ALLOC_TRANSIT_STALE_HOURS = 26  # state mtime > 26h 면 stale → cap 적용 안 함
+CAP_DEFEND_MIN_EXCESS = 0.01  # cap_ratio < 0.99 (= cap_excess ≥ 1%) 면 cap_defend 매도 발동
 
 
 def _validate_cap_ratio(val, sleeve_name: str):
@@ -906,6 +907,12 @@ def run_once(dry_run=False):
             _stock_cap_usd = _t2 * _stock_cap_ratio
         except Exception:
             _stock_cap_usd = None
+
+    # 옵션 Z: cap_defend trigger — cap_ratio < (1 - MIN_EXCESS) 면 rebal 강제 (drift 와 별개)
+    if _stock_cap_ratio is not None and _stock_cap_ratio < (1.0 - CAP_DEFEND_MIN_EXCESS):
+        if not state.get('rebalancing_needed', False):
+            state['rebalancing_needed'] = True
+            log(f'  🛡️ cap_defend trigger: cap_ratio={_stock_cap_ratio:.4f} < {1.0-CAP_DEFEND_MIN_EXCESS:.2f} (excess≥{CAP_DEFEND_MIN_EXCESS*100:.0f}%) → rebal 강제')
 
     # 5. Merge + Delta 매매
     if state.get('rebalancing_needed', False):

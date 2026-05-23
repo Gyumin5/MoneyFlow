@@ -61,6 +61,7 @@ LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
 
 CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor → 거래 중단 fallback
 ALLOC_TRANSIT_STALE_HOURS = 26
+CAP_DEFEND_MIN_EXCESS = 0.01  # cap_ratio < 0.99 면 cap_defend 매도 발동
 
 
 def _validate_cap_ratio(val, sleeve_name: str):
@@ -1535,6 +1536,13 @@ def main():
             state['rebalancing_needed'] = True
             state['last_rebal_reason'] = 'drift'
             log.info(f"  🔔 V23 drift 발화 (silent) → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
+
+        # 옵션 Z: cap_defend trigger (drift 와 별개)
+        if _drift_cap_ratio is not None and _drift_cap_ratio < (1.0 - CAP_DEFEND_MIN_EXCESS):
+            if not state.get('rebalancing_needed', False):
+                state['rebalancing_needed'] = True
+                state['last_rebal_reason'] = 'cap_defend'
+                log.info(f"  🛡️ cap_defend trigger: cap_ratio={_drift_cap_ratio:.4f} < {1.0-CAP_DEFEND_MIN_EXCESS:.2f} → rebal 강제")
             # V23: drift 알림 silent — Daily Report 09:15 가 통합 보고
         # schema_version 마크
         state['schema_version'] = SCHEMA_VERSION
