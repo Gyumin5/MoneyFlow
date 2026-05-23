@@ -174,7 +174,13 @@ _logger = setup_file_logger(LOG_FILE, LOG_FILE)
 log = make_log_fn(_logger, _run_id_ref)
 
 
+_DRY_RUN_SILENT = [False]  # mutable flag — run_once 에서 dry_run 시 True 로 토글
+
+
 def send_telegram(msg: str):
+    if _DRY_RUN_SILENT[0]:
+        log(f'  [DRY] telegram silent: {msg}')
+        return
     _send_tg(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg, prefix='주식')
 
 
@@ -810,6 +816,7 @@ def run_once(dry_run=False):
     global RUN_ID
     RUN_ID = uuid.uuid4().hex
     _run_id_ref[0] = RUN_ID
+    _DRY_RUN_SILENT[0] = bool(dry_run)
     _t0 = time.time()
     log('=' * 50)
     log('주식 executor 시작')

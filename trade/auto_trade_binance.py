@@ -207,8 +207,14 @@ def load_config():
         return '', ''
 
 
+_DRY_RUN_SILENT = [False]  # main 에서 --trade 아니면 True 토글
+
+
 def send_telegram(msg: str):
-    """텔레그램 알림."""
+    """텔레그램 알림. dry-run 모드면 로그만 남기고 silent."""
+    if _DRY_RUN_SILENT[0]:
+        log.info(f'[DRY] telegram silent: {msg[:200]}')
+        return
     _send_tg_common(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg, prefix='선물', timeout=10)
 
 
@@ -1350,6 +1356,9 @@ def main():
     parser.add_argument('--report', action='store_true', help='일일 리포트 (텔레그램)')
 
     args = parser.parse_args()
+
+    # dry-run silent: --trade 없으면 텔레그램 silent (테스트용)
+    _DRY_RUN_SILENT[0] = (not getattr(args, 'trade', False))
 
     api_key, api_secret = load_config()
     if not api_key:
