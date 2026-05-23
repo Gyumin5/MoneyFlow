@@ -287,6 +287,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
     crash_cooldown = 0
     rebal_count = 0
     liq_count = 0
+    liq_log = []
     trade_count = 0
     stop_count = 0
     pv_list = []
@@ -632,6 +633,14 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 eq = margins[coin] + pnl_at_low
                 liq_fee = max(eq, 0) * 0.015
                 returned = max(eq - liq_fee, 0)
+                pv_pre = _port_val(date)
+                liq_log.append(dict(date=date, coin=coin, entry=entry_prices[coin],
+                                    low=low, liq_price=liq_price,
+                                    qty=holdings[coin], margin=margins[coin],
+                                    pnl_at_low=pnl_at_low, returned=returned,
+                                    loss_pct=(low/entry_prices[coin]-1),
+                                    sleeve_pv_pre=pv_pre,
+                                    sleeve_loss_pct=(margins[coin]-returned)/pv_pre if pv_pre>0 else 0))
                 capital += returned
                 del holdings[coin]; del entry_prices[coin]; del margins[coin]
                 entry_bar_index.pop(coin, None)
@@ -863,6 +872,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         'Stops': stop_count,
     }
     result['_equity'] = eq  # equity curve (pd.Series)
+    result['_liq_log'] = liq_log
     return result
 
 

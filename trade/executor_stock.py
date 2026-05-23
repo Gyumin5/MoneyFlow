@@ -49,7 +49,33 @@ BASE_URL = 'https://openapi.koreainvestment.com:9443'
 TOKEN_FILE = os.path.expanduser('~/.kis_token.json')
 SIGNAL_STATE_FILE = 'signal_state.json'
 TRADE_STATE_FILE = 'kis_trade_state.json'
+ALLOC_TRANSIT_STATE_FILE = 'trade_state.json'  # 코인 state — alloc_transit flag 공유
+ALLOC_STOCK_RATIO = 0.60
 LOG_FILE = 'executor_stock.log'
+
+
+def _read_alloc_transit_cap_ratio(sleeve: str = 'stock'):
+    """trade_state.json 의 alloc_transit active 면 sleeve cap_ratio (≤1.0) 반환. 아니면 None.
+
+    cap_ratio = min(1.0, target_sleeve_krw / current_sleeve_krw)
+    effective_pv_local = actual_pv_local × cap_ratio (cap_ratio < 1.0 일 때만 의미)
+    """
+    for _p in (
+        os.path.expanduser('~/trade_state.json'),
+        ALLOC_TRANSIT_STATE_FILE,
+        os.path.join(os.getcwd(), ALLOC_TRANSIT_STATE_FILE),
+    ):
+        try:
+            if os.path.exists(_p):
+                with open(_p, 'r') as f:
+                    obj = json.load(f)
+                at = obj.get('alloc_transit')
+                if at and at.get('active'):
+                    cr = float((at.get('cap_ratio') or {}).get(sleeve, 1.0))
+                    return cr
+        except Exception:
+            continue
+    return None
 
 # V23 (2026-04-30): snap-based 3-tranche stagger (snap=69, stagger=23)
 # - snap_id 0/1/2, 각 69일 주기로 rebal, stagger = 23일 (3*23, prime stagger)
@@ -587,8 +613,12 @@ def merge_tranches(state: dict) -> Dict[str, float]:
     return merged
 
 
-def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None):
-    """target vs 현재 잔고 → Delta 매매 (정수 주 단위)."""
+def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None, effective_pv_usd: float = None):
+    """target vs 현재 잔고 → Delta 매매 (정수 주 단위).
+
+    effective_pv_usd: alloc_transit cap 시 effective_pv (= min(actual, target_ratio×total)).
+                     None 이면 actual total_usd 사용.
+    """
     if cash_buffer is None:
         cash_buffer = CASH_BUFFER_DEFAULT
     holdings, total_usd, exrt = api.get_balance()
@@ -604,6 +634,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             'completed': False,
         }
 
+    # alloc_transit cap 적용
+    pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
+
     # 현재 비중 계산
     current_values = {}
     for ticker, qty in holdings.items():
@@ -615,7 +648,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     sells = []
     buys = []
     failed_orders = []
-    target_usd = total_usd * (1 - cash_buffer)
+    target_usd = pv_for_target * (1 - cash_buffer)
+    if effective_pv_usd is not None and effective_pv_usd < total_usd:
+        log(f'    🔴 alloc_transit cap 적용: pv ${total_usd:,.0f} → ${pv_for_target:,.0f}')
     log(f'    target_usd: ${target_usd:,.0f} (buffer={cash_buffer:.2f})')
 
     for ticker, target_w in target.items():
@@ -690,11 +725,13 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     holdings2, total2, _ = api.get_balance()
     if total2 > 0:
         max_diff = 0
+        # alloc_transit cap 적용 시 denom 도 capped 기준
+        denom_for_diff = min(total2, effective_pv_usd) if effective_pv_usd is not None else total2
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
             price = api.get_current_price(ticker)
-            current_w = (holdings2.get(ticker, 0) * price / total2) if price > 0 else 0
+            current_w = (holdings2.get(ticker, 0) * price / denom_for_diff) if price > 0 else 0
             max_diff = max(max_diff, abs(target_w - current_w))
         if max_diff < REBALANCE_TOLERANCE and not failed_orders:
             state['rebalancing_needed'] = False
@@ -790,20 +827,26 @@ def run_once(dry_run=False):
     # 4. 앵커 체크
     check_anchors(signal, state)
 
-    # 4.5. Drift trigger (2026-05-23 추가): cur_w (cash 포함) vs combined target half_turnover ≥ 0.10
-    # 외부 cash inflow (자산간 alloc rebal) 즉시 deploy. 평상시 internal drift 도 catch.
-    # NOTE: stock→coin alloc transit 시 sell→rebuy 충돌 우려 (추후 pause flag 추가 예정).
+    # 4.5. Drift trigger (2026-05-23): cur_w vs combined target half_turnover ≥ 0.10
+    # alloc_transit cap (옵션 D): effective_pv = total_usd × cap_ratio (cap_ratio < 1.0 일 때만)
+    _stock_cap_ratio = _read_alloc_transit_cap_ratio('stock')
+    _stock_cap_usd = None
     if not state.get('rebalancing_needed', False):
         try:
             _merged_target = merge_tranches(state)
             if _merged_target:
-                _holdings, _total_usd, _ = api.get_balance()
+                _holdings, _total_usd, _exrt = api.get_balance()
                 if _total_usd > 0:
+                    if _stock_cap_ratio is not None and _stock_cap_ratio < 1.0:
+                        _stock_cap_usd = _total_usd * _stock_cap_ratio
+                    _pv_basis = _total_usd if _stock_cap_usd is None else _stock_cap_usd
+                    if _stock_cap_usd is not None:
+                        log(f'  🔴 alloc_transit cap_ratio={_stock_cap_ratio:.3f} → pv ${_total_usd:,.0f} → ${_pv_basis:,.0f}')
                     _cur_w = {}
                     for _tk, _qty in _holdings.items():
                         _px = api.get_current_price(_tk)
                         if _px and _qty > 0:
-                            _cur_w[_tk] = (_qty * _px) / _total_usd
+                            _cur_w[_tk] = (_qty * _px) / _pv_basis
                     _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
                     if _cash_w > 0:
                         _cur_w['Cash'] = _cash_w
@@ -816,12 +859,20 @@ def run_once(dry_run=False):
         except Exception as _ex:
             log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
 
+    # alloc_transit cap (drift 체크 외에서도 execute_delta 에 적용)
+    if _stock_cap_usd is None and _stock_cap_ratio is not None and _stock_cap_ratio < 1.0:
+        try:
+            _, _t2, _ = api.get_balance()
+            _stock_cap_usd = _t2 * _stock_cap_ratio
+        except Exception:
+            _stock_cap_usd = None
+
     # 5. Merge + Delta 매매
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
         log(f'  Target: {target}')
         mode = 'DRY-RUN' if dry_run else 'LIVE'
-        result = execute_delta(target, api, state, cash_buffer=cash_buffer)
+        result = execute_delta(target, api, state, cash_buffer=cash_buffer, effective_pv_usd=_stock_cap_usd)
         sells = result.get('sells', [])
         buys = result.get('buys', [])
         max_diff = result.get('max_diff')
