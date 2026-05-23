@@ -107,6 +107,7 @@ _patch_pyupbit_remaining_req_parser()
 
 CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor → 거래 중단 fallback (1.0 처리)
 ALLOC_TRANSIT_STALE_HOURS = 26
+CAP_DEFEND_MIN_EXCESS = 0.01  # cap_ratio < 0.99 면 cap_defend 매도 발동 (any_new_bar 우회)
 
 
 def _validate_cap_ratio(val, sleeve_name: str, log_fn=None):
@@ -886,12 +887,16 @@ def run_once(dry_run: bool = False) -> int:
         _flush_telegram(dry_run)
         return 1
 
-    if not result.any_new_bar:
+    # 옵션 Z: cap_defend trigger — cap_ratio < 0.99 면 any_new_bar 우회 (매일 cap 매도 시도)
+    _cap_defend_fire = (_spot_cap_ratio is not None and _spot_cap_ratio < (1.0 - CAP_DEFEND_MIN_EXCESS))
+    if not result.any_new_bar and not _cap_defend_fire:
         log('  ℹ 새 봉 없음 (idempotent) → 리밸런싱 스킵.')
         _save_state_unless_dry(state_path, state, dry_run)
         _tg(f'⏸ 새 봉 없음 → 스킵 (다음 봉 닫힘 대기)')
         _flush_telegram(dry_run)
         return 0
+    if _cap_defend_fire and not result.any_new_bar:
+        log(f'  🛡️ cap_defend trigger: cap_ratio={_spot_cap_ratio:.4f} < {1.0-CAP_DEFEND_MIN_EXCESS:.2f} → any_new_bar 우회 (cap 매도 시도)')
 
     # 멤버/합산 target 로깅
     for mname, mt in result.member_targets.items():
@@ -949,6 +954,12 @@ def run_once(dry_run: bool = False) -> int:
         log(f'  ℹ V23 drift 트리거 발화 (silent): ht={result.drift_half_turnover:.3f} ≥ {result.drift_threshold:.2f}')
     elif target_changed:
         state['last_rebal_reason'] = 'snap_or_signal'
+
+    # 옵션 Z: cap_defend trigger (drift/target_changed 와 별개)
+    if _cap_defend_fire and not state.get('rebalancing_needed', False):
+        state['rebalancing_needed'] = True
+        state['last_rebal_reason'] = 'cap_defend'
+        log(f'  🛡️ cap_defend trigger → rebalancing_needed=True (cap_ratio={_spot_cap_ratio:.4f})')
     log(f'  V23 debug: schema_version={state.get("schema_version", "N/A")} '
         f'cur_w_count={len(cur_w_input)} ht={result.drift_half_turnover:.4f} '
         f'drift_fire={result.drift_fire} target_changed={target_changed}')
