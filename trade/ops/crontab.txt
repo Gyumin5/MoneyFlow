@@ -24,10 +24,10 @@
 #0 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --report >> /home/ubuntu/binance_trade.log 2>&1
 
 
-# V23 선물: 1d 1회 (09:05 KST, D봉 닫힘 직후)
-5 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --trade >> /home/ubuntu/binance_trade.log 2>&1
-# V23 코인: 1d 1회 (09:05 KST, D봉 닫힘 직후) — 선물과 동기
-5 9 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1
+# V23 선물: 1d 1회 (09:20 KST, recommend 09:15 직후 → alloc_transit flag 당일 반영)
+20 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --trade >> /home/ubuntu/binance_trade.log 2>&1
+# V23 코인: 1d 1회 (09:20 KST, recommend 09:15 직후) — 선물과 동기
+20 9 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1
 
 # ═══ V23 모니터링 ═══
 # 월 1회 BT replay: 매월 1일 09:30 KST (라이브 파라미터로 BT 재실행, baseline 대비 drift 알림)
