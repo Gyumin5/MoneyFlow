@@ -1,3 +1,23 @@
+## [2026-05-23] alloc_transit phantom buffer (옵션 D) 도입
+tags: V23, alloc_transit, phantom_buffer, drift, ai-debate
+- 결정: 자산배분 트리거 fire 시 3자산 동시 cap_ratio 적용 (60/25/15). cap_ratio = min(1.0, target_sleeve_krw / current_sleeve_krw) 매일 갱신. 각 executor 가 effective_pv = actual × cap_ratio. clear: ht ≤ 0.05 AND 최소 1일 유지. floor 0.10 (드물게 자산 90% 매도 한도).
+- 근거: T+2 settle 지연 + 사용자 수동 송금 환경에서 stock→coin transit 시 cash idle 문제. ai-debate 3라운드 (codex+gemini+claude). 옵션 A (5상태 머신, 1주) → over-engineering. 옵션 C (사용자 수동) → 1000만원 단위 실수 위험. 옵션 D pure (단순 cap) → 무한루프 자연 차단 (cap 도달 = effective_pv 한계 = 추가 매도 X). Critical 1-6 안전장치 (cap_ratio 검증/floor/schema fallback/stale guard/풍부한 로그/fault injection test 14 케이스 PASS) 후 채택.
+- 코드: strategies/cap_defend/recommend_personal.py (flag set/clear/update + cooldown 1일 + 첫 발동 알림) + trade/{executor_stock,executor_coin,auto_trade_binance}.py (cap_ratio 적용 + validation + stale guard) + trade/test_alloc_transit_validation.py + crontab.txt (코인/선물 09:05→09:20)
+- 되돌릴 조건: cap_ratio invalid/stale 빈발 또는 자산 10억 초과 시 옵션 A (5상태 머신) 로 승격. drift_whipsaw 시 DRIFT_ENABLED=False 토글 가능
+- Prediction: alloc_transit 무한 매도 루프 / flag flapping / state race / cash 회계 오류 사고가 6개월 동안 telemetry/history 상 재발하지 않으면 성공, 재발하면 재검토.
+
+## [2026-05-23] stock V23 drift trigger 추가 (drift_threshold=0.10)
+tags: V23, 주식, drift, alloc_rebal
+- 결정: stock_engine_snap.py + trade/executor_stock.py 에 drift trigger 추가. cur_w (cash 포함) vs combined target half_turnover ≥ 10pp 면 즉시 rebal.
+- 근거: 자산간 alloc rebal 후 stock 계좌에 cash inflow 시 다음 anchor (최대 23일) 까지 idle 문제. BT Cal +2.8% (1.09 → 1.12, MDD 동일). alloc_transit phantom buffer 와 협업 (cap 으로 매도 → drift 로 잔여 deploy 차단).
+- 되돌릴 조건: drift whipsaw 빈발 시 threshold 0.15 또는 0.20 으로 상향, 또는 비활성.
+
+## [2026-05-22] 자산배분 M 안 채택 (60/25/15, T1(13)|T3U_can(20))
+tags: V23, alloc, 트리거, marginal_stability, ai-debate
+- 결정: 자산배분 70/15/15 → 60/25/15. 리밸 트리거 T1(ht≥13pp) OR T3U_can(rel-under≥20% & sleeve canary ON).
+- 근거: 363 후보 × n=72 windows unified rank-sum 결과 broad plateau center. 5.4yr BT Cal 3.97 / CAGR 70.74% / MDD -17.81% / Sharpe 2.09. marginal stability 분석: T1(13) std 0.194, T3U_can(20) std 0.216, 양쪽 평탄.
+- 되돌릴 조건: yearly Cal rank drop 또는 새 후보 unified rank champ 등장.
+
 ## [2026-05-14] 선물 sleeve 재최적화 — V23 유지 + 펀딩 BT 버그 fix
 tags: V23, 선물, 펀딩, BT, plateau
 - 결정: V23 그대로 유지 (변경 없음). C1/EW 후보 모두 채택하지 않음.

@@ -2392,9 +2392,24 @@ if __name__ == "__main__":
                     _at = _ts_obj.get('alloc_transit') or {}
                     _was_active = bool(_at.get('active', False))
                     _ALLOC_CLEAR_HT = 0.05
-                    _now_str = datetime.now(_KST).strftime('%Y-%m-%d %H:%M KST')
+                    _ALLOC_MIN_ON_DAYS = 1  # Important 9: clear cooldown — 최소 1일 유지
+                    _now_dt = datetime.now(_KST)
+                    _now_str = _now_dt.strftime('%Y-%m-%d %H:%M KST')
                     _cap_ratios = _compute_cap_ratios(alloc_total, stock_krw, spot_krw, fut_krw)
-                    if _was_active and ht <= _ALLOC_CLEAR_HT:
+                    # clear cooldown 체크: set_at 으로부터 최소 1일 경과해야 clear 가능
+                    _can_clear = True
+                    try:
+                        _set_at = _at.get('set_at', '')
+                        if _set_at:
+                            _set_dt = datetime.strptime(_set_at.replace(' KST', ''), '%Y-%m-%d %H:%M').replace(tzinfo=_KST)
+                            _on_days = (_now_dt - _set_dt).total_seconds() / 86400
+                            if _on_days < _ALLOC_MIN_ON_DAYS:
+                                _can_clear = False
+                    except Exception:
+                        pass
+                    if _was_active and ht <= _ALLOC_CLEAR_HT and not _can_clear:
+                        alloc_lines.append(f"  ⏳ alloc_transit clear 대기 (ht {ht*100:.2f}pp OK, set 이후 최소 {_ALLOC_MIN_ON_DAYS}일 필요)")
+                    if _was_active and ht <= _ALLOC_CLEAR_HT and _can_clear:
                         _ts_obj['alloc_transit'] = {
                             'active': False,
                             'cleared_at': _now_str,
@@ -2419,6 +2434,19 @@ if __name__ == "__main__":
                         _alloc_transit_active = True
                         alloc_lines.append(
                             f"  🔴 alloc_transit SET — cap_ratio stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}")
+                        # Important 8: 첫 발동 텔레그램 알림
+                        try:
+                            send_telegram(
+                                f"🔴 alloc_transit SET (옵션 D phantom buffer 첫 발동)\n"
+                                f"트리거: {_ts_obj['alloc_transit']['reason']}\n"
+                                f"ht: {ht*100:.2f}pp (≥ {REBAL_HT_THRESHOLD*100:.0f}pp)\n"
+                                f"cap_ratio: stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}\n"
+                                f"현재: 주식 ₩{stock_krw:,.0f} / 업비트 ₩{spot_krw:,.0f} / 바이낸스 ₩{fut_krw:,.0f}\n"
+                                f"목표: 60/25/15 (총 ₩{alloc_total:,.0f})\n"
+                                f"다음 cron 부터 cap 적용 → 초과 sleeve 자동 매도. 결과 cash 수동 transfer 필요."
+                            )
+                        except Exception as _ex_tg:
+                            alloc_lines.append(f"  ⚠️ alert 전송 실패: {_ex_tg}")
                     elif _was_active:
                         _alloc_transit_active = True
                         _ts_obj['alloc_transit'].update({

@@ -60,6 +60,7 @@ LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
 
 
 CAP_RATIO_FLOOR = 0.10  # cap_ratio < floor → 거래 중단 fallback
+ALLOC_TRANSIT_STALE_HOURS = 26
 
 
 def _validate_cap_ratio(val, sleeve_name: str):
@@ -103,7 +104,10 @@ def _read_alloc_transit_cap_ratio_fut():
                 return 1.0
             cr = _validate_cap_ratio(cr_raw, 'fut')
             mtime_age = (time.time() - os.path.getmtime(_p)) / 3600 if os.path.exists(_p) else -1
-            log.info(f'alloc_transit cap_ratio[fut]={cr:.4f} (state mtime age {mtime_age:.1f}h)')
+            if mtime_age > ALLOC_TRANSIT_STALE_HOURS:
+                log.error(f'alloc_transit state stale (age {mtime_age:.1f}h) → cap 무시')
+                return None
+            log.info(f'alloc_transit cap_ratio[fut]={cr:.4f} (mtime age {mtime_age:.1f}h)')
             return cr
         except json.JSONDecodeError as ex:
             log.error(f'alloc_transit JSON parse 실패 ({_p}): {ex} → fallback')
