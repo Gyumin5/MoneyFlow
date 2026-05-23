@@ -151,13 +151,20 @@ def run_snapshot_ensemble(prices_dict, ind, params: SP,
                            phase_offset: int = 0,
                            execution_delay_bars: int = 0,
                            exclude_assets=None,
+                           drift_threshold: float | None = 0.10,
                            _trace: list | None = None) -> pd.DataFrame | None:
     """V21 스타일 snapshot 단일 계좌 백테스트 (v4 — event-based rebal).
 
     Rebal trigger:
       1) snap target 업데이트 (snap 일정 도달)
       2) canary flip (combined risk_on 이 이전 대비 바뀐 경우)
-    Drift 기반 rebal 없음 (사용자 지정).
+      3) drift trigger (2026-05-23 추가): cur_w (cash 포함) vs combined target 의
+         half_turnover ≥ drift_threshold 면 즉시 rebal.
+         - 외부 cash inflow (자산간 alloc rebal) 즉시 deploy 가능.
+         - drift_threshold=None 으로 호출 시 비활성.
+         - 기본값 0.10 (BT 5/7/10pp plateau, Cal +2.8% vs no-drift).
+    NOTE: stock→coin alloc transit 시 sell→rebuy 충돌 방지를 위해 pause flag
+          시스템은 추후 추가 예정.
 
     - calendar mode (기본): days_since_start 기반. snap i 는 (days - i*stagger) % snap_days == 0.
     - 각 snap 독립 prev_risk_on state 유지 (hysteresis).
@@ -246,8 +253,8 @@ def run_snapshot_ensemble(prices_dict, ind, params: SP,
 
         # Snap 이 하나라도 갱신 → combined target 체결 (즉시 or delay)
         do_execute = None  # 실제 체결할 target dict
+        combined = _ensemble_avg(snap_targets)
         if any_snap_updated:
-            combined = _ensemble_avg(snap_targets)
             if execution_delay_bars <= 0:
                 do_execute = combined
             else:
@@ -258,6 +265,20 @@ def run_snapshot_ensemble(prices_dict, ind, params: SP,
         if pending_rebal is not None and bar_i >= pending_rebal['due_i']:
             do_execute = pending_rebal['target']
             pending_rebal = None
+
+        # Drift trigger (2026-05-23 추가): snap/canary 갱신 없을 때만 평가.
+        # cur_w (holdings + cash 비중) vs combined target 의 half_turnover.
+        if do_execute is None and drift_threshold is not None and pv > 0:
+            cur_w = {'Cash': cash / pv}
+            for t, shares in holdings.items():
+                p = get_price(ind, t, date)
+                if not np.isnan(p):
+                    cur_w[t] = (shares * p) / pv
+            all_keys = set(cur_w.keys()) | set(combined.keys())
+            ht_drift = sum(abs(cur_w.get(k, 0.0) - combined.get(k, 0.0))
+                           for k in all_keys) / 2
+            if ht_drift >= drift_threshold:
+                do_execute = combined
 
         if do_execute is not None:
             pv = cash

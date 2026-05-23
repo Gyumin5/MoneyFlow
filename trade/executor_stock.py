@@ -790,6 +790,32 @@ def run_once(dry_run=False):
     # 4. 앵커 체크
     check_anchors(signal, state)
 
+    # 4.5. Drift trigger (2026-05-23 추가): cur_w (cash 포함) vs combined target half_turnover ≥ 0.10
+    # 외부 cash inflow (자산간 alloc rebal) 즉시 deploy. 평상시 internal drift 도 catch.
+    # NOTE: stock→coin alloc transit 시 sell→rebuy 충돌 우려 (추후 pause flag 추가 예정).
+    if not state.get('rebalancing_needed', False):
+        try:
+            _merged_target = merge_tranches(state)
+            if _merged_target:
+                _holdings, _total_usd, _ = api.get_balance()
+                if _total_usd > 0:
+                    _cur_w = {}
+                    for _tk, _qty in _holdings.items():
+                        _px = api.get_current_price(_tk)
+                        if _px and _qty > 0:
+                            _cur_w[_tk] = (_qty * _px) / _total_usd
+                    _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
+                    if _cash_w > 0:
+                        _cur_w['Cash'] = _cash_w
+                    _all_keys = set(_cur_w.keys()) | set(_merged_target.keys())
+                    _ht = sum(abs(_cur_w.get(_k, 0.0) - _merged_target.get(_k, 0.0))
+                              for _k in _all_keys) / 2
+                    if _ht >= 0.10:
+                        state['rebalancing_needed'] = True
+                        log(f'  🌊 V23 stock drift trigger: ht={_ht*100:.2f}pp ≥ 10pp → rebal 필요')
+        except Exception as _ex:
+            log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
+
     # 5. Merge + Delta 매매
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
