@@ -911,9 +911,10 @@ def run_once(dry_run: bool = False) -> int:
     combined_cash = result.combined_target.get('Cash', 0.0)
     log(f'  combined target: {combined_coins or "CASH only"} (cash={combined_cash:.1%})')
 
-    # Cash buffer
-    buffer_pct = float(state.get('cash_buffer', state.get('buffer_pct', CASH_BUFFER_DEFAULT)))
-    state['cash_buffer'] = buffer_pct
+    # Cash buffer — V23 (2026-05-26): spot_cash_buffer 키 우선, 없으면 legacy cash_buffer
+    buffer_pct = float(state.get('spot_cash_buffer', state.get('cash_buffer', state.get('buffer_pct', CASH_BUFFER_DEFAULT))))
+    state['spot_cash_buffer'] = buffer_pct
+    state['cash_buffer'] = buffer_pct  # backward compat
     state['buffer_pct'] = buffer_pct
     target = apply_cash_buffer(result.combined_target, buffer_pct)
     log(f'  Cash buffer {buffer_pct*100:.1f}% 적용 후 target Cash={target.get("Cash",0)*100:.2f}%')
