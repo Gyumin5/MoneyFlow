@@ -124,7 +124,7 @@ def _read_alloc_transit_cap_ratio(sleeve: str = 'stock'):
 SNAP_PERIOD_DAYS = 69
 N_SNAPS = 3
 SNAP_STAGGER_DAYS = 23  # SNAP_PERIOD_DAYS / N_SNAPS
-CASH_BUFFER_DEFAULT = 0.02
+CASH_BUFFER_DEFAULT = 0.07  # V23 (2026-05-26): stock 계좌 안에 7% cash buffer (자산간 자동 rebal 제거, alloc 65/20/15)
 MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
 LIMIT_PRICE_SLIP = 0.003   # ±0.3%
@@ -832,8 +832,8 @@ def run_once(dry_run=False):
     if not signal:
         log('  signal_state.json 없음 — 스킵')
         return
-    # cash_buffer: state에서 읽기, 없으면 기본값 2%
-    cash_buffer = state.get('cash_buffer', CASH_BUFFER_DEFAULT)
+    # V23 (2026-05-26): stock_cash_buffer 키 우선, 없으면 legacy cash_buffer, 둘 다 없으면 default 6%
+    cash_buffer = float(state.get('stock_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
     log(f'  cash_buffer: {cash_buffer:.0%}')
 
     # V23: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
