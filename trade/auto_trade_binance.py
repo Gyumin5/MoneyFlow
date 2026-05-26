@@ -1368,10 +1368,10 @@ def main():
     client = Client(api_key, api_secret)
     state = load_state()
 
-    # cash_buffer: state에서 동적 읽기
+    # cash_buffer: V23 (2026-05-26): fut_cash_buffer 키 우선, 없으면 legacy cash_buffer
     global CASH_BUFFER
-    CASH_BUFFER = state.get('cash_buffer', CASH_BUFFER_DEFAULT)
-    log.info(f"cash_buffer: {CASH_BUFFER:.0%}")
+    CASH_BUFFER = float(state.get('fut_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
+    log.info(f"cash_buffer (fut): {CASH_BUFFER:.0%}")
 
     if args.status:
         positions, pv, ok = get_current_positions(client)

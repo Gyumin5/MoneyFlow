@@ -220,28 +220,47 @@ VERSION_HISTORY = [
 • <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
-<b>▶ 자산배분:</b> 60/25/15 (주식/현물/선물, V23 갱신 2026-05-22). 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 리밸런싱은 수동"""),
+<b>▶ 자산배분:</b> 65/20/15 (주식계좌/현물/선물, V23 갱신 2026-05-26 B 안). 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15  # V23 갱신 (2026-05-22): 70/15/15 → 60/25/15 (M 안 채택, broad plateau Cal 3.97 MDD -17.8)
-REBAL_HT_THRESHOLD = 0.13  # V23 갱신 (2026-05-22): T1 = half_turnover (sum|cur-tgt|/2) ≥ 13pp — M 안 (unified rank champ)
-REBAL_T3U_REL = 0.20  # V23 추가 (2026-05-22): T3U_can = max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.65, 0.20, 0.15  # V23 갱신 (2026-05-26): 60/25/15 → 65/20/15 (B 안 채택, stock 계좌 65% 안에 cash 7%, 실투자 60.45%)
+REBAL_HT_THRESHOLD = 0.13  # V23: T1 = half_turnover (sum|cur-tgt|/2) ≥ 13pp
+REBAL_T3U_REL = 0.20  # V23: T3U_can = max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
 CASH_ASSET = 'Cash'
-CASH_BUFFER_PERCENT_DEFAULT = 0.02 # 2% Cash Buffer
+STOCK_CASH_BUFFER_DEFAULT = 0.07   # V23 (2026-05-26): stock 계좌 안에서 7% cash buffer (= 4.55% of total)
+SPOT_CASH_BUFFER_DEFAULT = 0.01    # V23 (2026-05-26): Upbit 1%
+FUT_CASH_BUFFER_DEFAULT = 0.01     # V23 (2026-05-26): Binance 1%
+CASH_BUFFER_PERCENT_DEFAULT = STOCK_CASH_BUFFER_DEFAULT  # backward compat (stock 기준)
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
 
-def get_cash_buffer():
-    """현금 버퍼 비율. V23 trade_state에서 읽기 (HTML 표시용)."""
+def get_cash_buffer(sleeve: str = 'stock'):
+    """sleeve 별 현금 버퍼 비율. V23 trade_state.json 에서 sleeve_cash_buffer 키 우선 읽기.
+
+    sleeve: 'stock' | 'spot' | 'fut'.
+    """
+    default = {
+        'stock': STOCK_CASH_BUFFER_DEFAULT,
+        'spot': SPOT_CASH_BUFFER_DEFAULT,
+        'fut': FUT_CASH_BUFFER_DEFAULT,
+    }.get(sleeve, STOCK_CASH_BUFFER_DEFAULT)
+    key = f'{sleeve}_cash_buffer'
     for _p in (
         os.path.join(APP_HOME, 'trade_state.json'),
         'trade_state.json',
     ):
         try:
             with open(_p, 'r') as f:
-                return float(json.load(f).get('cash_buffer', CASH_BUFFER_PERCENT_DEFAULT))
+                d = json.load(f)
+                # 신규 키 우선, 없으면 legacy cash_buffer (stock 호환)
+                v = d.get(key)
+                if v is None and sleeve == 'stock':
+                    v = d.get('cash_buffer')
+                if v is not None:
+                    return float(v)
+                return default
         except Exception:
             continue
-    return CASH_BUFFER_PERCENT_DEFAULT
+    return default
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
 # Stock Configuration (V23 R7B: B안 universe — 11yr rs=58, 5yr Cal 0.84)
@@ -890,8 +909,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
-            const TARGET_STOCK_RATIO = 0.60;
-            const TARGET_COIN_RATIO = 0.25;
+            const TARGET_STOCK_RATIO = 0.65;
+            const TARGET_COIN_RATIO = 0.20;
             const TARGET_FUTURES_RATIO = 0.15;
             const REBAL_HT = 0.13;           // V23 갱신 (2026-05-22): T1 = half_turnover ≥ 13pp
             const REBAL_T3U_REL = 0.20;      // V23 추가 (2026-05-22): T3U_can = max rel underweight ≥ 20% + sleeve canary ON
@@ -1766,7 +1785,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.60, T_SPOT = 0.25, T_FUT = 0.15;
+                    const T_STOCK = 0.65, T_SPOT = 0.20, T_FUT = 0.15;
                     const REBAL_HT = 0.13;
                     const REBAL_T3U = 0.20;
                     const pStock = stockKrw / allocTotal;
@@ -2361,13 +2380,10 @@ if __name__ == "__main__":
                 t3u_fire = t3u_stock or t3u_spot or t3u_fut
                 fire = t1_fire or t3u_fire
 
-                # ── alloc_transit flag (옵션 D pure, 2026-05-23) ──
-                # set: flag OFF + fire ON → ON
-                # clear: flag ON + ht ≤ 0.05 → OFF
-                # ON 동안 각 executor 가 cap_ratio (sleeve 별) 로 effective_pv = actual × ratio 적용
-                # cap_ratio = min(1.0, target_sleeve_krw / current_sleeve_krw)
-                # cap_ratio 매일 재계산 (cron 마다 갱신)
-                _alloc_transit_active = False
+                # ── 자산배분 트리거 (V23 B 안, 2026-05-26) ──
+                # alloc_transit 자동 cap_ratio 시스템 폐지. read-only 평가 + 텔레그램 알림만.
+                # 사용자 수동 송금. 각 executor 는 자기 계좌 안에서만 자동매매 (sleeve 내부).
+                _alloc_transit_active = False  # 항상 False — 자동 cap 실행 X
                 _KST = timezone(timedelta(hours=9))
 
                 def _compute_cap_ratios(_tot, _sk, _spk, _fk):
@@ -2391,73 +2407,73 @@ if __name__ == "__main__":
                             _ts_obj = json.load(_f)
                     _at = _ts_obj.get('alloc_transit') or {}
                     _was_active = bool(_at.get('active', False))
-                    _ALLOC_CLEAR_HT = 0.05
-                    _ALLOC_MIN_ON_DAYS = 1  # Important 9: clear cooldown — 최소 1일 유지
                     _now_dt = datetime.now(_KST)
                     _now_str = _now_dt.strftime('%Y-%m-%d %H:%M KST')
                     _cap_ratios = _compute_cap_ratios(alloc_total, stock_krw, spot_krw, fut_krw)
-                    # clear cooldown 체크: set_at 으로부터 최소 1일 경과해야 clear 가능
-                    _can_clear = True
-                    try:
-                        _set_at = _at.get('set_at', '')
-                        if _set_at:
-                            _set_dt = datetime.strptime(_set_at.replace(' KST', ''), '%Y-%m-%d %H:%M').replace(tzinfo=_KST)
-                            _on_days = (_now_dt - _set_dt).total_seconds() / 86400
-                            if _on_days < _ALLOC_MIN_ON_DAYS:
-                                _can_clear = False
-                    except Exception:
-                        pass
-                    if _was_active and ht <= _ALLOC_CLEAR_HT and not _can_clear:
-                        alloc_lines.append(f"  ⏳ alloc_transit clear 대기 (ht {ht*100:.2f}pp OK, set 이후 최소 {_ALLOC_MIN_ON_DAYS}일 필요)")
-                    if _was_active and ht <= _ALLOC_CLEAR_HT and _can_clear:
+                    # V23 (2026-05-26) B 안: 자동 cap_ratio 폐지. read-only 평가 + 알림만.
+                    # legacy active=True 면 즉시 clear (마이그레이션).
+                    if _was_active:
                         _ts_obj['alloc_transit'] = {
                             'active': False,
                             'cleared_at': _now_str,
-                            'last_ht': float(ht),
-                            'last_total_krw': float(alloc_total),
+                            'reason': 'V23 B 안 (2026-05-26) — 자동 cap_ratio 폐지, 수동 송금 모델로 전환',
                         }
                         _alloc_transit_active = False
-                        alloc_lines.append(f"  🟢 alloc_transit CLEAR (ht {ht*100:.2f}pp ≤ 5pp)")
-                    elif (not _was_active) and fire:
-                        _ts_obj['alloc_transit'] = {
-                            'active': True,
-                            'set_at': _now_str,
-                            'updated_at': _now_str,
-                            'target_ratios': {'stock': STOCK_RATIO, 'spot': COIN_RATIO, 'fut': FUTURES_RATIO},
-                            'total_krw_current': float(alloc_total),
-                            'sleeve_krw_current': {'stock': float(stock_krw), 'spot': float(spot_krw), 'fut': float(fut_krw)},
-                            'cap_ratio': _cap_ratios,
-                            'last_ht': float(ht),
-                            'reason': ' | '.join(([f'T1 ht {ht*100:.1f}pp'] if t1_fire else []) +
-                                                  ([f'T3U_can'] if t3u_fire else [])),
+                        alloc_lines.append(f"  🟢 alloc_transit FORCE CLEAR (V23 B 안 — 자동 cap_ratio 시스템 폐지)")
+                    # 트리거 ON 시 텔레그램 알림 (read-only, 수동 송금 권장)
+                    if fire:
+                        # suggested_transfer 계산 (어느 sleeve → 어느 sleeve)
+                        tgt_stock_krw = alloc_total * STOCK_RATIO
+                        tgt_spot_krw = alloc_total * COIN_RATIO
+                        tgt_fut_krw = alloc_total * FUTURES_RATIO
+                        diffs = {
+                            'stock': stock_krw - tgt_stock_krw,
+                            'spot': spot_krw - tgt_spot_krw,
+                            'fut': fut_krw - tgt_fut_krw,
                         }
-                        _alloc_transit_active = True
-                        alloc_lines.append(
-                            f"  🔴 alloc_transit SET — cap_ratio stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}")
-                        # Important 8: 첫 발동 텔레그램 알림
+                        reason = ' | '.join(([f'T1 ht {ht*100:.1f}pp'] if t1_fire else []) +
+                                            ([f'T3U_can ≥ {REBAL_T3U_REL*100:.0f}%'] if t3u_fire else []))
+                        # rate-limit: 같은 reason 24h 내 중복 알림 X
+                        _last_alert = _at.get('last_alert_at', '') if isinstance(_at, dict) else ''
+                        _alert_ok = True
                         try:
-                            send_telegram(
-                                f"🔴 alloc_transit SET (옵션 D phantom buffer 첫 발동)\n"
-                                f"트리거: {_ts_obj['alloc_transit']['reason']}\n"
-                                f"ht: {ht*100:.2f}pp (≥ {REBAL_HT_THRESHOLD*100:.0f}pp)\n"
-                                f"cap_ratio: stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}\n"
-                                f"현재: 주식 ₩{stock_krw:,.0f} / 업비트 ₩{spot_krw:,.0f} / 바이낸스 ₩{fut_krw:,.0f}\n"
-                                f"목표: 60/25/15 (총 ₩{alloc_total:,.0f})\n"
-                                f"다음 cron 부터 cap 적용 → 초과 sleeve 자동 매도. 결과 cash 수동 transfer 필요."
-                            )
-                        except Exception as _ex_tg:
-                            alloc_lines.append(f"  ⚠️ alert 전송 실패: {_ex_tg}")
-                    elif _was_active:
-                        _alloc_transit_active = True
-                        _ts_obj['alloc_transit'].update({
-                            'updated_at': _now_str,
-                            'total_krw_current': float(alloc_total),
-                            'sleeve_krw_current': {'stock': float(stock_krw), 'spot': float(spot_krw), 'fut': float(fut_krw)},
-                            'cap_ratio': _cap_ratios,
-                            'last_ht': float(ht),
-                        })
-                        alloc_lines.append(
-                            f"  🟡 alloc_transit ON — cap_ratio stock {_cap_ratios['stock']:.3f} / spot {_cap_ratios['spot']:.3f} / fut {_cap_ratios['fut']:.3f}")
+                            if _last_alert:
+                                _la_dt = datetime.strptime(_last_alert.replace(' KST', ''), '%Y-%m-%d %H:%M').replace(tzinfo=_KST)
+                                if (_now_dt - _la_dt).total_seconds() < 86400:
+                                    _alert_ok = False
+                        except Exception:
+                            pass
+                        if _alert_ok:
+                            try:
+                                _msg_lines = [
+                                    f"⚠️ V23 자산배분 트리거 ON",
+                                    f"트리거: {reason}",
+                                    f"현재 비중: 주식 {p_stock*100:.1f}% / 업비트 {p_spot*100:.1f}% / 바이낸스 {p_fut*100:.1f}%",
+                                    f"목표: 60/20/15 (B 안 + per-sleeve buffer stock 6/spot 1/fut 1)",
+                                    f"현재 KRW: 주식 ₩{stock_krw:,.0f} / 업비트 ₩{spot_krw:,.0f} / 바이낸스 ₩{fut_krw:,.0f}",
+                                    f"목표 KRW: 주식 ₩{tgt_stock_krw:,.0f} / 업비트 ₩{tgt_spot_krw:,.0f} / 바이낸스 ₩{tgt_fut_krw:,.0f}",
+                                    f"송금 제안:",
+                                ]
+                                for _k, _v in diffs.items():
+                                    if abs(_v) > alloc_total * 0.005:  # 0.5% 미만은 무시
+                                        _kname = {'stock': '주식', 'spot': '업비트', 'fut': '바이낸스'}[_k]
+                                        if _v > 0:
+                                            _msg_lines.append(f"  {_kname}: 매도/출금 ₩{_v:,.0f}")
+                                        else:
+                                            _msg_lines.append(f"  {_kname}: 입금 ₩{-_v:,.0f}")
+                                _msg_lines.append(f"※ 자동 rebal X — 수동 송금 필요. sleeve 내부 자동매매는 그대로 진행")
+                                send_telegram('\n'.join(_msg_lines))
+                                _ts_obj['alloc_transit'] = {
+                                    'active': False,
+                                    'last_alert_at': _now_str,
+                                    'last_fire_reason': reason,
+                                    'last_ht': float(ht),
+                                    'last_total_krw': float(alloc_total),
+                                    'target_ratios': {'stock': STOCK_RATIO, 'spot': COIN_RATIO, 'fut': FUTURES_RATIO},
+                                }
+                            except Exception as _ex_tg:
+                                alloc_lines.append(f"  ⚠️ trigger alert 전송 실패: {_ex_tg}")
+                        alloc_lines.append(f"  ⚠️ 트리거 ON ({reason}) — 텔레그램 알림 발송 (수동 송금 권장)")
                     if _ts_path and (_was_active or _alloc_transit_active):
                         _tmp = _ts_path + '.tmp'
                         with open(_tmp, 'w') as _f:
