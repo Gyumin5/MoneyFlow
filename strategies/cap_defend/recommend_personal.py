@@ -2657,7 +2657,7 @@ if __name__ == "__main__":
                 _t3u_p = _max_ru / REBAL_T3U_REL if REBAL_T3U_REL > 0 else 0
                 _t3u_lbl, _t3u_ic = _trig_status(_t3u_p)
                 _verdict_signals.append(('T3U_max', _t3u_p, _t3u_lbl))
-                alloc_lines.append(f"  {_t3u_ic} T3U_can max-under {_max_ru*100:.0f}/{REBAL_T3U_REL*100:.0f}% {_t3u_p*100:.0f}% (주식 {rel_under_stock*100:.0f}% / 업비트 {rel_under_spot*100:.0f}% / 바이낸스 {rel_under_fut*100:.0f}%) [{_t3u_lbl}]")
+                alloc_lines.append(f"  {_t3u_ic} T3U_can {_max_ru*100:.0f}/{REBAL_T3U_REL*100:.0f}% {_t3u_p*100:.0f}% [{_t3u_lbl}]")
                 if fire:
                     alloc_lines.append(f"  🔔 리밸 필요 — {' | '.join(fire_reason)}")
                 else:
