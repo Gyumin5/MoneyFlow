@@ -15,7 +15,7 @@ Futures V24: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
   - D_SMA42: 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (05-04 갱신)
   - 가드 없음, 스탑 없음
 
-Asset Allocation: 60/25/15 (V24 갱신 2026-05-22), 리밸 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% & sleeve canary ON)
+Asset Allocation: 60/25/15 (V24 갱신 2026-05-22), 리밸 트리거: T1(ht≥20pp) OR T3U_can(max rel-under≥25% & sleeve canary ON)
 """
 
 import os
@@ -220,12 +220,12 @@ VERSION_HISTORY = [
 • <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
-<b>▶ 자산배분:</b> 65/20/15 (주식계좌/현물/선물, V24 갱신 2026-05-26 B 안). 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
+<b>▶ 자산배분:</b> 60/25/15 (주식계좌/현물/선물, V24 갱신 2026-05-26 B 안). 트리거: T1(ht≥20pp) OR T3U_can(max rel-under≥25% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.65, 0.20, 0.15  # V24 갱신 (2026-05-26): 60/25/15 → 65/20/15 (B 안 채택, stock 계좌 65% 안에 cash 7%, 실투자 60.45%)
-REBAL_HT_THRESHOLD = 0.13  # V24: T1 = half_turnover (sum|cur-tgt|/2) ≥ 13pp
-REBAL_T3U_REL = 0.20  # V24: T3U_can = max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15  # V24 그리드 best (2026-05-27): 65/20/15 → 60/25/15. BT Cal 3.86, MDD -18.2%, CAGR 70.5% (5.6yr)
+REBAL_HT_THRESHOLD = 0.20  # V24 그리드 best: T1 = half_turnover ≥ 20pp (이전 13pp → 20pp, 덜 민감)
+REBAL_T3U_REL = 0.25  # V24 그리드 best: T3U_can = max rel-under ≥ 25% AND sleeve canary ON (이전 20% → 25%)
 CASH_ASSET = 'Cash'
 STOCK_CASH_BUFFER_DEFAULT = 0.07   # V24 (2026-05-26): stock 계좌 안에서 7% cash buffer (= 4.55% of total)
 SPOT_CASH_BUFFER_DEFAULT = 0.01    # V24 (2026-05-26): Upbit 1%
@@ -936,11 +936,11 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
-            const TARGET_STOCK_RATIO = 0.65;
-            const TARGET_COIN_RATIO = 0.20;
+            const TARGET_STOCK_RATIO = 0.60;
+            const TARGET_COIN_RATIO = 0.25;
             const TARGET_FUTURES_RATIO = 0.15;
-            const REBAL_HT = 0.13;           // V24 갱신 (2026-05-22): T1 = half_turnover ≥ 13pp
-            const REBAL_T3U_REL = 0.20;      // V24 추가 (2026-05-22): T3U_can = max rel underweight ≥ 20% + sleeve canary ON
+            const REBAL_HT = 0.20;           // V24 갱신 (2026-05-22): T1 = half_turnover ≥ 20pp
+            const REBAL_T3U_REL = 0.25;      // V24 추가 (2026-05-22): T3U_can = max rel underweight ≥ 20% + sleeve canary ON
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1806,15 +1806,15 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (V24 갱신 2026-05-22: 60/25/15, T1(ht≥13pp) OR T3U_can(max rel-under≥20% + canary ON) 트리거 — 리밸런싱은 수동) ===
+                // === 3자산 배분 체크 (V24 갱신 2026-05-22: 60/25/15, T1(ht≥20pp) OR T3U_can(max rel-under≥25% + canary ON) 트리거 — 리밸런싱은 수동) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.65, T_SPOT = 0.20, T_FUT = 0.15;
-                    const REBAL_HT = 0.13;
-                    const REBAL_T3U = 0.20;
+                    const T_STOCK = 0.60, T_SPOT = 0.25, T_FUT = 0.15;
+                    const REBAL_HT = 0.20;
+                    const REBAL_T3U = 0.25;
                     const pStock = stockKrw / allocTotal;
                     const pSpot = spotKrw / allocTotal;
                     const pFut = futKrw / allocTotal;
