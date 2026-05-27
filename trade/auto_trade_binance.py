@@ -313,6 +313,26 @@ def fetch_klines(client: Client, symbol: str, interval: str, limit: int = 1500) 
         return pd.DataFrame()
 
 
+def fetch_spot_klines(client: Client, symbol: str, interval: str, limit: int = 500) -> pd.DataFrame:
+    """Binance Spot OHLCV (BTC canary 용 — 글로벌 표준 가격)."""
+    try:
+        klines = client.get_klines(symbol=symbol, interval=interval, limit=limit)
+        if not klines:
+            return pd.DataFrame()
+        df = pd.DataFrame(klines, columns=[
+            'Date', 'Open', 'High', 'Low', 'Close', 'Volume',
+            'CloseTime', 'QuoteVol', 'Trades', 'TakerBuy', 'TakerQuote', 'Ignore'
+        ])
+        df['Date'] = pd.to_datetime(df['Date'], unit='ms')
+        for c in ['Open', 'High', 'Low', 'Close', 'Volume']:
+            df[c] = df[c].astype(float)
+        df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].set_index('Date')
+        return df.sort_index()
+    except Exception as e:
+        log.error(f"fetch_spot_klines {symbol} {interval}: {e}")
+        return pd.DataFrame()
+
+
 def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
                                  cache_path: Optional[str] = None) -> List[Dict]:
     """CoinGecko top N 시총순 fetch. 실패 시 cache fallback."""
@@ -393,6 +413,9 @@ def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
     """모든 심볼의 D OHLCV 수집 + 1h (동적 레버리지 backup, 현재 비활성).
     V23: D 단일 전략 (SMA42+mom127+snap57+vol90 → 500 bars 충분).
     1h 는 동적 레버리지 백업용, 비활성이지만 호환 위해 fetch 유지.
+
+    BTC 는 canary 용 spot 가격으로 override (글로벌 표준 통일).
+    alt momentum/health 는 futures perp 유지.
     """
     data = {'1h': {}, 'D': {}}
     for sym in UNIVERSE:
@@ -404,6 +427,16 @@ def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
                 coin = sym.replace('USDT', '')
                 data[iv][coin] = df
             time.sleep(0.05)  # rate limit
+
+    # BTC 는 spot 으로 override (canary 글로벌 표준)
+    for iv in ['D']:
+        iv_api = '1d' if iv == 'D' else iv
+        spot_df = fetch_spot_klines(client, 'BTCUSDT', iv_api, 500)
+        if not spot_df.empty:
+            data[iv]['BTC'] = spot_df
+            log.info(f"BTC {iv} spot override OK (last close={spot_df['Close'].iloc[-1]:,.0f})")
+        else:
+            log.warning(f"BTC {iv} spot fetch 실패 — perp 유지")
     return data
 
 

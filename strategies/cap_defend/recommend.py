@@ -106,21 +106,32 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
             except: pass
             
     if not cg_data:
-        log.append("<p class='error'>❌ All Methods Failed. Using Hardcoded Fallback.</p>")
-        return ['BTC-USD', 'ETH-USD', 'SOL-USD', 'XRP-USD', 'DOGE-USD'], {}
-    
+        log.append("<p class='error'>❌ CoinGecko + cache 모두 실패. universe 없음 → 매매 skip.</p>")
+        return [], {}
+
     cg_symbol_to_id_map = {f"{item['symbol'].upper()}-USD": item['id'] for item in cg_data}
-    
+
     try:
         upbit_krw_tickers = pyupbit.get_tickers(fiat="KRW")
         upbit_symbols = {t.split('-')[1] for t in upbit_krw_tickers}
     except: upbit_symbols = set()
-    
+
+    binance_spot_symbols = set()
+    try:
+        bn_resp = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=15)
+        if bn_resp.status_code == 200:
+            for s in bn_resp.json().get('symbols', []):
+                if s.get('status') == 'TRADING' and s.get('quoteAsset') == 'USDT':
+                    base = s.get('baseAsset', '').upper()
+                    if base: binance_spot_symbols.add(base)
+    except: pass
+
     final_universe = []
     for item in cg_data:
         symbol = item['symbol'].upper()
         if symbol in STABLECOINS: continue
         if symbol not in upbit_symbols: continue
+        if binance_spot_symbols and symbol not in binance_spot_symbols: continue
         
         upbit_ticker = f"KRW-{symbol}"
         try:
@@ -186,22 +197,44 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
         if success:
             continue
 
-        # 2. Download from Yahoo
+        # 2. Crypto (-USD) → Binance Spot. Else → Yahoo.
+        is_crypto = ticker.endswith('-USD') and ticker.replace('-USD', '') not in {'EEM', 'SPY', 'QQQ', 'TLT', 'GLD', 'IEF', 'IWM', 'EFA', 'BIL'}
+        if is_crypto:
+            try:
+                symbol = ticker.replace('-USD', '')
+                bn_symbol = f"{symbol}USDT"
+                params = {'symbol': bn_symbol, 'interval': '1d', 'limit': 1000}
+                resp = session.get("https://api.binance.com/api/v3/klines", params=params, timeout=30)
+                if resp.status_code == 200:
+                    klines = resp.json()
+                    if klines:
+                        rows = [(pd.to_datetime(k[0], unit='ms').date(), float(k[4])) for k in klines]
+                        df = pd.DataFrame(rows, columns=['Date', 'Adj_Close']).drop_duplicates('Date')
+                        today_d = datetime.now().date()
+                        if len(df) > 0 and df['Date'].iloc[-1] == today_d:
+                            df = df.iloc[:-1]
+                        if len(df) > 0:
+                            df.to_csv(fp, index=False)
+                            success = True
+                            print(f"  - Downloaded {ticker} (Binance Spot {bn_symbol})")
+            except Exception as e:
+                print(f"  ⚠️ Binance Spot {ticker}: {e}")
+            continue
+
         try:
             current_timestamp = int(datetime.now(timezone.utc).timestamp())
             start_timestamp = int(datetime(2018, 1, 1, tzinfo=timezone.utc).timestamp())
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
             params = {"period1": start_timestamp, "period2": current_timestamp, "interval": "1d", "includeAdjustedClose": "true"}
-            
+
             resp = session.get(url, params=params, timeout=30)
-            
+
             if resp.status_code == 200:
                 res = resp.json()['chart']['result'][0]
                 df = pd.DataFrame({'Date': pd.to_datetime(res['timestamp'], unit='s').date, 'Adj_Close': res['indicators']['adjclose'][0]['adjclose']})
                 df = df.dropna().drop_duplicates('Date')
-                
-                # [Quality Check V12.2]
-                if ticker.endswith('-USD') and len(df) > 0:
+
+                if False and ticker.endswith('-USD') and len(df) > 0:
                     symbol = ticker.replace('-USD', '')
                     try:
                         upbit_ohlcv = pyupbit.get_ohlcv(f"KRW-{symbol}", interval="day", count=1)
