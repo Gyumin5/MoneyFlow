@@ -268,12 +268,20 @@ def run_snapshot_ensemble(prices_dict, ind, params: SP,
 
         # Drift trigger (2026-05-23 추가): snap/canary 갱신 없을 때만 평가.
         # cur_w (holdings + cash 비중) vs combined target 의 half_turnover.
-        if do_execute is None and drift_threshold is not None and pv > 0:
-            cur_w = {'Cash': cash / pv}
+        # V24 patch (2026-05-27): prev_trading_date 기준 가격으로 cur_w 산출 (look-ahead 차단)
+        if do_execute is None and drift_threshold is not None and pv > 0 and prev_trading_date is not None:
+            _drift_ref_date = prev_trading_date
+            # prev close 기준 PV 재산출
+            pv_prev = cash
             for t, shares in holdings.items():
-                p = get_price(ind, t, date)
-                if not np.isnan(p):
-                    cur_w[t] = (shares * p) / pv
+                p_prev = get_price(ind, t, _drift_ref_date)
+                if not np.isnan(p_prev):
+                    pv_prev += shares * p_prev
+            cur_w = {'Cash': cash / pv_prev} if pv_prev > 0 else {'Cash': 1.0}
+            for t, shares in holdings.items():
+                p = get_price(ind, t, _drift_ref_date)
+                if not np.isnan(p) and pv_prev > 0:
+                    cur_w[t] = (shares * p) / pv_prev
             all_keys = set(cur_w.keys()) | set(combined.keys())
             ht_drift = sum(abs(cur_w.get(k, 0.0) - combined.get(k, 0.0))
                            for k in all_keys) / 2
@@ -323,9 +331,12 @@ def run_snapshot_ensemble(prices_dict, ind, params: SP,
                 do_execute = combined
 
         if do_execute is not None:
+            # V24 patch (2026-05-27): PV sizing 은 prev_trading_date 기준 (look-ahead 차단)
+            # 체결은 date 가격으로 진행 (실거래 = 시그널 다음 영업일 체결과 동등)
+            _pv_date = prev_trading_date if prev_trading_date is not None else date
             pv = cash
             for t, shares in holdings.items():
-                p = get_price(ind, t, date)
+                p = get_price(ind, t, _pv_date)
                 if not np.isnan(p):
                     pv += shares * p
             holdings, cash = _rebal_to_target(holdings, cash, pv, do_execute,
