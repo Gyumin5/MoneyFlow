@@ -745,28 +745,41 @@ def _apply_refill_v2_to_state(state: Dict, members_cfg: Dict,
     ms_all = state.setdefault('members', {})
     n_members = len(members_cfg)
     new_combined: Dict[str, float] = {}
+    log.info('refill v2: 시작. members=%d', n_members)
 
     for mname, cfg in members_cfg.items():
         bars = bars_by_member.get(mname, {})
         if not bars:
+            log.warning('refill v2 [%s]: bars 없음 → skip', mname)
             continue
         mom_s = cfg['mom_short_bars']
         mom_l = cfg['mom_long_bars']
         mstate = ms_all.get(mname, {})
         snapshots = mstate.get('snapshots') or []
         if not snapshots:
+            log.warning('refill v2 [%s]: snapshots 없음 → skip', mname)
             continue
+        log.info('refill v2 [%s]: snapshots=%d mom_s=%d mom_l=%d', mname, len(snapshots), mom_s, mom_l)
+
+        # fail 판정 (캐시: 같은 코인 중복 호출 방지)
+        _fail_cache: Dict[str, Tuple[bool, float, float]] = {}
 
         def _is_failed(coin: str) -> bool:
+            if coin in _fail_cache:
+                return _fail_cache[coin][0]
             df = bars.get(coin)
             if df is None or df.empty:
-                return False  # 데이터 없으면 보수적으로 keep
+                _fail_cache[coin] = (False, 0.0, 0.0)
+                return False
             c = df['Close'].values
             if len(c) < max(mom_s, mom_l) + 1:
+                _fail_cache[coin] = (False, 0.0, 0.0)
                 return False
             ms = _calc_mom(c, mom_s)
             ml = _calc_mom(c, mom_l)
-            return ms < 0 and ml < 0
+            fail = ms < 0 and ml < 0
+            _fail_cache[coin] = (fail, ms, ml)
+            return fail
 
         # fresh healthy pool (mom2 양수). tie-break: 심볼 오름차순으로 결정성 보장
         healthy_pool: List[Tuple[str, float]] = []
@@ -782,33 +795,46 @@ def _apply_refill_v2_to_state(state: Dict, members_cfg: Dict,
                 healthy_pool.append((coin, ms))
         healthy_pool.sort(key=lambda x: (-x[1], x[0]))
         healthy_sorted = [c for c, _ in healthy_pool]
+        log.info('refill v2 [%s]: healthy_pool top5=%s (total %d)', mname,
+                 [(c, f'{m*100:.1f}%') for c, m in healthy_pool[:5]], len(healthy_pool))
 
         # 각 snapshot 처리
         new_snapshots = []
-        for snap in snapshots:
+        per_snap_changes = []
+        for si, snap in enumerate(snapshots):
             sn_coins = sorted([c for c in snap if c.upper() != 'CASH'])
             new_sn: Dict[str, float] = {}
             replaced = 0.0
+            failed_coins: List[str] = []
             for c in sn_coins:
                 if _is_failed(c):
                     replaced += float(snap.get(c, 0.0))
+                    failed_coins.append(c)
                 else:
                     new_sn[c] = float(snap.get(c, 0.0))
             cash_keys = [k for k in snap if k.upper() == 'CASH']
             cash_w = sum(float(snap.get(k, 0.0)) for k in cash_keys)
             new_sn['CASH'] = cash_w
+            picks_made: List[str] = []
             if replaced > 0:
                 fresh_picks = [c for c in healthy_sorted if c not in new_sn]
                 n_failed = len(sn_coins) - sum(1 for k in new_sn if k.upper() != 'CASH')
                 n_failed = max(1, n_failed)
                 if fresh_picks:
-                    picks = fresh_picks[:n_failed]
-                    w_per = replaced / len(picks)
-                    for c in picks:
+                    picks_made = fresh_picks[:n_failed]
+                    w_per = replaced / len(picks_made)
+                    for c in picks_made:
                         new_sn[c] = new_sn.get(c, 0.0) + w_per
                 else:
                     new_sn['CASH'] = new_sn.get('CASH', 0.0) + replaced
             new_snapshots.append(new_sn)
+            if failed_coins:
+                per_snap_changes.append((si, failed_coins, picks_made, replaced))
+                fail_detail = ','.join(f'{c}(ms={_fail_cache[c][1]*100:+.1f},ml={_fail_cache[c][2]*100:+.1f})' for c in failed_coins)
+                log.info('refill v2 [%s] snap[%d]: failed=%s replaced=%.4f → picks=%s', mname, si, fail_detail, replaced, picks_made or 'CASH')
+
+        if not per_snap_changes:
+            log.info('refill v2 [%s]: 모든 snapshot 변경 없음 (fail 없음)', mname)
 
         # state 에 반영
         mstate['snapshots'] = new_snapshots
@@ -1046,12 +1072,20 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     # 6b) V24 refill v2 (drift fire 시점에 mom2 음수 슬롯 교체)
     if drift_fire_b and REFILL_ENABLED:
         try:
+            combined_before = dict(combined)
             combined = _apply_refill_v2_to_state(state, MEMBERS, member_bars_cache, combined)
-            log.info('refill v2 applied: combined updated, n_keys=%d', len(combined))
-            # state 갱신 반영
+            # before/after diff (가장 큰 변화 top 5)
+            all_keys = set(combined_before) | set(combined)
+            diffs = sorted(
+                [(k, combined.get(k, 0) - combined_before.get(k, 0)) for k in all_keys],
+                key=lambda x: -abs(x[1])
+            )[:5]
+            log.info('refill v2 applied: combined %d→%d keys, top diffs=%s',
+                     len(combined_before), len(combined),
+                     [(k, f'{d*100:+.1f}%') for k, d in diffs if abs(d) > 1e-6])
             state['last_target_snapshot'] = {**combined, '_ts': to_utc_iso(now_utc)}
         except Exception as e:
-            log.warning('refill v2 skipped due to error: %s', e)
+            log.warning('refill v2 skipped due to error: %s', e, exc_info=True)
 
     return EngineResult(
         combined_target=combined,
