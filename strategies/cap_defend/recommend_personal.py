@@ -2286,6 +2286,36 @@ if __name__ == "__main__":
 
         coin_picks_str = ', '.join(t.replace('-USD','') for t in c_port.keys() if t != 'Cash')
 
+        # Helpers — 현재 보유 비중 + 목표 vs 보유 포맷
+        def _cur_weights_early(acct):
+            if not acct: return {}
+            tot = float(acct.get('total_krw', 0) or 0)
+            if tot <= 0: return {}
+            w = {}
+            for h in (acct.get('holdings') or []):
+                tk = (h.get('ticker') or '').upper().replace('-USD', '')
+                v = float(h.get('value_krw', h.get('weight_value_krw', 0)) or 0)
+                if tk and v > 0:
+                    w[tk] = v / tot
+            cash_v = float(acct.get('krw_balance', acct.get('cash_krw', 0)) or 0)
+            if cash_v > 0:
+                w['Cash'] = cash_v / tot
+            return w
+
+        def _fmt_disp_early(disp_dict, cur_dict):
+            lines = []
+            keys = sorted(set(disp_dict) | set(cur_dict), key=lambda k: -(disp_dict.get(k, 0) or 0))
+            for k in keys:
+                tw = disp_dict.get(k, 0.0)
+                cw = cur_dict.get(k, 0.0)
+                if tw < 1e-4 and cw < 1e-4 and k.lower() != 'cash':
+                    continue
+                tk = k.replace('-USD', '')
+                lines.append(f'  {tk}: 목표 {tw*100:.1f}% / 보유 {cw*100:.1f}%')
+            return lines
+
+        _cur_fut_early = _cur_weights_early(accts.get('coin_binance') if 'accts' in locals() else None)
+
         # 선물 state 읽기 (binance_state.json)
         fut_lines = ['🎯 바이낸스 목표']
         fut_canary_lines = []
@@ -2299,10 +2329,17 @@ if __name__ == "__main__":
                 strat = bn.get('strategies', {}).get('D_SMA42', {})
                 last_combined = strat.get('last_combined') or bn.get('last_target') or {}
                 if last_combined:
-                    for t, w in sorted(last_combined.items(), key=lambda kv: -kv[1]):
-                        if w < 1e-4 and t.lower() not in ('cash',):
-                            continue
-                        fut_lines.append(f'  {t}: {w*100:.1f}%')
+                    _fut_buf = get_cash_buffer('fut')
+                    f_disp = {}
+                    _f_has_cash = any(str(k).lower() == 'cash' for k in last_combined.keys())
+                    for k, w in last_combined.items():
+                        if str(k).lower() == 'cash':
+                            f_disp[k] = float(w)
+                        else:
+                            f_disp[k] = float(w) * (1.0 - _fut_buf)
+                    if not _f_has_cash and _fut_buf > 0:
+                        f_disp['Cash'] = _fut_buf
+                    fut_lines.extend(_fmt_disp_early(f_disp, _cur_fut_early))
                 else:
                     fut_lines.append('  (목표 없음)')
                 # canary detail
@@ -2325,17 +2362,64 @@ if __name__ == "__main__":
 
         # V23 통일 포맷 (Daily Report — 신호 요약, 실행 보고와 별개)
         date_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]
+
+        def _cur_weights(acct):
+            """sleeve 보유 비중 dict {ticker: weight} (cash 포함, 비중 0~1)."""
+            if not acct: return {}
+            tot = float(acct.get('total_krw', 0) or 0)
+            if tot <= 0: return {}
+            w = {}
+            for h in (acct.get('holdings') or []):
+                tk = (h.get('ticker') or '').upper().replace('-USD', '')
+                v = float(h.get('value_krw', h.get('weight_value_krw', 0)) or 0)
+                if tk and v > 0:
+                    w[tk] = v / tot
+            cash_v = float(acct.get('krw_balance', acct.get('cash_krw', 0)) or 0)
+            if cash_v > 0:
+                w['Cash'] = cash_v / tot
+            return w
+
+        _cur_stock = _cur_weights(accts.get('stock_kis') if 'accts' in locals() else None)
+        _cur_spot = _cur_weights(accts.get('coin_upbit') if 'accts' in locals() else None)
+        _cur_fut = _cur_weights(accts.get('coin_binance') if 'accts' in locals() else None)
+
+        def _fmt_disp(disp_dict, cur_dict):
+            lines = []
+            keys = sorted(set(disp_dict) | set(cur_dict), key=lambda k: -(disp_dict.get(k, 0) or 0))
+            for k in keys:
+                tw = disp_dict.get(k, 0.0)
+                cw = cur_dict.get(k, 0.0)
+                if tw < 1e-4 and cw < 1e-4 and k.lower() != 'cash':
+                    continue
+                tk = k.replace('-USD', '')
+                lines.append(f'  {tk}: 목표 {tw*100:.1f}% / 보유 {cw*100:.1f}%')
+            return lines
+
         c_lines = ['🎯 업비트 목표']
-        for t, w in sorted(c_port.items(), key=lambda kv: -kv[1]):
-            tk = t.replace('-USD', '')
-            if w < 1e-4 and tk.lower() != 'cash':
-                continue
-            c_lines.append(f'  {tk}: {w*100:.1f}%')
+        _spot_buf = get_cash_buffer('spot')
+        c_disp = {}
+        _c_has_cash = any(str(k).lower() == 'cash' for k in (c_port or {}).keys())
+        for k, w in (c_port or {}).items():
+            if str(k).lower() == 'cash':
+                c_disp[k] = float(w)
+            else:
+                c_disp[k] = float(w) * (1.0 - _spot_buf)
+        if not _c_has_cash and _spot_buf > 0:
+            c_disp['Cash'] = _spot_buf
+        c_disp_n = {str(k).replace('-USD', ''): v for k, v in c_disp.items()}
+        c_lines.extend(_fmt_disp(c_disp_n, _cur_spot))
         s_lines = ['🎯 주식 목표']
-        for t, w in sorted(s_port.items(), key=lambda kv: -kv[1]):
-            if w < 1e-4 and t.lower() != 'cash':
-                continue
-            s_lines.append(f'  {t}: {w*100:.1f}%')
+        _stock_buf = get_cash_buffer('stock')
+        s_port_disp = {}
+        _has_cash = any(str(k).lower() == 'cash' for k in (s_port or {}).keys())
+        for k, w in (s_port or {}).items():
+            if str(k).lower() == 'cash':
+                s_port_disp[k] = float(w)
+            else:
+                s_port_disp[k] = float(w) * (1.0 - _stock_buf)
+        if not _has_cash and _stock_buf > 0:
+            s_port_disp['Cash'] = _stock_buf
+        s_lines.extend(_fmt_disp(s_port_disp, _cur_stock))
 
         # 카나리 상세 — 비교대상 / 현재값 / SMA값 / 비율
         canary_lines = ['🦅 카나리']
@@ -2586,6 +2670,18 @@ if __name__ == "__main__":
             keys = set(cur_w) | set(tgt)
             return sum(abs(cur_w.get(k, 0) - tgt.get(k, 0)) for k in keys) / 2
 
+        try:
+            stock_acct_d = (accts.get("stock_kis") or {}) if 'accts' in locals() else {}
+            stock_total_d = float(stock_acct_d.get("total_krw", 0))
+            ht_st = _ht_from_holdings(stock_acct_d, stock_total_d, s_port or {})
+            thr_st = 0.10
+            if ht_st is None:
+                drift_lines.append("  주식: 잔고 없음")
+            else:
+                fire_st = ht_st >= thr_st
+                drift_lines.append(f"  주식: ht {ht_st*100:.2f}pp / 트리거 {thr_st*100:.0f}pp {'🔔 fire' if fire_st else '✅ 내'}")
+        except Exception as ex_dst:
+            drift_lines.append(f"  주식: 계산 실패 ({ex_dst})")
         try:
             spot_acct_d = (accts.get("coin_upbit") or {}) if 'accts' in locals() else {}
             spot_total_d = float(spot_acct_d.get("total_krw", 0))
