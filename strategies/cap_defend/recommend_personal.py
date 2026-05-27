@@ -2495,7 +2495,6 @@ if __name__ == "__main__":
                 lines = [f"  [{label}] 평가액 ₩{total:,.0f}"]
                 hs = acct.get("holdings") or []
                 if not hs:
-                    lines.append("    (보유 없음)")
                     return lines
                 for h in sorted(hs, key=lambda x: -float(x.get("krw", 0) or 0)):
                     krw = float(h.get("krw", 0) or 0)
