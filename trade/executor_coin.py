@@ -3,9 +3,9 @@
 
 구조:
   - 신호: coin_live_engine.compute_live_targets
-          (V23: Binance spot kline → 1D 단일 멤버 D_SMA42, snap=217×7, drift=0.10)
+          (V24: Binance spot kline → 1D 단일 멤버 D_SMA42, snap=217×7, drift=0.10)
   - 체결: Upbit KRW (pyupbit)
-  - 상태: trade_state.json (schema_version=V23)
+  - 상태: trade_state.json (schema_version=V24)
 
 실행 순서:
   1. flock /tmp/coin_executor.lock
@@ -66,7 +66,7 @@ except ImportError:
 
 # ═══ 상수 ═══
 STATE_FILE = 'trade_state.json'
-ALLOC_SPOT_RATIO = 0.25  # V23 (옵션 D, 2026-05-23)
+ALLOC_SPOT_RATIO = 0.25  # V24 (옵션 D, 2026-05-23)
 LOCK_FILE = '/tmp/coin_executor.lock'
 LOG_FILE = 'executor_coin.log'
 CACHE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -78,7 +78,7 @@ DUST_KRW = 5000                     # 이보다 작은 잔여는 전량 매도
 LIMIT_PRICE_SLIP = 0.003            # 매수 지정가 +0.3%
 ORDER_WAIT_SEC = 5                  # 매수 후 미체결 취소 대기
 LIQUIDATION_MAX_RETRIES = 3
-# V23 매도 robust retry — 코인 spot 매도 무조건 성공 보장 (2026-05-08)
+# V24 매도 robust retry — 코인 spot 매도 무조건 성공 보장 (2026-05-08)
 SELL_RETRY_DELAYS = [1, 3, 5, 10]
 SELL_MAX_ATTEMPTS = 5
 SELL_TIMEOUT_SEC = 60
@@ -344,7 +344,7 @@ class UpbitAPI:
             return 0.0, 0.0
 
     def sell_market_robust(self, coin: str, target_qty: float) -> Tuple[bool, float]:
-        """V23 robust 매도. 재시도 + fill 검증 + 잔량 재주문. Returns (success, total_filled)."""
+        """V24 robust 매도. 재시도 + fill 검증 + 잔량 재주문. Returns (success, total_filled)."""
         if target_qty <= 0:
             return True, 0.0
         if self.dry_run:
@@ -594,7 +594,7 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
                 continue
             buys.append((ticker, delta_v))
 
-    # 매도 — V23 robust retry + fill 검증 (sell_market_robust). 실패 시 즉시 텔레그램 alert.
+    # 매도 — V24 robust retry + fill 검증 (sell_market_robust). 실패 시 즉시 텔레그램 alert.
     sell_failures: List[str] = []
     for coin, sell_krw, sell_all in sells:
         qty_owned = api.get_coin_qty(coin)
@@ -631,7 +631,7 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
             sell_failures.append(f'{coin}: 요청 {sell_qty:.6f} / 체결 {filled:.6f} (잔량 ₩{short_krw:,.0f})')
             log(f'  ⚠ 매도 미완 {coin}: filled {filled:.8f}/{sell_qty:.8f}')
     if sell_failures and not dry_run:
-        alert = '🚨 V23 spot 매도 실패/부분체결 (다음 cron 재시도)\n' + '\n'.join(f'  - {m}' for m in sell_failures)
+        alert = '🚨 V24 spot 매도 실패/부분체결 (다음 cron 재시도)\n' + '\n'.join(f'  - {m}' for m in sell_failures)
         try:
             _send_tg(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, alert)
         except Exception as e:
@@ -653,7 +653,7 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
 
 
 # ═══ 사전 알림 ═══
-import v23_report as v23r  # noqa: E402
+import v24_report as v24r  # noqa: E402
 
 KRW_PER_COIN_DUST = 5_000  # 5천원 미만 보유는 표시 생략
 
@@ -701,7 +701,7 @@ def build_coin_report(result, balance: Dict[str, float], total_krw: float,
     holdings = _build_coin_holdings(balance, total_krw)
     visible_positions = sum(1 for h in holdings if h['ticker'] != 'Cash')
     status = {
-        'schema': 'V23',
+        'schema': 'V24',
         '평가액': f'₩{total_krw:,.0f}',
         'ht': f'{result.drift_half_turnover:.4f}',
         'drift_threshold': f'{result.drift_threshold:.2f}',
@@ -711,7 +711,7 @@ def build_coin_report(result, balance: Dict[str, float], total_krw: float,
     }
     if status_extra:
         status.update(status_extra)
-    return v23r.build_report(
+    return v24r.build_report(
         asset_label='', emoji='🪙', name='Cap Defend Spot',
         ts_str=ts, target=target,
         holdings=holdings,
@@ -846,7 +846,7 @@ def run_once(dry_run: bool = False) -> int:
         except Exception:
             return None
 
-    # V23: cur_w 산출 (자본금 기준 비중) — drift 트리거 평가용
+    # V24: cur_w 산출 (자본금 기준 비중) — drift 트리거 평가용
     # balance: {'KRW': float, 'BTC': float, ...} 모두 KRW 평가액
     cur_balance_for_w = api.get_balance() or {}
     total_for_w = sum(cur_balance_for_w.values()) if cur_balance_for_w else 0.0
@@ -911,7 +911,7 @@ def run_once(dry_run: bool = False) -> int:
     combined_cash = result.combined_target.get('Cash', 0.0)
     log(f'  combined target: {combined_coins or "CASH only"} (cash={combined_cash:.1%})')
 
-    # Cash buffer — V23 (2026-05-26): spot_cash_buffer 키 우선, 없으면 legacy cash_buffer
+    # Cash buffer — V24 (2026-05-26): spot_cash_buffer 키 우선, 없으면 legacy cash_buffer
     buffer_pct = float(state.get('spot_cash_buffer', state.get('cash_buffer', state.get('buffer_pct', CASH_BUFFER_DEFAULT))))
     state['spot_cash_buffer'] = buffer_pct
     state['cash_buffer'] = buffer_pct  # backward compat
@@ -948,15 +948,15 @@ def run_once(dry_run: bool = False) -> int:
         state['rebalancing_needed'] = True
         log(f'  🔔 target 변경 감지 → rebalancing_needed=True. prev={prev_combined}, new={result.combined_target}')
 
-    # V23 drift 트리거: target 불변이어도 cur_w 와 ht 차이 >= threshold 면 발화
+    # V24 drift 트리거: target 불변이어도 cur_w 와 ht 차이 >= threshold 면 발화
     # crash_cooldown 체크는 엔진이 이미 처리 (canary_on 만 추가 게이트로 가정)
     if not target_changed and result.drift_fire:
         state['rebalancing_needed'] = True
         state['last_rebal_reason'] = 'drift'
-        log(f'  🔔 V23 drift 발화 → rebalancing_needed=True. half_turnover={result.drift_half_turnover:.4f} '
+        log(f'  🔔 V24 drift 발화 → rebalancing_needed=True. half_turnover={result.drift_half_turnover:.4f} '
             f'>= threshold={result.drift_threshold:.2f}')
-        # V23: 정상 운영 알림 silent (Daily Report 09:15 이 통합 보고). 운영자 즉시 알림은 오류만.
-        log(f'  ℹ V23 drift 트리거 발화 (silent): ht={result.drift_half_turnover:.3f} ≥ {result.drift_threshold:.2f}')
+        # V24: 정상 운영 알림 silent (Daily Report 09:15 이 통합 보고). 운영자 즉시 알림은 오류만.
+        log(f'  ℹ V24 drift 트리거 발화 (silent): ht={result.drift_half_turnover:.3f} ≥ {result.drift_threshold:.2f}')
     elif target_changed:
         state['last_rebal_reason'] = 'snap_or_signal'
 
@@ -965,7 +965,7 @@ def run_once(dry_run: bool = False) -> int:
         state['rebalancing_needed'] = True
         state['last_rebal_reason'] = 'cap_defend'
         log(f'  🛡️ cap_defend trigger → rebalancing_needed=True (cap_ratio={_spot_cap_ratio:.4f})')
-    log(f'  V23 debug: schema_version={state.get("schema_version", "N/A")} '
+    log(f'  V24 debug: schema_version={state.get("schema_version", "N/A")} '
         f'cur_w_count={len(cur_w_input)} ht={result.drift_half_turnover:.4f} '
         f'drift_fire={result.drift_fire} target_changed={target_changed}')
 
@@ -974,7 +974,7 @@ def run_once(dry_run: bool = False) -> int:
         log(f'  ℹ target 불변 + rebalancing_needed=False → 스킵. prev={prev_combined}')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
-        # V23: 정상 no-op 보고 silent (Daily Report 09:15 이 통합 보고)
+        # V24: 정상 no-op 보고 silent (Daily Report 09:15 이 통합 보고)
         _flush_telegram(dry_run)
         return 0
 
@@ -984,7 +984,7 @@ def run_once(dry_run: bool = False) -> int:
         log('  ✅ 포지션이 이미 목표 근접 → rebalancing_needed=False 클리어. 스킵.')
         state['last_krw_balance'] = total_krw
         _save_state_unless_dry(state_path, state, dry_run)
-        # V23: 정상 no-op 보고 silent
+        # V24: 정상 no-op 보고 silent
         _flush_telegram(dry_run)
         return 0
 
@@ -995,7 +995,7 @@ def run_once(dry_run: bool = False) -> int:
         universe_sample = ', '.join(result.universe[:8])
         if len(result.universe) > 8:
             universe_sample += f' ... (+{len(result.universe) - 8})'
-        # V23: 사전 알림 silent (Daily Report 가 통합)
+        # V24: 사전 알림 silent (Daily Report 가 통합)
         log(f'  사전 알림 (silent): {summary[:80]}... / delta {delta_preview[:60]} / universe {result.universe[:5]}')
         flips = [m for m, f in result.canary_flipped.items() if f]
         if flips:
@@ -1029,7 +1029,7 @@ def run_once(dry_run: bool = False) -> int:
     _save_state_unless_dry(state_path, state, dry_run)
     log(f'  상태 저장: {STATE_FILE}')
 
-    # V23: 최종 정상 보고 silent. 거래 결과는 Daily Report 09:15 가 통합.
+    # V24: 최종 정상 보고 silent. 거래 결과는 Daily Report 09:15 가 통합.
     rebal_done = not bool(state.get('rebalancing_needed', False))
     log(f'  ✅ 거래 완료 (silent). 결과={rebal_done}, 다음 Daily Report 에 반영')
     _flush_telegram(dry_run)

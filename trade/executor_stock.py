@@ -7,7 +7,7 @@
   - 전략 신호 계산 안 함
   - signal_state 수정 안 함
 
-이벤트 우선순위 (V23, 가드 없음):
+이벤트 우선순위 (V24, 가드 없음):
   1. 카나리 플립 → 전 트랜치 즉시 전환
   2. 앵커 체크 (해당 snap 에 offense/defense picks 반영)
   3. Delta 매매
@@ -118,13 +118,13 @@ def _read_alloc_transit_cap_ratio(sleeve: str = 'stock'):
             continue
     return None
 
-# V23 (2026-04-30): snap-based 3-tranche stagger (snap=69, stagger=23)
+# V24 (2026-04-30): snap-based 3-tranche stagger (snap=69, stagger=23)
 # - snap_id 0/1/2, 각 69일 주기로 rebal, stagger = 23일 (3*23, prime stagger)
-# - V22(126/42) → V23(69/23): rank-sum BT 검증 결과 반영 (Cal 1.16 ymin +0.59)
+# - V22(126/42) → V24(69/23): rank-sum BT 검증 결과 반영 (Cal 1.16 ymin +0.59)
 SNAP_PERIOD_DAYS = 69
 N_SNAPS = 3
 SNAP_STAGGER_DAYS = 23  # SNAP_PERIOD_DAYS / N_SNAPS
-CASH_BUFFER_DEFAULT = 0.07  # V23 (2026-05-26): stock 계좌 안에 7% cash buffer (자산간 자동 rebal 제거, alloc 65/20/15)
+CASH_BUFFER_DEFAULT = 0.07  # V24 (2026-05-26): stock 계좌 안에 7% cash buffer (자산간 자동 rebal 제거, alloc 65/20/15)
 MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
 LIMIT_PRICE_SLIP = 0.003   # ±0.3%
@@ -526,14 +526,14 @@ def check_signal_freshness(signal: dict) -> bool:
 
 
 def check_crash(signal: dict, api: KISAPI, state: dict) -> bool:
-    """V23: 가드 전면 제거 (BT spec과 정합) — 항상 False."""
+    """V24: 가드 전면 제거 (BT spec과 정합) — 항상 False."""
     guard = state.get('guard_state') or {}
     if guard.get('crash_active'):
         guard['crash_active'] = False
         guard['crash_date'] = None
         guard['crash_cooldown_until'] = None
         state['guard_state'] = guard
-        log('  V23: 잔존 crash_active 정리 (가드 spec 제거)')
+        log('  V24: 잔존 crash_active 정리 (가드 spec 제거)')
     return False
 
 
@@ -566,7 +566,7 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
 
 
 def _migrate_tranches_to_snaps(state: dict) -> None:
-    """V21 monthly tranches (1/8/15/22) → V22/V23 snap-based (0/1/2) 1회 변환.
+    """V21 monthly tranches (1/8/15/22) → V22/V24 snap-based (0/1/2) 1회 변환.
     기존 picks/weights 를 모두 보존 (4 → 3 평균 EW). 첫 snap-based 실행 시만 트리거.
     """
     if 'snapshots' in state:
@@ -597,11 +597,11 @@ def _migrate_tranches_to_snaps(state: dict) -> None:
         }
     state['snapshots'] = snapshots
     state['_v22_migrated_from_tranches'] = today.isoformat()
-    log(f'  🔁 V23 migration: monthly tranches → 3 snaps (last_rebal staggered today/-42d/-84d)')
+    log(f'  🔁 V24 migration: monthly tranches → 3 snaps (last_rebal staggered today/-42d/-84d)')
 
 
 def check_anchors(signal: dict, state: dict):
-    """V23 snap-based 앵커 체크.
+    """V24 snap-based 앵커 체크.
     각 snap 의 (today - last_rebal_date) >= SNAP_PERIOD_DAYS 면 신규 picks 으로 rebal.
     """
     _migrate_tranches_to_snaps(state)
@@ -635,11 +635,11 @@ def check_anchors(signal: dict, state: dict):
             snap['weights'] = dict(weights)
             snap['last_rebal_date'] = today.isoformat()
             state['rebalancing_needed'] = True
-            log(f'  📅 V23 snap{snap_id} rebal (elapsed={elapsed}d ≥ {SNAP_PERIOD_DAYS}d): {picks}')
+            log(f'  📅 V24 snap{snap_id} rebal (elapsed={elapsed}d ≥ {SNAP_PERIOD_DAYS}d): {picks}')
 
 
 def merge_tranches(state: dict) -> Dict[str, float]:
-    """V23 snapshots merge → 최종 target (3 snap EW 평균)."""
+    """V24 snapshots merge → 최종 target (3 snap EW 평균)."""
     snapshots = state.get('snapshots', {})
     if not snapshots:
         # 하위호환: 옛 tranches 가 남아있다면 그걸로 fallback
@@ -832,11 +832,11 @@ def run_once(dry_run=False):
     if not signal:
         log('  signal_state.json 없음 — 스킵')
         return
-    # V23 (2026-05-26): stock_cash_buffer 키 우선, 없으면 legacy cash_buffer, 둘 다 없으면 default 6%
+    # V24 (2026-05-26): stock_cash_buffer 키 우선, 없으면 legacy cash_buffer, 둘 다 없으면 default 6%
     cash_buffer = float(state.get('stock_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
     log(f'  cash_buffer: {cash_buffer:.0%}')
 
-    # V23: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
+    # V24: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
     # 단, 둘 다 없으면 신호도 없는 상태라 스킵.
     if not state.get('tranches') and not state.get('snapshots'):
         log('  kis_trade_state.json 트랜치/스냅 모두 없음 — 첫 실행, anchor 체크가 init')
@@ -860,7 +860,7 @@ def run_once(dry_run=False):
     # 1. 미체결 취소
     api.cancel_all_pending()
 
-    # 2. V23: 가드 없음. 잔존 crash_active 만 정리.
+    # 2. V24: 가드 없음. 잔존 crash_active 만 정리.
     check_crash(signal, api, state)
 
     if not is_fresh:
@@ -903,7 +903,7 @@ def run_once(dry_run=False):
                               for _k in _all_keys) / 2
                     if _ht >= 0.10:
                         state['rebalancing_needed'] = True
-                        log(f'  🌊 V23 stock drift trigger: ht={_ht*100:.2f}pp ≥ 10pp → rebal 필요')
+                        log(f'  🌊 V24 stock drift trigger: ht={_ht*100:.2f}pp ≥ 10pp → rebal 필요')
         except Exception as _ex:
             log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
 
@@ -932,10 +932,10 @@ def run_once(dry_run=False):
         max_diff = result.get('max_diff')
         failed_orders = result.get('failed_orders', [])
 
-        # V23 통일 보고
+        # V24 통일 보고
         import sys as _sys, os as _os
         _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-        import v23_report as v23r
+        import v24_report as v24r
         from datetime import timezone, timedelta
         kst_now = datetime.now(timezone(timedelta(hours=9)))
 
@@ -975,13 +975,13 @@ def run_once(dry_run=False):
         canary_lines = [f"Stock canary: {'ON 🟢 (공격)' if risk_on else 'OFF 🔴 (방어)'}"]
 
         status = {
-            'schema': 'V23',
+            'schema': 'V24',
             'mode': mode,
             '리밸 결과': '✅ 완료' if result.get('completed') else '⏳ 미완료',
             '잔여 편차': f'{max_diff:.1%}' if max_diff is not None else 'N/A',
             '총자산': f'${total_usd:,.0f} (환율 {fx:,.0f})',
         }
-        # V23: 정상 보고 silent — Daily Report 09:15 가 통합 보고
+        # V24: 정상 보고 silent — Daily Report 09:15 가 통합 보고
         target_norm = {('Cash' if k == 'Cash' else k): v for k, v in target.items()}
         log(f'주식 보고 (silent): target={target_norm} max_diff={max_diff} mode={mode}')
 

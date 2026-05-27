@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""V22 → V23 상태파일 마이그레이션.
+"""V22 → V24 상태파일 마이그레이션.
 
 대상 파일
-- trade_state.json (코인 spot, V22 1D+4h → V23 1D 단일 sn=217 n=7 drift=0.10)
-- binance_state.json (선물, V22 1D+4h → V23 1D 단일 sn=57 n=3 drift=0.05)
-- kis_trade_state.json (주식, V22 sd=125 → V23 sd=69 stagger=23)
+- trade_state.json (코인 spot, V22 1D+4h → V24 1D 단일 sn=217 n=7 drift=0.10)
+- binance_state.json (선물, V22 1D+4h → V24 1D 단일 sn=57 n=3 drift=0.05)
+- kis_trade_state.json (주식, V22 sd=125 → V24 sd=69 stagger=23)
 
 절차 (각 state 파일별)
 1. 백업: {file}.v22.bak.{YYYYMMDDHHMMSS}
@@ -13,13 +13,13 @@
    - 새 슬롯은 last_combined 또는 빈 {'CASH': 1.0} 으로 초기화
 4. bar_counter 0 리셋 (n_snap 변경 시 stagger 재정렬)
 5. last_bar_ts 클리어 (다음 새 봉 처리)
-6. schema_version = 'V23' 추가
-7. last_rebal_reason = 'v23_migration'
+6. schema_version = 'V24' 추가
+7. last_rebal_reason = 'v24_migration'
 
 Usage
-  python3 migrate_v22_to_v23.py --dry-run     # 결과만 출력
-  python3 migrate_v22_to_v23.py --apply       # 실제 백업 + 변경
-  python3 migrate_v22_to_v23.py --rollback {YYYYMMDDHHMMSS}  # 백업 복원
+  python3 migrate_v22_to_v24.py --dry-run     # 결과만 출력
+  python3 migrate_v22_to_v24.py --apply       # 실제 백업 + 변경
+  python3 migrate_v22_to_v24.py --rollback {YYYYMMDDHHMMSS}  # 백업 복원
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from typing import Dict, Any, List
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-V23_COIN_SPOT_TARGET = {
+V24_COIN_SPOT_TARGET = {
     'snap_interval_bars': 217,
     'n_snapshots': 7,
     'drift_threshold': 0.10,
@@ -41,7 +41,7 @@ V23_COIN_SPOT_TARGET = {
     'keep_member': 'D_SMA42',
 }
 
-V23_COIN_FUT_TARGET = {
+V24_COIN_FUT_TARGET = {
     'snap_interval_bars': 57,
     'n_snapshots': 3,
     'drift_threshold': 0.05,
@@ -49,7 +49,7 @@ V23_COIN_FUT_TARGET = {
     'keep_member': 'D_SMA42',
 }
 
-V23_STOCK_TARGET = {
+V24_STOCK_TARGET = {
     'snap_period_days': 69,
     'snap_stagger_days': 23,
     'n_snaps': 3,
@@ -79,7 +79,7 @@ def backup_file(path: str, ts: str) -> str:
 
 
 def migrate_coin_spot(state: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
-    """trade_state.json (V22 → V23 spot)."""
+    """trade_state.json (V22 → V24 spot)."""
     members = state.get('members', {})
     keep = target['keep_member']
     n_snap_new = target['n_snapshots']
@@ -112,15 +112,15 @@ def migrate_coin_spot(state: Dict[str, Any], target: Dict[str, Any]) -> Dict[str
     members[keep] = keep_state
 
     state['members'] = members
-    state['schema_version'] = 'V23'
-    state['last_rebal_reason'] = 'v23_migration'
+    state['schema_version'] = 'V24'
+    state['last_rebal_reason'] = 'v24_migration'
     state['rebalancing_needed'] = True  # 첫 실행 정합 위해 강제 리밸
     print(f'  ✓ keep={keep} n_snap={n_snap_new} bar_counter=0 last_bar_ts=None rebalancing_needed=True')
     return state
 
 
 def migrate_coin_fut(state: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
-    """binance_state.json (V22 → V23 fut)."""
+    """binance_state.json (V22 → V24 fut)."""
     strategies = state.get('strategies', {})
     keep = target['keep_member']
     n_snap_new = target['n_snapshots']
@@ -149,15 +149,15 @@ def migrate_coin_fut(state: Dict[str, Any], target: Dict[str, Any]) -> Dict[str,
     strategies[keep] = keep_state
 
     state['strategies'] = strategies
-    state['schema_version'] = 'V23'
-    state['last_rebal_reason'] = 'v23_migration'
+    state['schema_version'] = 'V24'
+    state['last_rebal_reason'] = 'v24_migration'
     state['rebalancing_needed'] = True
     print(f'  ✓ keep={keep} n_snap={n_snap_new} bar_counter=0 last_bar_ts=None rebalancing_needed=True')
     return state
 
 
 def migrate_stock(state: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
-    """kis_trade_state.json (V22 → V23 stock).
+    """kis_trade_state.json (V22 → V24 stock).
 
     snap-based 3-tranche 는 유지 (n=3). snap_period 만 126→69, stagger 42→23.
     snapshots 의 last_rebal_date 은 stagger 변경 반영해 재계산.
@@ -180,9 +180,9 @@ def migrate_stock(state: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, An
         print(f'  - snap{snap_id}: last_rebal_date = {new_date} (강제 재정렬)')
 
     state['snapshots'] = snapshots
-    state['schema_version'] = 'V23'
-    state['last_rebal_reason'] = 'v23_migration'
-    print(f'  ✓ stock V23: snap_period={target["snap_period_days"]} stagger={target["snap_stagger_days"]} n={target["n_snaps"]}')
+    state['schema_version'] = 'V24'
+    state['last_rebal_reason'] = 'v24_migration'
+    print(f'  ✓ stock V24: snap_period={target["snap_period_days"]} stagger={target["snap_stagger_days"]} n={target["n_snaps"]}')
     return state
 
 
@@ -247,7 +247,7 @@ def main():
         print('No state files found. 종료.')
         sys.exit(1)
 
-    print(f'== V22 → V23 마이그레이션 ({"dry-run" if args.dry_run else "APPLY"}) ts={ts} ==')
+    print(f'== V22 → V24 마이그레이션 ({"dry-run" if args.dry_run else "APPLY"}) ts={ts} ==')
     for kind, path in files.items():
         print(f'\n[{kind}] {path}')
         state = load_json(path)
@@ -260,11 +260,11 @@ def main():
             print(f'  백업: {bak}')
 
         if kind == 'coin_spot':
-            new_state = migrate_coin_spot(state, V23_COIN_SPOT_TARGET)
+            new_state = migrate_coin_spot(state, V24_COIN_SPOT_TARGET)
         elif kind == 'coin_fut':
-            new_state = migrate_coin_fut(state, V23_COIN_FUT_TARGET)
+            new_state = migrate_coin_fut(state, V24_COIN_FUT_TARGET)
         elif kind == 'stock':
-            new_state = migrate_stock(state, V23_STOCK_TARGET)
+            new_state = migrate_stock(state, V24_STOCK_TARGET)
         else:
             print(f'  unknown kind: {kind}')
             continue

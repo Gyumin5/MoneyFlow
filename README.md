@@ -169,7 +169,6 @@ MoneyFlow/
 │   ├── legacy/backtest_official.py   과거 통합 백테스트
 │   ├── legacy/coin_engine.py         V18 계열 코인 엔진
 │   ├── legacy/coin_helpers.py        V18 계열 코인 헬퍼
-│   ├── legacy/coin_dd_exit.py        V18 DD exit
 │   ├── legacy/coin_backtest_howto.md 코인 V18 설명
 │   ├── legacy/daily_history.py       과거 일별 히스토리 빌더
 │   ├── legacy/run_portfolio_backtest.py 과거 포트폴리오 백테스트
@@ -222,7 +221,7 @@ MoneyFlow/
 ## 핵심 설계 원칙
 
 1. **Look-Ahead Bias 금지**: 시그널은 t-1 종가, 체결은 t일 가격
-2. **매일 루프**: 월간 전략이라도 매일 상태 점검 (Crash/DD/Blacklist)
+2. **매일 루프**: 월간 전략이라도 매일 상태 점검 (V24 = 가드 없음, canary + drift 만)
 3. **과적합 방지**: 10-anchor 평균, 파라미터 plateau 확인, 다기간 일관성
 4. **상태 관리**: `trade_state.json`, `signal_state.json`은 전략 상태 (단순 캐시 아님)
 5. **Single Source of Truth**: 전략 변경 시 백테스트/실매매/추천/매뉴얼 동시 수정

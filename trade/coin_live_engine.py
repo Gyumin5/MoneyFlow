@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Cap Defend 현물 라이브 엔진 (V23).
+"""Cap Defend 현물 라이브 엔진 (V24).
 
-V23 (2026-04-30): 1D 단일 멤버 D_SMA42 (snap=217봉, n_snap=7, drift_threshold=0.10).
+V24 (2026-04-30): 1D 단일 멤버 D_SMA42 (snap=217봉, n_snap=7, drift_threshold=0.10).
 바이낸스 spot kline에서 신호 계산 → 업비트 KRW 체결 (executor_coin.py에서 수행).
 
-V23 변경 (vs V22):
+V24 변경 (vs V22):
 - 1D + 4h 2멤버 → 1D 단일 멤버 (4h 멤버 제거)
 - snap_interval_bars 60 → 217 (3.6배 확장, 7-tranche stagger)
 - n_snapshots 3 → 7
@@ -14,7 +14,7 @@ V23 변경 (vs V22):
 
 가드 없음: gap/exclusion 가드 전면 제거. 앙상블 분산 + Upbit warning/delisting 필터.
 
-drift 트리거 (V23 신규):
+drift 트리거 (V24 신규):
 - 매 D봉 닫힘 시각 cur_w 와 target_w 의 half_turnover 계산
 - half_turnover >= drift_threshold(0.10) AND canary_on AND not crash_cooldown 시 추가 발화
 - snap_fire OR drift_fire 면 리밸 발화 (기존: snap_fire 만)
@@ -25,7 +25,7 @@ drift 트리거 (V23 신규):
 - 엔진 내부 현금 키는 'CASH' (대문자). executor로 넘어갈 때 'Cash' (소문자) 정규화.
 - 유니버스: CoinGecko Top40 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
 - Freshness: expected_last_bar_ts 일치 체크
-- Schema version: V23 (state['schema_version'] = 'V23')
+- Schema version: V24 (state['schema_version'] = 'V24')
 """
 
 from __future__ import annotations
@@ -63,8 +63,10 @@ HARDCODED_FALLBACK = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK',
 
 UPBIT_MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all?is_details=true'
 
-# V23 멤버 설정 (1D 단일, snap=217봉×7, drift 0.10, 2026-04-30 확정)
-SCHEMA_VERSION = 'V23'
+# V24 멤버 설정 (1D 단일, snap=217봉×7, drift 0.10, 2026-04-30 확정)
+# V24 (2026-05-27): refill v2 도입 — drift fire 시 mom2 음수 슬롯을 fresh healthy 로 교체
+SCHEMA_VERSION = 'V24'
+REFILL_ENABLED = True  # False 로 토글 시 V23 동작 (refill 비활성)
 DRIFT_THRESHOLD_SPOT = 0.10  # half-turnover 트리거 임계값
 DRIFT_ENABLED = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
 
@@ -73,8 +75,8 @@ MEMBER_D_SMA42 = {
     'sma_bars': 42,
     'mom_short_bars': 20,
     'mom_long_bars': 127,
-    'snap_interval_bars': 217,   # V23: 7*31 (stagger 31)
-    'n_snapshots': 7,            # V23: 3 → 7
+    'snap_interval_bars': 217,   # V24: 7*31 (stagger 31)
+    'n_snapshots': 7,            # V24: 3 → 7
     'canary_hyst': 0.015,
     'health_mode': 'mom2vol',
     'vol_mode': 'daily',
@@ -93,7 +95,7 @@ ENSEMBLE_WEIGHTS = {
 }
 
 # 각 interval별 최소 가져올 봉 수
-# V23: D 단일 (4h 제거). SMA42 + Mom127 + snap217 + vol90 → 최소 ~344. 500 충분
+# V24: D 단일 (4h 제거). SMA42 + Mom127 + snap217 + vol90 → 최소 ~344. 500 충분
 KLINE_LIMITS = {
     'D': 500,
 }
@@ -714,7 +716,7 @@ def combine_ensemble(member_targets: Dict[str, Dict[str, float]],
 
 
 
-# ─── V23 drift 트리거 유틸 ───
+# ─── V24 drift 트리거 유틸 ───
 def half_turnover(cur_w: Dict[str, float], tgt_w: Dict[str, float]) -> float:
     """sleeve-level half-turnover. Cash/CASH 모두 동일 키로 정규화 후 계산.
 
@@ -729,6 +731,102 @@ def half_turnover(cur_w: Dict[str, float], tgt_w: Dict[str, float]) -> float:
     a, b = _norm(cur_w), _norm(tgt_w)
     keys = set(a) | set(b)
     return sum(abs(b.get(k, 0.0) - a.get(k, 0.0)) for k in keys) / 2
+
+
+def _apply_refill_v2_to_state(state: Dict, members_cfg: Dict,
+                                bars_by_member: Dict[str, Dict[str, pd.DataFrame]],
+                                combined: Dict[str, float]) -> Dict[str, float]:
+    """V24 refill v2 — drift fire 시점에 각 멤버 snapshot 의 mom2 음수 코인 자리를
+    fresh healthy 코인으로 교체. 모든 멤버에 적용 후 combined 재계산해서 반환.
+
+    Fail 기준: mom_short<0 AND mom_long<0 (vol 미포함).
+    교체 대상: fresh healthy_pool (mom_short>0 AND mom_long>0) 중 snapshot 에 없는 종목.
+    """
+    ms_all = state.setdefault('members', {})
+    n_members = len(members_cfg)
+    new_combined: Dict[str, float] = {}
+
+    for mname, cfg in members_cfg.items():
+        bars = bars_by_member.get(mname, {})
+        if not bars:
+            continue
+        mom_s = cfg['mom_short_bars']
+        mom_l = cfg['mom_long_bars']
+        mstate = ms_all.get(mname, {})
+        snapshots = mstate.get('snapshots') or []
+        if not snapshots:
+            continue
+
+        def _is_failed(coin: str) -> bool:
+            df = bars.get(coin)
+            if df is None or df.empty:
+                return False  # 데이터 없으면 보수적으로 keep
+            c = df['Close'].values
+            if len(c) < max(mom_s, mom_l) + 1:
+                return False
+            ms = _calc_mom(c, mom_s)
+            ml = _calc_mom(c, mom_l)
+            return ms < 0 and ml < 0
+
+        # fresh healthy pool (mom2 양수). tie-break: 심볼 오름차순으로 결정성 보장
+        healthy_pool: List[Tuple[str, float]] = []
+        for coin, df in bars.items():
+            if coin == 'BTC':
+                continue
+            c = df['Close'].values
+            if len(c) < max(mom_s, mom_l) + 1:
+                continue
+            ms = _calc_mom(c, mom_s)
+            ml = _calc_mom(c, mom_l)
+            if ms > 0 and ml > 0:
+                healthy_pool.append((coin, ms))
+        healthy_pool.sort(key=lambda x: (-x[1], x[0]))
+        healthy_sorted = [c for c, _ in healthy_pool]
+
+        # 각 snapshot 처리
+        new_snapshots = []
+        for snap in snapshots:
+            sn_coins = sorted([c for c in snap if c.upper() != 'CASH'])
+            new_sn: Dict[str, float] = {}
+            replaced = 0.0
+            for c in sn_coins:
+                if _is_failed(c):
+                    replaced += float(snap.get(c, 0.0))
+                else:
+                    new_sn[c] = float(snap.get(c, 0.0))
+            cash_keys = [k for k in snap if k.upper() == 'CASH']
+            cash_w = sum(float(snap.get(k, 0.0)) for k in cash_keys)
+            new_sn['CASH'] = cash_w
+            if replaced > 0:
+                fresh_picks = [c for c in healthy_sorted if c not in new_sn]
+                n_failed = len(sn_coins) - sum(1 for k in new_sn if k.upper() != 'CASH')
+                n_failed = max(1, n_failed)
+                if fresh_picks:
+                    picks = fresh_picks[:n_failed]
+                    w_per = replaced / len(picks)
+                    for c in picks:
+                        new_sn[c] = new_sn.get(c, 0.0) + w_per
+                else:
+                    new_sn['CASH'] = new_sn.get('CASH', 0.0) + replaced
+            new_snapshots.append(new_sn)
+
+        # state 에 반영
+        mstate['snapshots'] = new_snapshots
+        ms_all[mname] = mstate
+
+        # combined 누적 (모든 멤버 동등 가중)
+        for snap in new_snapshots:
+            for t, w in snap.items():
+                key = 'CASH' if t.upper() == 'CASH' else t
+                new_combined[key] = new_combined.get(key, 0.0) + (w / len(new_snapshots)) / n_members
+
+    # 정규화
+    total = sum(new_combined.values())
+    if total > 0:
+        new_combined = {k: v / total for k, v in new_combined.items()}
+    else:
+        new_combined = {'CASH': 1.0}
+    return new_combined
 
 
 def evaluate_drift_fire(cur_w: Dict[str, float], tgt_w: Dict[str, float],
@@ -754,7 +852,7 @@ class EngineResult:
     universe: List[str]
     universe_meta: Dict
     alerts: List[str]
-    # V23 신규: drift 트리거 평가 결과 (cur_w 주어진 경우만)
+    # V24 신규: drift 트리거 평가 결과 (cur_w 주어진 경우만)
     drift_fire: bool = False
     drift_half_turnover: float = 0.0
     drift_threshold: float = DRIFT_THRESHOLD_SPOT
@@ -873,6 +971,9 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     # 가드 제거 (2026-04-21): 기존 state의 excluded_coins는 이후 save 때 자연 소거.
     state.pop('excluded_coins', None)
 
+    # V24 refill v2 용 — 각 멤버 bars 캐시 (drift fire 시점에 사용)
+    member_bars_cache: Dict[str, Dict[str, pd.DataFrame]] = {}
+
     for mname, cfg in MEMBERS.items():
         interval = cfg['interval']
         # 모든 (warning 제외된) universe 코인 + BTC 데이터 fetch
@@ -904,6 +1005,9 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         mem_state = MemberState.from_dict(ms_all.get(mname, {}))
         res = compute_member_target(mname, cfg, bars, effective_universe, mem_state, now_utc)
 
+        # V24 refill v2 — bars 캐시
+        member_bars_cache[mname] = bars
+
         member_targets[mname] = res.target
         fresh_map[mname] = res.fresh
         new_bar_map[mname] = res.new_bar
@@ -924,12 +1028,12 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     }
     state['last_target_snapshot'] = {**combined, '_ts': to_utc_iso(now_utc)}
     state['last_run_ts'] = to_utc_iso(now_utc)
-    state['schema_version'] = SCHEMA_VERSION  # V23 마이그레이션 마크
+    state['schema_version'] = SCHEMA_VERSION  # V24 마이그레이션 마크
 
     all_fresh = all(fresh_map.values()) if fresh_map else False
     any_new = any(new_bar_map.values()) if new_bar_map else False
 
-    # 6) V23 drift 트리거 평가 (cur_w 주어진 경우만, 정보용; 실제 발화 결정은 호출자)
+    # 6) V24 drift 트리거 평가 (cur_w 주어진 경우만, 정보용; 실제 발화 결정은 호출자)
     drift_fire_b = False
     drift_ht = 0.0
     if cur_w is not None:
@@ -938,6 +1042,16 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
                  drift_ht, DRIFT_THRESHOLD_SPOT, drift_fire_b, DRIFT_ENABLED)
         if not DRIFT_ENABLED:
             drift_fire_b = False  # snap-only fallback
+
+    # 6b) V24 refill v2 (drift fire 시점에 mom2 음수 슬롯 교체)
+    if drift_fire_b and REFILL_ENABLED:
+        try:
+            combined = _apply_refill_v2_to_state(state, MEMBERS, member_bars_cache, combined)
+            log.info('refill v2 applied: combined updated, n_keys=%d', len(combined))
+            # state 갱신 반영
+            state['last_target_snapshot'] = {**combined, '_ts': to_utc_iso(now_utc)}
+        except Exception as e:
+            log.warning('refill v2 skipped due to error: %s', e)
 
     return EngineResult(
         combined_target=combined,

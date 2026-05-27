@@ -7,9 +7,6 @@
 - 선정: 시총순 Top N → Greedy Absorption
 - 비중: EW + Cap 33%
 - 3-snapshot merge (앵커일: Day 1/10/19)
-- DD Exit (60d peak -25%)
-- Blacklist (-15% daily → 7일 제외)
-- Crash Breaker (BTC -10% → 3일 현금)
 - Drift 리밸런싱 (10% half-turnover)
 - PFD (플립 후 5일 재평가)
 - 격리마진 청산 (Low/High)
@@ -208,35 +205,27 @@ def calc_vol_bars(close_arr, lookback_bars, bars_per_year=8760):
 # ─── 메인 엔진 ───
 # ⚠ V21 (ENS_fut_L3_k3_12652d57) 재현 시 반드시 universe_size=3 명시할 것 (실전 live: UNIVERSE_SIZE=3).
 # 기본값 5는 V18/V19 시절 호환. V21 관련 스크립트에서 3으로 override 필수.
-def run(bars, funding, interval='1h', leverage=1.0,
-        universe_size=5, selection='greedy', cap=1/3,
-        tx_cost=0.0004, maint_rate=0.004,
-        # 윈도우: _days 또는 _bars 중 하나만 지정. _bars 우선.
-        sma_days=50, mom_short_days=30, mom_long_days=90, vol_days=90,
+def run(bars, funding, interval='D', leverage=3.0,
+        universe_size=3, selection='greedy', cap=1/3,
+        tx_cost=0.0006, maint_rate=0.004,
+        # V24 라이브 spec default (2026-05-27 정정)
+        sma_days=42, mom_short_days=18, mom_long_days=127, vol_days=90,
         sma_bars=0, mom_short_bars=0, mom_long_bars=0, vol_bars=0,
         canary_hyst=0.015,
-        dd_lookback=60, dd_threshold=-0.25,
-        dd_bars_override=0,  # 0이면 dd_lookback*bpd 사용
-        bl_drop=-0.15, bl_days=7,
-        bl_bars_override=0,
-        drift_threshold=0.10, post_flip_delay=5,
+        drift_threshold=0.03, post_flip_delay=5,
         daily_gate=False,
-        health_mode='mom2vol',  # 'mom2vol'(기본), 'mom1vol', 'mom1', 'mom2', 'vol', 'none'
-        vol_mode='daily',  # 'daily'(일봉 리샘플) or 'bar'(순수 봉 기반 연환산)
-        vol_threshold=0.05,  # vol_mode='daily' 기본. bar mode면 연환산 기준 (예: 0.80)
-        n_snapshots=3,  # 스냅샷 수 (3=월3회, 6=월6회, 12=거의매일)
-        snap_interval_bars=0,  # 0=달력 기반, >0=봉 기반 앵커 간격
+        health_mode='mom2vol',
+        vol_mode='daily',
+        vol_threshold=0.05,
+        n_snapshots=5,  # V24 spec
+        snap_interval_bars=95,  # V24 spec
         phase_offset_bars=0,  # bar_i 에 더할 위상 오프셋 (멤버별 비동기화 테스트용, 기본 0 = 기존 동작)
-        crash_threshold=-0.10,
-        crash_lookback_bars=0,  # 0=bpd(일간), >0=N봉 누적 수익률
-        crash_cool_override=0,  # 0=3*bpd, >0=직접 봉 수
-        bl_lookback_bars=0,  # 0=bpd(일간), >0=N봉 누적 수익률
         pfd_bars_override=0,  # 0=post_flip_delay*bpd, >0=직접 봉 수
         stop_kind='none',  # none, prev_close_pct, highest_close_since_entry_pct, highest_high_since_entry_pct, rolling_high_close_pct, rolling_high_high_pct
         stop_pct=0.0,
         stop_lookback_bars=0,
         initial_capital=10000.0,
-        start_date='2020-10-01', end_date='2026-03-28',
+        start_date='2020-10-01', end_date='2026-05-13',
         fill_mode='open',  # 'open'(unified_backtest 기준) | 'close'(legacy)
         external_target_schedule=None,  # dict[date -> {'target':dict, 'rebal':bool}] (앙상블 BT 용)
         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
@@ -258,12 +247,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
     mom30 = mom_short_bars if mom_short_bars > 0 else mom_short_days * bpd
     mom90 = mom_long_bars if mom_long_bars > 0 else mom_long_days * bpd
     _vol_bars = vol_bars if vol_bars > 0 else vol_days * bpd
-    dd_bars = dd_bars_override if dd_bars_override > 0 else dd_lookback * bpd
-    bl_cooldown = bl_bars_override if bl_bars_override > 0 else bl_days * bpd
     pfd_bars = pfd_bars_override if pfd_bars_override > 0 else post_flip_delay * bpd
-    crash_cool_bars = crash_cool_override if crash_cool_override > 0 else 3 * bpd
-    _crash_lookback = crash_lookback_bars if crash_lookback_bars > 0 else bpd
-    _bl_lookback = bl_lookback_bars if bl_lookback_bars > 0 else bpd
 
     # State
     capital = initial_capital
@@ -279,12 +263,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
     else:
         snap_days = [1 + int(i * 28 / n_snapshots) for i in range(n_snapshots)]
     snap_done = {}
-    blacklist = {}  # {coin: remaining_bars}
 
     prev_canary = False
     canary_on_bar = None
     pfd_done = True
-    crash_cooldown = 0
     rebal_count = 0
     liq_count = 0
     liq_log = []
@@ -409,10 +391,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
             return None
         return liq_price
 
-    def _execute_rebalance(target_weights, date):
-        """Delta 리밸런싱 with 선물 비용."""
+    def _execute_rebalance(target_weights, date, pv_date=None):
+        """Delta 리밸런싱 with 선물 비용. pv_date=None 이면 date 사용 (legacy)."""
         nonlocal capital, trade_count
-        pv = _port_val(date)
+        pv = _port_val(pv_date if pv_date is not None else date)
         if pv <= 0:
             return
 
@@ -501,8 +483,6 @@ def run(bars, funding, interval='1h', leverage=1.0,
         healthy = []
         min_bars = max(mom30, mom90, _vol_bars, sma_period)
         for coin in mcap_order:
-            if coin in blacklist:
-                continue
             df = bars.get(coin)
             if df is None:
                 continue
@@ -607,7 +587,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         if btc_i < sma_period or btc_i_prev < sma_period:
             continue
 
-        # daily_gate: 일간 개념 체크(DD/BL/drift)를 UTC 00시 바에서만 실행
+        # daily_gate: 일간 개념 체크(BL/drift)를 UTC 00시 바에서만 실행
         is_daily_bar = (not daily_gate) or (bpd == 1) or (hasattr(date, 'hour') and date.hour == 0)
 
         cur_month = date.strftime('%Y-%m')
@@ -679,72 +659,6 @@ def run(bars, funding, interval='1h', leverage=1.0,
             pfd_done = False
         elif not canary_on and canary_flipped:
             canary_on_bar = None
-
-        # ── Blacklist 감소 ──
-        for coin in list(blacklist.keys()):
-            blacklist[coin] -= 1
-            if blacklist[coin] <= 0:
-                del blacklist[coin]
-
-        # ── Crash Breaker (봉 기반: _crash_lookback봉 전 대비) ──
-        if crash_cooldown > 0:
-            crash_cooldown -= 1
-        elif btc_i_prev >= _crash_lookback:
-            btc_ret = btc_close[btc_i_prev] / btc_close[btc_i_prev - _crash_lookback] - 1
-            if btc_ret <= crash_threshold:
-                # 전량 청산
-                for coin in list(holdings.keys()):
-                    ci = bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1
-                    cur = get_close(bars, coin, ci)
-                    if cur > 0:
-                        pnl = holdings[coin] * (cur - entry_prices[coin])
-                        capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
-                holdings.clear(); entry_prices.clear(); margins.clear(); entry_bar_index.clear()
-                for si in range(n_snapshots):
-                    snapshots[si] = {'CASH': 1.0}
-                crash_cooldown = crash_cool_bars
-                rebal_count += 1
-
-        # ── DD Exit (daily_gate 시 일 1회만) ──
-        if dd_lookback > 0 and canary_on and holdings and not canary_flipped and is_daily_bar:
-            for coin in list(holdings.keys()):
-                df = bars.get(coin)
-                if df is None:
-                    continue
-                ci = df.index.get_indexer([date], method='ffill')[0]
-                if ci < dd_bars:
-                    continue
-                c = df['Close'].values
-                peak = np.max(c[ci - dd_bars:ci])
-                if peak > 0 and (c[ci] / peak - 1) <= dd_threshold:
-                    cur = c[ci]
-                    slip = SLIPPAGE_MAP.get(coin, 0.0005)
-                    pnl = holdings[coin] * (cur * (1 - slip) - entry_prices[coin])
-                    capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
-                    del holdings[coin]; del entry_prices[coin]; del margins[coin]
-                    entry_bar_index.pop(coin, None)
-                    trade_count += 1
-
-        # ── Blacklist (봉 기반: _bl_lookback봉 전 대비) ──
-        if bl_drop < 0 and canary_on and holdings and is_daily_bar:
-            for coin in list(holdings.keys()):
-                df = bars.get(coin)
-                if df is None:
-                    continue
-                ci = df.index.get_indexer([date], method='ffill')[0]
-                if ci < _bl_lookback:
-                    continue
-                c = df['Close'].values
-                bar_ret = c[ci] / c[ci - _bl_lookback] - 1
-                if bar_ret <= bl_drop:
-                    cur = c[ci]
-                    slip = SLIPPAGE_MAP.get(coin, 0.0005)
-                    pnl = holdings[coin] * (cur * (1 - slip) - entry_prices[coin])
-                    capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
-                    del holdings[coin]; del entry_prices[coin]; del margins[coin]
-                    entry_bar_index.pop(coin, None)
-                    blacklist[coin] = bl_cooldown
-                    trade_count += 1
 
         # ── 시그널 → 스냅샷 갱신 ──
         need_rebal = False
@@ -824,12 +738,57 @@ def run(bars, funding, interval='1h', leverage=1.0,
             need_rebal = ext_rebal
 
         # ── Drift (daily_gate 시 일 1회만) ──
+        # 변종: DRIFT_HEALTH_MODE = 'off' | 'refill' | 'cash'
         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
-            if _half_turnover(_current_weights(date), combined) >= drift_threshold:
+            if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
                 need_rebal = True
-
-        if crash_cooldown > 0:
-            need_rebal = False
+                # 변종: 헬스 fail 슬롯 처리 (mode != off 일 때만)
+                import os as _os
+                _drift_mode = _os.environ.get('DRIFT_HEALTH_MODE', 'refill')  # V24 default ON
+                _drift_refill = _drift_mode in ('refill', 'cash')
+                _drift_cash_only = _drift_mode == 'cash'
+                if _drift_refill:
+                    # 사용자 결정: 두 mom 모두 음수면 fail (vol 무시).
+                    # 메모리 Do-Not-Repeat: health-fail 에 vol 포함 금지.
+                    def _is_failed(coin):
+                        df_c = bars.get(coin)
+                        if df_c is None: return True
+                        ci_c = df_c.index.get_indexer([prev_date], method='ffill')[0]
+                        if ci_c < 0 or ci_c < max(mom30, mom90): return True
+                        c_arr = df_c['Close'].values[:ci_c+1]
+                        ms = calc_mom(c_arr, mom30)
+                        ml = calc_mom(c_arr, mom90)
+                        return ms < 0 and ml < 0
+                    fresh = _compute_weights(prev_date)
+                    healthy_coins = sorted([c for c in fresh.keys() if c != 'CASH'])
+                    for si in range(n_snapshots):
+                        sn = snapshots[si]
+                        sn_coins = sorted([c for c in sn.keys() if c != 'CASH'])
+                        new_sn = {}
+                        replaced_w = 0.0
+                        for c in sn_coins:
+                            if not _is_failed(c):
+                                new_sn[c] = sn[c]
+                            else:
+                                replaced_w += sn[c]
+                        new_sn['CASH'] = sn.get('CASH', 0)
+                        if replaced_w > 0:
+                            if _drift_cash_only:
+                                new_sn['CASH'] = new_sn.get('CASH', 0) + replaced_w
+                            else:
+                                already = set(new_sn.keys())
+                                fresh_picks = [c for c in healthy_coins if c not in already]
+                                n_failed = max(1, len(sn_coins) - (len(new_sn) - 1))
+                                if fresh_picks:
+                                    picks = fresh_picks[:n_failed]
+                                    w_per = replaced_w / len(picks)
+                                    for c in picks:
+                                        new_sn[c] = new_sn.get(c, 0) + w_per
+                                else:
+                                    new_sn['CASH'] = new_sn.get('CASH', 0) + replaced_w
+                        snapshots[si] = new_sn
+                    # combined 재계산
+                    combined = _merge_snapshots()
 
         # ── trace 기록 ──
         if _trace is not None:
@@ -843,8 +802,23 @@ def run(bars, funding, interval='1h', leverage=1.0,
 
         # ── 리밸런싱 실행 ──
         if need_rebal:
-            _execute_rebalance(combined, date)
+            _execute_rebalance(combined, date, pv_date=prev_date)
             rebal_count += 1
+            # 신규/추가된 포지션 same-bar liq 검사 (entry 시 같은 봉 Low 이미 알려진 경우 fairness)
+            for coin in list(holdings.keys()):
+                ci2 = btc_idx_map.get(date, -1) if coin == 'BTC' else (bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1)
+                low2 = get_low(bars, coin, ci2)
+                if low2 <= 0: continue
+                liq_p = _get_liq_price(coin) if leverage > 1 else None
+                if liq_p is not None and low2 <= liq_p:
+                    pnl_at_low = holdings[coin] * (low2 - entry_prices[coin])
+                    eq_at = margins[coin] + pnl_at_low
+                    liq_fee = max(eq_at, 0) * 0.015
+                    returned = max(eq_at - liq_fee, 0)
+                    capital += returned
+                    del holdings[coin]; del entry_prices[coin]; del margins[coin]
+                    entry_bar_index.pop(coin, None)
+                    liq_count += 1
 
         pv_list.append({'Date': date, 'Value': _port_val(date)})
         prev_canary = canary_on
@@ -885,7 +859,7 @@ if __name__ == '__main__':
     print("  헬스: Mom30>0 AND Mom90>0 AND Vol90≤5%")
     print("  선정: 시총순 Top5 → Greedy Absorption  (V18 기본값, V21은 Top3 필수 → 이 main 블록 아님)")
     print("  비중: EW + Cap 33%")
-    print("  리스크: DD -25%(60d), BL -15%(7d), Crash BTC-10%(3d)")
+    print("  리스크: 가드 없음 (V24)")
     print("  3-snapshot Day 1/10/19, Drift 10%, PFD 5d")
     print("  윈도우: 동일 기간 유지 (SMA 50일, Mom 30/90일 → 바 단위 자동 변환)")
     print("  비용: tx 0.04%, 시총별 슬리피지, 실제 펀딩레이트")
