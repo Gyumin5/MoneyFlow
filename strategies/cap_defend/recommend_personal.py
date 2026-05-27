@@ -2292,12 +2292,14 @@ if __name__ == "__main__":
             tot = float(acct.get('total_krw', 0) or 0)
             if tot <= 0: return {}
             w = {}
+            invested = 0.0
             for h in (acct.get('holdings') or []):
-                tk = (h.get('ticker') or '').upper().replace('-USD', '')
-                v = float(h.get('value_krw', h.get('weight_value_krw', 0)) or 0)
+                tk = (h.get('ticker') or h.get('symbol') or '').upper().replace('-USD', '')
+                v = float(h.get('krw', h.get('value_krw', h.get('weight_value_krw', 0))) or 0)
                 if tk and v > 0:
                     w[tk] = v / tot
-            cash_v = float(acct.get('krw_balance', acct.get('cash_krw', 0)) or 0)
+                    invested += v
+            cash_v = max(0.0, tot - invested)
             if cash_v > 0:
                 w['Cash'] = cash_v / tot
             return w
@@ -2364,20 +2366,7 @@ if __name__ == "__main__":
         date_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]
 
         def _cur_weights(acct):
-            """sleeve 보유 비중 dict {ticker: weight} (cash 포함, 비중 0~1)."""
-            if not acct: return {}
-            tot = float(acct.get('total_krw', 0) or 0)
-            if tot <= 0: return {}
-            w = {}
-            for h in (acct.get('holdings') or []):
-                tk = (h.get('ticker') or '').upper().replace('-USD', '')
-                v = float(h.get('value_krw', h.get('weight_value_krw', 0)) or 0)
-                if tk and v > 0:
-                    w[tk] = v / tot
-            cash_v = float(acct.get('krw_balance', acct.get('cash_krw', 0)) or 0)
-            if cash_v > 0:
-                w['Cash'] = cash_v / tot
-            return w
+            return _cur_weights_early(acct)
 
         _cur_stock = _cur_weights(accts.get('stock_kis') if 'accts' in locals() else None)
         _cur_spot = _cur_weights(accts.get('coin_upbit') if 'accts' in locals() else None)
