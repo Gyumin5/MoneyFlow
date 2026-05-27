@@ -291,7 +291,7 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
     log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V23: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
-    FETCH_LIMIT = 100 
+    FETCH_LIMIT = 40
     MIN_TRADE_VALUE_KRW = 1_000_000_000 
     DAYS_TO_CHECK = 260 
     headers = {"accept": "application/json", "User-Agent": "Mozilla/5.0"}
