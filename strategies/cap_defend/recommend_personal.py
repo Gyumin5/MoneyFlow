@@ -2316,7 +2316,14 @@ if __name__ == "__main__":
                 lines.append(f'  {tk}: 목표 {tw*100:.1f}% / 보유 {cw*100:.1f}%')
             return lines
 
-        _cur_fut_early = _cur_weights_early(accts.get('coin_binance') if 'accts' in locals() else None)
+        # accts (live_overview) 를 여기서 미리 조회 — target lines 에 보유 % 표시용
+        try:
+            _api_early = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
+            _ov_early = requests.get(f"{_api_early}/api/assets/live_overview", timeout=60).json()
+            accts = _ov_early.get("accounts", {}) or {}
+        except Exception:
+            accts = {}
+        _cur_fut_early = _cur_weights_early(accts.get('coin_binance'))
 
         # 선물 state 읽기 (binance_state.json)
         fut_lines = ['🎯 바이낸스 목표']
