@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-바이낸스 선물 자동매매 — V23 L3 단일 멤버 (2026-04-30 확정)
+바이낸스 선물 자동매매 — V24 L3 단일 멤버 (2026-04-30 확정)
 ========================================
-V23 신호:
+V24 신호:
 - D_SMA42:    (interval=D, SMA=42, Mom=18/127, mom2vol, daily vol 5%, Snap=95 bars, n_snap=5, drift=0.03)
 
-V23 변경 (vs V22):
+V24 변경 (vs V22):
 - 1D + 4h 2멤버 → 1D 단일 멤버 (4h 제거, snap=90→57)
-- drift_threshold = 0.03 (V23 갱신 05-04, 0.05 → 0.03 반응성 ↑)
+- drift_threshold = 0.03 (V24 갱신 05-04, 0.05 → 0.03 반응성 ↑)
 - ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}
 - cron 4h x 6 → 1d x 1 (09:05)
 
@@ -26,7 +26,7 @@ V23 변경 (vs V22):
 6. 현재 포지션과 비교 → delta 리밸런싱
 7. STOP 주문 없음 (sync_stop_orders는 early return)
 
-Schema version: V23 (state['schema_version'])
+Schema version: V24 (state['schema_version'])
 """
 
 import argparse
@@ -38,7 +38,7 @@ import sys
 import time
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -117,7 +117,7 @@ def _read_alloc_transit_cap_ratio_fut():
             continue
     return None
 
-# V23 전략/실행 파라미터 (1D 단일 멤버, drift=0.05, 2026-04-30 확정)
+# V24 전략/실행 파라미터 (1D 단일 멤버, drift=0.05, 2026-04-30 확정)
 # 고정 3배 레버리지, 가드 없음
 LEVERAGE_FLOOR = 3
 LEVERAGE_MID = 3
@@ -126,11 +126,12 @@ STOP_PCT = 0.0            # 가드 비활성
 STOP_GATE_CASH_THRESHOLD = 0.0  # cash_guard 비활성
 LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30  # 동적 lev 비활성이지만 상수 유지
 
-SCHEMA_VERSION = 'V23'
-DRIFT_THRESHOLD_FUT = 0.03  # V23 갱신 (05-04): 0.05 → 0.03
+SCHEMA_VERSION = 'V24'
+REFILL_ENABLED_FUT = True  # V24 refill v2 ON (drift fire 시 mom2 음수 슬롯 교체)
+DRIFT_THRESHOLD_FUT = 0.03  # V24 갱신 (05-04): 0.05 → 0.03
 DRIFT_ENABLED_FUT = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
 
-ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}  # V23: 단일 멤버
+ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}  # V24: 단일 멤버
 
 STRATEGIES = {
     'D_SMA42': {
@@ -141,9 +142,9 @@ STRATEGIES = {
         'health_mode': 'mom2vol',
         'vol_mode': 'daily',
         'vol_threshold': 0.05,
-        'snap_interval_bars': 95,    # V23 갱신 (05-04): 57 → 95 (5*19, stagger 19 유지)
+        'snap_interval_bars': 95,    # V24 갱신 (05-04): 57 → 95 (5*19, stagger 19 유지)
         'canary_hyst': 0.015,
-        'n_snapshots': 5,            # V23 갱신 (05-04): 3 → 5
+        'n_snapshots': 5,            # V24 갱신 (05-04): 3 → 5
     },
 }
 
@@ -411,7 +412,7 @@ def refresh_universe(client: Client, cache_dir: str = '/tmp') -> List[str]:
 
 def fetch_all_data(client: Client) -> Dict[str, Dict[str, pd.DataFrame]]:
     """모든 심볼의 D OHLCV 수집 + 1h (동적 레버리지 backup, 현재 비활성).
-    V23: D 단일 전략 (SMA42+mom127+snap57+vol90 → 500 bars 충분).
+    V24: D 단일 전략 (SMA42+mom127+snap57+vol90 → 500 bars 충분).
     1h 는 동적 레버리지 백업용, 비활성이지만 호환 위해 fetch 유지.
 
     BTC 는 canary 용 spot 가격으로 override (글로벌 표준 통일).
@@ -768,6 +769,95 @@ def combine_ensemble(targets: Dict[str, Dict[str, float]],
         for coin, cw in targets[strat_name].items():
             merged[coin] = merged.get(coin, 0) + cw * w
     return merged
+
+
+def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -> Dict[str, float]:
+    """V24 fut refill v2 — drift fire 시 각 전략의 snapshot 중 mom2 음수 코인 자리를
+    fresh healthy 로 교체. state['strategies'] 의 snapshots 를 in-place 수정한 후
+    재합산된 combined 를 반환.
+
+    Fail 기준: mom_short < 0 AND mom_long < 0 (vol 미포함, BT 일치).
+    """
+    bars = data.get('D', {})
+    if not bars:
+        return state.get('last_combined', {'CASH': 1.0})
+
+    strats = state.get('strategies', {})
+    new_combined: Dict[str, float] = {}
+    n_strats = max(1, len(STRATEGIES))
+
+    for strat_name, sp in STRATEGIES.items():
+        ss = strats.get(strat_name, {})
+        snaps = ss.get('snapshots') or []
+        if not snaps:
+            continue
+        mom_s = sp['mom_short_bars']
+        mom_l = sp['mom_long_bars']
+
+        def _is_failed(coin: str) -> bool:
+            df = bars.get(coin)
+            if df is None or df.empty:
+                return False
+            c = df['Close'].values
+            if len(c) < max(mom_s, mom_l) + 1:
+                return False
+            ms = calc_mom(c, mom_s)
+            ml = calc_mom(c, mom_l)
+            return ms < 0 and ml < 0
+
+        healthy_pool: List[Tuple[str, float]] = []
+        for coin, df in bars.items():
+            if coin == 'BTC':
+                continue
+            c = df['Close'].values
+            if len(c) < max(mom_s, mom_l) + 1:
+                continue
+            ms = calc_mom(c, mom_s)
+            ml = calc_mom(c, mom_l)
+            if ms > 0 and ml > 0:
+                healthy_pool.append((coin, ms))
+        # tie-break: 심볼 오름차순으로 결정성 보장
+        healthy_pool.sort(key=lambda x: (-x[1], x[0]))
+        healthy_sorted = [c for c, _ in healthy_pool]
+
+        new_snaps = []
+        for snap in snaps:
+            sn_coins = sorted([c for c in snap if c.upper() != 'CASH'])
+            new_sn: Dict[str, float] = {}
+            replaced = 0.0
+            for c in sn_coins:
+                if _is_failed(c):
+                    replaced += float(snap.get(c, 0.0))
+                else:
+                    new_sn[c] = float(snap.get(c, 0.0))
+            cash_w = sum(float(snap.get(k, 0.0)) for k in snap if k.upper() == 'CASH')
+            new_sn['CASH'] = cash_w
+            if replaced > 0:
+                fresh_picks = [c for c in healthy_sorted if c not in new_sn]
+                n_failed = len(sn_coins) - sum(1 for k in new_sn if k.upper() != 'CASH')
+                n_failed = max(1, n_failed)
+                if fresh_picks:
+                    picks = fresh_picks[:n_failed]
+                    w_per = replaced / len(picks)
+                    for c in picks:
+                        new_sn[c] = new_sn.get(c, 0.0) + w_per
+                else:
+                    new_sn['CASH'] = new_sn.get('CASH', 0.0) + replaced
+            new_snaps.append(new_sn)
+
+        ss['snapshots'] = new_snaps
+        n_snap = len(new_snaps) or 1
+        for snap in new_snaps:
+            for t, w in snap.items():
+                key = 'CASH' if t.upper() == 'CASH' else t
+                new_combined[key] = new_combined.get(key, 0.0) + (w / n_snap) / n_strats
+
+    total = sum(new_combined.values())
+    if total > 0:
+        new_combined = {k: v / total for k, v in new_combined.items()}
+    else:
+        new_combined = {'CASH': 1.0}
+    return new_combined
 
 
 # ─── 주문 실행 ───
@@ -1340,7 +1430,7 @@ def count_stop_orders(client: Client, symbols: Optional[List[str]] = None) -> in
 def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[str, pd.DataFrame],
                      target: Dict[str, float], order_alerts: Optional[List[str]] = None,
                      error_alerts: Optional[List[str]] = None):
-    """V22/V23 (가드 완전 제거): 스탑 주문 로직 없음.
+    """V22/V24 (가드 완전 제거): 스탑 주문 로직 없음.
 
     이전 배포에서 남았을 수 있는 잔존 스탑을 정리하고 즉시 반환.
     현재 UNIVERSE 밖 심볼에도 stale 스탑이 있을 수 있으므로
@@ -1353,7 +1443,7 @@ def sync_stop_orders(client: Client, positions: Dict[str, dict], data_1h: Dict[s
         if sym:
             cleanup_symbols.add(sym)
     cancel_stop_orders(client, sorted(cleanup_symbols))
-    log.info("STOP OFF (V23: 가드 완전 제거, 잔존 스탑 정리 %d심볼)", len(cleanup_symbols))
+    log.info("STOP OFF (V24: 가드 완전 제거, 잔존 스탑 정리 %d심볼)", len(cleanup_symbols))
 
 
 # ─── SQLite 자산 기록 ───
@@ -1401,7 +1491,7 @@ def main():
     client = Client(api_key, api_secret)
     state = load_state()
 
-    # cash_buffer: V23 (2026-05-26): fut_cash_buffer 키 우선, 없으면 legacy cash_buffer
+    # cash_buffer: V24 (2026-05-26): fut_cash_buffer 키 우선, 없으면 legacy cash_buffer
     global CASH_BUFFER
     CASH_BUFFER = float(state.get('fut_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
     log.info(f"cash_buffer (fut): {CASH_BUFFER:.0%}")
@@ -1432,7 +1522,7 @@ def main():
 
         lines = [f"📊 바이낸스 선물 일일 리포트 ({now})"]
         lines.append(f"총 자산: ${pv:.2f} ({pnl_pct:+.1f}%)")
-        lines.append(f"레버리지: 고정 3x (V23 1D 단일 D_SMA42 sn=95 n=5 drift=0.03)")
+        lines.append(f"레버리지: 고정 3x (V24 1D 단일 D_SMA42 sn=95 n=5 drift=0.03)")
 
         if positions:
             lines.append("\n포지션 (실질금액, notional/lev):")
@@ -1555,7 +1645,7 @@ def main():
         coins_combined = {k: f"{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0}
         log.info(f"합산: {coins_combined or 'CASH 100%'}")
 
-        # V23 drift 트리거: cur_w (자본금 기준 비중, real_weight 사용) vs target_w
+        # V24 drift 트리거: cur_w (자본금 기준 비중, real_weight 사용) vs target_w
         # half_turnover >= DRIFT_THRESHOLD_FUT(0.05) 이면 rebalancing_needed=True
         # alloc_transit cap (옵션 D): real_weight 분모를 effective_pv 로 scale
         _drift_cap_ratio = _read_alloc_transit_cap_ratio_fut()
@@ -1573,11 +1663,20 @@ def main():
         drift_fire_fut = ht_fut >= DRIFT_THRESHOLD_FUT
         if not DRIFT_ENABLED_FUT:
             drift_fire_fut = False  # snap-only fallback
-        log.info(f"V23 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.2f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT}")
+        log.info(f"V24 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.2f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT}")
         if drift_fire_fut and not state.get('rebalancing_needed', False):
             state['rebalancing_needed'] = True
             state['last_rebal_reason'] = 'drift'
-            log.info(f"  🔔 V23 drift 발화 (silent) → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
+            log.info(f"  🔔 V24 drift 발화 (silent) → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
+
+        # V24 refill v2 — drift fire 시 mom2 음수 슬롯 교체 후 combined 재계산
+        if drift_fire_fut and REFILL_ENABLED_FUT:
+            try:
+                combined = apply_refill_v2_fut(state, data)
+                coins_after = {k: f"{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0}
+                log.info(f"  🔁 V24 refill v2 적용: {coins_after or 'CASH 100%'}")
+            except Exception as e:
+                log.warning(f"refill v2 skipped: {e}")
 
         # 옵션 Z: cap_defend trigger (drift 와 별개)
         if _drift_cap_ratio is not None and _drift_cap_ratio < (1.0 - CAP_DEFEND_MIN_EXCESS):
@@ -1585,7 +1684,7 @@ def main():
                 state['rebalancing_needed'] = True
                 state['last_rebal_reason'] = 'cap_defend'
                 log.info(f"  🛡️ cap_defend trigger: cap_ratio={_drift_cap_ratio:.4f} < {1.0-CAP_DEFEND_MIN_EXCESS:.2f} → rebal 강제")
-            # V23: drift 알림 silent — Daily Report 09:15 가 통합 보고
+            # V24: drift 알림 silent — Daily Report 09:15 가 통합 보고
         # schema_version 마크
         state['schema_version'] = SCHEMA_VERSION
 
@@ -1663,10 +1762,10 @@ def main():
 
         elapsed = time.time() - t_start
         if args.trade:
-            # V23 통일 보고
+            # V24 통일 보고
             import sys as _sys, os as _os
             _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-            import v23_report as v23r
+            import v24_report as v24r
 
             kst_now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
             target_norm = {('Cash' if k == 'CASH' else k): v
@@ -1708,7 +1807,7 @@ def main():
             visible_positions = sum(1 for pos in positions_after.values()
                                      if pos.get('notional', 0.0) >= DISPLAY_DUST_NOTIONAL)
             status = {
-                'schema': 'V23',
+                'schema': 'V24',
                 '평가액': f'${pv_after:.2f}',
                 'ht': f'{ht_fut:.4f}',
                 'drift_threshold': f'{DRIFT_THRESHOLD_FUT:.2f}',
@@ -1721,10 +1820,10 @@ def main():
             if error_alerts:
                 extra = "⚠ 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10])
 
-            # V23: 정상 보고 silent — Daily Report 09:15 가 통합 보고. 오류만 즉시 알림.
+            # V24: 정상 보고 silent — Daily Report 09:15 가 통합 보고. 오류만 즉시 알림.
             if error_alerts:
                 send_telegram("⚠ 선물 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10]))
-            log.info(f"V23 fut report (silent): targets={target_norm} ht={ht_fut:.4f} fire={drift_fire_fut} pv=${pv_after:.2f}")
+            log.info(f"V24 fut report (silent): targets={target_norm} ht={ht_fut:.4f} fire={drift_fire_fut} pv=${pv_after:.2f}")
         log.info(f"=== 완료 ({elapsed:.1f}s) ===")
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)

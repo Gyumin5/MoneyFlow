@@ -278,6 +278,48 @@ def run_snapshot_ensemble(prices_dict, ind, params: SP,
             ht_drift = sum(abs(cur_w.get(k, 0.0) - combined.get(k, 0.0))
                            for k in all_keys) / 2
             if ht_drift >= drift_threshold:
+                # === Refill v2 변종 (2026-05-27) ===
+                # env STOCK_DRIFT_REFILL=refill|cash 일 때 drift fire 시점에
+                # snap_targets 안의 ETF 중 mom_short<0 AND mom_long<0 인 자리만 교체.
+                _drift_mode = os.environ.get('STOCK_DRIFT_REFILL', 'off')
+                if _drift_mode in ('refill', 'cash'):
+                    _mom_s_col = os.environ.get('STOCK_REFILL_MOM_SHORT', 'mom21')
+                    _mom_l_col = os.environ.get('STOCK_REFILL_MOM_LONG',  'mom126')
+                    def _stk_fail(tkr):
+                        ms = get_val(ind, tkr, prev_trading_date if prev_trading_date is not None else date, _mom_s_col)
+                        ml = get_val(ind, tkr, prev_trading_date if prev_trading_date is not None else date, _mom_l_col)
+                        if np.isnan(ms) or np.isnan(ml): return False
+                        return ms < 0 and ml < 0
+                    # fresh top zscore (positive mom 후보) 산출
+                    sig_d = prev_trading_date if prev_trading_date is not None else date
+                    fresh_target, _ = compute_target_with_canary(
+                        params, ind, sig_d, True, exclude_assets=None)
+                    healthy_pool = sorted([t for t in fresh_target.keys() if t != 'Cash'])
+                    for i in range(n_snap):
+                        st = snap_targets[i]
+                        new_st = {}
+                        replaced = 0.0
+                        for t, w in st.items():
+                            if t == 'Cash':
+                                new_st['Cash'] = new_st.get('Cash', 0.0) + w
+                            elif _stk_fail(t):
+                                replaced += w
+                            else:
+                                new_st[t] = w
+                        if replaced > 0:
+                            if _drift_mode == 'cash':
+                                new_st['Cash'] = new_st.get('Cash', 0.0) + replaced
+                            else:
+                                picks = [t for t in healthy_pool if t not in new_st]
+                                if picks:
+                                    w_per = replaced / len(picks[:max(1, sum(1 for k in st if k != 'Cash') - sum(1 for k in new_st if k != 'Cash'))])
+                                    n_fail = max(1, sum(1 for k in st if k != 'Cash') - sum(1 for k in new_st if k != 'Cash'))
+                                    for t in picks[:n_fail]:
+                                        new_st[t] = new_st.get(t, 0.0) + w_per
+                                else:
+                                    new_st['Cash'] = new_st.get('Cash', 0.0) + replaced
+                        snap_targets[i] = new_st
+                    combined = _ensemble_avg(snap_targets)
                 do_execute = combined
 
         if do_execute is not None:

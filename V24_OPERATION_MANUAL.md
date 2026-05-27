@@ -1,6 +1,6 @@
-# V23 운영 매뉴얼 (2026-04-30 확정)
+# V24 운영 매뉴얼 (2026-04-30 확정)
 
-V22 → V23. 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 단순화.
+V22 → V24. 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 단순화.
 
 ## 결정 근거 (요약)
 
@@ -16,12 +16,12 @@ AI 합의 (gemini + codex)
 
 ## 파라미터
 
-| 자산 | V22 | V23 |
+| 자산 | V22 | V24 |
 |---|---|---|
 | stock | sd=125, n=3, stagger=42 | sd=69, n=3, stagger=23 |
 | coin spot | D_SMA42 + H4_SMA240 EW (sn=60+360 동기) | D_SMA42 단일 sn=217×7 drift=0.10 |
 | coin fut | D_SMA42 + 4h_SMA240 EW (sn=90+540 동기, L3) | D_SMA42 단일 sn=95×5 drift=0.03 (L3) — 05-04 갱신 |
-| 자산배분 | 60/40/0 | 70/15/15 (V23 갱신 05-04, AI 균형 권고) |
+| 자산배분 | 60/40/0 | 70/15/15 (V24 갱신 05-04, AI 균형 권고) |
 | cron | 4h x 6 (9,13,17,21,1,5시) | 1d x 1 (09시) |
 
 차별화·서로소 충족
@@ -66,24 +66,24 @@ threshold
 - spot: 0.10
 - fut: 0.05
 
-## 코드 변경 요약 (V22 → V23)
+## 코드 변경 요약 (V22 → V24)
 
 라이브 엔진
-- trade/coin_live_engine.py: MEMBER_H4_SMA240 제거. MEMBER_D_SMA42 = {snap=217, n_snap=7}. ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}. half_turnover/evaluate_drift_fire utility 추가. EngineResult.drift_fire/drift_half_turnover/drift_threshold 필드 추가. SCHEMA_VERSION='V23'. KLINE_LIMITS '4h' 제거.
-- trade/executor_coin.py: cur_w 자본금 비중 산출 (Upbit 잔고 → KRW 비중) → engine 에 주입. result.drift_fire 시 rebalancing_needed=True. V23 debug log.
-- trade/auto_trade_binance.py: STRATEGIES 단일 (D_SMA42 sn=95 n=5, 05-04 갱신). ENSEMBLE_WEIGHTS={'D_SMA42':1.0}. fetch_all_data 에서 4h 제거. drift 트리거 로직 (cur_w fut = real_weight). DRIFT_THRESHOLD_FUT=0.03. SCHEMA_VERSION='V23'.
+- trade/coin_live_engine.py: MEMBER_H4_SMA240 제거. MEMBER_D_SMA42 = {snap=217, n_snap=7}. ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}. half_turnover/evaluate_drift_fire utility 추가. EngineResult.drift_fire/drift_half_turnover/drift_threshold 필드 추가. SCHEMA_VERSION='V24'. KLINE_LIMITS '4h' 제거.
+- trade/executor_coin.py: cur_w 자본금 비중 산출 (Upbit 잔고 → KRW 비중) → engine 에 주입. result.drift_fire 시 rebalancing_needed=True. V24 debug log.
+- trade/auto_trade_binance.py: STRATEGIES 단일 (D_SMA42 sn=95 n=5, 05-04 갱신). ENSEMBLE_WEIGHTS={'D_SMA42':1.0}. fetch_all_data 에서 4h 제거. drift 트리거 로직 (cur_w fut = real_weight). DRIFT_THRESHOLD_FUT=0.03. SCHEMA_VERSION='V24'.
 - trade/executor_stock.py: SNAP_PERIOD_DAYS=69, SNAP_STAGGER_DAYS=23.
 
 권고
-- strategies/cap_defend/recommend.py: 헤더 V23, 멤버 표기 단일화.
-- strategies/cap_defend/recommend_personal.py: STRATEGY_VERSION='V23', VERSION_HISTORY 추가, FUTURES/COIN_MEMBER_META V23 갱신, STOCK_ANCHOR_DAYS = (1, 24, 47).
+- strategies/cap_defend/recommend.py: 헤더 V24, 멤버 표기 단일화.
+- strategies/cap_defend/recommend_personal.py: STRATEGY_VERSION='V24', VERSION_HISTORY 추가, FUTURES/COIN_MEMBER_META V24 갱신, STOCK_ANCHOR_DAYS = (1, 24, 47).
 
 설정
 - strategies/cap_defend/futures_live_config.py: 단일 strategy, snap_interval_bars=95, n_snapshots=5, drift_threshold=0.03 (05-04 갱신).
 - trade/ops/crontab.txt: 4h x 6 → 1d x 1 (5 9 * * *).
 
 마이그레이션
-- trade/migrate_v22_to_v23.py: state 파일 백업 + 새 schema 초기화 (snapshots 길이 조정, bar_counter 0, last_bar_ts None, schema_version='V23', rebalancing_needed=True).
+- trade/migrate_v22_to_v24.py: state 파일 백업 + 새 schema 초기화 (snapshots 길이 조정, bar_counter 0, last_bar_ts None, schema_version='V24', rebalancing_needed=True).
 
 ## 마이그레이션 절차 (codex 검토 반영, 2026-04-30)
 
@@ -98,11 +98,11 @@ threshold
 3. 코드 배포 (scp)
 4. 마이그레이션 dry-run
    ```bash
-   python3 trade/migrate_v22_to_v23.py --dry-run
+   python3 trade/migrate_v22_to_v24.py --dry-run
    ```
 5. 마이그레이션 apply
    ```bash
-   python3 trade/migrate_v22_to_v23.py --apply
+   python3 trade/migrate_v22_to_v24.py --apply
    ```
 6. 수동 dry-run 1회 (target 산출만, 매매 없음)
    ```bash
@@ -110,11 +110,11 @@ threshold
    python3 trade/auto_trade_binance.py --dry-run
    ```
    검증 항목 (필수):
-   - schema_version='V23' 모든 state 파일 마크
+   - schema_version='V24' 모든 state 파일 마크
    - reason / snap_fire / drift_fire / half_turnover 일치
    - target_w 합계 = 1.0, current_w 합계 = 1.0
    - 선물 current_w 가 margin/equity 기준인지 (명목 노출 아님)
-   - per-coin delta 가 의도한 첫 주문인지 (V22 → V23 mismatch 폭 확인)
+   - per-coin delta 가 의도한 첫 주문인지 (V22 → V24 mismatch 폭 확인)
    - 동일 bar 중복 실행 0건
 7. 검증 통과 시 cron 활성화 (1d 09:05)
 8. 매매 활성화 (--trade) — 다음 09:05 cron 트리거 또는 수동 1회
@@ -127,8 +127,8 @@ threshold
 
 매 cron 실행 시 라이브 엔진 출력
 ```
-[V23 cron 09:05] {asset} bar_close ts={ts}
-  schema_version: V23
+[V24 cron 09:05] {asset} bar_close ts={ts}
+  schema_version: V24
   members: ['D_SMA42']
   current_weights: {coin: weight, ...}
   combined_target: {coin: weight, ...}
@@ -144,7 +144,7 @@ threshold
 
 리밸 발화 시 텔레그램
 ```
-⚠ V23 {asset} drift: ht={ht:.3f} ≥ {threshold:.2f} → 리밸
+⚠ V24 {asset} drift: ht={ht:.3f} ≥ {threshold:.2f} → 리밸
 ```
 
 ## 운영 사고 대응
@@ -160,14 +160,14 @@ drift whipsaw 의심 시
 
 상태파일 손상
 ```bash
-python3 trade/migrate_v22_to_v23.py --rollback {YYYYMMDDHHMMSS}
+python3 trade/migrate_v22_to_v24.py --rollback {YYYYMMDDHHMMSS}
 ```
 
 ## 점검 체크리스트 (배포 후 첫 1주)
 
 - [ ] cron 새 시각 (09:05) 정상 실행 확인
 - [ ] 4h cron 비활성 (잔존 cron 없음)
-- [ ] schema_version='V23' 모든 state 파일 마크 확인
+- [ ] schema_version='V24' 모든 state 파일 마크 확인
 - [ ] 첫 실행 부분체결 0건 확인
 - [ ] drift 발화 횟수 정상 범위 (spot ~5/wk, fut ~2/wk)
 - [ ] yearly Cal 추적 (BT vs live 비교)

@@ -1,21 +1,21 @@
 """
-Cap Defend V23 Recommendation Script
+Cap Defend V24 Recommendation Script
 ===================================
-V23 (2026-04-30 확정): 모든 자산 1D 단일 + drift trigger.
+V24 (2026-04-30 확정): 모든 자산 1D 단일 + drift trigger.
 
-Stock V23 (snap-based 3-tranche stagger sd=69, stagger=23):
+Stock V24 (snap-based 3-tranche stagger sd=69, stagger=23):
   - signal 생성은 recommend_personal.py 단계, executor 가 snap-based 3-tranche stagger 적용.
   - 가드 없음.
 
-Coin V23: 1D 단일 멤버 D_SMA42 (live engine: trade/coin_live_engine.py)
+Coin V24: 1D 단일 멤버 D_SMA42 (live engine: trade/coin_live_engine.py)
   - D_SMA42: 1D봉, SMA42, Mom20/127, snap 217봉×7, drift_threshold=0.10
   - 이전 H4_SMA240 멤버 제거 (4h 데이터 fetch 제거)
 
-Futures V23: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
+Futures V24: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
   - D_SMA42: 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (05-04 갱신)
   - 가드 없음, 스탑 없음
 
-Asset Allocation: 60/25/15 (V23 갱신 2026-05-22), 리밸 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% & sleeve canary ON)
+Asset Allocation: 60/25/15 (V24 갱신 2026-05-22), 리밸 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% & sleeve canary ON)
 """
 
 import os
@@ -91,13 +91,13 @@ except ImportError:
     CONFIG_HTML_NAME = "portfolio_result_gmoh.html"
 PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME") or CONFIG_HTML_NAME
 PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORTFOLIO_PUBLIC_URL
-STOCK_ANCHOR_DAYS = (1, 24, 47)  # V23: snap-based 3 staggered (offset days, period 69, stagger 23)
+STOCK_ANCHOR_DAYS = (1, 24, 47)  # V24: snap-based 3 staggered (offset days, period 69, stagger 23)
 COIN_ANCHOR_DAYS = (1, 11, 21)   # legacy 표시용
 FUTURES_TRANCHE_META = {
-    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 95,  "n_snapshots": 5},  # V23 갱신 05-04
+    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 95,  "n_snapshots": 5},  # V24 갱신 05-04
 }
 COIN_MEMBER_META = {
-    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 217, "n_snapshots": 7},  # V23
+    "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 217, "n_snapshots": 7},  # V24
 }
 
 def _save_signal_state(data):
@@ -200,41 +200,41 @@ def save_daily_live_snapshot():
         "cash_krw": cash_krw,
         "total_krw": total_krw,
     }
-STRATEGY_VERSION = "V23"
+STRATEGY_VERSION = "V24"
 VERSION_HISTORY = [
-    ("V23", "2026-04-30",
-     "전 자산 V23: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 60/25/15 (V23 갱신 2026-05-22, M 안).",
-     """<b>▶ 코인 현물 (V23 — 1D 단일 D_SMA42 + drift)</b>
+    ("V24", "2026-04-30",
+     "전 자산 V24: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 60/25/15 (V24 갱신 2026-05-22, M 안).",
+     """<b>▶ 코인 현물 (V24 — 1D 단일 D_SMA42 + drift)</b>
 • <b>D_SMA42:</b> 일봉 · SMA42 · Mom20/127 · snap 217봉×7 · canary hyst 1.5% · drift_threshold 0.10
 • <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND daily Vol≤5%
 • <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py
 
-<b>▶ 선물 (V23 — 1D 단일 D_SMA42 + drift)</b>
+<b>▶ 선물 (V24 — 1D 단일 D_SMA42 + drift)</b>
 • <b>D_SMA42:</b> 일봉 · SMA42 · Mom18/127 · snap 95봉×5 · drift_threshold 0.03
 • 고정 3x · 가드 없음
 
-<b>▶ 주식 (V23 — snap-based stagger sd=69)</b>
+<b>▶ 주식 (V24 — snap-based stagger sd=69)</b>
 • <b>유니버스:</b> SPY, QQQ, VEA, EEM, EWJ, GLD, PDBC (7종, R7B)
 • <b>카나리:</b> EEM &gt; SMA300 (2.0% hysteresis)
 • <b>선정:</b> Z-score Top 3 (Mom + Sharpe126 합)
 • <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
-<b>▶ 자산배분:</b> 65/20/15 (주식계좌/현물/선물, V23 갱신 2026-05-26 B 안). 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
+<b>▶ 자산배분:</b> 65/20/15 (주식계좌/현물/선물, V24 갱신 2026-05-26 B 안). 트리거: T1(ht≥13pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.65, 0.20, 0.15  # V23 갱신 (2026-05-26): 60/25/15 → 65/20/15 (B 안 채택, stock 계좌 65% 안에 cash 7%, 실투자 60.45%)
-REBAL_HT_THRESHOLD = 0.13  # V23: T1 = half_turnover (sum|cur-tgt|/2) ≥ 13pp
-REBAL_T3U_REL = 0.20  # V23: T3U_can = max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.65, 0.20, 0.15  # V24 갱신 (2026-05-26): 60/25/15 → 65/20/15 (B 안 채택, stock 계좌 65% 안에 cash 7%, 실투자 60.45%)
+REBAL_HT_THRESHOLD = 0.13  # V24: T1 = half_turnover (sum|cur-tgt|/2) ≥ 13pp
+REBAL_T3U_REL = 0.20  # V24: T3U_can = max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
 CASH_ASSET = 'Cash'
-STOCK_CASH_BUFFER_DEFAULT = 0.07   # V23 (2026-05-26): stock 계좌 안에서 7% cash buffer (= 4.55% of total)
-SPOT_CASH_BUFFER_DEFAULT = 0.01    # V23 (2026-05-26): Upbit 1%
-FUT_CASH_BUFFER_DEFAULT = 0.01     # V23 (2026-05-26): Binance 1%
+STOCK_CASH_BUFFER_DEFAULT = 0.07   # V24 (2026-05-26): stock 계좌 안에서 7% cash buffer (= 4.55% of total)
+SPOT_CASH_BUFFER_DEFAULT = 0.01    # V24 (2026-05-26): Upbit 1%
+FUT_CASH_BUFFER_DEFAULT = 0.01     # V24 (2026-05-26): Binance 1%
 CASH_BUFFER_PERCENT_DEFAULT = STOCK_CASH_BUFFER_DEFAULT  # backward compat (stock 기준)
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
 
 def get_cash_buffer(sleeve: str = 'stock'):
-    """sleeve 별 현금 버퍼 비율. V23 trade_state.json 에서 sleeve_cash_buffer 키 우선 읽기.
+    """sleeve 별 현금 버퍼 비율. V24 trade_state.json 에서 sleeve_cash_buffer 키 우선 읽기.
 
     sleeve: 'stock' | 'spot' | 'fut'.
     """
@@ -263,32 +263,27 @@ def get_cash_buffer(sleeve: str = 'stock'):
     return default
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock Configuration (V23 R7B: B안 universe — 11yr rs=58, 5yr Cal 0.84)
+# Stock Configuration (V24 R7B: B안 universe — 11yr rs=58, 5yr Cal 0.84)
 OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'EWJ', 'GLD', 'PDBC']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
-STOCK_CANARY_MA_PERIOD = 300   # V23
-STOCK_CANARY_HYST = 0.020      # V23 (2%)
-# V23: 가드 전면 제거. STOCK_CRASH_TICKER 만 universe 가격 다운로드용으로 보존.
+STOCK_CANARY_MA_PERIOD = 200   # V24 spec (2026-05-27 정정, BT Cal 0.83 > SMA300/2% Cal 0.81)
+STOCK_CANARY_HYST = 0.005      # V24 spec (0.5%)
+# V24: 가드 전면 제거. STOCK_CRASH_TICKER 만 universe 가격 다운로드용으로 보존.
 STOCK_CRASH_TICKER = 'VT'
 
 # Coin Configuration
-COIN_CANARY_MA_PERIOD = 42  # V23: D_SMA42 (이전 V22 = 50)
+COIN_CANARY_MA_PERIOD = 42  # V24: D_SMA42 (이전 V22 = 50)
 COIN_CANARY_HYST = 0.015  # 1.5% Hysteresis: enter Risk-On at SMA*1.015, exit at SMA*0.985
 N_SELECTED_COINS = 5
 VOLATILITY_WINDOW = 90
 
 # --- V15 Configuration ---
 VOL_CAP_FILTER = 0.05
-BL_THRESHOLD = -0.15
-BL_DAYS = 7
-DD_EXIT_LOOKBACK = 60
-DD_EXIT_THRESHOLD = -0.25
-CRASH_THRESHOLD = -0.10
 
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
-    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V23: Live CoinGecko Top 40)</h2>")
+    log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V24: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 40
@@ -652,27 +647,9 @@ def calc_weighted_mom(s):
     if len(s) < 253: return -np.inf
     return calc_ret(s, 252)
 
-# --- V15 DD Exit / Blacklist ---
-def check_dd_exit(s, lookback=DD_EXIT_LOOKBACK, threshold=DD_EXIT_THRESHOLD):
-    """Check if coin should be exited: price / max(recent lookback days) - 1 < threshold."""
-    if len(s) < lookback: return False, 0.0
-    recent = s.iloc[-lookback:]
-    peak = recent.max()
-    if peak <= 0: return False, 0.0
-    dd = s.iloc[-1] / peak - 1
-    return dd <= threshold, dd
-
-def check_blacklist(s, threshold=BL_THRESHOLD, lookback_days=BL_DAYS):
-    """Check if coin had a daily drop worse than threshold in the last lookback_days."""
-    if len(s) < lookback_days + 1: return False, 0.0
-    recent = s.iloc[-(lookback_days + 1):]
-    daily_rets = recent.pct_change().dropna()
-    worst = daily_rets.min()
-    return worst <= threshold, worst
-
 def run_stock_strategy_v15(log, all_prices, target_date):
-    """V23 Stock Strategy: R7B universe (SPY/QQQ/VEA/EEM/EWJ/GLD/PDBC) + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top2. 가드 없음 (앙상블 분산 단독 방어)."""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V23: R7B + EEM SMA300 hyst2% + Zscore3 Sh126d, 가드 없음)</h2>")
+    """V24 Stock Strategy: R7B universe (SPY/QQQ/VEA/EEM/EWJ/GLD/PDBC) + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top2. 가드 없음 (앙상블 분산 단독 방어)."""
+    log.append("<h2>📈 주식 포트폴리오 분석 (V24: R7B + EEM SMA300 hyst2% + Zscore3 Sh126d, 가드 없음)</h2>")
     eem = all_prices.get('EEM')
     meta = {'signal_dist': {}, 'next_candidates': []}
     # 이전 추천 종목 (HTML 리포트 비교 표시용)
@@ -723,7 +700,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드 (V23: Z-score Top 3 + Sharpe126d + EW)</h4>")
+        log.append("<h4>🚀 공격 모드 (V24: Z-score Top 3 + Sharpe126d + EW)</h4>")
         scores = []
         for t in OFFENSIVE_STOCK_UNIVERSE:
             p = all_prices.get(t)
@@ -735,7 +712,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         else:
             df = pd.DataFrame(scores).set_index('Ticker')
 
-            # V23 Z-score composite: zscore(12M_mom) + zscore(Sharpe126d)
+            # V24 Z-score composite: zscore(12M_mom) + zscore(Sharpe126d)
             m_std = df['Mom12M'].std()
             s_std = df['Sharpe126'].std()
             df['Z_Mom'] = (df['Mom12M'] - df['Mom12M'].mean()) / m_std if m_std > 0 else 0
@@ -790,7 +767,7 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     return {t: 1.0/len(picks) for t in picks}, f"수비 ({', '.join(picks)})", meta
 
 def _load_v20_state_personal():
-    """V23 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
+    """V24 live state (trade_state.json)을 여러 경로에서 탐색해 로드."""
     candidates = [
         os.path.join(os.getcwd(), 'trade_state.json'),
         '/home/ubuntu/trade_state.json',
@@ -805,18 +782,18 @@ def _load_v20_state_personal():
     return None, None
 
 def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=True):
-    """V23 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
+    """V24 앙상블 표시: trade_state.json의 결합 타겟 + 멤버 상태 렌더링.
 
     시그니처는 5-tuple 언팩 caller 호환.
     coin_universe / all_prices / is_today는 현재 미사용(engine이 자체 데이터 사용).
     """
     date_str = target_date.date() if hasattr(target_date, 'date') else target_date
-    log.append(f"<h3>🪙 코인 포트폴리오 (V23: 1D 단일 D_SMA42 sn=217×7 drift=0.10) ({date_str})</h3>")
+    log.append(f"<h3>🪙 코인 포트폴리오 (V24: 1D 단일 D_SMA42 sn=217×7 drift=0.10) ({date_str})</h3>")
     meta = {'signal_dist': {}, 'next_candidates': []}
 
     state, path = _load_v20_state_personal()
     if state is None:
-        log.append("<p class='error'>V23 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
+        log.append("<p class='error'>V24 상태 파일(trade_state.json)을 찾을 수 없습니다. executor가 아직 실행되지 않았을 수 있습니다.</p>")
         return {CASH_ASSET: 1.0}, "상태 로드 실패", meta, log, []
 
     log.append(f"<p class='info'>상태: {path} · 마지막 실행 {state.get('last_run_ts', 'N/A')}</p>")
@@ -829,7 +806,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
     # 멤버별 상태 테이블
     mrows = []
     healthy_union = []
-    for m_name in ('D_SMA42',):  # V23: 단일 멤버
+    for m_name in ('D_SMA42',):  # V24: 단일 멤버
         m_st = members.get(m_name, {})
         m_tgt = {k: v for k, v in (last_member_targets.get(m_name, {}) or {}).items() if k != '_ts'}
         m_ex = list((excluded.get(m_name, {}) or {}).keys())
@@ -850,7 +827,7 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
     except Exception:
         pass
 
-    # 결합 타겟 (1/2씩 EW, V23)
+    # 결합 타겟 (1/2씩 EW, V24)
     weights = {k: v for k, v in combined_snap.items() if k != '_ts'}
     if not weights:
         weights = {CASH_ASSET: 1.0}
@@ -861,14 +838,14 @@ def run_coin_strategy_v20(coin_universe, all_prices, target_date, log, is_today=
 
     w_rows = [{'자산': t, '비중': f"{w*100:.2f}%"} for t, w in sorted(weights.items(), key=lambda x: -x[1])]
     try:
-        log.append("<p><b>[결합 타겟]</b> V23 단일 멤버 D_SMA42 (executor가 이 비중으로 실행)</p>")
+        log.append("<p><b>[결합 타겟]</b> V24 단일 멤버 D_SMA42 (executor가 이 비중으로 실행)</p>")
         log.append(f"<div class='table-wrap'>{pd.DataFrame(w_rows).to_html(classes='dataframe small-table', index=False)}</div>")
     except Exception:
         pass
 
     # 카나리 상태 요약 (signal_dist meta 채우기 — 기존 UI 호환)
     d42_canary = members.get('D_SMA42', {}).get('canary_on')
-    h4_canary = None  # V23: H4 멤버 제거
+    h4_canary = None  # V24: H4 멤버 제거
     meta['signal_dist'] = {
         'D_SMA42_canary': d42_canary,
         'H4_SMA240_canary': h4_canary,
@@ -962,8 +939,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const TARGET_STOCK_RATIO = 0.65;
             const TARGET_COIN_RATIO = 0.20;
             const TARGET_FUTURES_RATIO = 0.15;
-            const REBAL_HT = 0.13;           // V23 갱신 (2026-05-22): T1 = half_turnover ≥ 13pp
-            const REBAL_T3U_REL = 0.20;      // V23 추가 (2026-05-22): T3U_can = max rel underweight ≥ 20% + sleeve canary ON
+            const REBAL_HT = 0.13;           // V24 갱신 (2026-05-22): T1 = half_turnover ≥ 13pp
+            const REBAL_T3U_REL = 0.20;      // V24 추가 (2026-05-22): T3U_can = max rel underweight ≥ 20% + sleeve canary ON
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
@@ -1327,7 +1304,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         return {k: v for k, v in merged.items() if v > 0}
 
     def _merge_stock_state(state: dict) -> dict:
-        """V23: snapshots 우선, 없으면 V21 tranches 폴백."""
+        """V24: snapshots 우선, 없으면 V21 tranches 폴백."""
         snapshots = state.get('snapshots', {}) or {}
         if snapshots:
             return _merge_tranches(snapshots)
@@ -1423,7 +1400,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_stock_state.get('rebalancing_needed'))}",
             f"<b>마지막 실행:</b> {_stock_state.get('last_trade_date', '-')}",
             f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_stock_exec_target)}",
-            f"<b>전략 KIS_V23:</b> Canary {'ON' if _stk.get('risk_on', True) else 'OFF'}, "
+            f"<b>전략 KIS_V24:</b> Canary {'ON' if _stk.get('risk_on', True) else 'OFF'}, "
             f"다음 트랜치 {_next_anchor_str(STOCK_ANCHOR_DAYS)}",
         ]
         _stock_tr_rows = []
@@ -1461,7 +1438,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     except Exception as _e:
         state_sections.append(f"<h2>📘 주식 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
-    # ── 현물 코인 실행 상태 (V23 앙상블) ──
+    # ── 현물 코인 실행 상태 (V24 앙상블) ──
     try:
         _coin_state, _coin_path = _load_first_json([
             os.path.join(APP_HOME, "trade_state.json"),
@@ -1502,7 +1479,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     "종목": _picks_text,
                     "비중": _weights_text,
                 })
-        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V23)", _coin_summary, _coin_rows))
+        state_sections.append(_strategy_block("📘 업비트 실행 상태 (V24)", _coin_summary, _coin_rows))
     except Exception as _e:
         state_sections.append(f"<h2>📘 업비트 실행 상태</h2><p class='error'>상태 조회 실패: {_e}</p>")
 
@@ -1829,7 +1806,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
 
-                // === 3자산 배분 체크 (V23 갱신 2026-05-22: 60/25/15, T1(ht≥13pp) OR T3U_can(max rel-under≥20% + canary ON) 트리거 — 리밸런싱은 수동) ===
+                // === 3자산 배분 체크 (V24 갱신 2026-05-22: 60/25/15, T1(ht≥13pp) OR T3U_can(max rel-under≥20% + canary ON) 트리거 — 리밸런싱은 수동) ===
                 const stockKrw = Number(stock.total_krw || 0);
                 const spotKrw = Number(upbit.total_krw || 0);
                 const futKrw = Number(binance.total_krw || 0);
@@ -2378,7 +2355,7 @@ if __name__ == "__main__":
             fut_lines.append(f'  (읽기 실패: {ex_fut})')
             fut_combined_str = ''
 
-        # V23 통일 포맷 (Daily Report — 신호 요약, 실행 보고와 별개)
+        # V24 통일 포맷 (Daily Report — 신호 요약, 실행 보고와 별개)
         date_str = target_date.strftime('%Y-%m-%d') if hasattr(target_date, 'strftime') else str(target_date)[:10]
 
         def _cur_weights(acct):
@@ -2536,7 +2513,7 @@ if __name__ == "__main__":
                 t3u_fire = t3u_stock or t3u_spot or t3u_fut
                 fire = t1_fire or t3u_fire
 
-                # ── 자산배분 트리거 (V23 B 안, 2026-05-26) ──
+                # ── 자산배분 트리거 (V24 B 안, 2026-05-26) ──
                 # alloc_transit 자동 cap_ratio 시스템 폐지. read-only 평가 + 텔레그램 알림만.
                 # 사용자 수동 송금. 각 executor 는 자기 계좌 안에서만 자동매매 (sleeve 내부).
                 _alloc_transit_active = False  # 항상 False — 자동 cap 실행 X
@@ -2566,16 +2543,16 @@ if __name__ == "__main__":
                     _now_dt = datetime.now(_KST)
                     _now_str = _now_dt.strftime('%Y-%m-%d %H:%M KST')
                     _cap_ratios = _compute_cap_ratios(alloc_total, stock_krw, spot_krw, fut_krw)
-                    # V23 (2026-05-26) B 안: 자동 cap_ratio 폐지. read-only 평가 + 알림만.
+                    # V24 (2026-05-26) B 안: 자동 cap_ratio 폐지. read-only 평가 + 알림만.
                     # legacy active=True 면 즉시 clear (마이그레이션).
                     if _was_active:
                         _ts_obj['alloc_transit'] = {
                             'active': False,
                             'cleared_at': _now_str,
-                            'reason': 'V23 B 안 (2026-05-26) — 자동 cap_ratio 폐지, 수동 송금 모델로 전환',
+                            'reason': 'V24 B 안 (2026-05-26) — 자동 cap_ratio 폐지, 수동 송금 모델로 전환',
                         }
                         _alloc_transit_active = False
-                        alloc_lines.append(f"  🟢 alloc_transit FORCE CLEAR (V23 B 안 — 자동 cap_ratio 시스템 폐지)")
+                        alloc_lines.append(f"  🟢 alloc_transit FORCE CLEAR (V24 B 안 — 자동 cap_ratio 시스템 폐지)")
                     # 트리거 ON 시 텔레그램 알림 (read-only, 수동 송금 권장)
                     if fire:
                         # suggested_transfer 계산 (어느 sleeve → 어느 sleeve)
@@ -2602,7 +2579,7 @@ if __name__ == "__main__":
                         if _alert_ok:
                             try:
                                 _msg_lines = [
-                                    f"⚠️ V23 자산배분 트리거 ON",
+                                    f"⚠️ V24 자산배분 트리거 ON",
                                     f"트리거: {reason}",
                                     f"현재 비중: 주식 {p_stock*100:.1f}% / 업비트 {p_spot*100:.1f}% / 바이낸스 {p_fut*100:.1f}%",
                                     f"목표: 60/20/15 (B 안 + per-sleeve buffer stock 6/spot 1/fut 1)",
@@ -2748,7 +2725,7 @@ if __name__ == "__main__":
         except Exception as ex_df:
             drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
 
-        # V23 params drift check (live ↔ canonical)
+        # V24 params drift check (live ↔ canonical)
         params_drift_lines = ["🧭 params drift check"]
         try:
             import subprocess
@@ -2803,7 +2780,7 @@ if __name__ == "__main__":
         _pd_block = ('\n'.join(params_drift_lines) + "\n\n") if _show_pd else ""
 
         summary = (
-                f"[Daily Report] 📊 V23 신호 ({date_str})\n"
+                f"[Daily Report] 📊 V24 신호 ({date_str})\n"
                 f"{_verdict_line}\n"
                 f"{_as_of_line}\n\n"
                 + '\n'.join(c_lines) + "\n\n"

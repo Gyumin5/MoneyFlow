@@ -1,4 +1,4 @@
-# V23 Spec — V22 차세대 (2026-04-30)
+# V24 Spec — V22 차세대 (2026-04-30)
 
 상태: DRAFT. AI 검토 + 합의 후 단계별 구현.
 
@@ -13,9 +13,9 @@ V22 운영 (2026-04-27 시작) 의 후속 개선. BT 검증 (5.4yr, 2020-10 ~ 20
 4. Option B/C verify — 차별화·서로소 강제 (gcd(spot_n, fut_n)=1)
 5. 후보 C 직도입 검증 — drift 발화 빈도, tx 민감도, yearly Cal 분포, 자산 상관/동시 DD
 
-## V22 → V23 변경점
+## V22 → V24 변경점
 
-| 자산 | V22 (현행) | V23 (신규) |
+| 자산 | V22 (현행) | V24 (신규) |
 |---|---|---|
 | stock | snap_days=125, n_snap=3, stagger=42 | snap_days=69, n_snap=3, stagger=23 |
 | coin spot | D_SMA42 + H4_SMA240 EW (snap 60 동기) | D-only n_snap=7 단일, snap=217, drift=0.10 |
@@ -72,7 +72,7 @@ cur_w 정의 (선물 기준)
 
 리밸 발화 조건 (변경, AI 검토 반영)
 - 기존: snap 기일에만
-- V23: `is_daily_bar AND not crash_cooldown AND (snap_fire OR (canary_on AND half_turnover >= threshold))`
+- V24: `is_daily_bar AND not crash_cooldown AND (snap_fire OR (canary_on AND half_turnover >= threshold))`
 
 ## 마이그레이션 영향
 
@@ -89,8 +89,8 @@ trade_state.json 스키마
 ## 필요 코드 변경 (sync 대상 — CLAUDE.md 규칙)
 
 ### 백테스트
-- strategies/cap_defend/backtest_spot_barfreq.py — V23 spec 갱신
-- strategies/cap_defend/backtest_futures_full.py — V23 spec
+- strategies/cap_defend/backtest_spot_barfreq.py — V24 spec 갱신
+- strategies/cap_defend/backtest_futures_full.py — V24 spec
 - strategies/cap_defend/futures_ensemble_engine.py — 멤버 1개로 단순화
 - strategies/cap_defend/futures_live_config.py — 새 파라미터
 
@@ -105,29 +105,29 @@ trade_state.json 스키마
 - trade/executor_stock.py — sd=69, n_snap=3, stagger=23
 
 ### 권고
-- strategies/cap_defend/recommend.py — V22 → V23 표기, 새 파라미터
+- strategies/cap_defend/recommend.py — V22 → V24 표기, 새 파라미터
 - strategies/cap_defend/recommend_personal.py — 동일
 
 ### 운영
 - trade/ops/run_executor.sh — 변경 없음 (executor 호출 그대로)
 - trade/ops/crontab.txt — 4h x 6 → 1d x 1
-- trade/ops/serve.py / trade_api_server.py — 검토 (V23 표기)
+- trade/ops/serve.py / trade_api_server.py — 검토 (V24 표기)
 - trade/asset_dashboard.html — V22 문자열 갱신
 - binance_state.json / kis_trade_state.json / signal_state.json — schema 변경 점검 + schema_version 필드
 
 ### 문서
-- V22_OPERATION_MANUAL.md → V23_OPERATION_MANUAL.md (또는 V22 갱신)
+- V22_OPERATION_MANUAL.md → V24_OPERATION_MANUAL.md (또는 V22 갱신)
 - CLAUDE.md — 코인 spot / 선물 / 마이그레이션 섹션 갱신
-- MEMORY.md — V23 운영 명시
+- MEMORY.md — V24 운영 명시
 - progress.md / history.md — 결정 로그
 
 ## 디버깅 로그 정의 (신규)
 
 매 D봉 닫힘 시각 (cron 09:05) 실행 시 라이브 엔진 로그
 ```
-[V23 cron 09:05] {asset} bar_close ts={ts}
+[V24 cron 09:05] {asset} bar_close ts={ts}
   bar_id: 2026-04-30T00:00:00Z
-  schema_version: V23
+  schema_version: V24
   members: [{member_name}]
   current_weights: {coin: weight, ...}     ← 거래소 잔고 기반 (margin/equity)
   member_signals: {member: target_weights}
@@ -147,7 +147,7 @@ trade_state.json 스키마
 
 리밸 발화 시 텔레그램
 ```
-[V23 {asset} REBAL] reason=drift|snap
+[V24 {asset} REBAL] reason=drift|snap
   half_turnover: 0.123
   threshold: 0.10
   current_w: {...}
@@ -158,7 +158,7 @@ trade_state.json 스키마
 
 부분체결 시 텔레그램
 ```
-[V23 PENDING] {asset} {coin}
+[V24 PENDING] {asset} {coin}
   planned_qty: {planned}
   filled_qty: {actual}
   pending_qty: {remaining}
@@ -229,7 +229,7 @@ gemini
 
 5. drift 비중 정의: 자본금 기준 (margin / equity). 명목 노출 X.
 
-6. state schema version 추가: trade_state.json["schema_version"] = "V23"
+6. state schema version 추가: trade_state.json["schema_version"] = "V24"
 
 7. 마이그레이션 절차
    a. 기존 cron 정지
@@ -258,4 +258,4 @@ gemini
 ## 변경 이력
 
 - 2026-04-30 DRAFT (Claude + 사용자 + AI 검토)
-- 2026-XX-XX V23 도입 (예정)
+- 2026-XX-XX V24 도입 (예정)
