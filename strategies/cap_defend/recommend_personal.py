@@ -2305,15 +2305,24 @@ if __name__ == "__main__":
             return w
 
         def _fmt_disp_early(disp_dict, cur_dict):
+            def _norm(k):
+                return 'Cash' if str(k).lower() == 'cash' else str(k).upper().replace('-USD', '')
+            disp_n = {}
+            for k, v in (disp_dict or {}).items():
+                nk = _norm(k)
+                disp_n[nk] = disp_n.get(nk, 0.0) + float(v or 0)
+            cur_n = {}
+            for k, v in (cur_dict or {}).items():
+                nk = _norm(k)
+                cur_n[nk] = cur_n.get(nk, 0.0) + float(v or 0)
             lines = []
-            keys = sorted(set(disp_dict) | set(cur_dict), key=lambda k: -(disp_dict.get(k, 0) or 0))
+            keys = sorted(set(disp_n) | set(cur_n), key=lambda k: -(disp_n.get(k, 0) or 0))
             for k in keys:
-                tw = disp_dict.get(k, 0.0)
-                cw = cur_dict.get(k, 0.0)
+                tw = disp_n.get(k, 0.0)
+                cw = cur_n.get(k, 0.0)
                 if tw < 1e-4 and cw < 1e-4 and k.lower() != 'cash':
                     continue
-                tk = k.replace('-USD', '')
-                lines.append(f'  {tk}: 목표 {tw*100:.1f}% / 보유 {cw*100:.1f}%')
+                lines.append(f'  {k}: 목표 {tw*100:.1f}% / 보유 {cw*100:.1f}%')
             return lines
 
         # accts (live_overview) 를 여기서 미리 조회 — target lines 에 보유 % 표시용
@@ -2417,11 +2426,27 @@ if __name__ == "__main__":
             s_port_disp['Cash'] = _stock_buf
         s_lines.extend(_fmt_disp(s_port_disp, _cur_stock))
 
-        # 카나리 상세 — 비교대상 / 현재값 / SMA값 / 비율
+        # 트리거 상태 등급 — verdict 산출용
+        # status: OK (<50%), WATCH (50-80%), NEAR (80-100%), FIRE (>=100%)
+        _verdict_signals = []
+        def _trig_status(progress):
+            if progress >= 1.0: return ('FIRE', '🔴')
+            if progress >= 0.8: return ('NEAR', '🟠')
+            if progress >= 0.5: return ('WATCH', '🟡')
+            return ('OK', '🟢')
+
+        def _canary_label(ratio):
+            if ratio is None: return ('?', '')
+            dist = (ratio - 1.0) * 100
+            mode = 'BULL' if ratio >= 1.0 else 'BEAR'
+            return (f"{dist:+.1f}%", mode)
+
+        # 카나리 상세 — SMA 괴리율 + cur/sma/ratio
         canary_lines = ['🦅 카나리']
         if btc_cur is not None:
+            _dist, _mode = _canary_label(btc_ratio)
             canary_lines.append(
-                f"  업비트: BTC vs SMA{COIN_CANARY_MA_PERIOD} — cur ${btc_cur:,.0f} / sma ${btc_sma:,.0f} / ratio {btc_ratio:.4f}"
+                f"  업비트: SMA {_dist} {_mode} — BTC ${btc_cur:,.0f} / SMA{COIN_CANARY_MA_PERIOD} ${btc_sma:,.0f} (ratio {btc_ratio:.4f})"
             )
         else:
             canary_lines.append(f"  업비트: BTC 데이터 부족")
@@ -2430,9 +2455,10 @@ if __name__ == "__main__":
         except Exception:
             ci = None
         if ci:
+            _br = ci.get('ratio', 0)
+            _bd, _bm = _canary_label(_br if _br else None)
             canary_lines.append(
-                f"  바이낸스: BTC vs SMA{ci.get('sma_p',42)} — "
-                f"cur ${ci.get('cur',0):,.0f} / sma ${ci.get('sma_val',0):,.0f} / ratio {ci.get('ratio',0):.4f}"
+                f"  바이낸스: SMA {_bd} {_bm} — BTC ${ci.get('cur',0):,.0f} / SMA{ci.get('sma_p',42)} ${ci.get('sma_val',0):,.0f} (ratio {_br:.4f})"
             )
         else:
             canary_lines.extend(fut_canary_lines)
@@ -2441,8 +2467,9 @@ if __name__ == "__main__":
         eem_p = s_meta.get('canary_sma_period', 300)
         if eem_cur_v and eem_sma_v:
             ratio_s = eem_cur_v / eem_sma_v if eem_sma_v else 0
+            _ed, _em = _canary_label(ratio_s)
             canary_lines.append(
-                f"  주식: EEM vs SMA{eem_p} — cur ${eem_cur_v:.2f} / sma ${eem_sma_v:.2f} / ratio {ratio_s:.4f}"
+                f"  주식: SMA {_ed} {_em} — EEM ${eem_cur_v:.2f} / SMA{eem_p} ${eem_sma_v:.2f} (ratio {ratio_s:.4f})"
             )
         else:
             canary_lines.append(f"  주식: EEM 데이터 부족")
@@ -2623,8 +2650,15 @@ if __name__ == "__main__":
                 alloc_lines.append(f"  주식 {p_stock:.1%} (목표 {STOCK_RATIO:.0%}, 편차 {d_stock:.1%})")
                 alloc_lines.append(f"  업비트 {p_spot:.1%} (목표 {COIN_RATIO:.0%}, 편차 {d_spot:.1%})")
                 alloc_lines.append(f"  바이낸스 {p_fut:.1%} (목표 {FUTURES_RATIO:.0%}, 편차 {d_fut:.1%})")
-                alloc_lines.append(f"  T1 half_turnover {ht*100:.2f}pp (트리거 {REBAL_HT_THRESHOLD*100:.0f}pp)")
-                alloc_lines.append(f"  T3U_can max rel-under: 주식 {rel_under_stock*100:.0f}% / 업비트 {rel_under_spot*100:.0f}% / 바이낸스 {rel_under_fut*100:.0f}% (트리거 {REBAL_T3U_REL*100:.0f}% + canary ON)")
+                _t1_p = ht / REBAL_HT_THRESHOLD if REBAL_HT_THRESHOLD > 0 else 0
+                _t1_lbl, _t1_ic = _trig_status(_t1_p)
+                _verdict_signals.append(('T1', _t1_p, _t1_lbl))
+                alloc_lines.append(f"  {_t1_ic} T1 {ht*100:.2f}/{REBAL_HT_THRESHOLD*100:.0f}pp {_t1_p*100:.0f}% — 남은 {(REBAL_HT_THRESHOLD-ht)*100:.2f}pp [{_t1_lbl}]")
+                _max_ru = max(rel_under_stock, rel_under_spot, rel_under_fut)
+                _t3u_p = _max_ru / REBAL_T3U_REL if REBAL_T3U_REL > 0 else 0
+                _t3u_lbl, _t3u_ic = _trig_status(_t3u_p)
+                _verdict_signals.append(('T3U_max', _t3u_p, _t3u_lbl))
+                alloc_lines.append(f"  {_t3u_ic} T3U_can max-under {_max_ru*100:.0f}/{REBAL_T3U_REL*100:.0f}% {_t3u_p*100:.0f}% (주식 {rel_under_stock*100:.0f}% / 업비트 {rel_under_spot*100:.0f}% / 바이낸스 {rel_under_fut*100:.0f}%) [{_t3u_lbl}]")
                 if fire:
                     alloc_lines.append(f"  🔔 리밸 필요 — {' | '.join(fire_reason)}")
                 else:
@@ -2675,7 +2709,10 @@ if __name__ == "__main__":
                 drift_lines.append("  주식: 잔고 없음")
             else:
                 fire_st = ht_st >= thr_st
-                drift_lines.append(f"  주식: ht {ht_st*100:.2f}pp / 트리거 {thr_st*100:.0f}pp {'🔔 fire' if fire_st else '✅ 내'}")
+                _p = ht_st / thr_st if thr_st > 0 else 0
+                _st_lbl, _st_ic = _trig_status(_p)
+                _verdict_signals.append(('주식 drift', _p, _st_lbl))
+                drift_lines.append(f"  주식: {_st_ic} ht {ht_st*100:.2f}/{thr_st*100:.0f}pp {_p*100:.0f}% — 남은 {(thr_st-ht_st)*100:.2f}pp [{_st_lbl}]")
         except Exception as ex_dst:
             drift_lines.append(f"  주식: 계산 실패 ({ex_dst})")
         try:
@@ -2687,7 +2724,10 @@ if __name__ == "__main__":
                 drift_lines.append("  업비트: 잔고 없음")
             else:
                 fire_sp = ht_sp >= thr_sp
-                drift_lines.append(f"  업비트: ht {ht_sp*100:.2f}pp / 트리거 {thr_sp*100:.0f}pp {'🔔 fire' if fire_sp else '✅ 내'}")
+                _p = ht_sp / thr_sp if thr_sp > 0 else 0
+                _sp_lbl, _sp_ic = _trig_status(_p)
+                _verdict_signals.append(('업비트 drift', _p, _sp_lbl))
+                drift_lines.append(f"  업비트: {_sp_ic} ht {ht_sp*100:.2f}/{thr_sp*100:.0f}pp {_p*100:.0f}% — 남은 {(thr_sp-ht_sp)*100:.2f}pp [{_sp_lbl}]")
         except Exception as ex_ds:
             drift_lines.append(f"  업비트: 계산 실패 ({ex_ds})")
         try:
@@ -2702,7 +2742,10 @@ if __name__ == "__main__":
                 drift_lines.append("  바이낸스: 목표 없음")
             else:
                 fire_f = ht_f >= thr_f
-                drift_lines.append(f"  바이낸스: ht {ht_f*100:.2f}pp / 트리거 {thr_f*100:.0f}pp {'🔔 fire' if fire_f else '✅ 내'}")
+                _p = ht_f / thr_f if thr_f > 0 else 0
+                _f_lbl, _f_ic = _trig_status(_p)
+                _verdict_signals.append(('바이낸스 drift', _p, _f_lbl))
+                drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.0f}pp {_p*100:.0f}% — 남은 {(thr_f-ht_f)*100:.2f}pp [{_f_lbl}]")
         except Exception as ex_df:
             drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
 
@@ -2731,17 +2774,48 @@ if __name__ == "__main__":
         except Exception as ex_pd:
             params_drift_lines.append(f"  (체크 실패: {ex_pd})")
 
+        # verdict 산출 — 가장 높은 상태등급
+        _rank = {'OK': 0, 'WATCH': 1, 'NEAR': 2, 'FIRE': 3}
+        _max_lbl = 'OK'
+        _max_sig = None
+        _max_p = 0.0
+        for _nm, _pp, _lbl in _verdict_signals:
+            if _rank.get(_lbl, 0) > _rank.get(_max_lbl, 0):
+                _max_lbl = _lbl
+                _max_sig = _nm
+                _max_p = _pp
+            elif _rank.get(_lbl, 0) == _rank.get(_max_lbl, 0) and _pp > _max_p:
+                _max_sig = _nm
+                _max_p = _pp
+        _params_fail = any('drift 발견' in ln or '⚠️' in ln for ln in params_drift_lines[1:])
+        if _params_fail and _rank.get(_max_lbl, 0) < 1:
+            _max_lbl = 'WATCH'
+            _max_sig = 'params drift'
+        _verdict_ic = {'OK': '🟢', 'WATCH': '🟡', 'NEAR': '🟠', 'FIRE': '🔴'}[_max_lbl]
+        _verdict_msg = {'OK': 'NO ACTION', 'WATCH': 'WATCH', 'NEAR': 'NEAR — 발화 임박', 'FIRE': 'ACT — 트리거 ON'}[_max_lbl]
+        _verdict_line = f"{_verdict_ic} {_verdict_msg}"
+        if _max_sig and _max_lbl != 'OK':
+            _verdict_line += f" ({_max_sig} {_max_p*100:.0f}%)"
+
+        _now_kst = datetime.now().strftime('%Y-%m-%d %H:%M KST')
+        _as_of_line = f"⏱ as-of {_now_kst}"
+
+        _show_pd = _params_fail
+        _pd_block = ('\n'.join(params_drift_lines) + "\n\n") if _show_pd else ""
+
         summary = (
-            f"[Daily Report] 📊 V23 신호 ({date_str})\n\n"
-            + '\n'.join(c_lines) + "\n\n"
-            + '\n'.join(fut_lines) + "\n\n"
-            + '\n'.join(s_lines) + "\n\n"
-            + '\n'.join(holdings_lines) + "\n\n"
-            + '\n'.join(canary_lines) + "\n\n"
-            + '\n'.join(drift_lines) + "\n\n"
-            + '\n'.join(params_drift_lines) + "\n\n"
-            + '\n'.join(alloc_lines)
-        )
+                f"[Daily Report] 📊 V23 신호 ({date_str})\n"
+                f"{_verdict_line}\n"
+                f"{_as_of_line}\n\n"
+                + '\n'.join(c_lines) + "\n\n"
+                + '\n'.join(fut_lines) + "\n\n"
+                + '\n'.join(s_lines) + "\n\n"
+                + '\n'.join(holdings_lines) + "\n\n"
+                + '\n'.join(canary_lines) + "\n\n"
+                + '\n'.join(drift_lines) + "\n\n"
+                + _pd_block
+                + '\n'.join(alloc_lines)
+            )
         if PORTFOLIO_PUBLIC_URL:
             send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)
         else:
