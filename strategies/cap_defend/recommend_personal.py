@@ -2711,7 +2711,7 @@ if __name__ == "__main__":
                 _p = ht_st / thr_st if thr_st > 0 else 0
                 _st_lbl, _st_ic = _trig_status(_p)
                 _verdict_signals.append(('주식 drift', _p, _st_lbl))
-                drift_lines.append(f"  주식: {_st_ic} ht {ht_st*100:.2f}/{thr_st*100:.0f}pp {_p*100:.0f}% — 남은 {(thr_st-ht_st)*100:.2f}pp [{_st_lbl}]")
+                drift_lines.append(f"  주식: {_st_ic} ht {ht_st*100:.2f}/{thr_st*100:.0f}pp {_p*100:.0f}% [{_st_lbl}]")
         except Exception as ex_dst:
             drift_lines.append(f"  주식: 계산 실패 ({ex_dst})")
         try:
@@ -2726,7 +2726,7 @@ if __name__ == "__main__":
                 _p = ht_sp / thr_sp if thr_sp > 0 else 0
                 _sp_lbl, _sp_ic = _trig_status(_p)
                 _verdict_signals.append(('업비트 drift', _p, _sp_lbl))
-                drift_lines.append(f"  업비트: {_sp_ic} ht {ht_sp*100:.2f}/{thr_sp*100:.0f}pp {_p*100:.0f}% — 남은 {(thr_sp-ht_sp)*100:.2f}pp [{_sp_lbl}]")
+                drift_lines.append(f"  업비트: {_sp_ic} ht {ht_sp*100:.2f}/{thr_sp*100:.0f}pp {_p*100:.0f}% [{_sp_lbl}]")
         except Exception as ex_ds:
             drift_lines.append(f"  업비트: 계산 실패 ({ex_ds})")
         try:
@@ -2744,7 +2744,7 @@ if __name__ == "__main__":
                 _p = ht_f / thr_f if thr_f > 0 else 0
                 _f_lbl, _f_ic = _trig_status(_p)
                 _verdict_signals.append(('바이낸스 drift', _p, _f_lbl))
-                drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.0f}pp {_p*100:.0f}% — 남은 {(thr_f-ht_f)*100:.2f}pp [{_f_lbl}]")
+                drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.0f}pp {_p*100:.0f}% [{_f_lbl}]")
         except Exception as ex_df:
             drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
 
