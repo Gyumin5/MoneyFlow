@@ -2446,7 +2446,7 @@ if __name__ == "__main__":
         if btc_cur is not None:
             _dist, _mode = _canary_label(btc_ratio)
             canary_lines.append(
-                f"  업비트: SMA {_dist} {_mode} — BTC ${btc_cur:,.0f} / SMA{COIN_CANARY_MA_PERIOD} ${btc_sma:,.0f} (ratio {btc_ratio:.4f})"
+                f"  업비트: SMA {_dist} {_mode} — BTC ${btc_cur:,.0f} / SMA{COIN_CANARY_MA_PERIOD} ${btc_sma:,.0f}"
             )
         else:
             canary_lines.append(f"  업비트: BTC 데이터 부족")
@@ -2458,7 +2458,7 @@ if __name__ == "__main__":
             _br = ci.get('ratio', 0)
             _bd, _bm = _canary_label(_br if _br else None)
             canary_lines.append(
-                f"  바이낸스: SMA {_bd} {_bm} — BTC ${ci.get('cur',0):,.0f} / SMA{ci.get('sma_p',42)} ${ci.get('sma_val',0):,.0f} (ratio {_br:.4f})"
+                f"  바이낸스: SMA {_bd} {_bm} — BTC ${ci.get('cur',0):,.0f} / SMA{ci.get('sma_p',42)} ${ci.get('sma_val',0):,.0f}"
             )
         else:
             canary_lines.extend(fut_canary_lines)
@@ -2469,7 +2469,7 @@ if __name__ == "__main__":
             ratio_s = eem_cur_v / eem_sma_v if eem_sma_v else 0
             _ed, _em = _canary_label(ratio_s)
             canary_lines.append(
-                f"  주식: SMA {_ed} {_em} — EEM ${eem_cur_v:.2f} / SMA{eem_p} ${eem_sma_v:.2f} (ratio {ratio_s:.4f})"
+                f"  주식: SMA {_ed} {_em} — EEM ${eem_cur_v:.2f} / SMA{eem_p} ${eem_sma_v:.2f}"
             )
         else:
             canary_lines.append(f"  주식: EEM 데이터 부족")
@@ -2652,7 +2652,7 @@ if __name__ == "__main__":
                 _t1_p = ht / REBAL_HT_THRESHOLD if REBAL_HT_THRESHOLD > 0 else 0
                 _t1_lbl, _t1_ic = _trig_status(_t1_p)
                 _verdict_signals.append(('T1', _t1_p, _t1_lbl))
-                alloc_lines.append(f"  {_t1_ic} T1 {ht*100:.2f}/{REBAL_HT_THRESHOLD*100:.0f}pp {_t1_p*100:.0f}% — 남은 {(REBAL_HT_THRESHOLD-ht)*100:.2f}pp [{_t1_lbl}]")
+                alloc_lines.append(f"  {_t1_ic} T1 {ht*100:.2f}/{REBAL_HT_THRESHOLD*100:.0f}pp {_t1_p*100:.0f}% [{_t1_lbl}]")
                 _max_ru = max(rel_under_stock, rel_under_spot, rel_under_fut)
                 _t3u_p = _max_ru / REBAL_T3U_REL if REBAL_T3U_REL > 0 else 0
                 _t3u_lbl, _t3u_ic = _trig_status(_t3u_p)
