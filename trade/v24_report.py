@@ -1,7 +1,7 @@
-"""V23 통일 텔레그램 보고 포맷 helper.
+"""V24 통일 텔레그램 보고 포맷 helper.
 
 3개 자산 (코인 spot, 선물 fut, 주식) + Daily Report 가 공통 skeleton 으로 출력.
-구조: [자산] EMOJI 자산이름 V23 (시각) → 🎯 목표 → 📦 보유 → 🔄 주문 → 🦅 카나리 → 📊 상태
+구조: [자산] EMOJI 자산이름 V24 (시각) → 🎯 목표 → 📦 보유 → 🔄 주문 → 🦅 카나리 → 📊 상태
 """
 from typing import Dict, Iterable, Optional
 
@@ -12,7 +12,7 @@ def fmt_pct(v: float) -> str:
 
 def build_header(asset_label: str, emoji: str, name: str, ts_str: str) -> str:
     prefix = f"[{asset_label}] " if asset_label else ""
-    return f"{prefix}{emoji} {name} V23 ({ts_str})"
+    return f"{prefix}{emoji} {name} V24 ({ts_str})"
 
 
 def build_target_section(target: Dict[str, float]) -> str:

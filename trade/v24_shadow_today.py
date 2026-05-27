@@ -1,6 +1,6 @@
-"""V23 shadow ledger — 오늘 시점 V23 가상 운영 보유 산출.
+"""V24 shadow ledger — 오늘 시점 V24 가상 운영 보유 산출.
 
-가정: V23 이 처음부터 줄곧 운영되었다고 가정하고 BT engine 으로 forward 시뮬레이션.
+가정: V24 이 처음부터 줄곧 운영되었다고 가정하고 BT engine 으로 forward 시뮬레이션.
 산출: 오늘 시점 combined target weights.
 
 단발 실행. 매일 자동화는 별도.
@@ -17,15 +17,15 @@ import stock_engine_snap as tss
 
 START = '2020-10-01'
 END = datetime.now().strftime('%Y-%m-%d')
-print(f'== V23 shadow ledger (오늘 시점 가상 보유) ==')
+print(f'== V24 shadow ledger (오늘 시점 가상 보유) ==')
 print(f'기간: {START} ~ {END}')
 
 # ─── 데이터 로드 ───
 print('\n코인 데이터 (D) 로드...')
 bars_D, funding = ub.load_data('D')
 
-# ─── spot V23 ───
-print('\n[spot] V23: D_SMA42 sn=217 n=7 drift=0.10')
+# ─── spot V24 ───
+print('\n[spot] V24: D_SMA42 sn=217 n=7 drift=0.10')
 spot_trace = []
 ub.run(bars_D, funding, interval='D', asset_type='spot', leverage=1.0,
        sma_days=42, mom_short_days=20, mom_long_days=127,
@@ -40,8 +40,8 @@ if spot_trace:
     print(f'  마지막 봉: {last["date"]}')
     print(f'  combined target: {dict(sorted(last["target"].items(), key=lambda x: -x[1]))}')
 
-# ─── fut V23 ───
-print('\n[fut] V23: D_SMA42 sn=57 n=3 drift=0.05 L3')
+# ─── fut V24 ───
+print('\n[fut] V24: D_SMA42 sn=57 n=3 drift=0.05 L3')
 fut_trace = []
 ub.run(bars_D, funding, interval='D', asset_type='fut', leverage=3.0,
        sma_days=42, mom_short_days=18, mom_long_days=127,
@@ -56,8 +56,8 @@ if fut_trace:
     print(f'  마지막 봉: {last["date"]}')
     print(f'  combined target: {dict(sorted(last["target"].items(), key=lambda x: -x[1]))}')
 
-# ─── stock V23 ───
-print('\n[stock] V23: SNAP=69 STAGGER=23 N=3')
+# ─── stock V24 ───
+print('\n[stock] V24: SNAP=69 STAGGER=23 N=3')
 OFF = ('SPY', 'QQQ', 'VEA', 'EEM', 'EWJ', 'GLD', 'PDBC')
 DEF = ('IEF', 'BIL', 'BNDX', 'GLD', 'PDBC')
 CAN = ('EEM',)
