@@ -785,25 +785,36 @@ def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -
     strats = state.get('strategies', {})
     new_combined: Dict[str, float] = {}
     n_strats = max(1, len(STRATEGIES))
+    log.info(f"refill v2 fut: 시작. strategies={n_strats}")
 
     for strat_name, sp in STRATEGIES.items():
         ss = strats.get(strat_name, {})
         snaps = ss.get('snapshots') or []
         if not snaps:
+            log.warning(f"refill v2 [{strat_name}]: snapshots 없음 → skip")
             continue
         mom_s = sp['mom_short_bars']
         mom_l = sp['mom_long_bars']
+        log.info(f"refill v2 [{strat_name}]: snaps={len(snaps)} mom_s={mom_s} mom_l={mom_l}")
+
+        _fail_cache: Dict[str, Tuple[bool, float, float]] = {}
 
         def _is_failed(coin: str) -> bool:
+            if coin in _fail_cache:
+                return _fail_cache[coin][0]
             df = bars.get(coin)
             if df is None or df.empty:
+                _fail_cache[coin] = (False, 0.0, 0.0)
                 return False
             c = df['Close'].values
             if len(c) < max(mom_s, mom_l) + 1:
+                _fail_cache[coin] = (False, 0.0, 0.0)
                 return False
             ms = calc_mom(c, mom_s)
             ml = calc_mom(c, mom_l)
-            return ms < 0 and ml < 0
+            fail = ms < 0 and ml < 0
+            _fail_cache[coin] = (fail, ms, ml)
+            return fail
 
         healthy_pool: List[Tuple[str, float]] = []
         for coin, df in bars.items():
@@ -819,31 +830,42 @@ def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -
         # tie-break: 심볼 오름차순으로 결정성 보장
         healthy_pool.sort(key=lambda x: (-x[1], x[0]))
         healthy_sorted = [c for c, _ in healthy_pool]
+        log.info(f"refill v2 [{strat_name}]: healthy_pool top5={[(c, f'{m*100:+.1f}%') for c, m in healthy_pool[:5]]} (total {len(healthy_pool)})")
 
         new_snaps = []
-        for snap in snaps:
+        change_count = 0
+        for si, snap in enumerate(snaps):
             sn_coins = sorted([c for c in snap if c.upper() != 'CASH'])
             new_sn: Dict[str, float] = {}
             replaced = 0.0
+            failed_coins: List[str] = []
             for c in sn_coins:
                 if _is_failed(c):
                     replaced += float(snap.get(c, 0.0))
+                    failed_coins.append(c)
                 else:
                     new_sn[c] = float(snap.get(c, 0.0))
             cash_w = sum(float(snap.get(k, 0.0)) for k in snap if k.upper() == 'CASH')
             new_sn['CASH'] = cash_w
+            picks_made: List[str] = []
             if replaced > 0:
                 fresh_picks = [c for c in healthy_sorted if c not in new_sn]
                 n_failed = len(sn_coins) - sum(1 for k in new_sn if k.upper() != 'CASH')
                 n_failed = max(1, n_failed)
                 if fresh_picks:
-                    picks = fresh_picks[:n_failed]
-                    w_per = replaced / len(picks)
-                    for c in picks:
+                    picks_made = fresh_picks[:n_failed]
+                    w_per = replaced / len(picks_made)
+                    for c in picks_made:
                         new_sn[c] = new_sn.get(c, 0.0) + w_per
                 else:
                     new_sn['CASH'] = new_sn.get('CASH', 0.0) + replaced
             new_snaps.append(new_sn)
+            if failed_coins:
+                fail_detail = ','.join(f'{c}(ms={_fail_cache[c][1]*100:+.1f},ml={_fail_cache[c][2]*100:+.1f})' for c in failed_coins)
+                log.info(f"refill v2 [{strat_name}] snap[{si}]: failed=[{fail_detail}] replaced={replaced:.4f} → picks={picks_made or 'CASH'}")
+                change_count += 1
+        if change_count == 0:
+            log.info(f"refill v2 [{strat_name}]: 모든 snapshot 변경 없음 (fail 없음)")
 
         ss['snapshots'] = new_snaps
         n_snap = len(new_snaps) or 1
@@ -1672,11 +1694,18 @@ def main():
         # V24 refill v2 — drift fire 시 mom2 음수 슬롯 교체 후 combined 재계산
         if drift_fire_fut and REFILL_ENABLED_FUT:
             try:
+                combined_before = dict(combined)
                 combined = apply_refill_v2_fut(state, data)
                 coins_after = {k: f"{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0}
-                log.info(f"  🔁 V24 refill v2 적용: {coins_after or 'CASH 100%'}")
+                all_keys = set(combined_before) | set(combined)
+                diffs = sorted(
+                    [(k, combined.get(k, 0) - combined_before.get(k, 0)) for k in all_keys],
+                    key=lambda x: -abs(x[1])
+                )[:5]
+                top_diffs = [(k, f'{d*100:+.1f}%') for k, d in diffs if abs(d) > 1e-6]
+                log.info(f"  🔁 V24 refill v2 적용: {coins_after or 'CASH 100%'} | top diffs={top_diffs}")
             except Exception as e:
-                log.warning(f"refill v2 skipped: {e}")
+                log.warning(f"refill v2 skipped: {e}", exc_info=True)
 
         # 옵션 Z: cap_defend trigger (drift 와 별개)
         if _drift_cap_ratio is not None and _drift_cap_ratio < (1.0 - CAP_DEFEND_MIN_EXCESS):
