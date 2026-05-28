@@ -2668,6 +2668,20 @@ if __name__ == "__main__":
             alloc_lines.append(f"  (조회 실패: {ex_ov})")
 
         # 드리프트 — 현재 보유 비중 vs 목표 비중에서 직접 계산 (state file 미사용)
+        def _apply_buffer(port, sleeve):
+            """raw port → cash buffer 적용된 target. cash 없으면 sleeve buffer 추가."""
+            buf = get_cash_buffer(sleeve)
+            has_cash = any(str(k).lower() == 'cash' for k in (port or {}).keys())
+            out = {}
+            for k, w in (port or {}).items():
+                if str(k).lower() == 'cash':
+                    out[k] = float(w)
+                else:
+                    out[k] = float(w) * (1.0 - buf)
+            if not has_cash and buf > 0:
+                out['Cash'] = buf
+            return out
+
         def _ht_from_holdings(acct, total_krw, target_dict):
             """half_turnover = sum(|cur_w - tgt_w|) / 2. cash 포함."""
             if total_krw <= 0:
@@ -2690,7 +2704,7 @@ if __name__ == "__main__":
         try:
             stock_acct_d = (accts.get("stock_kis") or {}) if 'accts' in locals() else {}
             stock_total_d = float(stock_acct_d.get("total_krw", 0))
-            ht_st = _ht_from_holdings(stock_acct_d, stock_total_d, s_port or {})
+            ht_st = _ht_from_holdings(stock_acct_d, stock_total_d, _apply_buffer(s_port or {}, 'stock'))
             thr_st = 0.10
             if ht_st is None:
                 drift_lines.append("  주식: 잔고 없음")
@@ -2705,7 +2719,7 @@ if __name__ == "__main__":
         try:
             spot_acct_d = (accts.get("coin_upbit") or {}) if 'accts' in locals() else {}
             spot_total_d = float(spot_acct_d.get("total_krw", 0))
-            ht_sp = _ht_from_holdings(spot_acct_d, spot_total_d, c_port or {})
+            ht_sp = _ht_from_holdings(spot_acct_d, spot_total_d, _apply_buffer(c_port or {}, 'spot'))
             thr_sp = 0.10
             if ht_sp is None:
                 drift_lines.append("  업비트: 잔고 없음")
@@ -2721,7 +2735,7 @@ if __name__ == "__main__":
             fut_acct_d = (accts.get("coin_binance") or {}) if 'accts' in locals() else {}
             fut_total_d = float(fut_acct_d.get("total_krw", 0))
             fut_target = last_combined if 'last_combined' in locals() and last_combined else {}
-            ht_f = _ht_from_holdings(fut_acct_d, fut_total_d, fut_target)
+            ht_f = _ht_from_holdings(fut_acct_d, fut_total_d, _apply_buffer(fut_target, 'fut') if fut_target else {})
             thr_f = 0.03
             if ht_f is None:
                 drift_lines.append("  바이낸스: 잔고 없음")
