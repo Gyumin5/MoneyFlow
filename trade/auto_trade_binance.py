@@ -1843,6 +1843,54 @@ def verify_leverage(client: Client, symbol: str, expected: int) -> bool:
     return ok
 
 
+def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notional: float,
+                                        target_notional: float, mark_price: float) -> bool:
+    """V25 cycle 8 P1: L 낮춤 전 사전 부분 매도 (reduceOnly).
+
+    new_L < current_L 인 코인은 used_margin 증가로 wallet 부족 (-4131) 위험.
+    target_notional_new 까지 미리 줄임 → set_leverage 안전 통과.
+    잔여 미세 조정은 execute_rebalance 가 처리.
+
+    Returns: True (성공 또는 매도 불필요), False (실패 → 호출자 ABORT).
+    """
+    # 안전 버퍼 1% (가격 변동/슬리피지 대비)
+    buffered_target = target_notional * 1.01
+    if current_notional <= buffered_target + 1e-6:
+        if DEBUG_LEVERAGE:
+            log.info(f"  {sym} 사전매도 불필요: current={current_notional:.2f} <= target+buf={buffered_target:.2f}")
+        return True
+    if mark_price <= 0:
+        log.error(f"_v25_partial_sell {sym}: mark_price={mark_price} 비정상")
+        return False
+    sell_notional = current_notional - target_notional
+    sell_qty_raw = sell_notional / mark_price
+    constraints = get_symbol_constraints(client, sym)
+    step = constraints.get('step_size', 0.0) or 0.000001
+    min_qty = constraints.get('min_qty', 0.0)
+    min_notional = constraints.get('min_notional', MIN_NOTIONAL)
+    sell_qty = (sell_qty_raw // step) * step
+    if sell_qty < min_qty or sell_qty * mark_price < min_notional:
+        log.warning(f"  {sym} 사전매도 skip: qty {sell_qty} 가 min_qty/min_notional 미달")
+        return True  # 어차피 차이 작음. ABORT 안 함.
+    log.info(f"  {sym} L 낮춤 사전매도: notional ${current_notional:.2f} → ${target_notional:.2f} "
+             f"(qty={sell_qty}, mark=${mark_price:.4f})")
+    try:
+        order = client.futures_create_order(
+            symbol=sym, side='SELL', type='MARKET', quantity=sell_qty, reduceOnly=True
+        )
+        if DEBUG_LEVERAGE:
+            log.info(f"  사전매도 OK {sym} orderId={order.get('orderId')}")
+        import time as _t
+        _t.sleep(0.5)  # 체결 안정화
+        return True
+    except BinanceAPIException as e:
+        log.error(f"  {sym} 사전매도 실패: code={getattr(e,'code',None)} msg={e}")
+        return False
+    except Exception as e:
+        log.error(f"  {sym} 사전매도 예외: {e}")
+        return False
+
+
 def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):
     """봇이 관리하는 일반/알고리즘 조건부 주문 정리."""
     symbol_set = set(symbols or UNIVERSE)
@@ -2307,6 +2355,47 @@ def main():
                 if not ensure_position_mode_oneway(client):
                     err = "V25 ABORT: one-way mode 보장 실패 — 매매 차단"
                     log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
+            if not v25_abort:
+                # cycle 8 P1: L 낮춤 전 사전 부분매도 — set_leverage 가 used_margin 증가로 -4131 거부하는 케이스 방지
+                # 룰: new_L < current_L 이면 비율(new_L/current_L) 만큼 reduceOnly 매도 → set_leverage → 잔여 미세조정은 execute_rebalance
+                # L 올림은 그대로 두고 execute_rebalance 가 매수 처리
+                for coin, new_lev in target_lev_map.items():
+                    sym = coin + 'USDT'
+                    info = _fetch_position_info(client, sym)
+                    if info is None:
+                        continue
+                    row = _pick_oneway_row(info)
+                    if row is None:
+                        continue
+                    try:
+                        pos_amt = abs(float(row.get('positionAmt', 0) or 0))
+                        cur_lev = int(float(row.get('leverage', 0) or 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if pos_amt <= 0 or cur_lev <= 0 or new_lev >= cur_lev:
+                        continue
+                    # mark_price: futures_account row 의 entryPrice/markPrice 또는 ticker fallback
+                    mark = 0.0
+                    for k in ('markPrice', 'entryPrice'):
+                        v = row.get(k)
+                        if v:
+                            try:
+                                mark = float(v)
+                                if mark > 0: break
+                            except (TypeError, ValueError):
+                                pass
+                    if mark <= 0:
+                        try:
+                            mark = float(_with_retry(lambda: client.futures_mark_price(symbol=sym))['markPrice'])
+                        except Exception as e:
+                            log.error(f"V25 ABORT: {sym} mark_price 조회 실패: {e}")
+                            v25_abort = True; _v25_persist_abort_log(f"V25 ABORT: {sym} mark_price 조회 실패"); break
+                    current_notional = pos_amt * mark
+                    target_notional = current_notional * (new_lev / cur_lev)
+                    log.info(f"V25 L↓ {sym}: {cur_lev}x → {new_lev}x, 사전매도 notional ${current_notional:.2f} → ${target_notional:.2f}")
+                    if not _v25_partial_sell_for_leverage_down(client, sym, current_notional, target_notional, mark):
+                        err = f"V25 ABORT: {sym} L 낮춤 사전매도 실패 — 매매 차단"
+                        log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
             if not v25_abort:
                 # 각 코인: 마진모드 자동 보장 → leverage 동적 변경
                 for coin, lev in target_lev_map.items():
