@@ -28,6 +28,7 @@ import requests
 from common.io import load_json, save_json
 from common.notify import send_telegram as _send_tg
 from common.logging_utils import setup_file_logger, make_log_fn
+from common.health_guard import HealthGuard, UnknownExecutionError
 
 # ─── Config ───
 try:
@@ -1003,11 +1004,26 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
+    hg = HealthGuard(name='stock')
+    lock_reason = hg.is_locked()
+    if lock_reason:
+        log(f'🔒 health lock 활성 — {lock_reason}. 수동 해제 필요 (rm {hg.lock_file})')
+        send_telegram(f'🔒 주식 lock 활성 — 수동 확인 후 rm {hg.lock_file}')
+        sys.exit(0)
     try:
         run_once(dry_run=args.dry_run)
+        if not args.dry_run:
+            hg.record_success()
+    except UnknownExecutionError as e:
+        import traceback
+        log(f'⚠️ UNKNOWN_EXECUTION: {e}\n{traceback.format_exc()}')
+        hg.lock(f'UNKNOWN_EXECUTION: {e}')
+        send_telegram(f'⚠️ [주식] UNKNOWN_EXECUTION — 중복 주문 위험. 수동 확인 후 rm {hg.lock_file}: {e}')
+        sys.exit(3)
     except Exception as e:
         import traceback
         err = traceback.format_exc()
         log(f'🚨 FATAL ERROR: {e}')
         log(err)
-        send_telegram(f'🚨 [주식] executor 비정상 종료: {e}')
+        streak = hg.record_abort(str(e)) if not args.dry_run else 0
+        send_telegram(f'🚨 [주식] executor 비정상 종료 (streak={streak}): {e}')
