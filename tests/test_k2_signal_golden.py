@@ -14,8 +14,14 @@ from trade.auto_trade_binance import _calc_btc_cap_lev, _calc_percoin_k2_lev
 from strategies.cap_defend.backtest_futures_v25 import build_K2_signal
 
 
-def _make_series(close_list, start='2024-01-01'):
-    idx = pd.date_range(start, periods=len(close_list), freq='D')
+def _make_series(close_list, end=None):
+    """End date defaults to yesterday UTC (so live helper finds completed bar at end)."""
+    from datetime import datetime, timezone, timedelta
+    if end is None:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        current = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = current - timedelta(days=1)  # completed bar = yesterday UTC
+    idx = pd.date_range(end=end, periods=len(close_list), freq='D')
     return pd.DataFrame({'Close': close_list}, index=idx)
 
 
@@ -58,14 +64,19 @@ def main():
     sig_idx_last = sig['BTC'].index[-1]
     assert last_ts == sig_idx_last, f"timestamp mismatch: bars[-1]={last_ts} vs sig[-1]={sig_idx_last}"
 
-    # cycle 5 P1: close[:-1] 경계 — bars 의 마지막 봉(진행중) 이 변해도 live 결과 불변
+    # cycle 7: UTC anchor — bars 끝에 "오늘 UTC (진행중)" 봉 추가해도 live 결과 불변
+    from datetime import datetime, timezone, timedelta
     bars_mod = _make_bars(seed=42)
     bars_mod['BTC'] = bars_mod['BTC'].copy()
-    # 마지막 봉 close 만 ±50% 흔들기 — close[:-1] 사용 시 결과 동일
     orig_btc_lev = _calc_btc_cap_lev(bars_mod)
-    bars_mod['BTC'].iloc[-1, bars_mod['BTC'].columns.get_loc('Close')] *= 1.5
+    # 마지막에 "오늘 UTC 자정" 행 추가 (진행중) — helper 가 자동 drop 해야 함
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    current_open = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    extra_close = bars_mod['BTC']['Close'].iloc[-1] * 1.5  # 인위적 강세 신호 가짜
+    bars_mod['BTC'].loc[current_open] = {'Close': extra_close}
     after_btc_lev = _calc_btc_cap_lev(bars_mod)
-    assert orig_btc_lev == after_btc_lev, f"close[:-1] 위반: 진행중 봉 변화로 leverage 가 변함 ({orig_btc_lev}->{after_btc_lev})"
+    assert orig_btc_lev == after_btc_lev, \
+        f"UTC anchor 위반: 진행중봉 추가로 leverage 변함 ({orig_btc_lev}->{after_btc_lev})"
 
     # cycle 5 P1: shift(1) lag — BT 의 signal[T] 은 T-1 까지의 정보만 사용
     # (bars 끝에 한 봉 추가 시 sig[-2] 가 이전 sig[-1] 과 같아야 함)
@@ -85,10 +96,13 @@ def main():
 
     # cycle 5 P1: min() clip 명시 검증 — BTC_cap=2, per-coin K2=4 면 final=2
     # 인위적 fixture: BTC 횡보(cap=2) + ETH 강한 상승(K2=4) → min=2
+    from datetime import datetime, timezone, timedelta
     n = 80
-    idx = pd.date_range('2024-01-01', periods=n, freq='D')
-    btc_flat = [50000.0] * n  # ratio=1.0 → cap=L_min(2)
-    eth_strong = [3000.0 * (1.03 ** i) for i in range(n)]  # 매일 3% → 7-day ratio ≈ 1.03^3 ≈ 1.093 > 1.075
+    end_completed = (datetime.now(timezone.utc).replace(tzinfo=None).replace(hour=0,minute=0,second=0,microsecond=0)
+                     - timedelta(days=1))
+    idx = pd.date_range(end=end_completed, periods=n, freq='D')
+    btc_flat = [50000.0] * n
+    eth_strong = [3000.0 * (1.03 ** i) for i in range(n)]
     bars_clip = {
         'BTC': pd.DataFrame({'Close': btc_flat}, index=idx),
         'ETH': pd.DataFrame({'Close': eth_strong}, index=idx),
