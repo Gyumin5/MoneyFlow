@@ -1,7 +1,7 @@
 """
-Cap Defend V24 Recommendation Script
+Cap Defend V25 Recommendation Script
 ===================================
-V24 (2026-04-30 확정): 모든 자산 1D 단일 + drift trigger.
+V25 (2026-05-28 도입): 선물 sleeve K2 + 동적 per-coin L + CROSS 마진. 코인/주식 V24 유지.
 
 Stock V24 (snap-based 3-tranche stagger sd=69, stagger=23):
   - signal 생성은 recommend_personal.py 단계, executor 가 snap-based 3-tranche stagger 적용.
@@ -11,11 +11,15 @@ Coin V24: 1D 단일 멤버 D_SMA42 (live engine: trade/coin_live_engine.py)
   - D_SMA42: 1D봉, SMA42, Mom20/127, snap 217봉×7, drift_threshold=0.10
   - 이전 H4_SMA240 멤버 제거 (4h 데이터 fetch 제거)
 
-Futures V24: 1D 단일 멤버 D_SMA42 + L3 고정 (auto_trade_binance.py)
-  - D_SMA42: 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (05-04 갱신)
-  - 가드 없음, 스탑 없음
+Futures V25: D_SMA42 sleeve + 동적 per-coin L + CROSS (auto_trade_binance.py)
+  - Sleeve: D_SMA42 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (V24 와 동일)
+  - 동적 L: 각 코인 L = min(BTC_cap, K2_per_coin). Lmin=2 / Lmid=3 / Lmax=4
+    · BTC cap: BTC/SMA42 ratio → L4(>1.05) / L3(>1.015) / L2
+    · K2 per-coin: close/SMA7 ratio → L4(>1.075) / L3(>1.025) / L2
+  - 마진모드: CROSS (V24 ISOLATED → V25 CROSS)
+  - BT: 단독 sleeve Cal 8.12 / MDD -38.3% / CAGR 312% (5.6yr)
 
-Asset Allocation: 60/25/15 (V24 갱신 2026-05-22), 리밸 트리거: T1(ht≥20pp) OR T3U_can(max rel-under≥25% & sleeve canary ON)
+Asset Allocation: 60/25/15 (V24 갱신 2026-05-22 유지), 리밸 트리거: T1(ht≥20pp) OR T3U_can(max rel-under≥25% & sleeve canary ON)
 """
 
 import os
@@ -200,18 +204,22 @@ def save_daily_live_snapshot():
         "cash_krw": cash_krw,
         "total_krw": total_krw,
     }
-STRATEGY_VERSION = "V24"
+STRATEGY_VERSION = "V25"
 VERSION_HISTORY = [
-    ("V24", "2026-04-30",
-     "전 자산 V24: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). 가드 없음, 자산배분 60/25/15 (V24 갱신 2026-05-22, M 안).",
+    ("V25", "2026-05-28",
+     "선물 sleeve V24 → V25 (K2 동적 per-coin L + CROSS 마진). 단독 BT Cal 8.12 / MDD -38.3% / CAGR 312%. 코인 spot / 주식 sleeve V24 유지.",
      """<b>▶ 코인 현물 (V24 — 1D 단일 D_SMA42 + drift)</b>
 • <b>D_SMA42:</b> 일봉 · SMA42 · Mom20/127 · snap 217봉×7 · canary hyst 1.5% · drift_threshold 0.10
 • <b>헬스:</b> Mom_short&gt;0 AND Mom_long&gt;0 AND daily Vol≤5%
 • <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py
 
-<b>▶ 선물 (V24 — 1D 단일 D_SMA42 + drift)</b>
-• <b>D_SMA42:</b> 일봉 · SMA42 · Mom18/127 · snap 95봉×5 · drift_threshold 0.03
-• 고정 3x · 가드 없음
+<b>▶ 선물 (V25 — D_SMA42 + 동적 per-coin L + CROSS, 2026-05-28 도입)</b>
+• <b>Sleeve:</b> D_SMA42 sn=95 n=5 drift=0.03 (V24 와 동일)
+• <b>동적 L:</b> 각 코인 L = min(BTC_cap, K2_per_coin), Lmin=2 / Lmid=3 / Lmax=4
+  · BTC cap: BTC/SMA42 ratio &gt; 1.05 → L4, &gt; 1.015 → L3, else L2
+  · K2 per-coin: close/SMA7 ratio &gt; 1.075 → L4, &gt; 1.025 → L3, else L2
+• <b>마진모드:</b> CROSS (V24 ISOLATED → V25 CROSS)
+• 가드 없음 · BT Cal 8.12 단독 sleeve · alloc 60/25/15 Cal 5.72
 
 <b>▶ 주식 (V24 — snap-based stagger sd=69)</b>
 • <b>유니버스:</b> SPY, QQQ, VEA, EEM, EWJ, GLD, PDBC (7종, R7B)
@@ -220,7 +228,10 @@ VERSION_HISTORY = [
 • <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
-<b>▶ 자산배분:</b> 60/25/15 (주식계좌/현물/선물, V24 갱신 2026-05-26 B 안). 트리거: T1(ht≥20pp) OR T3U_can(max rel-under≥25% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
+<b>▶ 자산배분:</b> 60/25/15 (주식계좌/현물/선물, V24 그대로 유지). 트리거: T1(ht≥20pp) OR T3U_can(max rel-under≥25% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
+    ("V24", "2026-04-30",
+     "전 자산 V24: 코인/선물 1D 단일 + drift trigger, 주식 snap-based stagger (sd=69, stagger=23). V25 (선물 K2) 로 대체.",
+     """V24 선물 sleeve: D_SMA42 + 고정 L3 ISO. V25 도입으로 deprecated."""),
 ]
 
 STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15  # V24 그리드 best (2026-05-27): 65/20/15 → 60/25/15. BT Cal 3.86, MDD -18.2%, CAGR 70.5% (5.6yr)

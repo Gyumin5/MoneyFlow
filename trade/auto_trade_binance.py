@@ -117,16 +117,34 @@ def _read_alloc_transit_cap_ratio_fut():
             continue
     return None
 
-# V24 전략/실행 파라미터 (1D 단일 멤버, drift=0.05, 2026-04-30 확정)
-# 고정 3배 레버리지, 가드 없음
-LEVERAGE_FLOOR = 3
-LEVERAGE_MID = 3
-LEVERAGE_CEILING = 3
-STOP_PCT = 0.0            # 가드 비활성
-STOP_GATE_CASH_THRESHOLD = 0.0  # cash_guard 비활성
-LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30  # 동적 lev 비활성이지만 상수 유지
+# V25 전략/실행 파라미터 (2026-05-28 도입, K2 + 동적 L + CROSS)
+# 동적 per-coin L: min(BTC_cap, per_coin_K2). Lmin=2, Lmid=3, Lmax=4
+# 마진모드 CROSS (ISOLATED → CROSS)
+# 가드 없음 (분산 + per-coin L 자체 방어)
+LEVERAGE_FLOOR = 2        # V25: Lmin (V24 L3 → V25 L2)
+LEVERAGE_MID = 3          # V25: Lmid (V24 와 동일)
+LEVERAGE_CEILING = 4      # V25: Lmax (V24 L3 → V25 L4)
+STOP_PCT = 0.0            # 가드 비활성 (V24 동일)
+STOP_GATE_CASH_THRESHOLD = 0.0
+LEVERAGE_MOM_LOOKBACK_BARS = 24 * 30  # legacy, V25 K2 SMA 가 대체
 
-SCHEMA_VERSION = 'V24'
+# V25 K2 (per-coin SMA-based) 파라미터
+K2_SMA_PERIOD = 7         # 짧은 SMA — 빠른 trend 반영
+K2_HYST = 0.025           # h=2.5% → thr_mid=1.025, thr_max=1.075
+
+# V25 BTC cap 파라미터 (BTC SMA42 ratio 기반)
+BTC_CAP_SMA_PERIOD = 42
+BTC_CAP_THR_MID = 1.015
+BTC_CAP_THR_MAX = 1.05
+
+# V25 마진모드
+MARGIN_TYPE = 'CROSSED'   # Binance API 표기 ('CROSSED' or 'ISOLATED')
+
+# 디버그 로그 (V25 도입 — 동적 L 검증용)
+DEBUG_LEVERAGE = True     # 매 cron L 결정 detail
+DEBUG_MARGIN = True       # set_margin_type / set_leverage 결과
+
+SCHEMA_VERSION = 'V25'
 REFILL_ENABLED_FUT = True  # V24 refill v2 ON (drift fire 시 mom2 음수 슬롯 교체)
 DRIFT_THRESHOLD_FUT = 0.03  # V24 갱신 (05-04): 0.05 → 0.03
 DRIFT_ENABLED_FUT = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
@@ -541,21 +559,93 @@ def apply_cash_degrade(lev: int, cash_w: float) -> int:
     return LEVERAGE_FLOOR
 
 
-def get_coin_leverage_map(target: Dict[str, float], data_1h: Dict[str, pd.DataFrame]) -> Dict[str, int]:
+def _calc_btc_cap_lev(data_d: Dict[str, pd.DataFrame]) -> int:
+    """V25 BTC cap: BTC SMA42 ratio 기반.
+    > BTC_CAP_THR_MAX(1.05) → Lmax(4)
+    > BTC_CAP_THR_MID(1.015) → Lmid(3)
+    else → Lmin(2)
+    prev_date(t-1) 기준.
+    """
+    btc_df = data_d.get('BTC')
+    if btc_df is None or btc_df.empty:
+        return LEVERAGE_FLOOR
+    close = btc_df['Close'].values
+    if len(close) < BTC_CAP_SMA_PERIOD + 2:
+        return LEVERAGE_FLOOR
+    # prev_date 기준 — iloc[-1] 은 진행중 봉, iloc[-2] = 마지막 완성봉
+    prev_close = close[:-1]
+    sma = float(np.asarray(prev_close[-BTC_CAP_SMA_PERIOD:], dtype=float).mean())
+    cur = float(prev_close[-1])
+    if sma <= 0:
+        return LEVERAGE_FLOOR
+    ratio = cur / sma
+    if ratio > BTC_CAP_THR_MAX:
+        lev = LEVERAGE_CEILING
+    elif ratio > BTC_CAP_THR_MID:
+        lev = LEVERAGE_MID
+    else:
+        lev = LEVERAGE_FLOOR
+    if DEBUG_LEVERAGE:
+        log.info(f"  BTC_cap: prev_close=${cur:,.2f} SMA{BTC_CAP_SMA_PERIOD}=${sma:,.2f} "
+                 f"ratio={ratio:.4f} → L={lev}")
+    return lev
+
+
+def _calc_percoin_k2_lev(coin: str, data_d: Dict[str, pd.DataFrame]) -> int:
+    """V25 per-coin K2: close/SMA{K2_SMA_PERIOD} ratio 기반.
+    > 1 + K2_HYST*3 (1.075) → Lmax(4)
+    > 1 + K2_HYST (1.025) → Lmid(3)
+    else → Lmin(2)
+    prev_date(t-1) 기준.
+    """
+    df = data_d.get(coin)
+    if df is None or df.empty:
+        return LEVERAGE_FLOOR
+    close = df['Close'].values
+    if len(close) < K2_SMA_PERIOD + 2:
+        return LEVERAGE_FLOOR
+    prev_close = close[:-1]
+    sma = float(np.asarray(prev_close[-K2_SMA_PERIOD:], dtype=float).mean())
+    cur = float(prev_close[-1])
+    if sma <= 0:
+        return LEVERAGE_FLOOR
+    ratio = cur / sma
+    thr_max = 1.0 + K2_HYST * 3
+    thr_mid = 1.0 + K2_HYST
+    if ratio > thr_max:
+        lev = LEVERAGE_CEILING
+    elif ratio > thr_mid:
+        lev = LEVERAGE_MID
+    else:
+        lev = LEVERAGE_FLOOR
+    if DEBUG_LEVERAGE:
+        log.info(f"  K2[{coin}]: prev_close={cur:.4f} SMA{K2_SMA_PERIOD}={sma:.4f} "
+                 f"ratio={ratio:.4f} → L={lev}")
+    return lev
+
+
+def get_coin_leverage_map(target: Dict[str, float], data_1h: Dict[str, pd.DataFrame],
+                          data_d: Optional[Dict[str, pd.DataFrame]] = None) -> Dict[str, int]:
+    """V25 동적 per-coin L. 최종 L = min(BTC_cap, per_coin_K2).
+
+    data_d (1D 봉) 가 필요 (K2 + BTC cap 모두 1D 기반).
+    data_d=None 이면 fallback (LEVERAGE_FLOOR).
+    """
     coins = get_target_coins(target)
     if not coins:
         return {}
-    ranked = rank_coins_capmom(target, data_1h)
-    cash_w = target.get('CASH', 0.0)
+    if data_d is None:
+        log.warning("V25 get_coin_leverage_map: data_d 없음 → 모든 코인 LEVERAGE_FLOOR fallback")
+        return {coin: LEVERAGE_FLOOR for coin in coins}
+
+    btc_cap = _calc_btc_cap_lev(data_d)
     lev_map = {}
-    for idx, coin in enumerate(ranked):
-        if idx == 0:
-            lev = LEVERAGE_CEILING
-        elif idx <= 2:
-            lev = LEVERAGE_MID
-        else:
-            lev = LEVERAGE_FLOOR
-        lev_map[coin] = apply_cash_degrade(lev, cash_w)
+    for coin in coins:
+        pc_lev = _calc_percoin_k2_lev(coin, data_d)
+        final_lev = min(btc_cap, pc_lev)
+        lev_map[coin] = final_lev
+        if DEBUG_LEVERAGE:
+            log.info(f"  {coin} → final L = min(BTC_cap={btc_cap}, K2={pc_lev}) = {final_lev}")
     return lev_map
 
 
@@ -1328,22 +1418,370 @@ def needs_rebalance(client: Client, target: Dict[str, float], current_positions:
     return False
 
 
-def set_leverage(client: Client, symbol: str, leverage: int):
-    """레버리지 설정."""
+def set_leverage(client: Client, symbol: str, leverage: int) -> bool:
+    """레버리지 설정. V25 — bool 반환, 실패 시 False. transient retry."""
     try:
-        client.futures_change_leverage(symbol=symbol, leverage=leverage)
+        resp = _with_retry(lambda: client.futures_change_leverage(symbol=symbol, leverage=leverage))
+        if DEBUG_LEVERAGE:
+            log.info(f"  set_leverage OK {symbol}={leverage}x resp={resp}")
+        return True
     except BinanceAPIException as e:
-        if 'No need to change' not in str(e):
-            log.warning(f"set_leverage {symbol}: {e}")
+        if _is_idempotent_error(e):
+            if DEBUG_LEVERAGE:
+                log.info(f"  set_leverage {symbol}={leverage}x idempotent (code={getattr(e,'code',None)})")
+            return True
+        log.error(f"set_leverage FAILED {symbol}={leverage}: code={getattr(e,'code',None)} msg={e}")
+        return False
 
 
-def set_margin_type(client: Client, symbol: str, margin_type: str = 'ISOLATED'):
-    """마진 모드 설정."""
+def set_margin_type(client: Client, symbol: str, margin_type: str = 'CROSSED') -> bool:
+    """마진 모드 설정. V25 — bool 반환. transient retry."""
     try:
-        client.futures_change_margin_type(symbol=symbol, marginType=margin_type)
+        resp = _with_retry(lambda: client.futures_change_margin_type(symbol=symbol, marginType=margin_type))
+        if DEBUG_MARGIN:
+            log.info(f"  set_margin OK {symbol}={margin_type} resp={resp}")
+        return True
     except BinanceAPIException as e:
-        if 'No need to change' not in str(e):
-            log.warning(f"set_margin {symbol}: {e}")
+        if _is_idempotent_error(e):
+            if DEBUG_MARGIN:
+                log.info(f"  set_margin {symbol}={margin_type} idempotent (code={getattr(e,'code',None)})")
+            return True
+        log.error(f"set_margin FAILED {symbol}={margin_type}: code={getattr(e,'code',None)} msg={e}")
+        return False
+
+
+# V25: margin_type 정규화 명시 매핑 (cycle 2 fix — 'isolated'.replace('ed','') 취약 정규화 제거)
+_MARGIN_NORM = {
+    'crossed': 'cross', 'cross': 'cross',
+    'isolated': 'isolated', 'isolate': 'isolated',
+}
+
+# V25 cycle 5 A: ABORT 알림 disk persist (process kill 대비 — Telegram flush 의존 제거)
+V25_ABORT_LOG = os.path.expanduser('~/binance_abort.log')
+
+
+def _v25_persist_abort_log(msg: str):
+    """V25 cycle 5 A: ABORT 발생 시 즉시 disk flush. Telegram 실패/프로세스 kill 시에도 잔존."""
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(V25_ABORT_LOG, 'a') as f:
+            f.write(f"[{ts} KST] {msg}\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())  # 강제 디스크 sync
+            except Exception:
+                pass
+    except Exception as e:
+        log.error(f"_v25_persist_abort_log 실패: {e}")
+
+
+# V25 cycle 6: 건강성 / heartbeat / abort_streak / reconciliation
+V25_HEALTH_FILE = os.path.expanduser('~/.binance_v25_health.json')
+V25_LOCK_FILE = os.path.expanduser('~/.binance_v25_lock')  # 연속 ABORT 시 자동 lock
+V25_ABORT_STREAK_LOCK_THRESHOLD = 3  # 3일 연속 ABORT → 자동 lock
+
+
+def _v25_read_health() -> dict:
+    try:
+        with open(V25_HEALTH_FILE) as f:
+            import json as _j
+            return _j.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        log.warning(f"_v25_read_health 실패: {e}")
+        return {}
+
+
+def _v25_write_health(data: dict):
+    import json as _j
+    try:
+        tmp = V25_HEALTH_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            _j.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            try: os.fsync(f.fileno())
+            except Exception: pass
+        os.replace(tmp, V25_HEALTH_FILE)
+    except Exception as e:
+        log.error(f"_v25_write_health 실패: {e}")
+
+
+def _v25_record_cron_result(success: bool, abort_reason: str = '',
+                            intent: Optional[dict] = None,
+                            actual: Optional[dict] = None) -> int:
+    """cycle 6: cron 완료 시 헬스 상태 갱신.
+    Returns: abort_streak (성공시 0).
+    """
+    from datetime import datetime
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    h = _v25_read_health()
+    if success:
+        h['last_success_at'] = now
+        h['abort_streak'] = 0
+        h['last_abort_reason'] = ''
+        if intent is not None:
+            h['last_intent'] = intent
+        if actual is not None:
+            h['last_actual'] = actual
+    else:
+        h['abort_streak'] = int(h.get('abort_streak', 0)) + 1
+        h['last_abort_at'] = now
+        h['last_abort_reason'] = abort_reason[:500]
+    _v25_write_health(h)
+    return int(h.get('abort_streak', 0))
+
+
+def _v25_check_lock() -> Optional[str]:
+    """lock file 존재 시 그 사유 반환. 없으면 None."""
+    try:
+        with open(V25_LOCK_FILE) as f:
+            return f.read().strip() or 'locked'
+    except FileNotFoundError:
+        return None
+    except Exception:
+        return None
+
+
+def _v25_create_lock(reason: str):
+    """V25 cron 자동 정지 — 수동 해제 (`rm ~/.binance_v25_lock`) 필요."""
+    try:
+        with open(V25_LOCK_FILE, 'w') as f:
+            from datetime import datetime
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} KST\n{reason}\n")
+    except Exception as e:
+        log.error(f"_v25_create_lock 실패: {e}")
+
+
+def _v25_reconcile(intent: dict, actual: dict) -> List[str]:
+    """주문 후 reconciliation — 의도 vs 실체결 차이 반환."""
+    diffs = []
+    intent_pos = intent.get('positions', {})
+    actual_pos = actual.get('positions', {})
+    for sym in set(intent_pos) | set(actual_pos):
+        i = intent_pos.get(sym, {})
+        a = actual_pos.get(sym, {})
+        if abs(i.get('notional', 0) - a.get('notional', 0)) > max(50.0, 0.05 * max(abs(i.get('notional', 0)), abs(a.get('notional', 0)), 1.0)):
+            diffs.append(f"{sym} notional: intent=${i.get('notional', 0):.2f} actual=${a.get('notional', 0):.2f}")
+        if i.get('leverage') and a.get('leverage') and int(i['leverage']) != int(a['leverage']):
+            diffs.append(f"{sym} L: intent={i['leverage']} actual={a['leverage']}")
+    if intent.get('margin_type') and actual.get('margin_type') and intent['margin_type'].lower() != actual['margin_type'].lower():
+        diffs.append(f"margin: intent={intent['margin_type']} actual={actual['margin_type']}")
+    return diffs
+
+
+# V25 Binance error code (cycle 3 P0 fix — 문자열 의존 제거)
+_BINANCE_IDEMPOTENT_CODES = {-4046, -4059}  # 'No need to change margin type' / 'No need to change position side'
+# V25 cycle 4 P0: -1022 (INVALID_SIGNATURE) 는 transient 아님 — 즉시 ABORT
+# V25 cycle 4 P1: -1003 (rate limit/429) transient 제외 — 짧은 재시도 대신 ABORT+알림 (긴 backoff 정책)
+# V25 cycle 4 P1: -1000/-1006/-1008 추가 (UNKNOWN/UNEXPECTED_RESP/SERVER_BUSY)
+_BINANCE_TRANSIENT_CODES = {-1000, -1001, -1006, -1007, -1008, -1021}
+_BINANCE_PRECONDITION_CODES = {-4061, -4068, -4111, -2014, -2015}  # position exist, isolate margin needed, mode dependency, api key invalid
+
+
+def _is_idempotent_error(e):
+    code = getattr(e, 'code', None)
+    if code is not None:
+        return code in _BINANCE_IDEMPOTENT_CODES
+    return 'No need to change' in str(e)  # fallback for older python-binance
+
+
+def _is_transient_error(e):
+    code = getattr(e, 'code', None)
+    if code is not None and code in _BINANCE_TRANSIENT_CODES:
+        return True
+    status = getattr(e, 'status_code', None)
+    return status is not None and 500 <= status < 600
+
+
+def _normalize_dual_side(val):
+    """V25 cycle 3 P0: dualSidePosition bool/str/int 안전 정규화."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        return val.strip().lower() in ('true', '1', 'yes')
+    return False
+
+
+def _with_retry(fn, retries=3, base_delay=1.0):
+    """V25 cycle 3 P1: transient error 시 bounded retry."""
+    import time as _t
+    last_exc = None
+    for attempt in range(retries):
+        try:
+            return fn()
+        except BinanceAPIException as e:
+            last_exc = e
+            if _is_transient_error(e) and attempt < retries - 1:
+                _t.sleep(base_delay * (2 ** attempt))
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+
+
+def _pick_oneway_row(info_list):
+    """V25: futures_position_information 응답에서 oneway 기준 positionSide=BOTH row 선택.
+
+    one-way mode 면 row 1개, positionSide='BOTH'.
+    hedge mode 면 row 다수, positionSide='LONG'/'SHORT' — V25 spec 위반. None 반환 → ABORT.
+    """
+    if not info_list:
+        return None
+    if len(info_list) == 1:
+        side = (info_list[0].get('positionSide') or '').upper()
+        if side in ('BOTH', ''):
+            return info_list[0]
+        return None
+    # 다중 row → hedge mode. BOTH 가 있는지 확인 (없으면 None)
+    for row in info_list:
+        side = (row.get('positionSide') or '').upper()
+        if side == 'BOTH':
+            return row
+    return None
+
+
+def verify_position_mode_oneway(client: Client) -> bool:
+    """V25: 계정 position mode 가 one-way 인지 검증."""
+    try:
+        mode = _with_retry(lambda: client.futures_get_position_mode())
+        # V25 cycle 3 P0 fix: bool/str/int 안전 정규화
+        dual = _normalize_dual_side(mode.get('dualSidePosition', False))
+        ok = (not dual)
+        if DEBUG_MARGIN:
+            log.info(f"  position_mode: dualSidePosition={dual} (raw={mode.get('dualSidePosition')!r}) → {'oneway OK' if ok else 'hedge mode'}")
+        return ok
+    except BinanceAPIException as e:
+        log.error(f"verify_position_mode_oneway: {e}")
+        return False
+
+
+def preflight_zero_positions(client: Client, symbols=None) -> bool:
+    """V25 cycle 4 P0: position mode 변경은 계정 단위 제약 — 계정 전체 심볼이 zero 여야 함.
+    symbols=None → 계정 전체 (cycle 4 권고, 기본). symbols list → 보고용 필터.
+    """
+    try:
+        info = _with_retry(lambda: client.futures_position_information())
+        non_zero = []
+        for row in info:
+            amt = abs(float(row.get('positionAmt', 0)))
+            if amt > 1e-9:
+                non_zero.append((row.get('symbol'), amt))
+        if non_zero:
+            log.error(f"preflight_zero_positions: 계정 전체 잔존 포지션 {non_zero} — 설정 변경 불가")
+            return False
+        if DEBUG_MARGIN:
+            log.info(f"  preflight_zero_positions OK (account-wide, all zero)")
+        return True
+    except BinanceAPIException as e:
+        log.error(f"preflight_zero_positions: {e}")
+        return False
+
+
+def preflight_zero_open_orders(client: Client, symbols=None) -> bool:
+    """V25 cycle 4 P0: 계정 전체 미체결 주문 0건 확인 (one-way / margin 변경 시 계정 전역 영향)."""
+    try:
+        orders = _with_retry(lambda: client.futures_get_open_orders())
+        if orders:
+            syms = sorted({o.get('symbol') for o in orders})
+            log.error(f"preflight_zero_open_orders: 계정 미체결 주문 {len(orders)}건 ({syms})")
+            return False
+        if DEBUG_MARGIN:
+            log.info(f"  preflight_zero_open_orders OK (account-wide, no orders)")
+        return True
+    except BinanceAPIException as e:
+        log.error(f"preflight_zero_open_orders: {e}")
+        return False
+
+
+def ensure_position_mode_oneway(client: Client) -> bool:
+    """V25: one-way mode 검증 + 필요 시 자동 변경."""
+    if verify_position_mode_oneway(client):
+        return True
+    log.info("position_mode = hedge → set one-way 시도")
+    try:
+        _with_retry(lambda: client.futures_change_position_mode(dualSidePosition=False))
+        if DEBUG_MARGIN:
+            log.info("  set_position_mode oneway OK")
+    except BinanceAPIException as e:
+        if _is_idempotent_error(e):
+            return True
+        log.error(f"set_position_mode oneway FAILED: code={getattr(e,'code',None)} msg={e}")
+        return False
+    # propagation 지연 대비
+    import time as _t
+    for _ in range(3):
+        if verify_position_mode_oneway(client):
+            return True
+        _t.sleep(0.5)
+    return False
+
+
+def ensure_margin_type(client: Client, symbol: str, expected: str = 'CROSSED') -> bool:
+    """V25: 마진모드 검증 + 필요 시 자동 변경. propagation 지연 대비 짧은 재조회."""
+    if verify_margin_type(client, symbol, expected):
+        return True
+    log.info(f"{symbol} 마진모드 ≠ {expected} → set {expected} 시도")
+    if not set_margin_type(client, symbol, expected):
+        return False
+    # P1: propagation 지연 대비 (Binance 변경 직후 즉시 조회 시 stale 가능)
+    import time as _t
+    for _ in range(3):
+        if verify_margin_type(client, symbol, expected):
+            return True
+        _t.sleep(0.5)
+    log.error(f"ensure_margin_type {symbol}: set 후에도 verify 실패")
+    return False
+
+
+def _fetch_position_info(client: Client, symbol: str = None):
+    """V25 cycle 3 P1: futures_position_information 호출 wrapper (transient retry)."""
+    try:
+        if symbol:
+            return _with_retry(lambda: client.futures_position_information(symbol=symbol))
+        return _with_retry(lambda: client.futures_position_information())
+    except BinanceAPIException as e:
+        log.error(f"_fetch_position_info({symbol}): {e}")
+        return None
+
+
+def verify_margin_type(client: Client, symbol: str, expected: str = 'CROSSED') -> bool:
+    """V25 cycle 4 P1: marginType 검증 — 항상 fresh fetch (set 직후 stale 방지 위해 cache 비허용)."""
+    info_list = _fetch_position_info(client, symbol)
+    if info_list is None:
+        return False
+    row = _pick_oneway_row(info_list)
+    if row is None:
+        log.error(f"verify_margin_type {symbol}: oneway row 없음 (hedge mode 또는 빈 응답)")
+        return False
+    actual = (row.get('marginType') or '').lower()
+    expected_norm = _MARGIN_NORM.get(expected.lower())
+    if expected_norm is None:
+        log.error(f"verify_margin_type {symbol}: 알 수 없는 expected={expected}")
+        return False
+    ok = (actual == expected_norm)
+    if DEBUG_MARGIN:
+        log.info(f"  verify_margin {symbol}: actual={actual} expected={expected_norm} → {'OK' if ok else 'MISMATCH'}")
+    return ok
+
+
+def verify_leverage(client: Client, symbol: str, expected: int) -> bool:
+    """V25 cycle 4 P1: leverage 검증 — 항상 fresh fetch (set 직후 stale 방지)."""
+    info_list = _fetch_position_info(client, symbol)
+    if info_list is None:
+        return False
+    row = _pick_oneway_row(info_list)
+    if row is None:
+        log.error(f"verify_leverage {symbol}: oneway row 없음")
+        return False
+    actual = int(float(row.get('leverage', 0)))
+    ok = (actual == expected)
+    if DEBUG_LEVERAGE:
+        log.info(f"  verify_leverage {symbol}: actual={actual} expected={expected} → {'OK' if ok else 'MISMATCH'}")
+    return ok
 
 
 def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):
@@ -1397,24 +1835,31 @@ def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):
                 log.warning(f"cancel algo {symbol} algoId={algo_id}: {e}")
 
 
-def force_cancel_all_orders(client: Client, symbols: Optional[List[str]] = None):
-    """심볼별 모든 열린 주문 강제 정리.
+def force_cancel_all_orders(client: Client, symbols: Optional[List[str]] = None) -> bool:
+    """심볼별 모든 열린 주문 강제 정리. V25 cycle 5 C: 실패 시 False 반환 → 호출자 ABORT.
 
     Binance가 조건부 closePosition 주문을 open_orders 목록에 노출하지 않는 경우가 있어,
     -4130 충돌 회피용으로 사용한다.
     """
     symbol_set = set(symbols or UNIVERSE)
+    failures = []
     for symbol in symbol_set:
         try:
             client.futures_cancel_all_open_orders(symbol=symbol)
             log.info(f"CANCEL ALL OPEN ORDERS {symbol}")
         except Exception as e:
             log.warning(f"cancel all open orders {symbol}: {e}")
+            failures.append((symbol, 'open', str(e)))
         try:
             client.futures_cancel_all_algo_open_orders(symbol=symbol)
             log.info(f"CANCEL ALL ALGO OPEN ORDERS {symbol}")
         except Exception as e:
             log.warning(f"cancel all algo open orders {symbol}: {e}")
+            failures.append((symbol, 'algo', str(e)))
+    if failures:
+        log.error(f"force_cancel_all_orders: {len(failures)} 건 실패 — {failures[:5]}")
+        return False
+    return True
 
 
 def count_stop_orders(client: Client, symbols: Optional[List[str]] = None) -> int:
@@ -1621,6 +2066,15 @@ def main():
             log.info(f"시작 지연: {jitter}s (크론 동시충돌 완화)")
             time.sleep(jitter)
 
+        # V25 cycle 6: lock 파일 확인 (3일 연속 ABORT 시 자동 lock — 수동 해제 필요)
+        lock_reason = _v25_check_lock()
+        if lock_reason:
+            err = f"V25 ABORT: lock 활성 — {lock_reason}. 수동 해제 필요 (rm {V25_LOCK_FILE})"
+            log.error(err)
+            send_telegram(f"🔒 {err}")
+            _v25_persist_abort_log(err)
+            return
+
         # 0. 유니버스 갱신 (CoinGecko top40 ∩ 바이낸스 USDT-M 선물 listing)
         refresh_universe(client)
 
@@ -1718,34 +2172,116 @@ def main():
         state['schema_version'] = SCHEMA_VERSION
 
         # 5. 리밸런싱
-        target_lev_map = get_coin_leverage_map(combined, data['1h'])
+        # V25: data['D'] 필수 — K2 per-coin SMA(7) + BTC_cap SMA(42) 모두 1D 기반.
+        # data['D'] 누락 또는 BTC 1D 길이 부족 시 abort (silent L2 fallback 차단)
+        if 'D' not in data or 'BTC' not in data['D'] or data['D']['BTC'].empty:
+            err = "V25 ABORT: data['D'] 또는 BTC 1D 누락 — K2/BTC_cap 평가 불가"
+            log.error(err)
+            error_alerts.append(err)
+            target_lev_map = {}
+        elif len(data['D']['BTC']) < BTC_CAP_SMA_PERIOD + 2:
+            err = f"V25 ABORT: BTC 1D 길이 {len(data['D']['BTC'])} < SMA42+2"
+            log.error(err)
+            error_alerts.append(err)
+            target_lev_map = {}
+        else:
+            target_lev_map = get_coin_leverage_map(combined, data['1h'], data['D'])
         rebalance_needed = state.get('rebalancing_needed', False)
         if not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
             positions_after, pv_after = positions_before, pv_before
+        elif not target_lev_map:
+            # V25: leverage map 산출 실패 → 매매 안 함 (안전)
+            err_msg = "V25 ABORT: target_lev_map 비어있음 — 매매 차단"
+            log.error(err_msg)
+            error_alerts.append(err_msg)
+            positions_after, pv_after = positions_before, pv_before
         elif args.trade:
-            # leverage / margin 변경 전에 기존 조건부 주문을 정리한다.
-            prep_symbols = sorted({
-                *(coin + 'USDT' for coin in target_lev_map.keys()),
-                *(pos['symbol'] for pos in positions_before.values()),
-            })
-            force_cancel_all_orders(client, prep_symbols)
-            for coin, lev in target_lev_map.items():
-                sym = coin + 'USDT'
-                set_leverage(client, sym, lev)
-                set_margin_type(client, sym, 'ISOLATED')
-
-            # alloc_transit cap (옵션 D, 2026-05-23): effective_pv = pv_before × cap_ratio (< 1.0)
-            _fut_cap_ratio = _read_alloc_transit_cap_ratio_fut()
-            if _fut_cap_ratio is not None and _fut_cap_ratio < 1.0:
-                _effective_pv = pv_before * _fut_cap_ratio
-                log.info(f"🔴 alloc_transit cap_ratio={_fut_cap_ratio:.3f} → pv ${pv_before:,.2f} → ${_effective_pv:,.2f}")
+            # V25 정책: all-or-nothing — 한 코인이라도 verify 실패 시 매매 전체 ABORT
+            # 부분 universe 매매 = BT 가정 (3 코인 균등) 위반. 다음 cron 에서 재시도.
+            #
+            # 순서: oneway 모드 검증 → 각 코인 margin → verify → leverage → verify → (모두 통과 시)
+            #       force_cancel → execute_rebalance
+            v25_abort = False
+            target_symbols = [coin + 'USDT' for coin in target_lev_map.keys()]
+            # V25 cycle 3 P0: 설정 변경 전 preflight — zero position + zero open orders
+            # 잔존 포지션·주문이 있으면 마진모드/one-way 변경이 거부됨 → 사전 검증
+            need_setup_change = False
+            # 빠른 marginType / one-way mode 점검 — 변경 필요한 경우만 preflight zero 강제
+            try:
+                cur_mode = client.futures_get_position_mode()
+                if _normalize_dual_side(cur_mode.get('dualSidePosition', False)):
+                    need_setup_change = True
+            except BinanceAPIException:
+                need_setup_change = True
+            if not need_setup_change:
+                for sym in target_symbols:
+                    info = _fetch_position_info(client, sym)
+                    if info is None:
+                        need_setup_change = True; break
+                    row = _pick_oneway_row(info)
+                    if row is None or (row.get('marginType') or '').lower() != 'cross':
+                        need_setup_change = True; break
+            if need_setup_change:
+                # cycle 4 P0: 계정 단위 (one-way mode 변경은 계정 전체 영향)
+                if not preflight_zero_positions(client):
+                    err = "V25 ABORT: 설정 변경 필요한데 계정에 잔존 포지션 있음 (one-way / margin 변경 거부됨)"
+                    log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
+                elif not preflight_zero_open_orders(client):
+                    err = "V25 ABORT: 설정 변경 필요한데 계정에 미체결 주문 있음 — 매매 차단"
+                    log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
+            if not v25_abort:
+                # one-way mode 자동 보장 (포지션 없을 때만)
+                if not ensure_position_mode_oneway(client):
+                    err = "V25 ABORT: one-way mode 보장 실패 — 매매 차단"
+                    log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
+            if not v25_abort:
+                # 각 코인: 마진모드 자동 보장 → leverage 동적 변경
+                for coin, lev in target_lev_map.items():
+                    sym = coin + 'USDT'
+                    if DEBUG_LEVERAGE:
+                        log.info(f"V25 prep {sym}: ensure margin={MARGIN_TYPE}, leverage={lev}x")
+                    if not ensure_margin_type(client, sym, MARGIN_TYPE):
+                        err = f"V25 ABORT: {sym} 마진모드 {MARGIN_TYPE} 보장 실패 — 매매 차단"
+                        log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
+                    if not set_leverage(client, sym, lev):
+                        err = f"V25 ABORT: set_leverage({sym}={lev}) 실패 — 매매 차단"
+                        log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
+                    # P1: propagation 짧은 재조회
+                    import time as _t
+                    lev_ok = False
+                    for _ in range(3):
+                        if verify_leverage(client, sym, lev):
+                            lev_ok = True; break
+                        _t.sleep(0.3)
+                    if not lev_ok:
+                        err = f"V25 ABORT: verify_leverage({sym}) ≠ {lev}x after retry — 매매 차단"
+                        log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
+            if v25_abort:
+                positions_after, pv_after = positions_before, pv_before
             else:
-                _effective_pv = pv_before
-            execute_rebalance(
-                client, combined, _effective_pv, target_lev_map,
-                order_alerts=order_alerts, error_alerts=error_alerts,
-            )
+                # 모든 검증 통과 → 사전 주문 정리 후 매매 (cycle 2 fix: cancel 을 검증 후로 이동)
+                prep_symbols = sorted({
+                    *(coin + 'USDT' for coin in target_lev_map.keys()),
+                    *(pos['symbol'] for pos in positions_before.values()),
+                })
+                # cycle 5 C: cancel 실패 시 ABORT (잔존 주문이 신규 주문과 충돌 위험)
+                if not force_cancel_all_orders(client, prep_symbols):
+                    err = "V25 ABORT: force_cancel_all_orders 실패 — 잔존 주문이 신규 주문과 충돌 위험, 매매 차단"
+                    log.error(err); error_alerts.append(err); v25_abort = True
+                    _v25_persist_abort_log(err)
+            if not v25_abort:
+                # alloc_transit cap (옵션 D, 2026-05-23): effective_pv = pv_before × cap_ratio (< 1.0)
+                _fut_cap_ratio = _read_alloc_transit_cap_ratio_fut()
+                if _fut_cap_ratio is not None and _fut_cap_ratio < 1.0:
+                    _effective_pv = pv_before * _fut_cap_ratio
+                    log.info(f"🔴 alloc_transit cap_ratio={_fut_cap_ratio:.3f} → pv ${pv_before:,.2f} → ${_effective_pv:,.2f}")
+                else:
+                    _effective_pv = pv_before
+                execute_rebalance(
+                    client, combined, _effective_pv, target_lev_map,
+                    order_alerts=order_alerts, error_alerts=error_alerts,
+                )
 
             # 리밸런싱 후 포지션
             positions_after, pv_after, pos_after_ok = get_current_positions(client)
@@ -1849,10 +2385,49 @@ def main():
             if error_alerts:
                 extra = "⚠ 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10])
 
+            # V25 cycle 6: cron 결과 헬스 기록 + reconciliation
+            v25_success = not (v25_abort or error_alerts)
+            intent_snapshot = {
+                'positions': {coin + 'USDT': {
+                    'notional': pv_before * combined.get(coin, 0.0) * target_lev_map.get(coin, 1),
+                    'leverage': target_lev_map.get(coin, 0),
+                } for coin in target_lev_map.keys()},
+                'margin_type': MARGIN_TYPE,
+                'targets': dict(target_norm),
+            }
+            actual_snapshot = {
+                'positions': {pos['symbol']: {
+                    'notional': pos.get('notional', 0.0),
+                    'leverage': pos.get('leverage', 0),
+                } for pos in positions_after.values()},
+                'pv': pv_after,
+            }
+            recon_diffs = _v25_reconcile(intent_snapshot, actual_snapshot) if v25_success else []
+            if recon_diffs:
+                recon_msg = "⚠ V25 reconciliation 차이:\n  - " + "\n  - ".join(recon_diffs[:5])
+                log.warning(recon_msg)
+                send_telegram(recon_msg)
+                _v25_persist_abort_log(recon_msg)
+                v25_success = False
+
+            streak = _v25_record_cron_result(
+                success=v25_success,
+                abort_reason="; ".join(error_alerts[:3]) if error_alerts else ('reconcile diff' if recon_diffs else ''),
+                intent=intent_snapshot,
+                actual=actual_snapshot,
+            )
+            if not v25_success:
+                if streak == 2:
+                    send_telegram(f"⚠ V25 ABORT 2일 연속 — 다음 ABORT 시 자동 lock")
+                elif streak >= V25_ABORT_STREAK_LOCK_THRESHOLD:
+                    _v25_create_lock(f"abort_streak={streak} reached threshold")
+                    send_telegram(f"🔒 V25 ABORT {streak}일 연속 — 자동 lock. 수동 해제: rm {V25_LOCK_FILE}")
+
             # V24: 정상 보고 silent — Daily Report 09:15 가 통합 보고. 오류만 즉시 알림.
             if error_alerts:
                 send_telegram("⚠ 선물 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10]))
-            log.info(f"V24 fut report (silent): targets={target_norm} ht={ht_fut:.4f} fire={drift_fire_fut} pv=${pv_after:.2f}")
+            log.info(f"V25 fut: targets={target_norm} ht={ht_fut:.4f} fire={drift_fire_fut} pv=${pv_after:.2f} "
+                     f"success={v25_success} streak={streak}")
         log.info(f"=== 완료 ({elapsed:.1f}s) ===")
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
