@@ -43,6 +43,7 @@ from pyupbit import request_api as pyupbit_request_api
 
 from common.io import load_json, save_json
 from common.notify import send_telegram as _send_tg
+from common.health_guard import HealthGuard, UnknownExecutionError
 
 try:
     from common.logging_utils import setup_file_logger, make_log_fn
@@ -1042,6 +1043,14 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='주문 없이 target/delta만 로그+텔레그램')
     args = parser.parse_args()
 
+    hg = HealthGuard(name='coin')
+    lock_reason = hg.is_locked()
+    if lock_reason:
+        log(f'🔒 health lock 활성 — {lock_reason}. 수동 해제 필요 (rm {hg.lock_file})')
+        _tg(f'🔒 코인 lock 활성 — 수동 확인 후 rm {hg.lock_file}')
+        _flush_telegram(args.dry_run)
+        return
+
     lock_f = None
     try:
         lock_f = open(LOCK_FILE, 'w')
@@ -1054,12 +1063,21 @@ def main():
             return
 
         rc = run_once(dry_run=args.dry_run)
+        if rc == 0 and not args.dry_run:
+            hg.record_success()
         sys.exit(rc)
     except SystemExit:
         raise
+    except UnknownExecutionError as e:
+        log(f'⚠️ UNKNOWN_EXECUTION: {e}\n{traceback.format_exc()}')
+        hg.lock(f'UNKNOWN_EXECUTION: {e}')
+        _tg(f'⚠️ 코인 UNKNOWN_EXECUTION — 중복 주문 위험. 수동 확인 후 rm {hg.lock_file}: {e}')
+        _flush_telegram(args.dry_run)
+        sys.exit(3)
     except Exception as e:
         log(f'❌ 치명 오류: {e}\n{traceback.format_exc()}')
-        _tg(f'❌ 코인 치명 오류: {e}')
+        streak = hg.record_abort(str(e)) if not args.dry_run else 0
+        _tg(f'❌ 코인 치명 오류 (streak={streak}): {e}')
         _flush_telegram(args.dry_run)
         sys.exit(2)
     finally:
