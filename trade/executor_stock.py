@@ -899,8 +899,21 @@ def run_once(dry_run=False):
                     _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
                     if _cash_w > 0:
                         _cur_w['Cash'] = _cash_w
-                    _all_keys = set(_cur_w.keys()) | set(_merged_target.keys())
-                    _ht = sum(abs(_cur_w.get(_k, 0.0) - _merged_target.get(_k, 0.0))
+                    # cash buffer 반영 — merged_target 은 risky-asset 100% 정규화이므로
+                    # execute_delta 가 적용하는 cash buffer 만큼 target 도 스케일 다운 + Cash 추가
+                    _stock_buf = float(state.get('stock_cash_buffer',
+                                                 state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
+                    _target_buf = {}
+                    _has_cash_tgt = any(str(_k).lower() == 'cash' for _k in _merged_target)
+                    for _k, _w in _merged_target.items():
+                        if str(_k).lower() == 'cash':
+                            _target_buf[_k] = float(_w)
+                        else:
+                            _target_buf[_k] = float(_w) * (1.0 - _stock_buf)
+                    if not _has_cash_tgt and _stock_buf > 0:
+                        _target_buf['Cash'] = _stock_buf
+                    _all_keys = set(_cur_w.keys()) | set(_target_buf.keys())
+                    _ht = sum(abs(_cur_w.get(_k, 0.0) - _target_buf.get(_k, 0.0))
                               for _k in _all_keys) / 2
                     if _ht >= 0.10:
                         state['rebalancing_needed'] = True

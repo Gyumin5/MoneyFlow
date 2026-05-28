@@ -949,6 +949,36 @@ def run_once(dry_run: bool = False) -> int:
         state['rebalancing_needed'] = True
         log(f'  🔔 target 변경 감지 → rebalancing_needed=True. prev={prev_combined}, new={result.combined_target}')
 
+    # cash buffer 반영 — engine 의 combined 은 risky-asset 100% 정규화이므로
+    # spot_cash_buffer (실매매가 유지하는 KRW) 만큼 target 스케일 다운 + Cash 추가 후 재평가
+    try:
+        _spot_buf = float(state.get('spot_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
+    except (TypeError, ValueError):
+        _spot_buf = CASH_BUFFER_DEFAULT
+    if _spot_buf > 0 and cur_w_input:
+        _combined_buf = {}
+        _has_cash_in_tgt = any(str(_k).lower() == 'cash' for _k in result.combined_target)
+        # canary OFF (Cash=1.0) 인 경우 buffer 적용 skip — 이미 Cash 100%
+        _cash_w_in_tgt = sum(float(_v) for _k, _v in result.combined_target.items()
+                             if str(_k).lower() == 'cash')
+        if _cash_w_in_tgt < 0.99:
+            for _k, _v in result.combined_target.items():
+                if str(_k).lower() == 'cash':
+                    _combined_buf[_k] = float(_v)
+                else:
+                    _combined_buf[_k] = float(_v) * (1.0 - _spot_buf)
+            if not _has_cash_in_tgt:
+                _combined_buf['Cash'] = _spot_buf
+            _ht_buf = cle.half_turnover(cur_w_input, _combined_buf)
+            if _ht_buf >= result.drift_threshold and not result.drift_fire:
+                log(f'  🔔 cash buffer 반영 drift 재평가: ht={_ht_buf:.4f} ≥ {result.drift_threshold:.2f} → fire')
+                # 엔진 결과 override (dataclass — 일부는 frozen 일 수 있어 try/except)
+                try:
+                    result.drift_fire = True
+                    result.drift_half_turnover = _ht_buf
+                except Exception:
+                    pass
+
     # V24 drift 트리거: target 불변이어도 cur_w 와 ht 차이 >= threshold 면 발화
     # crash_cooldown 체크는 엔진이 이미 처리 (canary_on 만 추가 게이트로 가정)
     if not target_changed and result.drift_fire:
