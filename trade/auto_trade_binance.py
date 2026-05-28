@@ -1705,11 +1705,11 @@ def verify_position_mode_oneway(client: Client) -> bool:
 
 
 def preflight_zero_positions(client: Client, symbols=None) -> bool:
-    """V25 cycle 4 P0: position mode 변경은 계정 단위 제약 — 계정 전체 심볼이 zero 여야 함.
-    symbols=None → 계정 전체 (cycle 4 권고, 기본). symbols list → 보고용 필터.
+    """V25 cycle 4 P0 + cycle 8: 계정 전체 심볼 zero 검증. futures_account positions 사용 (fresh account 도 정상).
     """
     try:
-        info = _with_retry(lambda: client.futures_position_information())
+        acc = _with_retry(lambda: client.futures_account())
+        info = acc.get('positions', [])
         non_zero = []
         for row in info:
             amt = abs(float(row.get('positionAmt', 0)))
@@ -1719,7 +1719,7 @@ def preflight_zero_positions(client: Client, symbols=None) -> bool:
             log.error(f"preflight_zero_positions: 계정 전체 잔존 포지션 {non_zero} — 설정 변경 불가")
             return False
         if DEBUG_MARGIN:
-            log.info(f"  preflight_zero_positions OK (account-wide, all zero)")
+            log.info(f"  preflight_zero_positions OK (account-wide, all zero, n={len(info)} symbols)")
         return True
     except BinanceAPIException as e:
         log.error(f"preflight_zero_positions: {e}")
@@ -1783,18 +1783,28 @@ def ensure_margin_type(client: Client, symbol: str, expected: str = 'CROSSED') -
 
 
 def _fetch_position_info(client: Client, symbol: str = None):
-    """V25 cycle 3 P1: futures_position_information 호출 wrapper (transient retry)."""
+    """V25 cycle 8 P0: futures_account()['positions'] 사용.
+
+    futures_position_information 는 신규 계좌에서 0 rows 반환 → verify 가 false-negative.
+    futures_account 는 모든 universe 심볼 1 entry 항상 반환 (positionAmt=0 포함).
+    Returns: positions list (positionSide=BOTH row 포함). symbol=None 이면 전체, symbol 지정 시 1 entry list.
+    """
     try:
+        acc = _with_retry(lambda: client.futures_account())
+        positions = acc.get('positions', [])
         if symbol:
-            return _with_retry(lambda: client.futures_position_information(symbol=symbol))
-        return _with_retry(lambda: client.futures_position_information())
+            filtered = [p for p in positions if p.get('symbol') == symbol]
+            return filtered
+        return positions
     except BinanceAPIException as e:
         log.error(f"_fetch_position_info({symbol}): {e}")
         return None
 
 
 def verify_margin_type(client: Client, symbol: str, expected: str = 'CROSSED') -> bool:
-    """V25 cycle 4 P1: marginType 검증 — 항상 fresh fetch (set 직후 stale 방지 위해 cache 비허용)."""
+    """V25 cycle 8 P0: marginType 검증 — futures_account positions 사용.
+    futures_account row 는 marginType 대신 isolated:bool. False=CROSS, True=ISOLATED.
+    """
     info_list = _fetch_position_info(client, symbol)
     if info_list is None:
         return False
@@ -1802,7 +1812,11 @@ def verify_margin_type(client: Client, symbol: str, expected: str = 'CROSSED') -
     if row is None:
         log.error(f"verify_margin_type {symbol}: oneway row 없음 (hedge mode 또는 빈 응답)")
         return False
-    actual = (row.get('marginType') or '').lower()
+    # futures_account: isolated (bool). futures_position_information: marginType (string).
+    if 'isolated' in row:
+        actual = 'isolated' if bool(row.get('isolated')) else 'cross'
+    else:
+        actual = (row.get('marginType') or '').lower()
     expected_norm = _MARGIN_NORM.get(expected.lower())
     if expected_norm is None:
         log.error(f"verify_margin_type {symbol}: 알 수 없는 expected={expected}")
@@ -2272,7 +2286,13 @@ def main():
                     if info is None:
                         need_setup_change = True; break
                     row = _pick_oneway_row(info)
-                    if row is None or (row.get('marginType') or '').lower() != 'cross':
+                    if row is None:
+                        need_setup_change = True; break
+                    # cycle 8: futures_account 는 isolated(bool), futures_position_information 은 marginType(str)
+                    if 'isolated' in row:
+                        if bool(row.get('isolated')):
+                            need_setup_change = True; break
+                    elif (row.get('marginType') or '').lower() != 'cross':
                         need_setup_change = True; break
             if need_setup_change:
                 # cycle 4 P0: 계정 단위 (one-way mode 변경은 계정 전체 영향)
