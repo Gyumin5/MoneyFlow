@@ -74,11 +74,15 @@ def test_pick_oneway_row():
 
 
 class FakeClient:
-    """Mock binance client for preflight tests."""
+    """Mock binance client for preflight tests. cycle 8: futures_account 기반."""
     def __init__(self, positions=None, orders=None):
+        # positions: list of dict with positionSide=BOTH default, isolated default False
         self._pos = positions or []
         self._ord = orders or []
         self.calls = []
+    def futures_account(self):
+        self.calls.append(('account', None))
+        return {'positions': list(self._pos)}
     def futures_position_information(self, symbol=None):
         self.calls.append(('positions', symbol))
         if symbol:
