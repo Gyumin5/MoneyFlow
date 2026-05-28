@@ -2238,9 +2238,25 @@ def main():
             cur_w_fut[coin] = float(pos.get('real_weight', 0.0)) * _drift_scale
         cash_w = max(0.0, 1.0 - sum(cur_w_fut.values()))
         cur_w_fut['CASH'] = cash_w
-        # target normalize: dict with 'CASH' key
-        tgt_w_norm = {k: v for k, v in combined.items()}
-        # drift compute
+        # cash buffer 반영 — combined 은 risky-asset 100% 정규화, 실매매는 fut_cash_buffer KRW 유지
+        try:
+            _fut_buf = float(state.get('fut_cash_buffer', state.get('cash_buffer', CASH_BUFFER)))
+        except (TypeError, ValueError):
+            _fut_buf = CASH_BUFFER
+        # canary OFF (CASH 100%) 시 buffer 적용 skip
+        _cash_in_tgt = sum(float(v) for k, v in combined.items() if k.upper() == 'CASH')
+        tgt_w_norm = {}
+        if _fut_buf > 0 and _cash_in_tgt < 0.99:
+            _has_cash_in_tgt = any(k.upper() == 'CASH' for k in combined)
+            for k, v in combined.items():
+                if k.upper() == 'CASH':
+                    tgt_w_norm[k] = float(v)
+                else:
+                    tgt_w_norm[k] = float(v) * (1.0 - _fut_buf)
+            if not _has_cash_in_tgt:
+                tgt_w_norm['CASH'] = _fut_buf
+        else:
+            tgt_w_norm = {k: float(v) for k, v in combined.items()}
         _all_keys = set(cur_w_fut) | set(tgt_w_norm)
         ht_fut = sum(abs(tgt_w_norm.get(k, 0.0) - cur_w_fut.get(k, 0.0)) for k in _all_keys) / 2
         drift_fire_fut = ht_fut >= DRIFT_THRESHOLD_FUT
