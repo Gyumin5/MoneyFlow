@@ -139,6 +139,51 @@ def test_verify_fresh_fetch_called():
     print("PASS: verify_* 가 매 호출 fresh fetch")
 
 
+def test_finalize_daily_bar_for_signal():
+    """V25 cycle 7: UTC open_time anchor 검증 (인덱스 기반 close[:-1] 대체)."""
+    from trade.auto_trade_binance import _finalize_daily_bar_for_signal, StaleBarError
+    import pandas as pd
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 5, 28, 0, 5, 0)
+    completed = datetime(2026, 5, 27, 0, 0, 0)
+
+    # case 1: last == completed
+    df = pd.DataFrame({'Close': [100.0, 110.0]}, index=pd.to_datetime(['2026-05-26', '2026-05-27']))
+    assert _finalize_daily_bar_for_signal(df, now).index[-1] == completed
+
+    # case 2: last == current (in-progress) → drop
+    df = pd.DataFrame({'Close': [100.0, 110.0, 105.0]},
+                     index=pd.to_datetime(['2026-05-26', '2026-05-27', '2026-05-28']))
+    r = _finalize_daily_bar_for_signal(df, now)
+    assert r.index[-1] == completed and len(r) == 2
+
+    # case 3: stale
+    try:
+        _finalize_daily_bar_for_signal(pd.DataFrame({'Close': [100.0]},
+            index=pd.to_datetime(['2026-05-25'])), now)
+        assert False, "stale should raise"
+    except StaleBarError:
+        pass
+
+    # case 4: future
+    try:
+        _finalize_daily_bar_for_signal(pd.DataFrame({'Close': [100.0]},
+            index=pd.to_datetime(['2026-05-29'])), now)
+        assert False, "future should raise"
+    except StaleBarError:
+        pass
+
+    # case 5: empty
+    try:
+        _finalize_daily_bar_for_signal(pd.DataFrame(), now)
+        assert False, "empty should raise"
+    except StaleBarError:
+        pass
+
+    print("PASS: _finalize_daily_bar_for_signal (5 cases: completed/in-progress/stale/future/empty)")
+
+
 def main():
     test_error_code_invariants()
     test_is_transient_predicate()
@@ -147,7 +192,8 @@ def main():
     test_preflight_account_wide()
     test_verify_no_cache_param()
     test_verify_fresh_fetch_called()
-    print("\n✅ V25 cycle 5 unit tests ALL PASSED")
+    test_finalize_daily_bar_for_signal()
+    print("\n✅ V25 cycle 5+7 unit tests ALL PASSED")
 
 
 if __name__ == '__main__':
