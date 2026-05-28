@@ -559,23 +559,67 @@ def apply_cash_degrade(lev: int, cash_w: float) -> int:
     return LEVERAGE_FLOOR
 
 
+class StaleBarError(Exception):
+    """V25 cycle 7: 마지막 완성봉이 누락된 stale 상태. 신호 계산 불가 → ABORT 경로."""
+    pass
+
+
+def _finalize_daily_bar_for_signal(df: pd.DataFrame, now_utc=None) -> pd.DataFrame:
+    """V25 cycle 7 — 날짜 기반 마지막 완성봉 검증 (인덱스 기반 close[:-1] 대체).
+
+    Binance 1d 봉 open_time = UTC 00:00. cron 09:05 KST = 00:05 UTC.
+    completed_open_utc = 어제 00:00 UTC. 신호 입력은 이 봉의 close.
+
+    분기:
+      last_open == completed_open_utc → 정상, df 그대로
+      last_open == current_open_utc (오늘 진행중) → 마지막 행 drop 후 사용
+      last_open <  completed_open_utc → stale, StaleBarError 발생 (cron 측 ABORT)
+      last_open >  current_open_utc → future, StaleBarError 발생
+
+    Returns: df 끝이 completed_open_utc 봉인 DataFrame.
+    """
+    from datetime import datetime, timedelta, timezone
+    if df is None or df.empty:
+        raise StaleBarError("빈 DataFrame")
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    current_open_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    completed_open_utc = current_open_utc - timedelta(days=1)
+    # df.index 는 to_datetime(ms) 결과 — tz-naive UTC.
+    last_open = df.index[-1]
+    if hasattr(last_open, 'to_pydatetime'):
+        last_open = last_open.to_pydatetime()
+    if last_open == completed_open_utc:
+        return df
+    if last_open == current_open_utc:
+        df2 = df.iloc[:-1]
+        if df2.empty or df2.index[-1] != completed_open_utc:
+            raise StaleBarError(
+                f"진행중 봉 drop 후에도 completed bar({completed_open_utc}) 없음. last={df2.index[-1] if len(df2) else 'empty'}"
+            )
+        return df2
+    if last_open < completed_open_utc:
+        raise StaleBarError(f"stale: last_open={last_open} < completed={completed_open_utc}")
+    raise StaleBarError(f"future: last_open={last_open} > current={current_open_utc}")
+
+
 def _calc_btc_cap_lev(data_d: Dict[str, pd.DataFrame]) -> int:
     """V25 BTC cap: BTC SMA42 ratio 기반.
     > BTC_CAP_THR_MAX(1.05) → Lmax(4)
     > BTC_CAP_THR_MID(1.015) → Lmid(3)
     else → Lmin(2)
-    prev_date(t-1) 기준.
+    V25 cycle 7: 날짜 기반 마지막 완성봉 (UTC open_time anchor) 사용.
+    StaleBarError → 호출부에서 ABORT 처리.
     """
     btc_df = data_d.get('BTC')
     if btc_df is None or btc_df.empty:
         return LEVERAGE_FLOOR
+    btc_df = _finalize_daily_bar_for_signal(btc_df)  # raises StaleBarError
     close = btc_df['Close'].values
-    if len(close) < BTC_CAP_SMA_PERIOD + 2:
+    if len(close) < BTC_CAP_SMA_PERIOD + 1:
         return LEVERAGE_FLOOR
-    # prev_date 기준 — iloc[-1] 은 진행중 봉, iloc[-2] = 마지막 완성봉
-    prev_close = close[:-1]
-    sma = float(np.asarray(prev_close[-BTC_CAP_SMA_PERIOD:], dtype=float).mean())
-    cur = float(prev_close[-1])
+    sma = float(np.asarray(close[-BTC_CAP_SMA_PERIOD:], dtype=float).mean())
+    cur = float(close[-1])
     if sma <= 0:
         return LEVERAGE_FLOOR
     ratio = cur / sma
@@ -601,12 +645,12 @@ def _calc_percoin_k2_lev(coin: str, data_d: Dict[str, pd.DataFrame]) -> int:
     df = data_d.get(coin)
     if df is None or df.empty:
         return LEVERAGE_FLOOR
+    df = _finalize_daily_bar_for_signal(df)  # V25 cycle 7: UTC anchor, raises StaleBarError
     close = df['Close'].values
-    if len(close) < K2_SMA_PERIOD + 2:
+    if len(close) < K2_SMA_PERIOD + 1:
         return LEVERAGE_FLOOR
-    prev_close = close[:-1]
-    sma = float(np.asarray(prev_close[-K2_SMA_PERIOD:], dtype=float).mean())
-    cur = float(prev_close[-1])
+    sma = float(np.asarray(close[-K2_SMA_PERIOD:], dtype=float).mean())
+    cur = float(close[-1])
     if sma <= 0:
         return LEVERAGE_FLOOR
     ratio = cur / sma
@@ -638,6 +682,7 @@ def get_coin_leverage_map(target: Dict[str, float], data_1h: Dict[str, pd.DataFr
         log.warning("V25 get_coin_leverage_map: data_d 없음 → 모든 코인 LEVERAGE_FLOOR fallback")
         return {coin: LEVERAGE_FLOOR for coin in coins}
 
+    # V25 cycle 7: StaleBarError 가 발생하면 호출자 (main) 가 ABORT 처리.
     btc_cap = _calc_btc_cap_lev(data_d)
     lev_map = {}
     for coin in coins:
@@ -2185,7 +2230,14 @@ def main():
             error_alerts.append(err)
             target_lev_map = {}
         else:
-            target_lev_map = get_coin_leverage_map(combined, data['1h'], data['D'])
+            try:
+                target_lev_map = get_coin_leverage_map(combined, data['1h'], data['D'])
+            except StaleBarError as e:
+                err = f"V25 ABORT: 봉 정합성 실패 (StaleBarError) — {e}. 매매 차단, 다음 cron 재시도."
+                log.error(err); error_alerts.append(err)
+                _v25_persist_abort_log(err)
+                send_telegram(f"⚠ {err}")
+                target_lev_map = {}
         rebalance_needed = state.get('rebalancing_needed', False)
         if not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
