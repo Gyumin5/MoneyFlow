@@ -401,33 +401,35 @@ def run_stock_strategy_v15(log, all_prices):
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드 (Z-score Top 3 + Sharpe252d + EW)</h4>")
-        scores = []
-        for t in OFFENSIVE_STOCK_UNIVERSE:
-            p = all_prices.get(t)
-            if p is None or len(p) < 253: continue
-            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe252': calc_sharpe(p, 252)})
-
-        if not scores:
-            log.append("<p class='warning'>공격 ETF 데이터 부족 → 수비 전환</p>")
-            # Fall through to defense
-        else:
-            df = pd.DataFrame(scores).set_index('Ticker')
-
-            # Z-score composite: zscore(12M_mom) + zscore(Sharpe252d)
-            m_std = df['Mom12M'].std()
-            s_std = df['Sharpe252'].std()
-            df['Z_Mom'] = (df['Mom12M'] - df['Mom12M'].mean()) / m_std if m_std > 0 else 0
-            df['Z_Sh'] = (df['Sharpe252'] - df['Sharpe252'].mean()) / s_std if s_std > 0 else 0
-            df['ZScore'] = df['Z_Mom'] + df['Z_Sh']
-
-            try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
-            except: pass
-
-            picks = df.nlargest(3, 'ZScore').index.tolist()
-
-            log.append(f"<p>Z-score Top 3: <b>{picks}</b> (Equal Weight)</p>")
-            return {t: 1.0/len(picks) for t in picks}, "공격 모드"
+        # V25: strategy 모듈 호출 (단일 진입점)
+        try:
+            import stock_strategy_v25 as _ss25
+        except Exception:
+            _ss25 = None
+        if _ss25 is None:
+            log.append("<p class='error'>V25 strategy 모듈 로드 실패</p>")
+            return {CASH_ASSET: 1.0}, "Error"
+        log.append("<h4>🚀 공격 모드 (V25: Z-score 랭킹 + 3-mom (30/72/230) 필터 + cap=1/3+Cash)</h4>")
+        picks, weights, off_meta = _ss25.compute_offense(all_prices)
+        df = off_meta.get('df')
+        if df is not None:
+            try:
+                log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
+            except Exception:
+                pass
+        excluded = off_meta.get('excluded_by_mom', [])
+        if excluded and df is not None:
+            try:
+                exc_detail = ", ".join(
+                    f"{t}(m30={df.at[t,'Mom30']:+.2%}, m72={df.at[t,'Mom72']:+.2%}, m230={df.at[t,'Mom230']:+.2%})"
+                    for t in excluded[:5]
+                )
+                log.append(f"<p>🚫 3-mom 탈락: {exc_detail}</p>")
+            except Exception:
+                pass
+        cash_slot = off_meta.get('cash_slot', 0.0)
+        log.append(f"<p>V25 picks ({len(picks)}/3): <b>{picks}</b> (cap=1/3+Cash, Cash slot {cash_slot:.0%})</p>")
+        return weights, f"공격 모드 (3-mom 통과 {len(picks)}/3)"
 
     # Defense mode: Top 3 by 6M return
     log.append("<h4>🛡️ 수비 모드 (Top 3 by 6M Return)</h4>")
