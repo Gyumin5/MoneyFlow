@@ -274,8 +274,8 @@ def get_cash_buffer(sleeve: str = 'stock'):
     return default
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
-# Stock Configuration (V24 R7B: B안 universe — 11yr rs=58, 5yr Cal 0.84)
-OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'EWJ', 'GLD', 'PDBC']
+# Stock Configuration (V25: R7 = R7B 의 EWJ 를 VNQ 로 교체. BT 기준 universe)
+OFFENSIVE_STOCK_UNIVERSE = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ']
 DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 200   # V24 spec (2026-05-27 정정, BT Cal 0.83 > SMA300/2% Cal 0.81)
@@ -711,47 +711,49 @@ def run_stock_strategy_v15(log, all_prices, target_date):
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
-        log.append("<h4>🚀 공격 모드 (V24: Z-score Top 3 + Sharpe126d + EW)</h4>")
-        scores = []
-        for t in OFFENSIVE_STOCK_UNIVERSE:
-            p = all_prices.get(t)
-            if p is None or len(p) < 253: continue
-            scores.append({'Ticker': t, 'Mom12M': calc_weighted_mom(p), 'Sharpe126': calc_sharpe(p, 126)})
+        # V25: strategy 모듈 호출 (executor_stock 과 동일 함수)
+        try:
+            import stock_strategy_v25 as _ss25
+        except Exception:
+            _ss25 = None
+        if _ss25 is None:
+            log.append("<p class='error'>V25 strategy 모듈 로드 실패</p>")
+            return {CASH_ASSET: 1.0}, "Error", meta
+        log.append("<h4>🚀 공격 모드 (V25: Z-score 랭킹 + 3-mom (30/72/230) 필터 + cap=1/3+Cash)</h4>")
+        picks, weights, off_meta = _ss25.compute_offense(all_prices)
+        df = off_meta.get('df')
+        if df is not None:
+            try:
+                log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
+            except Exception:
+                pass
+        excluded = off_meta.get('excluded_by_mom', [])
+        meta['selection_reason'] = {'ZScore_3mom_filter': picks, 'excluded_by_mom': excluded}
+        if excluded and df is not None:
+            try:
+                exc_detail = ", ".join(
+                    f"{t}(m30={df.at[t,'Mom30']:+.2%}, m72={df.at[t,'Mom72']:+.2%}, m230={df.at[t,'Mom230']:+.2%})"
+                    for t in excluded[:5]
+                )
+                log.append(f"<p>🚫 3-mom 탈락: {exc_detail}</p>")
+            except Exception:
+                pass
 
-        if not scores:
-            log.append("<p class='warning'>공격 ETF 데이터 부족 → 수비 전환</p>")
+        # Trigger detection
+        if stock_holdings:
+            new_picks = sorted(set(picks) - set(stock_holdings))
+            n_changed = len(new_picks)
+            is_monthly = (target_date.day <= 5)
+            trigger_rebal = (n_changed >= 2 and not is_monthly)
+            if trigger_rebal:
+                log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 TRIGGER REBALANCE: {n_changed}종목 변경</b></p>")
         else:
-            df = pd.DataFrame(scores).set_index('Ticker')
+            log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정</p>")
 
-            # V24 Z-score composite: zscore(12M_mom) + zscore(Sharpe126d)
-            m_std = df['Mom12M'].std()
-            s_std = df['Sharpe126'].std()
-            df['Z_Mom'] = (df['Mom12M'] - df['Mom12M'].mean()) / m_std if m_std > 0 else 0
-            df['Z_Sh'] = (df['Sharpe126'] - df['Sharpe126'].mean()) / s_std if s_std > 0 else 0
-            df['ZScore'] = df['Z_Mom'] + df['Z_Sh']
-
-            try: log.append(f"<div class='table-wrap'>{df.to_html(classes='dataframe small-table', float_format='%.4f')}</div>")
-            except: pass
-
-            picks = df.nlargest(3, 'ZScore').index.tolist()
-            meta['selection_reason'] = {'ZScore_Top3': picks}
-
-            # Trigger detection: compare with actual holdings (signal_state.json의 stock_holdings)
-            if stock_holdings:
-                new_picks = sorted(set(picks) - set(stock_holdings))
-                exit_picks = sorted(set(stock_holdings) - set(picks))
-                n_changed = len(new_picks)
-                is_monthly = (target_date.day <= 5)
-                trigger_rebal = (n_changed >= 2 and not is_monthly)
-
-                if trigger_rebal:
-                    log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 TRIGGER REBALANCE: {n_changed}종목 변경</b></p>")
-            else:
-                log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정</p>")
-
-            log.append(f"<p>공격 {len(picks)}종목 선정 (Equal Weight)</p>")
-            # NOTE: signal_state 저장은 main()에서 새 스키마로 일괄 저장
-            return {t: 1.0/len(picks) for t in picks}, "공격 모드", meta
+        cash_slot = off_meta.get('cash_slot', 0.0)
+        mode_lbl = f"공격 모드 (3-mom 통과 {len(picks)}/3, Cash slot {cash_slot:.0%})"
+        log.append(f"<p>공격 {len(picks)}종목 선정 (cap=1/3+Cash, V25 3-mom)</p>")
+        return weights, mode_lbl, meta
 
     # Defense mode: Top 3 by 6M return
     log.append("<h4>🛡️ 수비 모드 (Top 3 by 6M Return)</h4>")

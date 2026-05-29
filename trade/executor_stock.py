@@ -30,6 +30,15 @@ from common.notify import send_telegram as _send_tg
 from common.logging_utils import setup_file_logger, make_log_fn
 from common.health_guard import HealthGuard, UnknownExecutionError
 
+# V25: strategy 직접 계산 (signal_state.json 의존 제거)
+_strat_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           '..', 'strategies', 'cap_defend')
+sys.path.insert(0, _strat_path)
+try:
+    import stock_strategy_v25 as stock_strat  # type: ignore
+except Exception:
+    stock_strat = None  # fallback to signal_state.json
+
 # ─── Config ───
 try:
     from config import KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT, KIS_ACCOUNT_PROD
@@ -813,6 +822,155 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 
 # ═══ run_once ═══
 
+def _fetch_strategy_prices(tickers, days=400, max_close_date=None):
+    """Yahoo Adj_Close (auto_adjust=True) fetch.
+
+    max_close_date 이후 row 는 자르고, 마지막 row 날짜를 로그.
+    23:35 KST = 14:35 UTC 시점에 US 장중 partial bar 가 yfinance 에 섞일 수 있어 명시적 차단.
+    max_close_date 미지정 시 KST 기준 어제 (= 미국 거래일 T-1 이상) 로 자동 설정.
+    """
+    import yfinance as yf
+    import pandas as pd
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    if max_close_date is None:
+        # KST 어제 = T-1 안전 (yfinance row index 는 UTC 자정 기준)
+        kst_now = _dt.now(_tz(_td(hours=9)))
+        max_close_date = (kst_now - _td(days=1)).date()
+    end = _dt.now(); start = end - _td(days=days)
+    out = {}
+    last_dates = {}
+    for t in tickers:
+        try:
+            df = yf.download(t, start=start.strftime('%Y-%m-%d'),
+                            end=end.strftime('%Y-%m-%d'),
+                            progress=False, auto_adjust=True)
+            if df is None or len(df) == 0:
+                continue
+            s = df['Close'].squeeze().dropna()
+            s.index = pd.to_datetime(s.index)
+            # max_close_date 이후 row 제거 (장중 partial 차단)
+            s = s[s.index.date <= max_close_date]
+            if len(s) < 2:
+                log(f'  ⚠️ {t}: T-1 까지 데이터 부족 ({len(s)} rows)')
+                continue
+            out[t] = s
+            last_dates[t] = s.index[-1].date()
+        except Exception as e:
+            log(f'  ⚠️ Yahoo fetch {t}: {e}')
+    if last_dates:
+        # 모든 ticker 의 마지막 date 가 동일한지 확인 (hard check — 불일치 시 caller 가 SKIP)
+        dates_set = set(last_dates.values())
+        if len(dates_set) > 1:
+            log(f'  ⚠️ 가격 마지막 date 불일치: {last_dates} — HARD FAIL')
+            out['__date_mismatch__'] = last_dates  # type: ignore
+        else:
+            log(f'  📅 가격 기준일: {list(dates_set)[0]} (max_close_date={max_close_date})')
+    return out
+
+
+def _compute_signal_v25(state):
+    """V25: stock_strategy_v25 직접 호출 → signal dict 생성.
+
+    signal_state.json 의존 없음. 실패 시 None 반환 → 호출자가 fallback.
+    prev_risk_on 추출: explicit None check (False 명시값 보존).
+    가격 기준일 hard check + cold-start SKIP.
+    """
+    if stock_strat is None:
+        return None
+    try:
+        import pandas as pd  # local ensure
+        tickers = (stock_strat.OFFENSIVE_STOCK_UNIVERSE
+                   + stock_strat.DEFENSIVE_STOCK_UNIVERSE
+                   + [stock_strat.STOCK_CANARY_TICKER])
+        tickers = sorted(set(tickers))
+        prices = _fetch_strategy_prices(tickers)
+        # Hard check: 가격 기준일 불일치 시 SKIP
+        if '__date_mismatch__' in prices:
+            dm = prices.pop('__date_mismatch__')
+            send_telegram(f'⚠️ V25 stock: 가격 기준일 불일치 {dm} — 주문 SKIP')
+            return None
+        if len(prices) < 5:
+            log(f'  ⚠️ V25 strategy: 가격 부족 ({len(prices)} 종목)')
+            send_telegram(f'⚠️ V25 stock: 가격 데이터 부족 ({len(prices)}) — 주문 SKIP')
+            return None
+        # prev_risk_on: explicit None check (False 명시 보존)
+        prev_risk_on = state.get('prev_risk_on')
+        if prev_risk_on is None:
+            prev_risk_on = state.get('canary_risk_on')
+        # Cold-start SKIP: prev 도 None + EEM 결측이면 risk_on 추측 불가 → SKIP
+        eem = prices.get(stock_strat.STOCK_CANARY_TICKER)
+        if prev_risk_on is None and (eem is None or len(eem) < stock_strat.STOCK_CANARY_MA_PERIOD):
+            log(f'  ⚠️ V25 strategy: cold-start (prev/canary 모두 None + EEM 결측) → SKIP')
+            send_telegram('⚠️ V25 stock: cold-start 데이터 결측 → 주문 SKIP')
+            return None
+        off_picks, off_w, off_meta = stock_strat.compute_offense(prices)
+        def_picks, def_w, def_meta = stock_strat.compute_defense(prices)
+        risk_on, canary_meta = stock_strat.eem_canary(eem, prev_risk_on)
+        signal = {
+            'stock': {
+                'risk_on': bool(risk_on),
+                'offense_picks': list(off_picks),
+                'offense_weights': dict(off_w),
+                'defense_picks': list(def_picks),
+                'defense_weights': dict(def_w),
+            },
+            'meta': {
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'source': 'executor_stock_v25',
+                'strategy_version': 'V25',
+                'canary': canary_meta,
+                'offense_excluded_by_mom': off_meta.get('excluded_by_mom', []),
+            },
+        }
+        log(f'  V25 strategy: risk_on={risk_on}, picks={off_picks if risk_on else def_picks}')
+        return signal
+    except Exception as e:
+        log(f'  ⚠️ V25 strategy compute 실패: {e}')
+        return None
+
+
+V25_DEPLOY_DATE = '2026-05-29'   # V25 첫 배포일 (이 날부터 3 영업일 V24 fallback 금지)
+V24_FALLBACK_BLOCK_DAYS = 3
+
+
+def _signal_state_fresh(signal):
+    """signal_state.json fallback 검증.
+
+    - 24h 이내 + strategy_version V25 (V24 는 첫 3일 금지)
+    - V25 fresh signal 만 fallback 허용
+    """
+    if not signal:
+        return False
+    meta = signal.get('meta', {}) or {}
+    ver = meta.get('strategy_version', 'V24')
+    if ver not in ('V24', 'V25'):
+        log(f'  ⚠️ fallback signal: unknown strategy_version={ver}')
+        return False
+    # V25 첫 배포 후 V24_FALLBACK_BLOCK_DAYS 영업일 V24 fallback 금지
+    if ver == 'V24':
+        try:
+            from datetime import date as _d
+            dep = _d.fromisoformat(V25_DEPLOY_DATE)
+            today = _d.today()
+            days_since = (today - dep).days
+            if days_since <= V24_FALLBACK_BLOCK_DAYS:
+                log(f'  ⚠️ V24 fallback 금지 (V25 배포 후 {days_since}일, 블록 {V24_FALLBACK_BLOCK_DAYS}일)')
+                return False
+        except Exception as _ex:
+            log(f'  ⚠️ V24 fallback 검증 예외: {_ex} → 차단')
+            return False
+    updated_at = meta.get('updated_at', '')
+    try:
+        age_h = (datetime.now() - datetime.strptime(updated_at, '%Y-%m-%d %H:%M')).total_seconds() / 3600
+        if age_h > 24:
+            log(f'  ⚠️ fallback signal: stale ({age_h:.1f}h)')
+            return False
+    except Exception:
+        log(f'  ⚠️ fallback signal: updated_at 파싱 실패 ({updated_at})')
+        return False
+    return True
+
+
 def run_once(dry_run=False):
     global RUN_ID
     RUN_ID = uuid.uuid4().hex
@@ -822,16 +980,50 @@ def run_once(dry_run=False):
     log('=' * 50)
     log('주식 executor 시작')
 
-    signal = load_json(SIGNAL_STATE_FILE)
     state = load_json(TRADE_STATE_FILE)
     api = KISAPI(dry_run=dry_run)
 
+    # V25: strategy 직접 계산 우선 — 실패 시 signal_state.json fallback (freshness 검증)
+    signal = _compute_signal_v25(state)
+    signal_source = 'v25_compute'
+    if signal is None:
+        fallback = load_json(SIGNAL_STATE_FILE)
+        if _signal_state_fresh(fallback):
+            signal = fallback
+            signal_source = 'signal_state.json'
+            log('  ⚠️ V25 compute 실패 → signal_state.json fallback (fresh)')
+            send_telegram(f'⚠️ V25 stock: compute 실패 → signal_state fallback ({fallback.get("meta",{}).get("strategy_version","?")})')
+        else:
+            log('  ⚠️ V25 compute 실패 + fallback signal stale/missing → 주문 SKIP')
+            send_telegram('⚠️ V25 stock: compute 실패 + fallback stale → 주문 SKIP')
+            return
+    else:
+        # V25 정상 계산 → 텔레그램 알림 (첫 1~3 거래일 모니터링)
+        _stock = signal.get('stock', {})
+        _meta = signal.get('meta', {})
+        _can = (_meta.get('canary', {}) or {})
+        _mode = '공격' if _stock.get('risk_on') else '수비'
+        _picks = _stock.get('offense_picks' if _stock.get('risk_on') else 'defense_picks', [])
+        _excl = _meta.get('offense_excluded_by_mom', [])
+        _dist = _can.get('canary_dist')
+        try:
+            _dist_s = f"{_dist*100:+.2f}%" if _dist is not None else 'NA'
+        except Exception:
+            _dist_s = 'NA'
+        send_telegram(
+            f"📊 V25 stock signal 계산\n"
+            f"mode: {_mode} (EEM dist={_dist_s})\n"
+            f"picks: {_picks}\n"
+            f"mom 탈락: {_excl if _excl else '없음'}"
+        )
+
     # ── 디버그 로그: 입력 데이터 ──
+    log(f'  signal_source: {signal_source}')
     log(f'  signal: {json.dumps(signal, ensure_ascii=False, default=str)[:500]}')
     log(f'  state: {json.dumps(state, ensure_ascii=False, default=str)[:500]}')
-    
+
     if not signal:
-        log('  signal_state.json 없음 — 스킵')
+        log('  signal 없음 — 스킵')
         return
     # V24 (2026-05-26): stock_cash_buffer 키 우선, 없으면 legacy cash_buffer, 둘 다 없으면 default 6%
     cash_buffer = float(state.get('stock_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
@@ -903,21 +1095,18 @@ def run_once(dry_run=False):
                     # execute_delta 가 적용하는 cash buffer 만큼 target 도 스케일 다운 + Cash 추가
                     _stock_buf = float(state.get('stock_cash_buffer',
                                                  state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
-                    _target_buf = {}
-                    _has_cash_tgt = any(str(_k).lower() == 'cash' for _k in _merged_target)
-                    for _k, _w in _merged_target.items():
-                        if str(_k).lower() == 'cash':
-                            _target_buf[_k] = float(_w)
-                        else:
-                            _target_buf[_k] = float(_w) * (1.0 - _stock_buf)
-                    if not _has_cash_tgt and _stock_buf > 0:
-                        _target_buf['Cash'] = _stock_buf
+                    # V25: target 은 risky+Cash slot (sum=1.0 또는 risky 만 sum<=1.0).
+                    # 모든 weight*(1-buf) 후 잔여 (buf 만큼)를 Cash 에 흡수.
+                    _target_buf = {_k: float(_w) * (1.0 - _stock_buf)
+                                   for _k, _w in _merged_target.items()}
+                    _curr_sum = sum(_target_buf.values())
+                    _target_buf['Cash'] = _target_buf.get('Cash', 0.0) + max(0.0, 1.0 - _curr_sum)
                     _all_keys = set(_cur_w.keys()) | set(_target_buf.keys())
                     _ht = sum(abs(_cur_w.get(_k, 0.0) - _target_buf.get(_k, 0.0))
                               for _k in _all_keys) / 2
-                    if _ht >= 0.10:
+                    if _ht >= 0.05:
                         state['rebalancing_needed'] = True
-                        log(f'  🌊 V24 stock drift trigger: ht={_ht*100:.2f}pp ≥ 10pp → rebal 필요')
+                        log(f'  🌊 V25 stock drift trigger: ht={_ht*100:.2f}pp ≥ 5pp → rebal 필요')
         except Exception as _ex:
             log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
 
