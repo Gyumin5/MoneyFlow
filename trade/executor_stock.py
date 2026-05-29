@@ -1010,11 +1010,9 @@ def run_once(dry_run=False):
             _dist_s = f"{_dist*100:+.2f}%" if _dist is not None else 'NA'
         except Exception:
             _dist_s = 'NA'
-        send_telegram(
-            f"📊 V25 stock signal 계산\n"
-            f"mode: {_mode} (EEM dist={_dist_s})\n"
-            f"picks: {_picks}\n"
-            f"mom 탈락: {_excl if _excl else '없음'}"
+        log(
+            f"V25 stock signal 계산: mode={_mode} EEM_dist={_dist_s} "
+            f"picks={_picks} mom_excl={_excl if _excl else '없음'}"
         )
 
     # ── 디버그 로그: 입력 데이터 ──
