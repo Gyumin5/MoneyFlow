@@ -235,6 +235,51 @@ def get_buying_power_usd() -> float:
     return 0.0
 
 
+def get_account_asset() -> dict:
+    """투자계좌자산현황 (CTRP6548R) — 외화RP 자동매매 포함 총자산. 단위 KRW.
+
+    해외주식 inquire-balance/present-balance 는 외화RP(USD)자동매매 스윕분을
+    구조적으로 못 잡는다. 이 API 만 RP 포함 총자산(tot_asst_amt)을 준다.
+    실패 시 빈 dict 반환 (호출부에서 기존 방식으로 fallback).
+    """
+    try:
+        data = _get("/uapi/domestic-stock/v1/trading/inquire-account-balance", "CTRP6548R", {
+            "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+            "INQR_DVSN_1": "", "BSPR_BF_DT_APLY_YN": "",
+        }, retries=2)
+    except Exception:
+        return {}
+    o2 = data.get("output2", {})
+    if isinstance(o2, list):
+        o2 = o2[0] if o2 else {}
+    if not isinstance(o2, dict):
+        return {}
+
+    def _f(key: str) -> float:
+        try:
+            return float(o2.get(key, 0) or 0)
+        except Exception:
+            return 0.0
+
+    tot = _f("tot_asst_amt")          # 계좌 총자산 (RP 포함)
+    if tot <= 0:
+        return {}
+    ovrs = _f("ovrs_stck_evlu_amt1")  # 해외주식 평가
+    frcr_cash = _f("frcr_evlu_tota")  # 외화예수금 (KRW 환산)
+    krw_cash = _f("tot_dncl_amt")     # 원화예수금
+    # 외화RP 등 기타 금융상품 = 총자산 − 주식 − 예수금 (named 필드로 도출, output1 위치 의존 회피)
+    rp = max(0.0, tot - ovrs - frcr_cash - krw_cash)
+    return {
+        "tot_asst_amt_krw": tot,
+        "ovrs_stock_krw": ovrs,
+        "frcr_cash_krw": frcr_cash,
+        "krw_cash_krw": krw_cash,
+        "rp_krw": rp,
+        "deposit_krw": frcr_cash + krw_cash,   # 예수금 합
+        "cash_total_krw": frcr_cash + krw_cash + rp,  # 예수금 + RP = 실현금
+    }
+
+
 # 잔고 가격 캐시 (잔고 조회 시 자동 갱신)
 _balance_price_cache = {}
 
