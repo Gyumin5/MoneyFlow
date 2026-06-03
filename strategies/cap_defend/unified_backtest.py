@@ -223,6 +223,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
         # 윈도우: _days 또는 _bars 중 하나만 지정. _bars 우선.
         sma_days=50, mom_short_days=30, mom_long_days=90, vol_days=90,
         sma_bars=0, mom_short_bars=0, mom_long_bars=0, vol_bars=0,
+        mom_mid_days=0, mom_mid_bars=0,  # V25: 3-mom 지원 (mom_mid 추가)
+        zscore_mom_bars=0, zscore_sharpe_bars=0,  # V25 selection='zscore' 룩백
         canary_hyst=0.015,
         dd_lookback=60, dd_threshold=-0.25,
         dd_bars_override=0,  # 0이면 dd_lookback*bpd 사용
@@ -289,6 +291,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
     health_sma_period = (health_sma_days * bpd) if health_sma_days and health_sma_days > 0 else sma_period
     mom30 = mom_short_bars if mom_short_bars > 0 else mom_short_days * bpd
     mom90 = mom_long_bars if mom_long_bars > 0 else mom_long_days * bpd
+    mom60 = mom_mid_bars if mom_mid_bars > 0 else (mom_mid_days * bpd if mom_mid_days > 0 else 0)
     _vol_bars = vol_bars if vol_bars > 0 else vol_days * bpd
     dd_bars = dd_bars_override if dd_bars_override > 0 else dd_lookback * bpd
     bl_cooldown = bl_bars_override if bl_bars_override > 0 else bl_days * bpd
@@ -529,7 +532,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
 
         healthy = []
-        min_bars = max(mom30, mom90, _vol_bars, sma_period, health_sma_period)
+        min_bars = max(mom30, mom90, mom60, _vol_bars, sma_period, health_sma_period)
         _excluded = exclude_assets or frozenset()
         for coin in mcap_order:
             if coin in blacklist:
@@ -549,7 +552,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 healthy.append(coin)
                 continue
             m_short = calc_mom(c, mom30) if 'mom' in health_mode else 999
-            m_long = calc_mom(c, mom90) if 'mom2' in health_mode else 999
+            m_long = calc_mom(c, mom90) if ('mom2' in health_mode or '3mom' in health_mode) else 999
+            m_mid = calc_mom(c, mom60) if ('3mom' in health_mode and mom60 > 0) else 999
             if 'vol' in health_mode:
                 if vol_mode == 'bar':
                     vol = calc_vol_bars(c, _vol_bars, bars_per_year)
@@ -565,6 +569,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
 
             if health_mode == 'mom2vol':
                 ok = m_short > 0 and m_long > 0 and vol <= vol_threshold
+            elif health_mode == '3momvol':
+                ok = m_short > 0 and m_mid > 0 and m_long > 0 and vol <= vol_threshold
+            elif health_mode == '3mom':
+                ok = m_short > 0 and m_mid > 0 and m_long > 0
             elif health_mode == 'mom1vol':
                 ok = m_short > 0 and vol <= vol_threshold
             elif health_mode == 'mom1':
@@ -582,6 +590,35 @@ def run(bars, funding, interval='1h', leverage=1.0,
             if ok:
                 healthy.append(coin)
 
+        # Z-score selection (Mom252 + Sharpe126), V25 옵션
+        if selection == 'zscore' and len(healthy) > 1:
+            zscore_lb_mom = zscore_mom_bars if zscore_mom_bars > 0 else 252 * bpd
+            zscore_lb_sh = zscore_sharpe_bars if zscore_sharpe_bars > 0 else 126 * bpd
+            moms, shs = {}, {}
+            for coin in healthy:
+                df = bars.get(coin)
+                if df is None:
+                    continue
+                ci = df.index.get_indexer([sig_date], method='ffill')[0]
+                if ci < 0:
+                    continue
+                c = df['Close'].values[:ci + 1]
+                if len(c) < zscore_lb_mom + 2:
+                    continue
+                moms[coin] = float(c[-1] / c[-zscore_lb_mom - 1] - 1)
+                if len(c) < zscore_lb_sh + 2:
+                    continue
+                rets = np.diff(c[-zscore_lb_sh - 1:]) / c[-zscore_lb_sh - 1:-1]
+                sd = float(rets.std())
+                shs[coin] = float(rets.mean() / sd * np.sqrt(bars_per_year)) if sd > 0 else 0.0
+            keys = [c for c in healthy if c in moms and c in shs]
+            if len(keys) > 1:
+                m_arr = np.array([moms[c] for c in keys])
+                s_arr = np.array([shs[c] for c in keys])
+                m_std = m_arr.std() or 1.0
+                s_std = s_arr.std() or 1.0
+                z = (m_arr - m_arr.mean()) / m_std + (s_arr - s_arr.mean()) / s_std
+                healthy = [k for _, k in sorted(zip(-z, keys))]
         picks = healthy[:universe_size]
 
         # Greedy absorption
@@ -618,14 +655,15 @@ def run(bars, funding, interval='1h', leverage=1.0,
         if df is None:
             return False
         ci = df.index.get_indexer([sig_date], method='ffill')[0]
-        min_bars_local = max(mom30, mom90, _vol_bars, sma_period, health_sma_period)
+        min_bars_local = max(mom30, mom90, mom60, _vol_bars, sma_period, health_sma_period)
         if ci < 0 or ci < min_bars_local:
             return False
         c = df['Close'].values[:ci + 1]
         if health_mode == 'none':
             return True
         m_short = calc_mom(c, mom30) if 'mom' in health_mode else 999
-        m_long = calc_mom(c, mom90) if 'mom2' in health_mode else 999
+        m_long = calc_mom(c, mom90) if ('mom2' in health_mode or '3mom' in health_mode) else 999
+        m_mid = calc_mom(c, mom60) if ('3mom' in health_mode and mom60 > 0) else 999
         if 'vol' in health_mode:
             if vol_mode == 'bar':
                 vol = calc_vol_bars(c, _vol_bars, bars_per_year)
@@ -639,6 +677,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
             sma_ok = c[-1] > sma_val
         if health_mode == 'mom2vol':
             return m_short > 0 and m_long > 0 and vol <= vol_threshold
+        elif health_mode == '3momvol':
+            return m_short > 0 and m_mid > 0 and m_long > 0 and vol <= vol_threshold
+        elif health_mode == '3mom':
+            return m_short > 0 and m_mid > 0 and m_long > 0
         elif health_mode == 'mom1vol':
             return m_short > 0 and vol <= vol_threshold
         elif health_mode == 'mom1':
@@ -861,6 +903,9 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 need_rebal = True
 
         # ── 앵커 리밸런싱 (Risk-On + 미플립) ──
+        # ANCHOR_TRADE_MODE=defer 시 snap 갱신만 하고 need_rebal 안 켬 → drift 만 trade trigger
+        import os as _osa
+        _anchor_defer = _osa.environ.get('ANCHOR_TRADE_MODE', 'on') == 'defer'
         if canary_on and not canary_flipped:
             if snap_interval_bars > 0:
                 # 봉 기반 앵커: bar_i % interval로 트리거
@@ -870,7 +915,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
                         new_w = _compute_weights(prev_date)
                         if new_w != snapshots[si]:
                             snapshots[si] = new_w
-                            need_rebal = True
+                            if not _anchor_defer:
+                                need_rebal = True
             else:
                 # 달력 기반 앵커 (기존)
                 day_of_month = date.day
@@ -881,13 +927,37 @@ def run(bars, funding, interval='1h', leverage=1.0,
                         new_w = _compute_weights(prev_date)
                         if new_w != snapshots[si]:
                             snapshots[si] = new_w
-                            need_rebal = True
+                            if not _anchor_defer:
+                                need_rebal = True
 
         # ── Drift (daily_gate 시 일 1회만) ──
         combined = _merge_snapshots(sig_date_for_health=prev_date)
         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
             if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
                 need_rebal = True
+                # V25 옵션 B: drift 발화 시 CASH 슬롯 refill (보유 종목 유지)
+                import os as _os
+                if _os.environ.get('DRIFT_CASH_REFILL', 'off') == 'on':
+                    _fresh_full = _compute_weights(prev_date)
+                    _fresh_pool = sorted([c for c in _fresh_full.keys() if c not in ('CASH', 'Cash')])
+                    if _fresh_pool:
+                        for si in range(n_snapshots):
+                            sn = snapshots[si]
+                            cash_w = sn.get('CASH', 0) + sn.get('Cash', 0)
+                            if cash_w <= 0.001:
+                                continue
+                            already = set(c for c in sn.keys() if c not in ('CASH', 'Cash'))
+                            candidates = [c for c in _fresh_pool if c not in already]
+                            if not candidates:
+                                continue
+                            n_slots = max(1, int(round(cash_w / cap)))
+                            picks = candidates[:n_slots]
+                            w_per = cash_w / len(picks)
+                            new_sn = {k: v for k, v in sn.items() if k not in ('CASH', 'Cash')}
+                            for c in picks:
+                                new_sn[c] = new_sn.get(c, 0) + w_per
+                            snapshots[si] = new_sn
+                        combined = _merge_snapshots(sig_date_for_health=prev_date)
 
         if crash_cooldown > 0:
             need_rebal = False
