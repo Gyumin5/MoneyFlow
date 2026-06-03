@@ -887,6 +887,8 @@ def run(bars, funding, interval='D', leverage=3.0,
                     need_rebal = True
 
             # ── 앵커 리밸런싱 (Risk-On + 미플립) ──
+            import os as _osa
+            _anchor_defer = _osa.environ.get('ANCHOR_TRADE_MODE', 'on') == 'defer'
             if canary_on and not canary_flipped:
                 if snap_interval_bars > 0:
                     for si in range(n_snapshots):
@@ -895,7 +897,8 @@ def run(bars, funding, interval='D', leverage=3.0,
                             new_w = _compute_weights(prev_date)
                             if new_w != snapshots[si]:
                                 snapshots[si] = new_w
-                                need_rebal = True
+                                if not _anchor_defer:
+                                    need_rebal = True
                 else:
                     day_of_month = date.day
                     for si, anchor in enumerate(snap_days):
@@ -905,7 +908,8 @@ def run(bars, funding, interval='D', leverage=3.0,
                             new_w = _compute_weights(prev_date)
                             if new_w != snapshots[si]:
                                 snapshots[si] = new_w
-                                need_rebal = True
+                                if not _anchor_defer:
+                                    need_rebal = True
 
             combined = _merge_snapshots()
         else:
@@ -988,6 +992,30 @@ def run(bars, funding, interval='D', leverage=3.0,
                         snapshots[si] = new_sn
                     # combined 재계산
                     combined = _merge_snapshots()
+                # V25 옵션 B: CASH 슬롯 refill (drift 발화 + 빈 CASH 슬롯 + fresh healthy 존재 시)
+                if _os.environ.get('DRIFT_CASH_REFILL', 'off') == 'on':
+                    _fresh_full = _compute_weights(prev_date)
+                    _fresh_pool = sorted([c for c in _fresh_full.keys() if c != 'CASH'])
+                    if _fresh_pool:
+                        for si in range(n_snapshots):
+                            sn = snapshots[si]
+                            cash_w = sn.get('CASH', 0)
+                            if cash_w <= 0.001:
+                                continue
+                            already = set(c for c in sn.keys() if c != 'CASH')
+                            candidates = [c for c in _fresh_pool if c not in already]
+                            if not candidates:
+                                continue
+                            # 빈 슬롯 수 = round(cash_w / cap)
+                            n_slots = max(1, int(round(cash_w / cap)))
+                            picks = candidates[:n_slots]
+                            w_per = cash_w / len(picks)
+                            new_sn = dict(sn)
+                            del new_sn['CASH']
+                            for c in picks:
+                                new_sn[c] = new_sn.get(c, 0) + w_per
+                            snapshots[si] = new_sn
+                        combined = _merge_snapshots()
 
         # ── A 안 cooldown: no_reentry 코인 combined 에서 제거 ──
         if no_reentry:
