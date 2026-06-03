@@ -313,15 +313,36 @@ def _get_upbit_usdt_krw_rate() -> float:
 
 
 def _get_stock_balance_data() -> dict:
-    """한투 해외주식 잔고 자동 조회."""
-    from auto_trade_kis import get_balance, get_buying_power_usd
+    """한투 해외주식 잔고 자동 조회.
+
+    현금/총자산은 CTRP6548R(투자계좌자산현황)의 tot_asst_amt 기준 — 외화RP(USD)
+    자동매매 스윕분을 포함한다. 해외주식 inquire-balance/present-balance 만으로는
+    RP 가 누락되어 총자산이 ~RP 만큼 작게 잡힌다. CTRP6548R 실패 시 기존 방식 fallback.
+    """
+    from auto_trade_kis import get_balance, get_buying_power_usd, get_account_asset
 
     holdings_raw, _ = get_balance()
     stock_eval = sum(h['eval_amt'] for h in holdings_raw)
     buying_power = get_buying_power_usd()
     rate = _get_usdkrw_rate()
-    total_usd = stock_eval + buying_power
-    total_krw = total_usd * rate
+
+    asset = get_account_asset()  # CTRP6548R: RP 포함 총자산 (KRW)
+    if asset.get("tot_asst_amt_krw", 0) > 0:
+        total_krw = asset["tot_asst_amt_krw"]
+        cash_krw = asset["cash_total_krw"]      # 예수금 + 외화RP = 실현금
+        rp_krw = asset.get("rp_krw", 0.0)
+        deposit_krw = asset.get("deposit_krw", 0.0)
+        total_usd = total_krw / rate if rate > 0 else stock_eval + buying_power
+        cash_usd = cash_krw / rate if rate > 0 else buying_power
+    else:
+        # fallback: 기존 방식 (RP 누락)
+        total_usd = stock_eval + buying_power
+        total_krw = total_usd * rate
+        cash_krw = buying_power * rate
+        cash_usd = buying_power
+        rp_krw = 0.0
+        deposit_krw = buying_power * rate
+
     holdings = []
     for h in holdings_raw:
         holdings.append({
@@ -334,14 +355,16 @@ def _get_stock_balance_data() -> dict:
     if total_krw > 0:
         for h in holdings:
             weights[h['ticker']] = float(h.get('weight_value_krw', 0.0)) / total_krw
-        weights['현금'] = (buying_power * rate) / total_krw
+        weights['현금'] = cash_krw / total_krw
     return {
         "total_krw": total_krw,
         "total_usd": total_usd,
         "stock_eval_usd": stock_eval,
         "buying_power_usd": buying_power,
-        "cash_usd": buying_power,
-        "cash_krw": buying_power * rate,
+        "cash_usd": cash_usd,
+        "cash_krw": cash_krw,
+        "rp_krw": rp_krw,
+        "deposit_krw": deposit_krw,
         "exchange_rate": rate,
         "holdings": holdings,
         "weights": weights,
