@@ -1,3 +1,20 @@
+## [2026-06-03] KIS 잔고 외화RP 누락 → CTRP6548R 채택 + 자동RP 해지
+tags: KIS, 잔고, RP, 표시정합, executor
+- 결정: 한투 총자산/현금은 CTRP6548R(투자계좌자산현황) output2.tot_asst_amt 기준. 해외주식 inquire-balance/present-balance 단독 사용 금지(외화RP 자동매매 스윕분 누락). 사용자가 KIS앱에서 자동RP 해지.
+- 근거: HTML 총액 419.24M vs 실계좌 440.18M, 차이 ≈ 외화RP(USD)자동매매 20.13M. 해외주식 API 계열은 RP(금융상품)를 구조적으로 못 봄. CTRP6548R 만 RP 포함 총자산을 줌(앱과 100% 일치). 자동RP 해지 시 유휴 USD 가 외화예수금으로 환원돼 present-balance/주문가능액에 전액 포함 → executor PV·funding 도 코드 수정 없이 자동 정확.
+- 코드: trade/auto_trade_kis.py(get_account_asset 신규, CTRP6548R), trade/ops/trade_api_server.py(_get_stock_balance_data RP 포함), strategies/cap_defend/recommend_personal.py(line127 보유=total−cash). 서버 배포·검증 완료(present-balance 419.98M→440.11M, 주문가능 18,345→31,592 USD).
+- 실험/실패: present-balance tot_asst_amt(419.98M)도 RP 못 잡음 — 처음엔 executor 가 이걸 쓰니 맞을 줄 알았으나 둘 다 누락이었음. RP 는 오직 CTRP6548R 에만.
+- 되돌릴 조건: 자동RP 재활성화 시 executor PV/funding 가 다시 RP 누락 → CTRP6548R 기반 패치 필요. 현재는 RP off 라 불필요.
+- 한계: 옛 일별 스냅샷(assets.db)은 RP 활성 기간 동안 total 을 ~RP(~20M, 총자산의 ~3%)만큼 과소 기록. 일별 RP 미저장이라 정밀 backfill 불가. 2026-06-03 부터 정확.
+
+## [2026-06-02] K2 per-coin L 상방 L5/L6 + 하방 L1/L3 floor 전부 기각
+tags: V25, 선물, leverage, K2, ai-debate, 과적합방지
+- 결정: per-coin 동적 L 현행 L2~4 유지. 하방 L1·floor L3, 상방 L5·L6 모두 미채택. 라이브 변경 없음.
+- 근거: 하방 변형은 양방향 Calmar 악화 (L1 floor: CAGR↓·MDD 불변 → alloc Cal 2.98→2.63 / L3 floor: CAGR↑이나 MDD↑↑ → 2.98→2.78). L6 만장일치 NO-GO (alloc 이득 0=plateau 평평 3.14, bootstrap 1건 음수, 꼬리위험만). L5(1.10/1.08)는 5게이트 robust 통과 (제외 4/4 +0.11~0.35, bootstrap 12/12, cost 5x edge 유지, window rank dominant) 이고 BT 가 일중 Low+CROSS worst-case 청산 검사하는데도 5.6yr 청산 0건 — 그러나 이득 작음(BNB+SOL +0.16 Cal), Sharpe 미세하락(1.66→1.63 = 이득이 alpha 아닌 leverage-beta), plateau 단조(내부 peak 없음 = bull 샘플 레버리지-베타 시그니처, V25 과적합 규칙 위반), bull-heavy 표본. "robust 통과 ≠ 채택" — 사용자 NO-GO.
+- 실험/실패: L5 임계 plateau 가 1.075 에서 최고(Cal 3.18)지만 이는 L4 를 사실상 L5 로 치환=상시 고레버리지화. 재검토 시 1.075 공격안 금지, 보수 1.10/1.08 만. L6 는 재론 가치 없음.
+- 되돌릴 조건: 장기 bear/횡보 포함 표본으로 재검증 시 + intraday(<1h) 청산 시뮬 통과 시 L5 보수안 재론 가능. 그 전엔 재론 금지.
+- 스크립트: research/bt_k2_l5l6_full.py(5게이트 통합), bt_k2_upside_l5.py, bt_k2_floor_l3.py, bt_k2_l1_downside.py. 토론: ~/.claude/state/ai-debate/run-20260602T060453Z/.
+
 ## [2026-05-23] alloc_transit phantom buffer (옵션 D) 도입
 tags: V24, alloc_transit, phantom_buffer, drift, ai-debate
 - 결정: 자산배분 트리거 fire 시 3자산 동시 cap_ratio 적용 (60/25/15). cap_ratio = min(1.0, target_sleeve_krw / current_sleeve_krw) 매일 갱신. 각 executor 가 effective_pv = actual × cap_ratio. clear: ht ≤ 0.05 AND 최소 1일 유지. floor 0.10 (드물게 자산 90% 매도 한도).

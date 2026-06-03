@@ -124,7 +124,14 @@ def save_daily_live_snapshot():
     upbit = accounts.get("coin_upbit", {}) or {}
     binance = accounts.get("coin_binance", {}) or {}
 
-    stock_krw = float(stock.get("stock_eval_usd", 0.0)) * float(stock.get("exchange_rate", 0.0))
+    # 보유주식 = KIS 총자산(RP 포함) − 현금(예수금+RP). account 기준이라 spot FX 환산 오차 없음.
+    # total_krw/cash_krw 없으면(구버전 API) 기존 spot FX 환산으로 fallback.
+    _stock_total = float(stock.get("total_krw", 0.0))
+    _stock_cash = float(stock.get("cash_krw", 0.0))
+    if _stock_total > 0:
+        stock_krw = max(0.0, _stock_total - _stock_cash)
+    else:
+        stock_krw = float(stock.get("stock_eval_usd", 0.0)) * float(stock.get("exchange_rate", 0.0))
     fx_rate = float(stock.get("exchange_rate", 0.0) or binance.get("exchange_rate", 0.0) or 0.0)
     upbit_coin_krw = sum(float(row.get("value", 0.0)) for row in (upbit.get("holdings") or []))
     binance_total_krw = float(binance.get("total_krw", 0.0))
