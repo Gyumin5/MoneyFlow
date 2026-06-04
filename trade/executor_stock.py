@@ -271,6 +271,9 @@ class KISAPI:
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
         self._balance_price_cache: Dict[str, float] = {}
+        # 결제기준(앱/CTRP6548R) 주식평가 / live 주식평가 비율. get_balance 에서 갱신.
+        # 평가·드리프트·목표 사이징을 결제기준(전일종가, HTML/앱 일치)으로 통일하는 데 사용.
+        self._settle_scale: float = 1.0
 
     def get_balance(self) -> Tuple[Dict[str, int], float, float]:
         """잔고 → (holdings {ticker: qty}, total_usd, exchange_rate)."""
@@ -346,12 +349,33 @@ class KISAPI:
         if real_cash_krw > 0 and exrt > 0:
             cash_usd = real_cash_krw / exrt
 
-        # 총자산 = 보유주식(현재가 평가, holdings_usd) + 실예수금.
-        # 현재가 일관 기준 — tot_asst_amt 은 주식을 전일종가로 잡아 보유 현재가 비교와
-        # 기준이 어긋나 초과현금이 배포되지 않는 under-deploy 버그를 유발했음(2026-06-04 수정).
-        total_usd = holdings_usd + cash_usd
+        # 결제기준(앱/CTRP6548R) 주식 평가 — 표시(HTML/리포트)·백테스트(전일종가 사이징)와
+        # 동일 기준으로 통일(2026-06-04). 주문 수량 산정엔 현재가를 쓰되, 총자산/드리프트/
+        # 목표 사이징은 결제기준. _settle_scale = 결제기준주식 / live주식 (per-ticker 환산용).
+        settle_stock_usd = 0.0
+        self._settle_scale = 1.0
+        try:
+            _ab = _get('/uapi/domestic-stock/v1/trading/inquire-account-balance', 'CTRP6548R', {
+                'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
+                'INQR_DVSN_1': '', 'BSPR_BF_DT_APLY_YN': '',
+            })
+            _o2 = _ab.get('output2', {})
+            if isinstance(_o2, list):
+                _o2 = _o2[0] if _o2 else {}
+            _settle_stock_krw = float(_o2.get('ovrs_stck_evlu_amt1', 0) or 0)
+            if _settle_stock_krw > 0 and exrt > 0:
+                settle_stock_usd = _settle_stock_krw / exrt
+                if holdings_usd > 0:
+                    self._settle_scale = settle_stock_usd / holdings_usd
+        except Exception:
+            settle_stock_usd = 0.0
+
+        # 총자산 = 결제기준 주식 + 실예수금 (= 앱 계좌총자산). CTRP6548R 실패 시 live fallback.
+        if settle_stock_usd > 0:
+            total_usd = settle_stock_usd + cash_usd
+        else:
+            total_usd = holdings_usd + cash_usd
         if total_usd <= 0:
-            # fallback: 계좌 총자산 (전일종가 기준)
             try:
                 total_krw = float(bp_data.get('output3', {}).get('tot_asst_amt', 0))
                 if total_krw > 0 and exrt > 0:
@@ -710,11 +734,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     # alloc_transit cap 적용
     pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
 
-    # 현재 비중 계산
+    # 현재 비중 계산 — 결제기준 평가(_settle_scale)로 total_usd(결제기준)와 일관.
+    _scale = getattr(api, '_settle_scale', 1.0) or 1.0
     current_values = {}
     for ticker, qty in holdings.items():
         price = api.get_current_price(ticker)
-        current_values[ticker] = qty * price if price else 0
+        current_values[ticker] = (qty * price * _scale) if price else 0
         log(f'    현재 {ticker}: ${current_values[ticker]:,.0f} ({(current_values[ticker] / total_usd):.1%})')
 
     # 매도/매수 리스트
@@ -1097,11 +1122,13 @@ def run_once(dry_run=False):
                     _pv_basis = _total_usd if _stock_cap_usd is None else _stock_cap_usd
                     if _stock_cap_usd is not None:
                         log(f'  🔴 alloc_transit cap_ratio={_stock_cap_ratio:.3f} → pv ${_total_usd:,.0f} → ${_pv_basis:,.0f}')
+                    # 결제기준 평가(_settle_scale)로 cur_w 계산 — HTML/리포트 drift 와 동일 기준.
+                    _scale = getattr(api, '_settle_scale', 1.0) or 1.0
                     _cur_w = {}
                     for _tk, _qty in _holdings.items():
                         _px = api.get_current_price(_tk)
                         if _px and _qty > 0:
-                            _cur_w[_tk] = (_qty * _px) / _pv_basis
+                            _cur_w[_tk] = (_qty * _px * _scale) / _pv_basis
                     _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
                     if _cash_w > 0:
                         _cur_w['Cash'] = _cash_w
