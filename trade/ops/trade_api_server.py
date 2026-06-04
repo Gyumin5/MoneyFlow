@@ -326,16 +326,17 @@ def _get_stock_balance_data() -> dict:
     buying_power = get_buying_power_usd()
     rate = _get_usdkrw_rate()
 
-    asset = get_account_asset()  # CTRP6548R: RP 포함 현금 (KRW)
+    asset = get_account_asset()  # CTRP6548R: RP 포함 총자산/현금 (KRW)
     if asset.get("tot_asst_amt_krw", 0) > 0:
-        cash_krw = asset["cash_total_krw"]      # 예수금 + 외화RP = 실현금 (RP 포함)
+        # 앱 "계좌 총자산" 과 일치하는 결제기준(전일종가) 총자산을 그대로 사용.
+        # 현금은 실예수금(외화+원화, RP 포함) = cash_total_krw. 주식 = total - cash =
+        # ovrs_stck_evlu_amt1(결제기준). 표시 cash% 는 잔차가 아니라 실예수금/총자산.
+        # (live now_pric2 로 total 을 잡으면 앱과 어긋나므로 결제기준 유지 — 2026-06-04)
+        total_krw = asset["tot_asst_amt_krw"]
+        cash_krw = asset["cash_total_krw"]      # 예수금 + 외화RP = 실현금
+        stock_eval_krw = max(0.0, total_krw - cash_krw)   # 결제기준 주식 평가 (앱과 일치)
         rp_krw = asset.get("rp_krw", 0.0)
         deposit_krw = asset.get("deposit_krw", 0.0)
-        # 총자산 = 보유주식(현재가 평가) + 실현금. 현재가 일관 기준.
-        # CTRP6548R tot_asst_amt 은 주식을 전일종가(ovrs_stck_evlu_amt1)로 잡아
-        # live holdings(eval_amt)와 기준이 어긋나 cash 잔차가 위장되는 버그가 있었음
-        # (2026-06-04 수정). RP 는 cash_krw 에 이미 포함되므로 누락 없음.
-        total_krw = stock_eval * rate + cash_krw
         total_usd = total_krw / rate if rate > 0 else stock_eval + buying_power
         cash_usd = cash_krw / rate if rate > 0 else buying_power
     else:
@@ -347,13 +348,25 @@ def _get_stock_balance_data() -> dict:
         rp_krw = 0.0
         deposit_krw = buying_power * rate
 
+    # 종목 평가액은 결제기준 주식합(stock_eval_krw, 앱과 일치)에 비례 스케일.
+    # KIS now_pric2(live)·결제기준(전일종가) 가격기준 차이로 live 합(stock_eval×rate)이
+    # 앱 주식합과 어긋나므로, 비중·잔차현금이 앱과 맞도록 결제기준으로 환산한다.
+    _stock_eval_krw = locals().get('stock_eval_krw', None)
+    _live_stock_krw = stock_eval * rate
+    if _stock_eval_krw and _live_stock_krw > 0:
+        _scale = _stock_eval_krw / _live_stock_krw
+    else:
+        _scale = 1.0
     holdings = []
     for h in holdings_raw:
+        _live_val = float(h.get("eval_amt", 0.0)) * rate
+        _val = _live_val * _scale   # 결제기준 환산 (앱과 일치)
         holdings.append({
             **h,
             "price_krw": float(h.get("current_price", 0.0)) * rate,
-            "value_krw": float(h.get("eval_amt", 0.0)) * rate,
-            "weight_value_krw": float(h.get("eval_amt", 0.0)) * rate,
+            "value_krw": _val,
+            "value_krw_live": _live_val,
+            "weight_value_krw": _val,
         })
     weights = {}
     if total_krw > 0:
