@@ -333,15 +333,31 @@ class KISAPI:
                 except Exception:
                     pass
 
+        # 실예수금(외화예수금 + 원화예수금) — present-balance output3.
+        # 외화RP 자동매매 해지 상태 가정. (RP 재활성화 시 RP 스윕분 누락 →
+        #  CTRP6548R(투자계좌자산현황) tot_asst_amt 기반으로 전환 필요)
+        real_cash_krw = 0.0
         try:
-            total_krw = float(bp_data.get('output3', {}).get('tot_asst_amt', 0))
-            if total_krw > 0 and exrt > 0:
-                total_usd = total_krw / exrt
+            _o3 = bp_data.get('output3', {}) or {}
+            real_cash_krw = (float(_o3.get('frcr_evlu_tota', 0) or 0)
+                             + float(_o3.get('tot_dncl_amt', 0) or 0))
         except Exception:
-            total_usd = 0.0
+            real_cash_krw = 0.0
+        if real_cash_krw > 0 and exrt > 0:
+            cash_usd = real_cash_krw / exrt
 
+        # 총자산 = 보유주식(현재가 평가, holdings_usd) + 실예수금.
+        # 현재가 일관 기준 — tot_asst_amt 은 주식을 전일종가로 잡아 보유 현재가 비교와
+        # 기준이 어긋나 초과현금이 배포되지 않는 under-deploy 버그를 유발했음(2026-06-04 수정).
+        total_usd = holdings_usd + cash_usd
         if total_usd <= 0:
-            total_usd = holdings_usd + cash_usd
+            # fallback: 계좌 총자산 (전일종가 기준)
+            try:
+                total_krw = float(bp_data.get('output3', {}).get('tot_asst_amt', 0))
+                if total_krw > 0 and exrt > 0:
+                    total_usd = total_krw / exrt
+            except Exception:
+                total_usd = 0.0
 
         # 환율 캐싱: 유효한 환율이면 state에 저장, 없으면 캐시에서 복원
         if exrt > 0:
