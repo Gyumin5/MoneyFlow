@@ -825,12 +825,18 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         max_diff = 0
         # alloc_transit cap 적용 시 denom 도 capped 기준
         denom_for_diff = min(total2, effective_pv_usd) if effective_pv_usd is not None else total2
+        _scale2 = getattr(api, '_settle_scale', 1.0) or 1.0
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
             price = api.get_current_price(ticker)
-            current_w = (holdings2.get(ticker, 0) * price / denom_for_diff) if price > 0 else 0
-            max_diff = max(max_diff, abs(target_w - current_w))
+            # 결제기준 평가(_scale2) + cash buffer 반영 목표로 비교.
+            # merge_tranches target 은 risky 합=1.0(버퍼 전)이라 실효 목표는 ×(1-buffer).
+            # (미반영 시 현금이 정상적으로 buffer% 여도 max_diff 가 buffer 만큼 떠서
+            #  rebalancing_needed 가 영구히 안 꺼지는 latch 버그 발생 — 2026-06-05 수정)
+            current_w = (holdings2.get(ticker, 0) * price * _scale2 / denom_for_diff) if price > 0 else 0
+            target_eff = target_w * (1 - cash_buffer)
+            max_diff = max(max_diff, abs(target_eff - current_w))
         if max_diff < REBALANCE_TOLERANCE and not failed_orders:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
