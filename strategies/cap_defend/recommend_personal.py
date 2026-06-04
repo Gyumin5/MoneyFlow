@@ -2714,7 +2714,7 @@ if __name__ == "__main__":
             stock_acct_d = (accts.get("stock_kis") or {}) if 'accts' in locals() else {}
             stock_total_d = float(stock_acct_d.get("total_krw", 0))
             ht_st = _ht_from_holdings(stock_acct_d, stock_total_d, _apply_buffer(s_port or {}, 'stock'))
-            thr_st = 0.10
+            thr_st = 0.05  # V25 주식 sleeve drift threshold (executor 와 동일, V24 0.10 에서 강화)
             if ht_st is None:
                 drift_lines.append("  주식: 잔고 없음")
             else:

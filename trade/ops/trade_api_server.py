@@ -326,12 +326,16 @@ def _get_stock_balance_data() -> dict:
     buying_power = get_buying_power_usd()
     rate = _get_usdkrw_rate()
 
-    asset = get_account_asset()  # CTRP6548R: RP 포함 총자산 (KRW)
+    asset = get_account_asset()  # CTRP6548R: RP 포함 현금 (KRW)
     if asset.get("tot_asst_amt_krw", 0) > 0:
-        total_krw = asset["tot_asst_amt_krw"]
-        cash_krw = asset["cash_total_krw"]      # 예수금 + 외화RP = 실현금
+        cash_krw = asset["cash_total_krw"]      # 예수금 + 외화RP = 실현금 (RP 포함)
         rp_krw = asset.get("rp_krw", 0.0)
         deposit_krw = asset.get("deposit_krw", 0.0)
+        # 총자산 = 보유주식(현재가 평가) + 실현금. 현재가 일관 기준.
+        # CTRP6548R tot_asst_amt 은 주식을 전일종가(ovrs_stck_evlu_amt1)로 잡아
+        # live holdings(eval_amt)와 기준이 어긋나 cash 잔차가 위장되는 버그가 있었음
+        # (2026-06-04 수정). RP 는 cash_krw 에 이미 포함되므로 누락 없음.
+        total_krw = stock_eval * rate + cash_krw
         total_usd = total_krw / rate if rate > 0 else stock_eval + buying_power
         cash_usd = cash_krw / rate if rate > 0 else buying_power
     else:
