@@ -2327,6 +2327,7 @@ def main():
                 send_telegram(f"⚠ {err}")
                 target_lev_map = {}
         rebalance_needed = state.get('rebalancing_needed', False)
+        v25_abort = False  # 버그 수정 2026-06-06: 비매매 경로에서도 항상 정의 (요약부 v25_success 참조)
         if not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
             positions_after, pv_after = positions_before, pv_before
