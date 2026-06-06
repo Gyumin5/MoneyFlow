@@ -917,6 +917,16 @@ def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -
     if not bars:
         return state.get('last_combined', {'CASH': 1.0})
 
+    def _closed_close(df: pd.DataFrame):
+        """진행중(미완성) 일봉 제외한 close 배열 — 시그널 경로(_finalize_daily_bar_for_signal)와
+        동일한 t-1 완성봉 기준. look-ahead 방지 (V25 cycle 7 정합 수정 2026-06-06).
+        finalize 실패 시 보수적으로 마지막 봉 제외."""
+        try:
+            return _finalize_daily_bar_for_signal(df)['Close'].values
+        except Exception:
+            v = df['Close'].values
+            return v[:-1] if len(v) > 0 else v
+
     strats = state.get('strategies', {})
     new_combined: Dict[str, float] = {}
     n_strats = max(1, len(STRATEGIES))
@@ -941,7 +951,7 @@ def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -
             if df is None or df.empty:
                 _fail_cache[coin] = (False, 0.0, 0.0)
                 return False
-            c = df['Close'].values
+            c = _closed_close(df)
             if len(c) < max(mom_s, mom_l) + 1:
                 _fail_cache[coin] = (False, 0.0, 0.0)
                 return False
@@ -955,7 +965,7 @@ def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -
         for coin, df in bars.items():
             if coin == 'BTC':
                 continue
-            c = df['Close'].values
+            c = _closed_close(df)
             if len(c) < max(mom_s, mom_l) + 1:
                 continue
             ms = calc_mom(c, mom_s)
