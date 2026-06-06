@@ -40,7 +40,12 @@ def precompute(prices_df, mom_periods, defense_mom_periods):
     m63 = p_off / p_off.shift(63) - 1
     m126 = p_off / p_off.shift(126) - 1
     m252 = p_off / p_off.shift(252) - 1
-    wmom = 0.5*m63 + 0.3*m126 + 0.2*m252
+    import os as _os
+    # STOCK_ZMOM: 'weighted'(기본, 채택BT) | 'pure252'(라이브 현행 stock_strategy_v25)
+    if _os.environ.get('STOCK_ZMOM', 'weighted') == 'pure252':
+        wmom = m252
+    else:
+        wmom = 0.5*m63 + 0.3*m126 + 0.2*m252
     rets = p_off.pct_change()
     sh126 = rets.rolling(126).mean() / rets.rolling(126).std() * np.sqrt(252)
     z_m = wmom.sub(wmom.mean(axis=1), axis=0).div(wmom.std(axis=1).replace(0, np.nan), axis=0)
