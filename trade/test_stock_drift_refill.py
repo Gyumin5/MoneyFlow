@@ -99,6 +99,36 @@ def main():
     if not hasattr(ex, 'STOCK_DRIFT_REFILL'):
         fails.append('T6: STOCK_DRIFT_REFILL 플래그 없음')
 
+    # --- T7: 카나리 OFF flip → 모든 snapshot 즉시 방어로 교체 (앵커 안 기다림) ---
+    state7 = {'prev_risk_on': True, 'snapshots': fresh_snaps(['EEM', 'PDBC', 'QQQ'])}
+    sig7 = {'stock': {'risk_on': False,
+                      'offense_picks': ['EEM', 'QQQ', 'VEA'],
+                      'offense_weights': {'EEM': cap, 'QQQ': cap, 'VEA': cap},
+                      'defense_picks': ['IEF', 'BIL', 'GLD'],
+                      'defense_weights': {'IEF': cap, 'BIL': cap, 'GLD': cap}}}
+    flipped = ex.check_canary_flip(sig7, state7)
+    m7 = ex.merge_tranches(state7)
+    if not flipped:
+        fails.append('T7: 카나리 flip 미감지')
+    if set(k for k in m7 if k != 'Cash') != {'IEF', 'BIL', 'GLD'}:
+        fails.append(f'T7: 카나리 OFF 인데 방어 전환 안 됨 {m7}')
+    if not state7.get('rebalancing_needed'):
+        fails.append('T7: rebalancing_needed 미설정')
+    if any(state7['snapshots'][str(i)]['last_rebal_date'] != '2026-04-30' for i in range(N)):
+        fails.append('T7: 카나리 flip 이 last_rebal_date 변경 (앵커 cadence 훼손)')
+
+    # --- T8: 카나리 변화 없으면 flip=False, snapshot 보존 ---
+    state8 = {'prev_risk_on': True, 'snapshots': fresh_snaps(['EEM', 'PDBC', 'QQQ'])}
+    sig8 = {'stock': {'risk_on': True,
+                      'offense_picks': ['EEM', 'QQQ', 'VEA'],
+                      'offense_weights': {'EEM': cap, 'QQQ': cap, 'VEA': cap},
+                      'defense_picks': ['IEF', 'BIL', 'GLD'],
+                      'defense_weights': {'IEF': cap, 'BIL': cap, 'GLD': cap}}}
+    if ex.check_canary_flip(sig8, state8):
+        fails.append('T8: 카나리 동일한데 flip=True')
+    if set(k for k in ex.merge_tranches(state8) if k != 'Cash') != {'EEM', 'PDBC', 'QQQ'}:
+        fails.append('T8: 카나리 동일한데 snapshot 변경됨')
+
     print(f"# drift-refill 단위 검증 (N_SNAPS={N}, buf={BUF}, cap={cap:.3f})")
     print(f"  T3 ht: same={ht_same:.4f}  drift={ht_drift:.4f}")
     print(f"  merged after refill: {merged}")
@@ -107,7 +137,7 @@ def main():
         for f in fails:
             print("  -", f)
         sys.exit(1)
-    print("ALL PASS (T1~T6)")
+    print("ALL PASS (T1~T8)")
 
 
 if __name__ == '__main__':

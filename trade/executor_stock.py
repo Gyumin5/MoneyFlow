@@ -593,27 +593,24 @@ def check_crash(signal: dict, api: KISAPI, state: dict) -> bool:
 
 
 def check_canary_flip(signal: dict, state: dict) -> bool:
-    """카나리 플립 → 전 트랜치 즉시 전환."""
+    """카나리 플립 → 전 snapshot 즉시 전환 (offense ↔ defense).
+
+    카나리 OFF 시 앵커(69일) 안 기다리고 그날 즉시 방어자산으로 교체 (전량 매도→방어).
+    버그 수정(2026-06-06): 기존엔 구 state['tranches'](V24 마이그레이션 후 비어 있음)에
+    써서 snapshot picks 가 안 바뀌어 방어 전환이 앵커까지 최대 69일 지연됐음.
+    refill_snaps_fresh 로 모든 snapshot picks 를 새 레짐으로 교체. last_rebal_date 보존
+    (앵커 cadence 유지 = 채택 BT 정합).
+    """
     risk_on = signal.get('stock', {}).get('risk_on', True)
     prev = state.get('prev_risk_on')
 
     if prev is not None and risk_on != prev:
         log(f'  🔄 카나리 플립: {prev} → {risk_on}')
-        stock_sig = signal.get('stock', {})
-        if risk_on:
-            picks = stock_sig.get('offense_picks', [])
-            weights = stock_sig.get('offense_weights', {})
-        else:
-            picks = stock_sig.get('defense_picks', [])
-            weights = stock_sig.get('defense_weights', {})
-
-        for tr in state.get('tranches', {}).values():
-            tr['picks'] = list(picks)
-            tr['weights'] = dict(weights)
-
+        _migrate_tranches_to_snaps(state)
+        swapped = refill_snaps_fresh(signal, state)
         state['prev_risk_on'] = risk_on
         state['rebalancing_needed'] = True
-        log(f'카나리 플립 (silent): {"Risk-On" if risk_on else "Risk-Off"}')
+        log(f'카나리 플립 (silent): {"Risk-On 공격" if risk_on else "Risk-Off 방어"} swapped={swapped} → {merge_tranches(state)}')
         return True
 
     state['prev_risk_on'] = risk_on
