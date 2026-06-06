@@ -139,6 +139,11 @@ MAX_ORDER_ATTEMPTS = 5
 ORDER_WAIT_SEC = 5
 LIMIT_PRICE_SLIP = 0.003   # ±0.3%
 REBALANCE_TOLERANCE = 0.01  # 목표 달성 판정 허용 오차 ±1%
+# V25 (2026-06-06): 드리프트 5pp 발화 시 그날 fresh 3-mom selection 으로 snap picks 리필.
+# 채택 BT(bt_stock_mom3)와 정합 — 모멘텀 탈락 종목을 앵커(69일)까지 안 기다리고 발화일 교체.
+# 비용 스트레스 1x/3x/5x 모두 anchor-only 대비 우위 (Cal 1.17 vs 1.05, 턴오버 오히려 낮음).
+# 롤백: False 로 두면 anchor-only(종목 교체 앵커일에만) 로 복귀.
+STOCK_DRIFT_REFILL = True
 
 # Crash 상수
 CRASH_THRESHOLD = 0.97      # vt_prev_close × 0.97
@@ -710,6 +715,35 @@ def merge_tranches(state: dict) -> Dict[str, float]:
     return merged
 
 
+def refill_snaps_fresh(signal: dict, state: dict) -> bool:
+    """V25 drift-refill: 드리프트 발화일에 모든 snap picks 를 그날 fresh 신호로 교체.
+
+    채택 BT(bt_stock_mom3) 정합 — 발화일에 3-mom selection 으로 종목 교체.
+    last_rebal_date 는 건드리지 않음 → 정규 앵커 cadence(69일) 유지 (BT 의 고정 phase 와 동일).
+    같은 거래일 signal 은 _compute_signal_v25 로 1회만 계산되므로 picks 고정.
+    반환: 종목집합이 실제로 바뀌었으면 True.
+    """
+    stock_sig = signal.get('stock', {})
+    risk_on = stock_sig.get('risk_on', True)
+    if risk_on:
+        picks = stock_sig.get('offense_picks', [])
+        weights = stock_sig.get('offense_weights', {})
+    else:
+        picks = stock_sig.get('defense_picks', [])
+        weights = stock_sig.get('defense_weights', {})
+    if not picks and not weights:
+        return False
+    snapshots = state.setdefault('snapshots', {})
+    changed = False
+    for snap_id in range(N_SNAPS):
+        snap = snapshots.setdefault(str(snap_id), {})
+        if snap.get('picks') != list(picks):
+            changed = True
+        snap['picks'] = list(picks)
+        snap['weights'] = dict(weights)
+    return changed
+
+
 def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None, effective_pv_usd: float = None):
     """target vs 현재 잔고 → Delta 매매 (정수 주 단위).
 
@@ -1154,6 +1188,14 @@ def run_once(dry_run=False):
                     if _ht >= 0.05:
                         state['rebalancing_needed'] = True
                         log(f'  🌊 V25 stock drift trigger: ht={_ht*100:.2f}pp ≥ 5pp → rebal 필요')
+                        # V25 drift-refill (채택 BT 정합): 발화일에 그날 fresh 3-mom selection 으로
+                        # snap picks 교체. _ht 는 위에서 옛 target 기준으로 산출됨(BT 와 동일 순서) →
+                        # 이후 merge_tranches 가 새 picks 를 반영해 execute_delta 가 새 target 으로 체결.
+                        if STOCK_DRIFT_REFILL:
+                            _swapped = refill_snaps_fresh(signal, state)
+                            if _swapped:
+                                _new_t = merge_tranches(state)
+                                log(f'  🔄 V25 drift-refill: snap picks → 그날 fresh 3-mom 으로 교체 (new target={_new_t})')
         except Exception as _ex:
             log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
 
