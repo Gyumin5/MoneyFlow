@@ -993,8 +993,15 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 import os as _os
                 # 라이브 정합 refill_v2: drift 발화 시 mom2 음수 슬롯 → fresh healthy 교체
                 # (coin_live_engine._apply_refill_v2_to_state 와 동일). DRIFT_HEALTH_MODE='refill'.
-                if _os.environ.get('DRIFT_HEALTH_MODE', 'off') == 'refill':
+                _dhm = _os.environ.get('DRIFT_HEALTH_MODE', 'off')
+                if _dhm == 'refill':
                     _refill_v2_snapshots(prev_date)
+                    combined = _merge_snapshots(sig_date_for_health=prev_date)
+                # 주식식 전체 재선정: drift 발화 시 전 snapshot 을 fresh full selection 으로 교체
+                elif _dhm == 'reselect':
+                    _fresh = _compute_weights(prev_date)
+                    for si in range(len(snapshots)):
+                        snapshots[si] = dict(_fresh)
                     combined = _merge_snapshots(sig_date_for_health=prev_date)
                 # V25 옵션 B: drift 발화 시 CASH 슬롯 refill (보유 종목 유지)
                 elif _os.environ.get('DRIFT_CASH_REFILL', 'off') == 'on':
