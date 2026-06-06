@@ -47,9 +47,19 @@ def calc_sharpe(s: pd.Series, d: int) -> float:
 
 
 def calc_weighted_mom(s: pd.Series) -> float:
-    """V15: Pure 12-month momentum."""
+    """V25 weighted rank momentum: 0.5*ret63 + 0.3*ret126 + 0.2*ret252.
+
+    채택 BT(bt_stock_window_rank → bt_stock_coin_v3.precompute) 의 Z-rank 모멘텀 정의와 일치.
+    (2026-06-06 정정: 이전엔 순수 252일 — V15 잔재 — 으로 들어가 라이브가 채택 BT 와
+    종목 선정 16.8% 날 어긋났음. replay-diff 로 발견, 가중 전환 시 100% 정합 검증.)
+    """
     if len(s) < MOM12M_DAYS + 1: return float('-inf')
-    return calc_ret(s, MOM12M_DAYS)
+    r63 = calc_ret(s, 63)
+    r126 = calc_ret(s, 126)
+    r252 = calc_ret(s, MOM12M_DAYS)
+    if any(np.isnan(x) for x in (r63, r126, r252)):
+        return float('-inf')
+    return 0.5 * r63 + 0.3 * r126 + 0.2 * r252
 
 
 def eem_canary(eem: Optional[pd.Series], prev_risk_on: Optional[bool],
