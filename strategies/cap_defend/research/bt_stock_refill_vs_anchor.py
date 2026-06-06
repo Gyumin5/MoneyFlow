@@ -94,10 +94,34 @@ def run(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
         ht = half_t(cur_w, target)
         if ht >= drift_thr:
             if mode == 'refill':
+                # 전량 재선정 (현행 주식): 발화일 fresh top3 로 전 스냅 교체
                 for s in snaps:
                     if can_now:
                         s['picks'] = pick_for_snap(d, can_now)
                         s['target'] = picks_to_target(s['picks'], cash_buf, 'cap')
+                    else:
+                        s['picks'] = []
+                        s['target'] = select_off(d, mom_def, cash_buf, 'cap')
+                target = merge_targets()
+            elif mode == 'slot':
+                # 슬롯교체 (코인식): 3-mom 통과 보유는 유지, 탈락 슬롯만 다음 랭킹으로
+                ms_row = mom_off[ms].loc[d]; mid_row = mom_off[mid].loc[d]; ml_row = mom_off[ml].loc[d]
+
+                def _ok(t):
+                    a, b, c = ms_row.get(t, np.nan), mid_row.get(t, np.nan), ml_row.get(t, np.nan)
+                    return all(pd.notna(x) and x > 0 for x in (a, b, c))
+                for s in snaps:
+                    if can_now:
+                        kept = [t for t in s['picks'] if _ok(t)]
+                        for t in ranked.at[d]:
+                            if len(kept) >= 3:
+                                break
+                            if t == CASH_KEY or t in kept:
+                                continue
+                            if _ok(t):
+                                kept.append(t)
+                        s['picks'] = kept
+                        s['target'] = picks_to_target(kept, cash_buf, 'cap')
                     else:
                         s['picks'] = []
                         s['target'] = select_off(d, mom_def, cash_buf, 'cap')
