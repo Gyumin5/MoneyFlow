@@ -8,6 +8,12 @@
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..',
                                  'strategies', 'cap_defend'))
+# 라이브 정합 (2026-06-06): coin_live_engine / auto_trade_binance 는 drift 발화 시
+# refill v2 (mom2 음수 코인 → fresh healthy 교체) 를 수행한다. shadow BT 도 동일하게
+# refill 모드로 돌려 BT-of-record 가 라이브와 1:1 일치하게 한다.
+# 검증(research/bt_spot_refill_vs_anchor.py): drift=0.10 에서 refill ≡ anchor-only
+# (5.4yr 종목교체 0일, CAGR/MDD/Cal 동일) → 채택 성과 불변.
+os.environ['DRIFT_HEALTH_MODE'] = 'refill'
 from datetime import datetime
 import pandas as pd
 

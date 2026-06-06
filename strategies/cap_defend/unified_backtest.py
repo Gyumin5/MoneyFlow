@@ -695,6 +695,61 @@ def run(bars, funding, interval='1h', leverage=1.0,
             return sma_ok and vol <= vol_threshold
         return True
 
+    def _coin_mom2(coin, sig_date):
+        """coin 의 (mom_short, mom_long) at sig_date(t-1). 데이터 부족 시 None."""
+        df = bars.get(coin)
+        if df is None:
+            return None
+        ci = df.index.get_indexer([sig_date], method='ffill')[0]
+        if ci < 0 or ci < max(mom30, mom90):
+            return None
+        c = df['Close'].values[:ci + 1]
+        return calc_mom(c, mom30), calc_mom(c, mom90)
+
+    def _refill_v2_snapshots(sig_date):
+        """라이브 _apply_refill_v2_to_state(coin_live_engine.py) 정합 refill.
+        각 snapshot 에서 mom_short<0 AND mom_long<0 코인 제거 → fresh healthy
+        (mom_short>0 AND mom_long>0, -mom_short then symbol) EW 충당. vol 미포함.
+        sig_date=t-1 (look-ahead 방지). snapshots in-place 수정."""
+        healthy = []
+        for coin in bars.keys():
+            if coin == 'BTC' or coin in blacklist:
+                continue
+            m = _coin_mom2(coin, sig_date)
+            if m is None:
+                continue
+            ms, ml = m
+            if ms > 0 and ml > 0:
+                healthy.append((coin, ms))
+        healthy.sort(key=lambda x: (-x[1], x[0]))
+        healthy_sorted = [c for c, _ in healthy]
+        for si in range(len(snapshots)):
+            snap = snapshots[si]
+            sn_coins = sorted([c for c in snap if c.upper() != 'CASH'])
+            new_sn = {}
+            replaced = 0.0
+            for c in sn_coins:
+                m = _coin_mom2(c, sig_date)
+                failed = (m is not None and m[0] < 0 and m[1] < 0)
+                if failed:
+                    replaced += float(snap.get(c, 0.0))
+                else:
+                    new_sn[c] = float(snap.get(c, 0.0))
+            cash_w = sum(float(snap.get(k, 0.0)) for k in snap if k.upper() == 'CASH')
+            new_sn['CASH'] = cash_w
+            if replaced > 0:
+                fresh = [c for c in healthy_sorted if c not in new_sn]
+                n_failed = len(sn_coins) - sum(1 for k in new_sn if k.upper() != 'CASH')
+                n_failed = max(1, n_failed)
+                if fresh:
+                    picks = fresh[:n_failed]
+                    w_per = replaced / len(picks)
+                    for c in picks:
+                        new_sn[c] = new_sn.get(c, 0.0) + w_per
+                else:
+                    new_sn['CASH'] = new_sn.get('CASH', 0.0) + replaced
+            snapshots[si] = new_sn
+
     def _merge_snapshots(sig_date_for_health=None):
         combined = {}
         n = len(snapshots)
@@ -935,9 +990,14 @@ def run(bars, funding, interval='1h', leverage=1.0,
         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
             if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
                 need_rebal = True
-                # V25 옵션 B: drift 발화 시 CASH 슬롯 refill (보유 종목 유지)
                 import os as _os
-                if _os.environ.get('DRIFT_CASH_REFILL', 'off') == 'on':
+                # 라이브 정합 refill_v2: drift 발화 시 mom2 음수 슬롯 → fresh healthy 교체
+                # (coin_live_engine._apply_refill_v2_to_state 와 동일). DRIFT_HEALTH_MODE='refill'.
+                if _os.environ.get('DRIFT_HEALTH_MODE', 'off') == 'refill':
+                    _refill_v2_snapshots(prev_date)
+                    combined = _merge_snapshots(sig_date_for_health=prev_date)
+                # V25 옵션 B: drift 발화 시 CASH 슬롯 refill (보유 종목 유지)
+                elif _os.environ.get('DRIFT_CASH_REFILL', 'off') == 'on':
                     _fresh_full = _compute_weights(prev_date)
                     _fresh_pool = sorted([c for c in _fresh_full.keys() if c not in ('CASH', 'Cash')])
                     if _fresh_pool:
