@@ -2813,13 +2813,12 @@ if __name__ == "__main__":
         _show_pd = _params_fail
         _pd_block = ('\n'.join(params_drift_lines) + "\n\n") if _show_pd else ""
 
+        # 🎯 목표 비중 섹션(업비트/바이낸스/주식)은 사용자 요청으로 제거 (2026-06-07)
+        # — 보유/카나리/드리프트/자산배분만 표시. 실행은 executor 가 자동 처리.
         summary = (
                 f"[Daily Report] 📊 V24 신호 ({date_str})\n"
                 f"{_verdict_line}\n"
                 f"{_as_of_line}\n\n"
-                + '\n'.join(c_lines) + "\n\n"
-                + '\n'.join(fut_lines) + "\n\n"
-                + '\n'.join(s_lines) + "\n\n"
                 + '\n'.join(holdings_lines) + "\n\n"
                 + '\n'.join(canary_lines) + "\n\n"
                 + '\n'.join(drift_lines) + "\n\n"
