@@ -2721,7 +2721,7 @@ if __name__ == "__main__":
                 fire_st = ht_st >= thr_st
                 _p = ht_st / thr_st if thr_st > 0 else 0
                 _st_lbl, _st_ic = _trig_status(_p)
-                _verdict_signals.append(('주식 drift', _p, _st_lbl))
+                # sleeve 내부 drift 는 executor 자동처리 → 헤더 판정(_verdict_signals)에서 제외 (2026-06-08)
                 drift_lines.append(f"  주식: {_st_ic} ht {ht_st*100:.2f}/{thr_st*100:.0f}pp {_p*100:.0f}% [{_st_lbl}]")
         except Exception as ex_dst:
             drift_lines.append(f"  주식: 계산 실패 ({ex_dst})")
@@ -2736,7 +2736,6 @@ if __name__ == "__main__":
                 fire_sp = ht_sp >= thr_sp
                 _p = ht_sp / thr_sp if thr_sp > 0 else 0
                 _sp_lbl, _sp_ic = _trig_status(_p)
-                _verdict_signals.append(('업비트 drift', _p, _sp_lbl))
                 drift_lines.append(f"  업비트: {_sp_ic} ht {ht_sp*100:.2f}/{thr_sp*100:.0f}pp {_p*100:.0f}% [{_sp_lbl}]")
         except Exception as ex_ds:
             drift_lines.append(f"  업비트: 계산 실패 ({ex_ds})")
@@ -2754,7 +2753,6 @@ if __name__ == "__main__":
                 fire_f = ht_f >= thr_f
                 _p = ht_f / thr_f if thr_f > 0 else 0
                 _f_lbl, _f_ic = _trig_status(_p)
-                _verdict_signals.append(('바이낸스 drift', _p, _f_lbl))
                 drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.0f}pp {_p*100:.0f}% [{_f_lbl}]")
         except Exception as ex_df:
             drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
@@ -2802,7 +2800,7 @@ if __name__ == "__main__":
             _max_lbl = 'WATCH'
             _max_sig = 'params drift'
         _verdict_ic = {'OK': '🟢', 'WATCH': '🟡', 'NEAR': '🟠', 'FIRE': '🔴'}[_max_lbl]
-        _verdict_msg = {'OK': 'NO ACTION', 'WATCH': 'WATCH', 'NEAR': 'NEAR — 발화 임박', 'FIRE': 'ACT — 트리거 ON'}[_max_lbl]
+        _verdict_msg = {'OK': 'NO ACTION', 'WATCH': 'WATCH', 'NEAR': 'NEAR — 송금 임박', 'FIRE': 'ACT — 자산간 송금 필요'}[_max_lbl]
         _verdict_line = f"{_verdict_ic} {_verdict_msg}"
         if _max_sig and _max_lbl != 'OK':
             _verdict_line += f" ({_max_sig} {_max_p*100:.0f}%)"
@@ -2813,15 +2811,15 @@ if __name__ == "__main__":
         _show_pd = _params_fail
         _pd_block = ('\n'.join(params_drift_lines) + "\n\n") if _show_pd else ""
 
-        # 🎯 목표 비중 섹션(업비트/바이낸스/주식)은 사용자 요청으로 제거 (2026-06-07)
-        # — 보유/카나리/드리프트/자산배분만 표시. 실행은 executor 가 자동 처리.
+        # 🎯 목표(2026-06-07) + 🌊 드리프트(2026-06-08) 섹션 제거 — 사용자 요청.
+        # sleeve 내부 drift 는 executor 자동처리 → 사용자 행동 없음. 헤더 판정도 자산간
+        # 이동(T1/T3U)만 반영. 보유/카나리/자산배분만 표시.
         summary = (
                 f"[Daily Report] 📊 V24 신호 ({date_str})\n"
                 f"{_verdict_line}\n"
                 f"{_as_of_line}\n\n"
                 + '\n'.join(holdings_lines) + "\n\n"
                 + '\n'.join(canary_lines) + "\n\n"
-                + '\n'.join(drift_lines) + "\n\n"
                 + _pd_block
                 + '\n'.join(alloc_lines)
             )
