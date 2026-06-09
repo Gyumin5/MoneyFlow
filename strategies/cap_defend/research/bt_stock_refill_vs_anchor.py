@@ -86,13 +86,34 @@ def run(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
                     s['picks'] = []
                     s['target'] = select_off(d, mom_def, cash_buf, 'cap')
             prev_can = can_now
+        # daily-exit 모드: 매일 3-mom 헬스 재평가 → 탈락 픽 즉시 슬롯 교체 (앵커/드리프트 안 기다림)
+        picks_changed_today = False
+        if mode == 'daily' and can_now:
+            ms_row = mom_off[ms].loc[d]; mid_row = mom_off[mid].loc[d]; ml_row = mom_off[ml].loc[d]
+
+            def _ok_d(t):
+                a, b, c = ms_row.get(t, np.nan), mid_row.get(t, np.nan), ml_row.get(t, np.nan)
+                return all(pd.notna(x) and x > 0 for x in (a, b, c))
+            for s in snaps:
+                kept = [t for t in s['picks'] if _ok_d(t)]
+                for t in ranked.at[d]:
+                    if len(kept) >= 3:
+                        break
+                    if t == CASH_KEY or t in kept:
+                        continue
+                    if _ok_d(t):
+                        kept.append(t)
+                if frozenset(kept) != frozenset(s['picks']):
+                    picks_changed_today = True
+                    s['picks'] = kept
+                    s['target'] = picks_to_target(kept, cash_buf, 'cap')
         target = merge_targets()
         total = sum(holdings.values())
         if total <= 0:
             holdings = {CASH_KEY: 1.0}; total = 1.0
         cur_w = {k: v/total for k, v in holdings.items()}
         ht = half_t(cur_w, target)
-        if ht >= drift_thr:
+        if ht >= drift_thr or picks_changed_today:
             if mode == 'refill':
                 # 전량 재선정 (현행 주식): 발화일 fresh top3 로 전 스냅 교체
                 for s in snaps:
@@ -168,13 +189,14 @@ def main():
     print(f"# V25 라이브 파라미터: ms={MS} mid={MID} ml={ML} drift={DRIFT} buf={BUF} snap={SNAP_INT} n={N_SNAPS}")
     print(f"# 기간 {sd.date()}~{ed.date()}, 11 anchor 평균. 비용 스트레스 1x/3x/5x (base TX={TX})\n")
     print(f"  {'cost':>5} {'mode':<8} {'CAGR':>7} {'MDD':>7} {'Calmar':>7} {'turnover/yr':>12} {'swaps':>7}")
+    MODES = ('anchor', 'refill', 'daily')
     for mult in (1, 3, 5):
         tx = TX * mult
-        agg = {'refill': [], 'anchor': []}
-        tov = {'refill': [], 'anchor': []}
-        swp = {'refill': [], 'anchor': []}
+        agg = {m: [] for m in MODES}
+        tov = {m: [] for m in MODES}
+        swp = {m: [] for m in MODES}
         for anchor in range(0, 11):
-            for mode in ('refill', 'anchor'):
+            for mode in MODES:
                 r = run(pdf, ranked, mom_off, mom_def, canary, sd, ed, anchor,
                         DRIFT, BUF, MS, MID, ML, SNAP_INT, N_SNAPS, mode, tx=tx)
                 if r is None:
@@ -184,7 +206,7 @@ def main():
                 if m is None:
                     continue
                 agg[mode].append(m); tov[mode].append(turnover); swp[mode].append(swaps)
-        for mode in ('anchor', 'refill'):
+        for mode in MODES:
             ms_ = agg[mode]
             if not ms_:
                 print(f"  {mult}x   {mode:<8} (no data)"); continue
