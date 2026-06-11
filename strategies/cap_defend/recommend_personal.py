@@ -1821,7 +1821,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                     + '</div>';
 
                 html += '<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:12px;">';
-                html += card('주식 - 한투', fmtKrwFull(stock.total_krw), fmtKrwFull(stock.cash_krw), shareText(stock.total_krw) + ' / 보유 ' + ((stock.holdings || []).length) + '종목', stock.error);
+                const ustlNet = Number(stock.ustl_net_krw || 0);
+                const stockSub = shareText(stock.total_krw) + ' / 보유 ' + ((stock.holdings || []).length) + '종목'
+                    + (Math.abs(ustlNet) > 1000 ? '<br>현금 중 미결제 ' + (ustlNet > 0 ? '+' : '') + fmtKrwFull(ustlNet) + ' (T+1 결제 대기)' : '');
+                html += card('주식 - 한투', fmtKrwFull(stock.total_krw), fmtKrwFull(stock.cash_krw), stockSub, stock.error);
                 html += card('업비트', fmtKrwFull(upbit.total_krw), fmtKrwFull(upbit.krw_balance), shareText(upbit.total_krw) + ' / 보유 ' + ((upbit.holdings || []).length) + '종목', upbit.error);
                 html += card('바이낸스', fmtKrwFull(binance.total_krw), fmtKrwFull(binance.cash_krw), shareText(binance.total_krw) + ' / 보유 ' + ((binance.holdings || []).length) + '포지션', binance.error);
                 html += '</div>';
