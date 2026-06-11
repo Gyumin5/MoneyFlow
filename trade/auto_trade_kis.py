@@ -235,6 +235,27 @@ def get_buying_power_usd() -> float:
     return 0.0
 
 
+def get_unsettled_amounts() -> dict:
+    """미결제 매도/매수 금액 (CTRP6504R output3, KRW 환산).
+
+    미국주식 T+1 결제: 체결 후 결제 전까지 매도대금은 예수금에 안 잡히고
+    총자산에만 포함된다. 표시용 실효 현금 = 예수금 + (미결제 매도 - 미결제 매수).
+    실패 시 0 반환 (호출부 영향 없음 — 미결제 없을 때와 동일).
+    """
+    try:
+        data = _get("/uapi/overseas-stock/v1/trading/inquire-present-balance", "CTRP6504R", {
+            "CANO": KIS_ACCOUNT, "ACNT_PRDT_CD": KIS_ACCOUNT_PROD,
+            "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840",
+            "TR_MKET_CD": "00", "INQR_DVSN_CD": "00",
+        }, retries=2)
+        o3 = data.get("output3", {}) or {}
+        sll = float(o3.get("ustl_sll_amt_smtl", 0) or 0)
+        buy = float(o3.get("ustl_buy_amt_smtl", 0) or 0)
+        return {"ustl_sll_krw": sll, "ustl_buy_krw": buy, "ustl_net_krw": sll - buy}
+    except Exception:
+        return {"ustl_sll_krw": 0.0, "ustl_buy_krw": 0.0, "ustl_net_krw": 0.0}
+
+
 def get_account_asset() -> dict:
     """투자계좌자산현황 (CTRP6548R) — 외화RP 자동매매 포함 총자산. 단위 KRW.
 

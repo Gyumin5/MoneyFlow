@@ -319,7 +319,8 @@ def _get_stock_balance_data() -> dict:
     자동매매 스윕분을 포함한다. 해외주식 inquire-balance/present-balance 만으로는
     RP 가 누락되어 총자산이 ~RP 만큼 작게 잡힌다. CTRP6548R 실패 시 기존 방식 fallback.
     """
-    from auto_trade_kis import get_balance, get_buying_power_usd, get_account_asset
+    from auto_trade_kis import (get_balance, get_buying_power_usd, get_account_asset,
+                                get_unsettled_amounts)
 
     holdings_raw, _ = get_balance()
     stock_eval = sum(h['eval_amt'] for h in holdings_raw)
@@ -327,14 +328,16 @@ def _get_stock_balance_data() -> dict:
     rate = _get_usdkrw_rate()
 
     asset = get_account_asset()  # CTRP6548R: RP 포함 총자산/현금 (KRW)
+    ustl = get_unsettled_amounts()  # T+1 미결제 매도/매수 (KRW)
+    ustl_net_krw = float(ustl.get("ustl_net_krw", 0.0))
     if asset.get("tot_asst_amt_krw", 0) > 0:
         # 앱 "계좌 총자산" 과 일치하는 결제기준(전일종가) 총자산을 그대로 사용.
-        # 현금은 실예수금(외화+원화, RP 포함) = cash_total_krw. 주식 = total - cash =
-        # ovrs_stck_evlu_amt1(결제기준). 표시 cash% 는 잔차가 아니라 실예수금/총자산.
-        # (live now_pric2 로 total 을 잡으면 앱과 어긋나므로 결제기준 유지 — 2026-06-04)
+        # 현금 = 실예수금(외화+원화+RP) + 미결제 순매도대금(ustl_net). T+1 결제 전
+        # 매도대금이 예수금에 안 잡혀 현금이 과소표시되는 문제 보정 (2026-06-11,
+        # 강제 리밸 후 "현금 3%" 혼선). 주식 = total - 실효현금 → 결제 후 앱과 수렴.
         total_krw = asset["tot_asst_amt_krw"]
-        cash_krw = asset["cash_total_krw"]      # 예수금 + 외화RP = 실현금
-        stock_eval_krw = max(0.0, total_krw - cash_krw)   # 결제기준 주식 평가 (앱과 일치)
+        cash_krw = asset["cash_total_krw"] + ustl_net_krw  # 실효 현금
+        stock_eval_krw = max(0.0, total_krw - cash_krw)
         rp_krw = asset.get("rp_krw", 0.0)
         deposit_krw = asset.get("deposit_krw", 0.0)
         total_usd = total_krw / rate if rate > 0 else stock_eval + buying_power
@@ -382,6 +385,9 @@ def _get_stock_balance_data() -> dict:
         "cash_krw": cash_krw,
         "rp_krw": rp_krw,
         "deposit_krw": deposit_krw,
+        "ustl_sll_krw": float(ustl.get("ustl_sll_krw", 0.0)),
+        "ustl_buy_krw": float(ustl.get("ustl_buy_krw", 0.0)),
+        "ustl_net_krw": ustl_net_krw,
         "exchange_rate": rate,
         "holdings": holdings,
         "weights": weights,
