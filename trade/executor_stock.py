@@ -345,6 +345,7 @@ class KISAPI:
         # 외화RP 자동매매 해지 상태 가정. (RP 재활성화 시 RP 스윕분 누락 →
         #  CTRP6548R(투자계좌자산현황) tot_asst_amt 기반으로 전환 필요)
         real_cash_krw = 0.0
+        _o3 = {}
         try:
             _o3 = bp_data.get('output3', {}) or {}
             real_cash_krw = (float(_o3.get('frcr_evlu_tota', 0) or 0)
@@ -353,6 +354,18 @@ class KISAPI:
             real_cash_krw = 0.0
         if real_cash_krw > 0 and exrt > 0:
             cash_usd = real_cash_krw / exrt
+
+        # 미결제 매도/매수 순대금 합산 (T+1 결제 전 in-flight 현금).
+        # BT 는 매도대금 즉시 재사용 가정 → 사이징 현금도 실효 현금 기준이어야 정합.
+        # (2026-06-12 도입. 06-11 이중 트림 사고: 미결제 $10.3k 를 현금에서 빼고 봐서
+        #  7% 버퍼 매도를 이틀 연속 반복 → 현금 ~10.5% 과적. 미결제 0 이면 동작 불변.)
+        try:
+            _ustl_net_krw = (float(_o3.get('ustl_sll_amt_smtl', 0) or 0)
+                             - float(_o3.get('ustl_buy_amt_smtl', 0) or 0))
+        except Exception:
+            _ustl_net_krw = 0.0
+        if exrt > 0 and _ustl_net_krw != 0:
+            cash_usd += _ustl_net_krw / exrt
 
         # 결제기준(앱/CTRP6548R) 주식 평가 — 표시(HTML/리포트)·백테스트(전일종가 사이징)와
         # 동일 기준으로 통일(2026-06-04). 주문 수량 산정엔 현재가를 쓰되, 총자산/드리프트/
