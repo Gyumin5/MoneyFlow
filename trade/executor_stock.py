@@ -913,12 +913,33 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 
 # ═══ run_once ═══
 
+DATE_ALIGN_TOLERANCE_BD = 3  # 종목별 yfinance 지연 시 공통 기준일이 T-1 대비 최대 이만큼 과거여도 진행
+
+
+def _resolve_common_date(last_dates, max_close_date, tol_bd=DATE_ALIGN_TOLERANCE_BD):
+    """종목별 마지막일이 불일치할 때 전 종목 공통 최신일(=min(last_dates))과 그 신선도 판정.
+
+    반환 (common_date, gap_bd, ok). ok=True 면 common_date 로 정렬해 진행, False 면 SKIP.
+    gap_bd = common_date 직후~max_close_date(T-1) 사이 영업일 수. tol_bd 이하면 진행.
+    """
+    import numpy as _np
+    from datetime import timedelta as _td2
+    common_last = min(last_dates.values())
+    if max_close_date > common_last:
+        gap_bd = int(_np.busday_count(common_last + _td2(days=1), max_close_date + _td2(days=1)))
+    else:
+        gap_bd = 0
+    return common_last, gap_bd, (gap_bd <= tol_bd)
+
+
 def _fetch_strategy_prices(tickers, days=400, max_close_date=None):
     """Yahoo Adj_Close (auto_adjust=True) fetch.
 
     max_close_date 이후 row 는 자르고, 마지막 row 날짜를 로그.
     23:35 KST = 14:35 UTC 시점에 US 장중 partial bar 가 yfinance 에 섞일 수 있어 명시적 차단.
     max_close_date 미지정 시 KST 기준 어제 (= 미국 거래일 T-1 이상) 로 자동 설정.
+    종목별 마지막일 불일치 시: 전 종목 공통 최신일로 정렬해 진행(공통일이 T-1 대비 tol_bd 영업일
+    이내). 너무 과거면 HARD FAIL (caller SKIP).
     """
     import yfinance as yf
     import pandas as pd
@@ -949,13 +970,23 @@ def _fetch_strategy_prices(tickers, days=400, max_close_date=None):
         except Exception as e:
             log(f'  ⚠️ Yahoo fetch {t}: {e}')
     if last_dates:
-        # 모든 ticker 의 마지막 date 가 동일한지 확인 (hard check — 불일치 시 caller 가 SKIP)
         dates_set = set(last_dates.values())
-        if len(dates_set) > 1:
-            log(f'  ⚠️ 가격 마지막 date 불일치: {last_dates} — HARD FAIL')
-            out['__date_mismatch__'] = last_dates  # type: ignore
-        else:
+        if len(dates_set) == 1:
             log(f'  📅 가격 기준일: {list(dates_set)[0]} (max_close_date={max_close_date})')
+        else:
+            # 종목별 마지막일 불일치 → 전 종목 공통 최신일로 정렬 시도(yfinance 지연 흡수).
+            common_last, gap_bd, ok = _resolve_common_date(last_dates, max_close_date)
+            if ok:
+                for t in list(out.keys()):
+                    out[t] = out[t][out[t].index.date <= common_last]
+                    if len(out[t]) < 2:
+                        out.pop(t)
+                log(f'  📅 종목별 마지막일 불일치 → 공통 기준일 {common_last} 정렬 진행 '
+                    f'(gap {gap_bd}bd ≤ {DATE_ALIGN_TOLERANCE_BD}, last_dates={last_dates})')
+            else:
+                log(f'  ⚠️ 가격 마지막 date 불일치 + 공통일 {common_last} 너무 과거 '
+                    f'(gap {gap_bd}bd > {DATE_ALIGN_TOLERANCE_BD}) — HARD FAIL: {last_dates}')
+                out['__date_mismatch__'] = last_dates  # type: ignore
     return out
 
 
