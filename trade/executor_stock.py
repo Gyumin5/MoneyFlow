@@ -914,6 +914,38 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 # ═══ run_once ═══
 
 DATE_ALIGN_TOLERANCE_BD = 3  # 종목별 yfinance 지연 시 공통 기준일이 T-1 대비 최대 이만큼 과거여도 진행
+KIS_FILL_ENABLED = True      # 야후 지연 종목을 KIS 해외 일봉 종가로 채워 진짜 T-1 정렬 (False 면 공통일자 가드만)
+
+
+def _kis_fill_recent(ticker, have_last_date, target_date):
+    """야후가 ticker 를 have_last_date 까지만 줬을 때 (have_last_date, target_date] 구간 종가를
+    KIS dailyprice(HHDFS76240000) 로 가져와 {Timestamp: close} 반환. 실패/미커버 시 {}.
+
+    KIS raw 종가 = 야후 수정종가(최신 bar 는 미래배당 미반영이라 동일, 실측 4자리 일치).
+    target_date ≤ max_close_date(T-1) 라 장중 partial 미요청 — look-ahead 없음.
+    """
+    import pandas as pd
+    excd = QUOTE_EXCD_MAP.get(ticker, 'NAS')
+    bymd = target_date.strftime('%Y%m%d')
+    filled = {}
+    try:
+        data = _get('/uapi/overseas-price/v1/quotations/dailyprice', 'HHDFS76240000', {
+            'AUTH': '', 'EXCD': excd, 'SYMB': ticker,
+            'GUBN': '0', 'BYMD': bymd, 'MODP': '0',
+        }, retries=2)
+        for it in data.get('output2', []) or []:
+            if not isinstance(it, dict):
+                continue
+            xy, cl = it.get('xymd'), it.get('clos')
+            if not xy or not cl:
+                continue
+            d = pd.to_datetime(xy, format='%Y%m%d')
+            c = float(cl)
+            if c > 0 and have_last_date < d.date() <= target_date:
+                filled[d] = c
+    except Exception as e:
+        log(f'  ⚠️ KIS fill {ticker}: {e}')
+    return filled
 
 
 def _resolve_common_date(last_dates, max_close_date, tol_bd=DATE_ALIGN_TOLERANCE_BD):
@@ -971,10 +1003,25 @@ def _fetch_strategy_prices(tickers, days=400, max_close_date=None):
             log(f'  ⚠️ Yahoo fetch {t}: {e}')
     if last_dates:
         dates_set = set(last_dates.values())
+        if len(dates_set) > 1 and KIS_FILL_ENABLED:
+            # 1차 복구: 야후 지연 종목을 KIS 최신 종가로 채워 진짜 T-1 정렬.
+            target = min(max(last_dates.values()), max_close_date)
+            for t in list(out.keys()):
+                if last_dates[t] < target:
+                    fill = _kis_fill_recent(t, last_dates[t], target)
+                    if fill:
+                        s = out[t]
+                        for d, c in sorted(fill.items()):
+                            s.loc[d] = c
+                        s = s[s.index.date <= max_close_date].sort_index()
+                        out[t] = s
+                        last_dates[t] = s.index[-1].date()
+                        log(f'  🔁 {t}: KIS 보강 {[str(d.date()) for d in sorted(fill)]} → last {last_dates[t]}')
+            dates_set = set(last_dates.values())
         if len(dates_set) == 1:
             log(f'  📅 가격 기준일: {list(dates_set)[0]} (max_close_date={max_close_date})')
         else:
-            # 종목별 마지막일 불일치 → 전 종목 공통 최신일로 정렬 시도(yfinance 지연 흡수).
+            # 2차(폴백): KIS 로도 못 맞춘 잔여 불일치 → 공통 최신일 정렬(≤tol) 또는 SKIP.
             common_last, gap_bd, ok = _resolve_common_date(last_dates, max_close_date)
             if ok:
                 for t in list(out.keys()):
