@@ -1,3 +1,13 @@
+## [2026-07-03] 보안: 포트5000 GET 잔고조회 엔드포인트 PIN 인증 추가 (ai-debate 결과 반영, B안 채택)
+tags: 보안, trade_api, PIN, ai-debate, 정보노출
+- 결정: live_overview/snapshots/coin_balance/stock_balance/binance_balance/holdings 6개 GET 엔드포인트에 require_auth() 게이트 추가. require_auth() 는 localhost(127.0.0.1/::1) 요청은 무조건 통과(TCP peer 스푸핑 불가로 안전), 원격 요청은 X-Auth-PIN 헤더(또는 기존 body/쿼리 password) 일치 필요. 대시보드 2종(recommend_personal.py 생성 portfolio_result_gmoh.html + 정적 asset_dashboard.html) 모두 getPin()/authHeaders() 헬퍼로 세션(탭)당 1회 prompt, sessionStorage 캐시(localStorage 미사용, 403 응답 시 캐시 삭제).
+- 근거: 재점검 중 발견한 무인증 실계좌 잔고노출을 ai-debate(run-20260703T111308Z) 최종권고(C: VPN/네트워크격리)가 아닌 즉시 실행 가능한 B안(PIN)으로 사용자가 직접 선택 — "API키는 이미 숨겨져있고 IP제한도 걸려있다"는 사용자 확인으로 assume-breach 후속조치(거래소 출금권한/IP allowlist)는 이미 충족 판단.
+- localhost bypass 핵심 이유: recommend_personal.py 의 09:15 cron 내부 save_daily_live_snapshot() 이 http://127.0.0.1:5000/api/assets/live_overview 를 PIN 없이 호출 — 여기에 PIN 게이트를 걸면 daily snapshot cron 이 매일 깨짐. 회피책으로 "인증 대상은 원격 요청뿐"으로 경계를 좁힘.
+- 검증: 외부 네트워크(세션 자체 egress→서버 공인IP) 실측 — 무인증 403, 틀린PIN 403, 정상PIN 200, 저위험 /api/status 는 미변경 200. 서버 배포+재시작+recommend_personal.py 수동 1회 실행으로 대시보드 즉시 갱신, daily snapshot 정상 저장 확인(cron 안 깨짐 실증).
+- 부작용: 검증차 recommend_personal.py 를 수동 재실행하면서 오늘자 텔레그램 일간리포트가 중복 발송됨(무해, 사용자에게 안내).
+- 되돌릴 조건: VPN/Tailscale 등 네트워크 격리(ai-debate 원권고 C)로 이전 시 이 PIN 게이트는 보조 계층으로 유지하거나 완화 가능.
+- 커밋: 6ee462f.
+
 ## [2026-07-03] 선물 V25 유지증거금률 단순화(flat 0.4%) 유지 — tier-aware 구현 보류
 tags: 선물, 유지증거금, maint_rate, BT정밀도, ai-debate
 - 결정: unified_backtest/backtest_futures_v25.py 의 maint_rate=0.004 flat 단순화 유지. 코인별/notional별 실제 tier(알트 0.5~0.65%) 반영한 정식 구현 보류, known limitation 으로만 문서화.
