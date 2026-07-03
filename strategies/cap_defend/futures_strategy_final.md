@@ -1,9 +1,14 @@
 # 바이낸스 선물 최종 전략 설명
 
+> ⚠️ 역사적 문서 (기준일 2026-04-01, V19/d005 시절). 현행 선물은 V25 (2026-05-28 도입):
+> D_SMA42 단일 sleeve (1D, 09:05), snap=95 n=5 drift=0.03, 동적 per-coin L=min(BTC_cap,K2)
+> (Lmin=2/mid=3/max=4), 마진모드 CROSSED, 스탑·가드 없음. 아래 4h 3전략 앙상블은 deprecated.
+> 현행 스펙은 [`../../V25_OPERATION_MANUAL.md`](../../V25_OPERATION_MANUAL.md), 엔진 `backtest_futures_v25.py`.
+
 기준일: 2026-04-01  
 적용 대상: 바이낸스 USDT-M 선물 자동매매
 
-## 개요
+## 개요 (V19/d005 — 역사적)
 
 최종 채택 전략은 `1h_09 + 4h_01 + 4h_09` 3전략 앙상블이다.
 

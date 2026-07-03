@@ -1,3 +1,20 @@
+## [2026-06-16] 전략 성능 아웃라이어 의존도 + 일반화 기대성능 보정
+tags: 일반화, survivorship, 아웃라이어, 유니버스, 기대성능, ai-debate
+- 결정: 전략 기대성능을 헤드라인 단일값(전체포트 CAGR 72.5%)으로 제시 금지. 3층 보고 — 상방케이스 72.5%(freak 포함, 기대값 아님) / 계획기준 CAGR 30~45%·중앙 35~40%·Cal~2~3·Sharpe 1.5~1.7 / no-freak 스트레스 29%(비용·수동송금지연·레짐악화 얹으면 20%대 이하). 유니버스는 사후수익 아닌 구조적 사전필터(거래소토큰/밈/유동성/상장기간/규제/선물청산)로 정의, full 유지+BNB/DOGE 관찰플래그. 매매코드 무변경.
+- 근거(bt_v25_deoutlier.py, 전체포트 3 sleeve): base CAGR full 72.5% → BNB만 제외 42.9%(-29.6pp) → 점프코인 전부 제외(U5) 29.2%. 헤드라인 절반 가까이가 BNB freak 점프 의존. de-outlier 해도 MDD 안 줄고 악화(-16%) = 정직한 survivorship 보정. 코인 첨도 DOGE 787·BNB 43·XRP 28·ADA 21(점프) vs SOL 8.6·BTC 3.7(정상).
+- 핵심교훈: 사후 최대승자 제외는 hindsight — 실시간 식별 불가, 모멘텀 전략은 다음 승자 타게 설계. de-outlier 수치는 예측 아닌 취약성 진단/스트레스로만 사용. ai-debate(run-20260616T013453Z): full 유지 기본, T3O full기준 기각 유지(de-outlier 승률 72~87% 회복은 우측꼬리 제거 순환효과 가능).
+- 후속(권장): net backtest(슬리피지·수수료·세금·funding·수동송금지연), leave-one-out 기여도, 레짐별 분해.
+
+## [2026-06-16] 자산간 리밸 T3O(과대-트림) 트리거 — 라이브 기준 기각 (현행 base 유지)
+tags: 자산배분, 트리거, T3O, T3U, robustness, ai-debate, 유니버스
+- 결정: 현행 T1 20pp/T3U 20% 유지, T3O 미도입. 매매코드 무변경. (1차 토론의 "조건부 채택"은 BNB·SOL 제외 유니버스 기준이었고, 라이브(full, BNB·SOL 포함) 기준 2차 토론에서 번복됨.)
+- 근거: T3O 는 4유니버스 조합 전부에서 Cal·Sharpe·MDD 부호 개선이나, 라이브 full 유니버스에선 BNB·SOL 상방을 구조적으로 잘라 CAGR 희생 과다. 임계 grid(full): 20%→35% 올려도 CAGR 희생 8.4→6.3pp(채택바 3-4pp 미달), MDD 개선 -12.4%서 평탄, 40%부턴 보호 소멸. window 승률 50~60% 내내 = 매구간 우위 아닌 꼬리보험(소수 드로다운 의존). ai-debate 2회(run-20260616T011050Z 조건부GO → run-20260616T012423Z 라이브기준 기각).
+- 유니버스별 ΔCal(신−현행): full +0.41(CAGR-8.4pp,win50%) / BNB만 +0.51(-6.4pp,50%) / SOL만 +0.07(-3.1pp,77%) / 둘다제외 +0.40(-0.5pp,85%). T3O가 명확히 이로운 곳은 둘다제외뿐인데 그 유니버스 자체가 base CAGR 72.5→34.8 로 큰 수익 희생.
+- 코인 아웃라이어 통계(2020-11~): BNB kurt 43.3·왜도 2.61·하루 +71% = 통계적 아웃라이어(제외 명분 데이터 지지). SOL kurt 8.6·왜도 0.51 = 점프아웃라이어 아님(고베타·-96% MDD). Sharpe 상 BTC(0.78) 뚜렷 상회는 BNB 1.08·SOL 1.17 둘뿐.
+- 핵심교훈: T3O 는 T3U 의 대칭(과대+카나리OFF) 아님. 비대 sleeve=랠리sleeve→카나리 거의 ON → OFF게이트 too late(+0.15), 무게이트 차익실현 트림이 정합. 카나리 ON 게이트=none 과 동일.
+- 되돌릴 조건(사용자 결정): (a) BNB 를 아웃라이어로 유니버스 제외 + (b) 목적함수를 위험조정(Cal/Sharpe/MDD) 우선으로 명시 + 연 ~6pp CAGR 보험료 수용 시, 해당 유니버스서 T3O(35% 근방) 재평가. 그 전엔 base 유지.
+- 스크립트: research/bt_v25_t1_t3u_t3o.py, bt_v25_t3o_robust.py, bt_v25_excl_compare.py, bt_v25_t3o_thresh_full.py. 정리 research/T3O_TRIGGER_FINDINGS.md.
+
 ## [2026-06-03] KIS 잔고 외화RP 누락 → CTRP6548R 채택 + 자동RP 해지
 tags: KIS, 잔고, RP, 표시정합, executor
 - 결정: 한투 총자산/현금은 CTRP6548R(투자계좌자산현황) output2.tot_asst_amt 기준. 해외주식 inquire-balance/present-balance 단독 사용 금지(외화RP 자동매매 스윕분 누락). 사용자가 KIS앱에서 자동RP 해지.
