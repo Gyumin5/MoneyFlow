@@ -4,7 +4,14 @@
 
 ## 대상 전략
 
-- 공식 전략: `V17`
+- 공식 전략: `V25` (2026-05-29 도입). V17 은 deprecated.
+- V25 핵심:
+  - 유니버스 R7: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (R7B의 EWJ → VNQ 교체)
+  - EEM 카나리: SMA200 ± 0.5% hysteresis (dead-zone)
+  - 선정: Z-score(가중Mom 0.5×ret63+0.3×ret126+0.2×ret252 + Sharpe126) → 3-mom(30/72/230) 필터 → Top3 cap=1/3 + 7% Cash
+  - 트랜치: 3개 (SNAP_PERIOD=69, STAGGER=23, N_SNAPS=3), drift 0.05, 종목교체=앵커일 OR drift 5pp 발화일
+  - 가드 없음 (EEM 카나리 + 3-mom 필터 + 분산 = 유일 방어)
+  - 전략 순수함수: `stock_strategy_v25.py`
 - 엔진:
   - [run_current_stock_backtest.py](./run_current_stock_backtest.py)
   - [stock_engine.py](./stock_engine.py)

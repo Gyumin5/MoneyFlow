@@ -5,7 +5,7 @@
 ## 읽는 순서
 
 1. 현물 코인:
-   - 현재 운영 기준: `run_current_coin_v20_backtest.py`
+   - 현재 운영 기준(V24): `run_current_coin_v20_backtest.py` (라이브 MEMBERS import → V24, 파일명만 v20). 정합 엔진 `unified_backtest.py`(asset_type='spot')
    - 레거시 V18 문서: [legacy/coin_backtest_howto.md](./legacy/coin_backtest_howto.md)
 2. 주식:
    - [stock_backtest_howto.md](./stock_backtest_howto.md)
@@ -14,7 +14,7 @@
 
 ## 전략별 실행 명령
 
-### 현물 코인 V20
+### 현물 코인 V24
 
 데이터 갱신:
 
@@ -50,10 +50,10 @@ python3 strategies/cap_defend/run_current_stock_backtest.py
 python3 strategies/cap_defend/refresh_backtest_data.py --target futures
 ```
 
-최종 비교:
+최종 비교 (선물 V25 — CROSS 청산 + 동적 L):
 
 ```bash
-python3 strategies/cap_defend/run_current_futures_backtest.py
+python3 strategies/cap_defend/backtest_futures_v25.py
 ```
 
 ## 데이터 기준
@@ -102,6 +102,6 @@ python3 strategies/cap_defend/check_data_freshness.py
 
 ## 현재 공식 버전
 
-- 현물: `V20`
-- 주식: `V17`
-- 선물: `d005 4전략 EW` (4h_d005 + 2h_b60_S240 + 2h_b60_S120 + 4h_b60_M20_120)
+- 현물: `V24` — D_SMA42 단일, n_snap=7 snap_int=217 drift=0.10, 카나리 SMA42±1.5%
+- 주식: `V25` — R7, EEM SMA200±0.5%, Z-score+3-mom(30/72/230) 필터 → Top3 cap+7%Cash, 3트랜치(snap=69)
+- 선물: `V25` — D_SMA42 sleeve snap=95 n=5 drift=0.03, 동적 per-coin L=min(BTC_cap,K2), CROSSED 마진

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cap Defend 전략 설명</title>
+<style>
+  :root{
+    --bg:#0f1216; --card:#181d24; --card2:#1f262f; --line:#2a323d;
+    --txt:#e8edf2; --sub:#9fb0c0; --accent:#4fb0ff; --good:#37d39b;
+    --warn:#ffb454; --bad:#ff6b6b; --stock:#4fb0ff; --spot:#f5a524; --fut:#b388ff;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+    font-size:17px; line-height:1.65; -webkit-text-size-adjust:100%;
+  }
+  .wrap{max-width:720px; margin:0 auto; padding:18px 16px 60px;}
+  header.top{text-align:center; padding:14px 0 6px;}
+  header.top h1{font-size:26px; margin:0 0 4px; letter-spacing:-.3px;}
+  header.top .tag{color:var(--sub); font-size:14px;}
+  .card{
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:16px 16px 14px; margin:14px 0;
+  }
+  h2{font-size:20px; margin:6px 0 10px; display:flex; align-items:center; gap:8px;}
+  h3{font-size:17px; margin:14px 0 6px; color:var(--accent);}
+  p{margin:8px 0;}
+  .sub{color:var(--sub); font-size:14.5px;}
+  ul{margin:8px 0; padding-left:20px;}
+  li{margin:5px 0;}
+  .pill{display:inline-block; font-size:13px; padding:2px 10px; border-radius:999px;
+    background:var(--card2); color:var(--sub); border:1px solid var(--line); margin:2px 4px 2px 0;}
+  .dot{width:11px; height:11px; border-radius:50%; display:inline-block;}
+  .alloc{display:flex; gap:8px; margin:12px 0 6px;}
+  .alloc .seg{flex-grow:1; text-align:center; padding:12px 6px; border-radius:12px; color:#0b0f14; font-weight:700;}
+  .alloc .s1{background:var(--stock);} .alloc .s2{background:var(--spot);} .alloc .s3{background:var(--fut);}
+  .alloc .seg small{display:block; font-weight:600; font-size:12px; opacity:.8;}
+  table{width:100%; border-collapse:collapse; margin:10px 0; font-size:15px;}
+  th,td{text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top;}
+  th{color:var(--sub); font-weight:600; font-size:13.5px;}
+  code{background:var(--card2); padding:1px 6px; border-radius:6px; font-size:14px; color:#cfe6ff;}
+  .grid{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:10px 0;}
+  .kv{background:var(--card2); border-radius:10px; padding:9px 11px;}
+  .kv b{display:block; font-size:13px; color:var(--sub); font-weight:600;}
+  .kv span{font-size:15.5px;}
+  .flow{background:var(--card2); border-radius:10px; padding:10px 12px; font-size:14.5px; color:var(--sub);}
+  .flow b{color:var(--txt);}
+  .note{border-left:3px solid var(--accent); padding:8px 12px; background:rgba(79,176,255,.06); border-radius:0 10px 10px 0; margin:10px 0; font-size:14.5px;}
+  .ok{color:var(--good);} .wn{color:var(--warn);} .bd{color:var(--bad);}
+  .foot{text-align:center; color:var(--sub); font-size:13px; margin-top:24px;}
+  @media (max-width:380px){ body{font-size:16px;} .grid{grid-template-columns:1fr;} h1{font-size:23px;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Cap Defend</h1>
+  <div class="tag">3-슬리브 추세추종 · 분산방어 자동매매 · 2026-06-06</div>
+</header>
+
+<div class="card">
+  <h2>핵심 개념</h2>
+  <p>세 개의 독립 자산군(슬리브)에 자본을 나눠, 각 슬리브 안에서 <b>모멘텀 추세추종</b>으로 강한 종목만 보유한다. 손절·스탑 같은 가드는 쓰지 않고, <b>분산 + 카나리 + 모멘텀 헬스필터</b>가 유일한 방어다.</p>
+  <ul>
+    <li><b>매일 1회</b> 상태를 점검(D봉 닫힘 직후).</li>
+    <li>종목 교체는 <b>앵커일</b>(주기적)에만. 평소엔 비중 이탈(drift)이 임계 넘을 때만 거래.</li>
+    <li>신호는 <b>전일 완료봉(t-1)</b> 기준, 체결은 <b>당일(t)</b>. 미래 정보 차단.</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>자산 배분</h2>
+  <div class="alloc">
+    <div class="seg s1">주식 60%<small>KIS</small></div>
+    <div class="seg s2">현물 25%<small>업비트</small></div>
+    <div class="seg s3">선물 15%<small>바이낸스</small></div>
+  </div>
+  <p class="sub">슬리브별 현금 버퍼: 주식 7% · 현물 1% · 선물 1% (총 현금 ≈ 5%).</p>
+  <p>계좌 간 자금 이동은 <b>자동 리밸 안 함</b>. 트리거가 켜지면 텔레그램으로 송금 제안만 보내고, 실제 송금은 사용자가 수동으로 한다. 각 슬리브는 자기 계좌 안에서만 자동매매.</p>
+</div>
+
+<div class="card">
+  <h2><span class="dot" style="background:var(--stock)"></span> 주식 슬리브 <span class="pill">V25</span></h2>
+  <p class="sub">미국 ETF 7종 유니버스에서 위험자산/방어자산을 카나리로 스위칭.</p>
+
+  <h3>유니버스</h3>
+  <p><b>공격(R7):</b> SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ<br>
+     <b>방어:</b> IEF, BIL, BNDX, GLD, PDBC</p>
+
+  <h3>종목 선정 (위험-On 일 때)</h3>
+  <div class="flow">
+    <b>1.</b> Z-score 랭킹 = 가중모멘텀 Z + Sharpe126 Z<br>
+    　 가중모멘텀 = 0.5×수익률63일 + 0.3×126일 + 0.2×252일<br>
+    <b>2.</b> 3-모멘텀 필터 (30·72·230일 수익률 모두 양수)<br>
+    <b>3.</b> 통과 종목 중 상위 3개, 각 1/3 · 나머지 현금
+  </div>
+  <p class="sub">방어 모드는 6개월 수익률 양수 상위 3종 균등.</p>
+
+  <h3>방어 — 카나리</h3>
+  <p>EEM(신흥국)이 SMA200 아래로 0.5% 넘게 빠지면 위험-Off → 전 종목 즉시 방어자산으로 전환.</p>
+
+  <div class="grid">
+    <div class="kv"><b>스냅샷</b><span>69일 주기 × 3개 (stagger 23)</span></div>
+    <div class="kv"><b>drift 임계</b><span>5pp</span></div>
+    <div class="kv"><b>교체 시점</b><span>앵커일 OR drift 발화일</span></div>
+    <div class="kv"><b>거래비용(BT)</b><span>0.1% 편도</span></div>
+  </div>
+  <p class="sub">drift 발화 시 그날 fresh 재선정으로 스냅 리필 후 체결. 가드 없음 — 카나리+3모멘텀필터+분산이 방어.</p>
+</div>
+
+<div class="card">
+  <h2><span class="dot" style="background:var(--spot)"></span> 코인 현물 슬리브 <span class="pill">V24</span></h2>
+  <p class="sub">업비트 KRW 마켓. 단일 모멘텀 룰 D_SMA42.</p>
+
+  <h3>종목 선정 (카나리-On 일 때)</h3>
+  <div class="flow">
+    <b>1.</b> 시총순 후보 →
+    <b>2.</b> mom2vol 헬스필터(단기·장기 모멘텀 양수 AND 변동성 ≤ 5%) →<br>
+    <b>3.</b> 상위 3 → greedy 흡수(앞 종목 모멘텀이 더 높으면 뒤 제거) →
+    <b>4.</b> cap 1/3 + 현금
+  </div>
+
+  <h3>방어 — 카나리</h3>
+  <p>BTC 종가가 SMA42 위 1.5%를 못 넘기면 카나리 Off → 전량 현금(KRW).</p>
+
+  <div class="grid">
+    <div class="kv"><b>모멘텀</b><span>단기 20일 / 장기 127일</span></div>
+    <div class="kv"><b>변동성</b><span>90일, 상한 5%</span></div>
+    <div class="kv"><b>스냅샷</b><span>217봉 주기 × 7 (stagger 31)</span></div>
+    <div class="kv"><b>drift 임계</b><span>10pp</span></div>
+  </div>
+  <p class="sub">종목 교체는 사실상 앵커일(217봉)에만. greedy 흡수가 강해 보통 BTC 중심 1~2종 보유.</p>
+</div>
+
+<div class="card">
+  <h2><span class="dot" style="background:var(--fut)"></span> 코인 선물 슬리브 <span class="pill">V25</span></h2>
+  <p class="sub">바이낸스 USDT-M 무기한. 현물과 같은 D_SMA42 선정 + 동적 레버리지.</p>
+
+  <h3>선정</h3>
+  <p>현물과 동일 파이프라인(시총순→mom2vol→상위3→greedy→cap). 단기 모멘텀만 18일.</p>
+
+  <h3>동적 레버리지 (코인별)</h3>
+  <p>L = min(BTC캡, K2캡), 범위 2~4배.</p>
+  <table>
+    <tr><th>조건</th><th>BTC캡</th><th>K2(코인별)</th></tr>
+    <tr><td>강세 강</td><td>BTC/SMA42 &gt; 1.05 → 4</td><td>종가/SMA7 &gt; 1.075 → 4</td></tr>
+    <tr><td>강세 중</td><td>&gt; 1.015 → 3</td><td>&gt; 1.025 → 3</td></tr>
+    <tr><td>약</td><td>그 외 → 2</td><td>그 외 → 2</td></tr>
+  </table>
+
+  <div class="grid">
+    <div class="kv"><b>마진모드</b><span>CROSS</span></div>
+    <div class="kv"><b>스탑</b><span>없음 (0)</span></div>
+    <div class="kv"><b>스냅샷</b><span>95봉 × 5 (stagger 19)</span></div>
+    <div class="kv"><b>drift 임계</b><span>3pp</span></div>
+  </div>
+  <p class="sub">유일 방어 = 분산 + 코인별 동적 L. 거래비용 0.04%(메이커).</p>
+</div>
+
+<div class="card">
+  <h2>리밸런싱 트리거</h2>
+  <p>슬리브 내부: 매일 점검, 종목 교체는 앵커일 + (주식은 drift 발화일도). 비중 이탈이 임계 미만이면 거래 안 함.</p>
+  <h3>계좌 간 자금이동 알림 (수동 송금)</h3>
+  <ul>
+    <li><b>T1:</b> 목표 대비 half-turnover ≥ 20pp</li>
+    <li><b>T3U:</b> 어떤 슬리브가 목표보다 20% 이상 부족 AND 그 슬리브 카나리 On</li>
+  </ul>
+  <p class="sub">같은 사유는 24시간에 1번만 알림. 자동 송금/자동 cap 조정은 영구 비활성(B안).</p>
+</div>
+
+<div class="card">
+  <h2><span class="ok">✓</span> BT ↔ 라이브 정합 검증</h2>
+  <p class="sub">2026-06-06 통제 패리티 증명.</p>
+  <table>
+    <tr><th>슬리브</th><th>비교일</th><th>picks/weights 정합</th></tr>
+    <tr><td>코인 현물</td><td>2005일</td><td class="ok">100%</td></tr>
+    <tr><td>코인 선물</td><td>2004일</td><td class="ok">100%</td></tr>
+    <tr><td>주식</td><td>1553일</td><td class="ok">100% (가중모멘텀 정합 수정 후)</td></tr>
+  </table>
+  <div class="note">라이브 선정함수와 채택 백테스트 선정함수에 같은 유니버스·가격·카나리를 넣어 일별 종목·비중이 100% 일치함을 확인. 즉 실거래가 검증된 백테스트 그대로 돈다.</div>
+  <p class="sub">남은 차이는 유니버스 입력 소스뿐(라이브=실시간 시총, BT=생존편향 방지용 과거시점 시총 → 약 5.7%일 종목 갈림). 이는 의도된 구조 차이지 로직 버그가 아니다.</p>
+</div>
+
+<div class="foot">
+  Cap Defend — 추세추종 + 분산방어. 가드 없음, 카나리·모멘텀 헬스·분산이 방어.<br>
+  실제 truth는 코드와 상태 전이. 본 문서는 요약.
+</div>
+
+</div>
+</body>
+</html>

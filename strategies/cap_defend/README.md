@@ -1,7 +1,7 @@
 # Cap Defend 전략 디렉터리
 
 주식/현물코인/선물 전략의 백테스트 엔진, 실거래 설정, 운영 도구를 포함한다.
-현재 운영 기준으로 유지하는 전용 백테스트 진입점은 주식 V17, 코인 V20, 선물 d005 세 개다.
+현재 운영 = 주식 V25 / 코인현물 V24 / 선물 V25. 전략 정의 정본은 루트 [`CLAUDE.md`](../../CLAUDE.md).
 
 ## 바로 재현하기
 
@@ -21,10 +21,12 @@ python3 refresh_backtest_data.py --target futures  # 선물 갱신
 ### 백테스트 실행
 
 ```bash
-python3 run_current_stock_backtest.py     # 주식 V17
-python3 run_current_coin_v20_backtest.py  # 코인 V20
-python3 run_current_futures_backtest.py   # 선물 d005
+python3 run_current_stock_backtest.py       # 주식 (전략 순수함수 stock_strategy_v25.py)
+python3 run_current_coin_v20_backtest.py    # 코인현물 — 라이브 MEMBERS import → 현재 V24 정의로 실행 (파일명만 v20)
+python3 backtest_futures_v25.py             # 선물 V25 (CROSS 청산 + 동적 L)
 ```
+
+코인현물 V24 정합 엔진은 `unified_backtest.py`(asset_type='spot'), 선물 V25 는 `backtest_futures_v25.py`.
 
 ---
 
@@ -34,18 +36,20 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 | 파일 | 설명 |
 |------|------|
+| `unified_backtest.py` | 코인 V24 spot/fut 백테스트 엔진 (라이브 정합) |
+| `backtest_futures_v25.py` | 선물 V25 BT 엔진 (CROSS 청산 + 동적 L, build_K2_signal) |
+| `stock_strategy_v25.py` | 주식 V25 순수 전략 함수 (compute_offense/defense/eem_canary) |
 | `stock_engine.py` | 주식 백테스트 엔진 (delta 기반) |
-| `backtest_futures_full.py` | 선물 백테스트 엔진 (D/4h/2h/1h/30m/15m) |
-| `futures_ensemble_engine.py` | 선물 앙상블 실행 엔진 (다전략 합산) |
-| `futures_live_config.py` | 현재 실거래 선물 설정 (d005 4전략) |
+| `futures_ensemble_engine.py` | 선물 앙상블 실행 엔진 |
+| `futures_live_config.py` | 선물 V25 실거래 설정 (동적 L, K2/BTC_CAP, MARGIN_TYPE=CROSSED) |
 
 ### 백테스트 진입점
 
 | 파일 | 설명 |
 |------|------|
-| `run_current_coin_v20_backtest.py` | 코인 V20 전용 백테스트 |
-| `run_current_stock_backtest.py` | 주식 V17 백테스트 |
-| `run_current_futures_backtest.py` | 선물 d005 백테스트 |
+| `run_current_coin_v20_backtest.py` | 코인현물 백테스트 (라이브 MEMBERS import → 현재 V24) |
+| `backtest_futures_v25.py` | 선물 V25 백테스트 |
+| `run_current_stock_backtest.py` | 주식 백테스트 |
 
 ### 데이터 관리
 
@@ -69,7 +73,7 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 | 파일 | 설명 |
 |------|------|
-| `STRATEGY_EVOLUTION.md` | V12→V20 전략 진화 기록 (변경 근거, 폐기 아이디어) |
+| `STRATEGY_EVOLUTION.md` | V12→V25 전략 진화 기록 (변경 근거, 폐기 아이디어) |
 | `repo_backtest_guide.md` | 통합 백테스트 재현 가이드 |
 | `stock_backtest_howto.md` | 주식 백테스트 상세 설명 |
 | `futures_backtest_howto.md` | 선물 백테스트 상세 설명 |
@@ -89,66 +93,56 @@ python3 run_current_futures_backtest.py   # 선물 d005
 
 ## 전략 아키텍처
 
-### 코인 엔진 흐름 (V20)
+### 코인현물 엔진 흐름 (V24)
 
 ```
-멤버1 D_SMA50:
-  1. BTC vs SMA50 카나리
-  2. Mom30/90 + Vol90d 필터
-  3. Top5 + 33% cap
-  4. 30봉 기준 3-snapshot stagger
-  5. 극단갭 -15% 코인 제외
-
-멤버2 4h_SMA240:
-  1. BTC vs SMA240 카나리
-  2. Mom30/120 + Vol90d 필터
-  3. Top5 + 33% cap
-  4. 60봉 기준 3-snapshot stagger
-  5. 극단갭 -10% 코인 제외
-
-최종:
-  1. 두 멤버 50:50 EW 합산
-  2. Cash buffer 2%
-  3. 4h 기준 현물 리밸런싱
+D_SMA42 단일 sleeve, 매일 09:05:
+  1. BTC vs SMA42 ±1.5% dead-zone 카나리 (stateful)
+  2. mom2vol 헬스 (Vol90d cap 5%)
+  3. Top3 + 1/3 cap (greedy 흡수)
+  4. snap_interval=217봉 × n=7 snapshot merge → 단일 target
+  5. drift(half_turnover ≥ 0.10) 발화 시 refill v2, 아니면 앵커일에만 교체
+  6. Cash buffer 1%
 ```
 
-### 주식 엔진 흐름 (V17)
+### 주식 엔진 흐름 (V25)
 
 ```
-매일 루프:
-  1. VT crash 체크 (-3% → 현금화)
-  2. EEM 카나리 (SMA200, 0.5% hyst)
-  3. 앵커일(1/8/15/22) → Z-score 선정, 방어 전환
-  4. delta 기반 리밸런싱
+평일 23:35 (executor_stock.py 직접 계산):
+  1. 가격일자 가드 (야후 지연 → KIS 일봉 보강 → 공통일자 정렬 ≤3영업일 → 초과 SKIP)
+  2. EEM 카나리 (SMA200, 0.5% hyst dead-zone)
+  3. Z-score(가중Mom + Sharpe126) 랭킹 → 3-mom(30/72/230) 필터 → Top3 cap 1/3 + 7% Cash
+  4. 3트랜치 snap merge (SNAP_PERIOD=69, STAGGER=23, N_SNAPS=3)
+  5. drift(≥0.05) 발화일 OR 앵커일 → fresh 3-mom 재선정 교체, 아니면 보유 유지
+  6. delta 기반 리밸런싱 (가드 없음)
 ```
 
-### 선물 엔진 흐름 (d005)
+### 선물 엔진 흐름 (V25)
 
 ```
-2h/4h 주기:
-  1. 4전략 각각 시그널 계산 (SMA + Mom + Vol)
-  2. EW 합산 → 단일 비중
-  3. cap_mom_blend → 레버리지 결정 (3/4/5x)
-  4. prev_close 스탑 + cash_guard 체크
-  5. 포지션 조정
+D_SMA42 sleeve, 매일 09:05:
+  1. BTC vs SMA42 ±1.5% 카나리
+  2. mom2vol 헬스 → Top3 + 1/3 cap
+  3. snap_interval=95봉 × n=5 snapshot merge, drift ≥ 0.03
+  4. 동적 per-coin L = min(BTC_cap, K2_percoin), Lmin=2/mid=3/max=4
+  5. 마진모드 CROSSED, 스탑 없음, 캐시가드 없음
 ```
 
-### 자산배분 (V20, 비율은 V19 확정치 유지)
+### 자산배분 (V24/V25, 60/25/15)
 
 ```
-매일 09:15 cron:
+매일 09:15 cron (recommend):
   1. 주식(한투) + 현물코인(업비트) + 선물(바이낸스) 잔고 조회
-  2. 실제 비중 계산 → 목표(60/25/15) 대비 편차
-  3. 최대 편차 >= 8%p → 텔레그램 알림 (리밸런싱 필요)
-  4. 대시보드에 현재 비중 + 리밸런싱 금액 표시
+  2. 실제 비중 계산 → 목표(60/25/15, per-sleeve buffer 7/1/1%) 대비 편차
+  3. T1(half_turnover ≥ 20pp) OR T3U_can(sleeve 상대미달 ≥20% AND 카나리 ON) → 텔레그램 알림
+  4. 자동 송금·자동 cap 폐지 — 알림만, 사용자 수동 송금
 ```
 
 ---
 
 ## 주의사항
 
-- `run_current_coin_v20_backtest.py`는 V20 라이브 로직을 재현하기 위한 전용 러너다
-- `data/historical_universe.json`은 V20 백테스트에서 월별 Top40 유니버스 입력으로 사용한다
-- 선물은 `1h` 원본 기준, `4h`/`2h`는 리샘플링
+- `run_current_coin_v20_backtest.py`는 라이브 로직(현재 V24)을 재현하기 위한 전용 러너다 (파일명만 v20)
+- `data/historical_universe.json`은 코인 백테스트에서 월별 Top40 유니버스 입력으로 사용한다 (생존편향 방지)
 - 현금 키: 백테스트 `CASH`, 실매매/리포트 `Cash` — 혼동 주의
-- 상태파일(`trade_state.json`, `signal_state.json`)은 전략 상태이므로 함부로 삭제하지 않는다
+- 상태파일(`trade_state.json`, `kis_trade_state.json`, `signal_state.json`)은 전략 상태이므로 함부로 삭제하지 않는다

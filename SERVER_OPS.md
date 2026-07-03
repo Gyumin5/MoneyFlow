@@ -1,4 +1,4 @@
-# Server Operations — Cap Defend V22
+# Server Operations — Cap Defend V25 (주식 V25 / 코인현물 V24 / 선물 V25)
 
 운영 서버: `152.69.225.8`. 본 문서는 서버에서 실제로 도는 스크립트, cron, 헬스체크, 배포·복구 절차를 정리한다. 코드 truth 는 항상 서버 본 + 본 디렉토리(`trade/ops/`) 에 있고, 둘은 항상 일치해야 한다.
 
@@ -19,11 +19,12 @@
 | 선물 자동매매 | `trade/auto_trade_binance.py` | `~/auto_trade_binance.py` |
 | 추천 (general) | `strategies/cap_defend/recommend.py` | `~/recommend.py` |
 | 추천 (personal) | `strategies/cap_defend/recommend_personal.py` | `~/recommend_personal.py` |
-| 운영 매뉴얼 | `V22_OPERATION_MANUAL.md` | `~/V22_OPERATION_MANUAL.md` |
+| 운영 매뉴얼 | `V25_OPERATION_MANUAL.md` | `~/V25_OPERATION_MANUAL.md` |
 
 상태 파일 (서버에만 존재, gitignore)
-- `~/trade_state.json` — 코인 V22 live state (members, last_target_snapshot, rebalancing_needed)
-- `~/kis_trade_state.json` — 주식 V22 live state (snapshots: snap0/snap1/snap2)
+- `~/trade_state.json` — 코인현물 V24 live state (members, last_target_snapshot, rebalancing_needed, schema_version)
+- `~/kis_trade_state.json` — 주식 V25 live state (snapshots: snap0/snap1/snap2, last_rebal_date)
+- `~/binance_state.json` — 선물 V25 live state (strat.canary_on 등)
 - `~/signal_state.json` — recommend 출력, executor 입력
 - `~/state_backups/` — 매일 1회 자동 백업, 14일 보관
 
@@ -31,19 +32,21 @@
 
 ```
 @reboot                        cd ~ && nohup python3 serve.py > http.log 2>&1 &
-@reboot                        export TRADE_PIN=<redacted> && nohup python3 ~/trade_api_server.py > ~/api_server.log 2>&1 &
+@reboot                        export TRADE_PIN=<설정값> && nohup python3 ~/trade_api_server.py > ~/api_server.log 2>&1 &
 */5 * * * *                    ~/watchdog_serve.sh >> ~/watchdog.log
-15 9 * * *                     ~/run_recommend.sh general
-15 9 * * *                     ~/run_recommend.sh personal
-35 23 * * 1-5                  ~/run_executor.sh stock                # 평일 23:35
-05,35 0-4 * * 2-6              ~/run_executor.sh stock                # 익일 0~4시 :05/:35
-5 9,13,17,21,1,5 * * *         ~/run_executor.sh coin                 # 4h 동기
-5 9,13,17,21,1,5 * * *         python3 ~/auto_trade_binance.py --trade
+15 9 * * *                     ~/run_recommend.sh general              # 09:15 매일
+15 9 * * *                     ~/run_recommend.sh personal             # 09:15 매일
+35 23 * * 1-5                  ~/run_executor.sh stock                # 주식 V25, 평일 23:35 1회
+5 9 * * *                      ~/run_executor.sh coin                 # 코인현물 V24, 매일 09:05 1회
+5 9 * * *                      python3 ~/auto_trade_binance.py --trade # 선물 V25, 매일 09:05 1회
 ```
 
-설계 의도
-- recommend(09:15) → 주식 executor(23:35~익일 새벽) → 다음 09:15 recommend → ... 의 24h 사이클
-- 코인/선물은 4h 봉 닫힘 시각(KST 9/13/17/21/1/5) :05 동시 실행. bar-idempotency 로 같은 봉 중복 매매 방지
+TRADE_PIN 실제값은 여기 기록하지 않는다 (서버 crontab 에만 존재, 문서/채팅/커밋 금지).
+
+설계 의도 (V24/V25 — 모든 자산 1D 단일)
+- 코인/선물은 D봉 닫힘 직후 09:05 동시 실행 (4h 멤버 제거, 1일 1회). bar-idempotency 로 같은 봉 중복 매매 방지
+- 주식은 미국장 마감 후 평일 23:35 1회 (executor_stock.py 가 직접 전략 계산). 옛 "익일 0~4시 retry" 는 폐지됨
+- recommend(09:15) 는 HTML 생성 + 자산배분 트리거(T1/T3U) 체크 + 텔레그램
 - 워치독은 헬스체크 실패 시만 재시작. 정상 시 무동작 (idempotent)
 
 ## 3. 헬스체크
@@ -69,7 +72,7 @@
 3. 영향 영역 헬스체크 (위 표)
 4. API 서버 변경 시 재시작:
    ```
-   ssh ... 'pkill -f "python3 trade_api_server.py"; sleep 2; cd ~ && export TRADE_PIN=<redacted> ALLOWED_ORIGINS=http://152.69.225.8:8080; nohup python3 trade_api_server.py > api_server.log 2>&1 &'
+   ssh ... 'pkill -f "python3 trade_api_server.py"; sleep 2; cd ~ && export TRADE_PIN=<설정값> ALLOWED_ORIGINS=http://152.69.225.8:8080; nohup python3 trade_api_server.py > api_server.log 2>&1 &'
    ```
 5. cron 다음 실행 결과 로그 확인 (`tail -f ~/recommend.log` 등)
 6. git commit + push (서버는 git 저장소가 아님 — 로컬이 단일 source of truth)
@@ -142,7 +145,7 @@ ssh ... 'fuser -k 8080/tcp; sleep 2; cd ~ && nohup python3 serve.py > http.log 2
 
 - API 키 (`config.py`): 절대 git 에 커밋 금지. .gitignore 등재 확인
 - ALLOWED_ORIGINS: trade_api_server 는 명시적 origin 만 허용
-- TRADE_PIN: 환경변수 `TRADE_PIN=<redacted> 로 trade_api 보호
+- TRADE_PIN: 환경변수 `TRADE_PIN` 로 trade_api 보호 (실제값은 서버 crontab 에만, 문서·커밋 금지)
 - serve.py: 화이트리스트 6개 HTML 만 서빙. HEAD 자동 404
 - ssh 접근: `~/.ssh/id_rsa` 키 기반. password 로그인 비활성
 
@@ -155,6 +158,9 @@ ssh -i ~/.ssh/id_rsa ubuntu@152.69.225.8 'echo "==serve==" && curl -s -o /dev/nu
 
 ## 8. 변경 이력
 
+- 2026-07-03 — 문서 stale 갱신: 제목/매뉴얼참조 V22→V25, cron 을 현행(코인/선물 09:05 매일·주식 23:35 평일, 4h 및 0~4시 retry 폐지)으로 정정, 상태파일 버전 표기(코인 V24/주식·선물 V25) 정정, TRADE_PIN 평문 제거.
+- 2026-05-28 — 선물 V25 도입 (동적 per-coin L + CROSSED 마진). 코인현물 V24 / 주식 V25 유지.
+- 2026-04-30 — V24 마이그레이션 (모든 자산 1D 단일 + drift trigger, cron 4h×6 → 1d×1).
 - 2026-04-29 — watchdog_serve.sh robust restart 패치 (SIGKILL fallback + fuser -k + 3회 실패 알림). 서버 좀비 케이스 자동 복구.
 - 2026-04-28 — V22 단일 표기 일괄 정리. recommend*.py, V17_OPERATION_MANUAL → V22_OPERATION_MANUAL 갱신.
 - 2026-04-27 — V22 마이그레이션 (코인/선물/주식 모두 1D+4h 2멤버 EW + 주식 snap-stagger).
