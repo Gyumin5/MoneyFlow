@@ -1,3 +1,11 @@
+## [2026-07-03] 선물 V25 유지증거금률 단순화(flat 0.4%) 유지 — tier-aware 구현 보류
+tags: 선물, 유지증거금, maint_rate, BT정밀도, ai-debate
+- 결정: unified_backtest/backtest_futures_v25.py 의 maint_rate=0.004 flat 단순화 유지. 코인별/notional별 실제 tier(알트 0.5~0.65%) 반영한 정식 구현 보류, known limitation 으로만 문서화.
+- 근거: ai-debate(run-20260703T111308Z, 질문2) 권고에 따라 전면구현 대신 민감도 실험 선행 — 0.4%/0.5%/0.65% flat 3종을 V25 라이브 스펙(동적 per-coin L=min(BTC_cap,K2), CROSS, snap=95 n=5) 그대로 5.6yr(2020-10~2026-05) 재실행. 결과: CAGR/MDD/Cal/Sharpe/청산건수 3종 전부 완전 동일(변화 0.00pp, 청산 0건 vs 0건). 판정기준(MDD 2~3pp 이상 또는 청산 발생 시 구현) 미충족.
+- 핵심교훈: 동적 레버리지 상한(L4) + CROSS 마진 풀링 구조에서 유지증거금률 0.4~0.65% 구간 차이는 실질적 청산 위험에 영향 없음(마진 버퍼가 충분히 넉넉해 이 파라미터가 dead zone). 향후 레버리지 상한을 올리거나(L5/L6, 2026-06-02 기각됨) 마진모드를 ISOLATED로 되돌리는 변경이 있을 때만 재검증 필요.
+- 스크립트: research/bt_v25_maintrate_sensitivity.py.
+- 되돌릴 조건: 레버리지 상한 상향 또는 마진모드 변경 시 동일 스크립트로 재검증.
+
 ## [2026-07-03] 보안: TRADE_PIN 노출 대응(히스토리 정리+엔드포인트 제거+rotate) + 문서 stale 전면 갱신
 tags: 보안, secrets-scan, git-history, trade_api, 문서정합, 자산배분
 - 결정: (1) git 히스토리 전체에서 TRADE_PIN 값 filter-repo 치환 제거 후 force-push. (2) 강제거래 엔드포인트 /api/trade/upbit + 헬퍼 run_trade_async 코드 삭제(웹 노출 폐기), recommend_personal.py orphan forceTrade() JS 정리, 미배포 사본 trade/api_server.py 동일. (3) TRADE_PIN 40자리 랜덤 rotate(crontab+실행프로세스). (4) 문서 stale 전면 갱신: 버전표기 주식V25/코인현물V24/선물V25, README·SERVER_OPS 재작성, CLAUDE.md 카나리 SMA300·2%→SMA200·0.5% dead-zone 정정, 자산배분 표기 60/25/15 통일(라이브 코드 recommend.py 정본).
