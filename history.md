@@ -1,3 +1,11 @@
+## [2026-07-03] 보안: 잔고조회 PIN을 DASHBOARD_PIN(사용자 지정 별도값)으로 분리 + rate-limit/재시도 수정
+tags: 보안, trade_api, PIN, 설계결함
+- 결정: 직전 커밋(6ee462f)에서 잔고조회 GET에 TRADE_PIN(40자리 랜덤)을 그대로 재사용한 설계 결함을 수정. DASHBOARD_PIN 신규 env var(사용자가 직접 짧은 숫자로 지정) 도입, require_view_auth() 신설(TRADE_PIN 또는 DASHBOARD_PIN 허용, 읽기전용 GET 6개만 적용). 쓰기 API는 기존 TRADE_PIN 전용 유지. IP당 10분/5회 실패 시 rate-limit(정답이어도 차단). 프론트 403 시 즉시 1회 재프롬프트 재시도(authedFetch 헬퍼).
+- 근거: 사용자가 배포 직후 바로 지적 — "내가 pin 지정한적 없는데 뭘로 된거야? 틀리면 재시도가 안돼". TRADE_PIN 은 오늘 낮 보안조치로 40자리 랜덤 rotate 한 값이라 애초에 사람이 입력 가능한 값이 아니었음(내 설계 실수). 사용자 지정 값(0927)은 텔레그램으로 직접 전달받아 서버 env var로만 설정 — 코드/커밋/로그 어디에도 하드코딩하지 않음.
+- 검증: 외부 실측 — 무인증 403, 신규 PIN 정답 200, 오답 403, 5회 연속 오답 후 정답도 403(rate-limit 확인). cron 내부 호출(localhost bypass) 영향 없음.
+- 핵심교훈: 인증값을 재사용할 때 "이 값을 실제로 입력할 주체가 누구인가(기계 vs 사람)"를 먼저 확인해야 함 — 강한 랜덤값은 기계간 인증엔 맞지만 사람이 타이핑하는 UX엔 안 맞음. 배포 전 이 구분을 먼저 점검했어야 함.
+- 커밋: 6f92958.
+
 ## [2026-07-03] 보안: 포트5000 GET 잔고조회 엔드포인트 PIN 인증 추가 (ai-debate 결과 반영, B안 채택)
 tags: 보안, trade_api, PIN, ai-debate, 정보노출
 - 결정: live_overview/snapshots/coin_balance/stock_balance/binance_balance/holdings 6개 GET 엔드포인트에 require_auth() 게이트 추가. require_auth() 는 localhost(127.0.0.1/::1) 요청은 무조건 통과(TCP peer 스푸핑 불가로 안전), 원격 요청은 X-Auth-PIN 헤더(또는 기존 body/쿼리 password) 일치 필요. 대시보드 2종(recommend_personal.py 생성 portfolio_result_gmoh.html + 정적 asset_dashboard.html) 모두 getPin()/authHeaders() 헬퍼로 세션(탭)당 1회 prompt, sessionStorage 캐시(localStorage 미사용, 403 응답 시 캐시 삭제).
