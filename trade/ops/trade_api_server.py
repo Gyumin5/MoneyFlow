@@ -8,13 +8,30 @@ import threading
 import os
 import json
 import sqlite3
+import time
 from datetime import datetime
 
 app = Flask(__name__)
 APP_HOME = os.environ.get('MONEYFLOW_APP_HOME', os.getcwd())
 
-# 인증 토큰 (서버 환경변수 TRADE_PIN — 길고 랜덤한 값 권장)
+# 인증 토큰 (서버 환경변수 TRADE_PIN — 길고 랜덤한 값, 쓰기/설정변경 API 전용)
 TRADE_PIN = os.environ.get('TRADE_PIN', '')
+# 잔고조회(읽기전용) 전용 짧은 PIN — TRADE_PIN과 무관, 사용자가 직접 지정
+DASHBOARD_PIN = os.environ.get('DASHBOARD_PIN', '')
+
+# 잔고조회 API 무차별대입 방지: IP당 실패 횟수 제한 (in-memory, 프로세스 재시작 시 초기화)
+_view_auth_fails = {}
+RATE_LIMIT_WINDOW_SEC = 600
+RATE_LIMIT_MAX_FAILS = 5
+
+def _rate_limited(ip):
+    now = time.time()
+    fails = [t for t in _view_auth_fails.get(ip, []) if now - t < RATE_LIMIT_WINDOW_SEC]
+    _view_auth_fails[ip] = fails
+    return len(fails) >= RATE_LIMIT_MAX_FAILS
+
+def _record_view_fail(ip):
+    _view_auth_fails.setdefault(ip, []).append(time.time())
 
 # CORS: 같은 서버에서만 허용 (포트 8080 = serve.py)
 ALLOWED_ORIGINS = [o for o in os.environ.get('ALLOWED_ORIGINS', '').split(',') if o]  # 서버에서 환경변수로 설정
@@ -44,6 +61,21 @@ def require_auth():
         return False
     return True
 
+def require_view_auth():
+    """잔고조회(읽기전용) API 인증. TRADE_PIN 또는 DASHBOARD_PIN 둘 다 허용.
+    localhost bypass는 require_auth() 와 동일. IP당 10분/5회 실패 초과 시 잠금(무차별대입 방지)."""
+    if request.remote_addr in ('127.0.0.1', '::1'):
+        return True
+    ip = request.remote_addr
+    if _rate_limited(ip):
+        return False
+    data = request.get_json(silent=True) or {}
+    pwd = str(request.headers.get('X-Auth-PIN') or data.get('password') or request.args.get('password', ''))
+    if (TRADE_PIN and pwd == TRADE_PIN) or (DASHBOARD_PIN and pwd == DASHBOARD_PIN):
+        return True
+    _record_view_fail(ip)
+    return False
+
 running_tasks = {}
 HOLDINGS_FILE = os.environ.get('HOLDINGS_FILE', os.path.join(APP_HOME, 'my_stock_holdings.json'))
 
@@ -56,7 +88,7 @@ HOLDINGS_FILE = os.environ.get('HOLDINGS_FILE', os.path.join(APP_HOME, 'my_stock
 # --- Stock Holdings API ---
 @app.route('/api/holdings', methods=['GET'])
 def get_holdings():
-    if not require_auth():
+    if not require_view_auth():
         return jsonify({"error": "인증 필요"}), 403
     try:
         with open(HOLDINGS_FILE, 'r') as f:
@@ -165,7 +197,7 @@ init_assets_db()
 @app.route('/api/assets/snapshots', methods=['GET'])
 def get_snapshots():
     """전체 히스토리 조회."""
-    if not require_auth():
+    if not require_view_auth():
         return jsonify({"error": "인증 필요"}), 403
     conn = sqlite3.connect(ASSETS_DB)
     conn.row_factory = sqlite3.Row
@@ -257,7 +289,7 @@ def _get_coin_balance_data() -> dict:
 
 @app.route('/api/assets/coin_balance', methods=['GET'])
 def get_coin_balance():
-    if not require_auth():
+    if not require_view_auth():
         return jsonify({"error": "인증 필요"}), 403
     try:
         return jsonify(_get_coin_balance_data())
@@ -379,7 +411,7 @@ def _get_stock_balance_data() -> dict:
 
 @app.route('/api/assets/stock_balance', methods=['GET'])
 def get_stock_balance():
-    if not require_auth():
+    if not require_view_auth():
         return jsonify({"error": "인증 필요"}), 403
     try:
         return jsonify(_get_stock_balance_data())
@@ -527,7 +559,7 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
 
 @app.route('/api/assets/binance_balance', methods=['GET'])
 def get_binance_balance():
-    if not require_auth():
+    if not require_view_auth():
         return jsonify({"error": "인증 필요"}), 403
     try:
         return jsonify(_get_binance_balance_data())
@@ -538,7 +570,7 @@ def get_binance_balance():
 @app.route('/api/assets/live_overview', methods=['GET'])
 def get_live_overview():
     """한 번에 한투/업비트/바이낸스 실계좌 현황 조회."""
-    if not require_auth():
+    if not require_view_auth():
         return jsonify({"error": "인증 필요"}), 403
     result = {"updated": datetime.now().strftime('%Y-%m-%d %H:%M'), "accounts": {}}
     total_krw = 0.0

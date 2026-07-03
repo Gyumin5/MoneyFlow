@@ -1697,6 +1697,22 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             function authHeaders() {{
                 return {{'X-Auth-PIN': getPin()}};
             }}
+            // 403(PIN 틀림) 시 캐시 지우고 즉시 1회 재입력받아 재시도 (새로고침 불필요)
+            async function authedFetch(url, opts) {{
+                opts = opts || {{}};
+                opts.headers = Object.assign({{}}, opts.headers, {{'X-Auth-PIN': getPin()}});
+                let r = await fetch(url, opts);
+                if (r.status === 403) {{
+                    sessionStorage.removeItem('auth_pin');
+                    const retry = prompt('PIN이 틀렸습니다. 다시 입력:');
+                    if (retry) {{
+                        sessionStorage.setItem('auth_pin', retry);
+                        opts.headers['X-Auth-PIN'] = retry;
+                        r = await fetch(url, opts);
+                    }}
+                }}
+                return r;
+            }}
 
             // === Buffer / Force Trade ===
             async function updateBuffer() {{
@@ -1897,9 +1913,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 try {{
                     statusEl.innerHTML = '\u23f3 \uc2e4\uacc4\uc88c \uc870\ud68c \uc911...';
                     statusEl.style.color = '#1967d2';
-                    const r = await fetch(API + '/api/assets/live_overview', {{headers: authHeaders()}});
+                    const r = await authedFetch(API + '/api/assets/live_overview');
                     const data = await r.json();
-                    if (!r.ok) {{ if (r.status === 403) sessionStorage.removeItem('auth_pin'); throw new Error(data.error || 'API error'); }}
+                    if (!r.ok) throw new Error(data.error || 'API error');
                     renderLiveOverview(data);
                     statusEl.innerHTML = '\u2705 \uc870\ud68c \uc644\ub8cc (' + (data.updated || '-') + ')';
                     statusEl.style.color = '#0d904f';
@@ -1913,8 +1929,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             let chartTotal = null;
             async function loadHistory() {{
                 try {{
-                    const r = await fetch(API + '/api/assets/snapshots', {{headers: authHeaders()}});
-                    if (r.status === 403) sessionStorage.removeItem('auth_pin');
+                    const r = await authedFetch(API + '/api/assets/snapshots');
                     const rows = await r.json();
                     if (!Array.isArray(rows) || !rows.length) return;
 
