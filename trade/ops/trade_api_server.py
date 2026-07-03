@@ -43,7 +43,7 @@ def after_request(response):
         response.headers['Access-Control-Allow-Origin'] = '*'
     elif origin in ALLOWED_ORIGINS:
         response.headers['Access-Control-Allow-Origin'] = origin
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, X-Auth-PIN')
     response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     return response
 
