@@ -1684,20 +1684,34 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 arrow.textContent = body.classList.contains('collapsed') ? '\u25b6' : '\u25bc';
             }}
 
+            // [2026-07-03 \ubcf4\uc548] \uc794\uace0\uc870\ud68c API \uc778\uc99d \ud5e4\ub354. \uc138\uc158(\ud0ed) \ub2f9 1\ud68c\ub9cc \ud504\ub86c\ud504\ud2b8,
+            // sessionStorage \uc5d0\ub9cc \ubcf4\uad00(\ud0ed \ub2eb\uc73c\uba74 \uc0ad\uc81c \u2014 localStorage \ubbf8\uc0ac\uc6a9).
+            function getPin() {{
+                let pin = sessionStorage.getItem('auth_pin');
+                if (!pin) {{
+                    pin = prompt('\uc811\uc18d PIN \uc785\ub825:');
+                    if (pin) sessionStorage.setItem('auth_pin', pin);
+                }}
+                return pin || '';
+            }}
+            function authHeaders() {{
+                return {{'X-Auth-PIN': getPin()}};
+            }}
+
             // === Buffer / Force Trade ===
             async function updateBuffer() {{
                 const val = document.getElementById('bufferSelect').value;
                 const status = document.getElementById('bufferStatus');
-                const pwd = prompt('PIN 4\uc790\ub9ac:');
+                const pwd = getPin();
                 if (!pwd) return;
                 try {{
                     const resp = await fetch(API + '/api/cash_buffer', {{
-                        method: 'POST', headers: {{'Content-Type':'application/json'}},
+                        method: 'POST', headers: {{'Content-Type':'application/json', 'X-Auth-PIN': pwd}},
                         body: JSON.stringify({{cash_buffer: parseFloat(val), password: pwd}})
                     }});
                     const d = await resp.json();
                     if (resp.ok) {{ document.getElementById('bufferDisplay').textContent = Math.round((1-parseFloat(val))*100)+'%'; status.innerHTML='\u2705 \ubcc0\uacbd \uc644\ub8cc'; status.style.color='#0d904f'; }}
-                    else {{ status.innerHTML='\u26a0\ufe0f '+(d.error||'Error'); status.style.color='#d93025'; }}
+                    else {{ if (resp.status === 403) sessionStorage.removeItem('auth_pin'); status.innerHTML='\u26a0\ufe0f '+(d.error||'Error'); status.style.color='#d93025'; }}
                 }} catch(e) {{ status.innerHTML='\u274c API \uc2e4\ud328'; status.style.color='#d93025'; }}
                 setTimeout(()=>{{status.innerHTML='';}}, 5000);
             }}
@@ -1883,9 +1897,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 try {{
                     statusEl.innerHTML = '\u23f3 \uc2e4\uacc4\uc88c \uc870\ud68c \uc911...';
                     statusEl.style.color = '#1967d2';
-                    const r = await fetch(API + '/api/assets/live_overview');
+                    const r = await fetch(API + '/api/assets/live_overview', {{headers: authHeaders()}});
                     const data = await r.json();
-                    if (!r.ok) throw new Error(data.error || 'API error');
+                    if (!r.ok) {{ if (r.status === 403) sessionStorage.removeItem('auth_pin'); throw new Error(data.error || 'API error'); }}
                     renderLiveOverview(data);
                     statusEl.innerHTML = '\u2705 \uc870\ud68c \uc644\ub8cc (' + (data.updated || '-') + ')';
                     statusEl.style.color = '#0d904f';
@@ -1899,9 +1913,10 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             let chartTotal = null;
             async function loadHistory() {{
                 try {{
-                    const r = await fetch(API + '/api/assets/snapshots');
+                    const r = await fetch(API + '/api/assets/snapshots', {{headers: authHeaders()}});
+                    if (r.status === 403) sessionStorage.removeItem('auth_pin');
                     const rows = await r.json();
-                    if (!rows.length) return;
+                    if (!Array.isArray(rows) || !rows.length) return;
 
                     // Badge
                     const badge2 = document.getElementById('secHistory_badge');

@@ -339,6 +339,19 @@
     <script>
       const API =
         window.location.protocol + "//" + window.location.hostname + ":5000";
+      // [2026-07-03 보안] 잔고조회 API 인증 헤더. 세션(탭) 당 1회만 프롬프트,
+      // sessionStorage 에만 보관(탭 닫으면 삭제 — localStorage 미사용).
+      function getPin() {
+        let pin = sessionStorage.getItem("auth_pin");
+        if (!pin) {
+          pin = prompt("접속 PIN 입력:");
+          if (pin) sessionStorage.setItem("auth_pin", pin);
+        }
+        return pin || "";
+      }
+      function authHeaders() {
+        return { "X-Auth-PIN": getPin() };
+      }
       const fmt = (n) =>
         n >= 1e8
           ? (n / 1e8).toFixed(1) + "억"
@@ -359,8 +372,9 @@
       // Fetch coin balance
       async function fetchCoin() {
         try {
-          const r = await fetch(API + "/api/assets/coin_balance");
+          const r = await fetch(API + "/api/assets/coin_balance", { headers: authHeaders() });
           const d = await r.json();
+          if (r.status === 403) sessionStorage.removeItem("auth_pin");
           if (d.error) {
             alert("에러: " + d.error);
             return;
@@ -527,10 +541,11 @@
         try {
           const r = await fetch(API + "/api/assets/snapshots", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Auth-PIN": getPin() },
             body: JSON.stringify(data),
           });
           const d = await r.json();
+          if (r.status === 403) sessionStorage.removeItem("auth_pin");
           alert(d.message || d.error);
           loadHistory();
         } catch (e) {
@@ -543,9 +558,10 @@
 
       async function loadHistory() {
         try {
-          const r = await fetch(API + "/api/assets/snapshots");
+          const r = await fetch(API + "/api/assets/snapshots", { headers: authHeaders() });
+          if (r.status === 403) sessionStorage.removeItem("auth_pin");
           const rows = await r.json();
-          if (!rows.length) return;
+          if (!Array.isArray(rows) || !rows.length) return;
 
           // Table (역순: 최신이 위)
           const tbody = document.querySelector("#historyTable tbody");
