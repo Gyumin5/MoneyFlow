@@ -352,6 +352,22 @@
       function authHeaders() {
         return { "X-Auth-PIN": getPin() };
       }
+      // 403(PIN 틀림) 시 캐시 지우고 즉시 1회 재입력받아 재시도 (새로고침 불필요)
+      async function authedFetch(url, opts) {
+        opts = opts || {};
+        opts.headers = Object.assign({}, opts.headers, { "X-Auth-PIN": getPin() });
+        let r = await fetch(url, opts);
+        if (r.status === 403) {
+          sessionStorage.removeItem("auth_pin");
+          const retry = prompt("PIN이 틀렸습니다. 다시 입력:");
+          if (retry) {
+            sessionStorage.setItem("auth_pin", retry);
+            opts.headers["X-Auth-PIN"] = retry;
+            r = await fetch(url, opts);
+          }
+        }
+        return r;
+      }
       const fmt = (n) =>
         n >= 1e8
           ? (n / 1e8).toFixed(1) + "억"
@@ -372,9 +388,8 @@
       // Fetch coin balance
       async function fetchCoin() {
         try {
-          const r = await fetch(API + "/api/assets/coin_balance", { headers: authHeaders() });
+          const r = await authedFetch(API + "/api/assets/coin_balance");
           const d = await r.json();
-          if (r.status === 403) sessionStorage.removeItem("auth_pin");
           if (d.error) {
             alert("에러: " + d.error);
             return;
@@ -558,8 +573,7 @@
 
       async function loadHistory() {
         try {
-          const r = await fetch(API + "/api/assets/snapshots", { headers: authHeaders() });
-          if (r.status === 403) sessionStorage.removeItem("auth_pin");
+          const r = await authedFetch(API + "/api/assets/snapshots");
           const rows = await r.json();
           if (!Array.isArray(rows) || !rows.length) return;
 
