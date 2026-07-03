@@ -1,3 +1,11 @@
+## [2026-07-03] fix: CORS Access-Control-Allow-Headers에 X-Auth-PIN 누락 — 대시보드 전체 브레이크
+tags: 버그, CORS, trade_api, PIN
+- 결정: after_request 의 Access-Control-Allow-Headers 를 'Content-Type' 단독에서 'Content-Type, X-Auth-PIN' 으로 확장.
+- 근거: DASHBOARD_PIN 배포 직후 사용자가 "PIN 입력창은 뜨고 입력도 되는데 조회는 계속 실패"라고 보고. 서버 로그 확인 결과 브라우저가 CORS preflight(OPTIONS)는 200 통과시키지만 실제 GET 요청이 로그에 전혀 안 잡힘 — 브라우저가 클라이언트 단에서 차단하는 전형적 패턴. 원인은 프론트에서 커스텀 헤더 X-Auth-PIN 을 추가하면서 cross-origin(8080↔5000) preflight 가 발생하는데, 서버가 그 헤더를 Allow-Headers 에 포함 안 해 브라우저가 실제 요청을 거부한 것.
+- 검증: curl 로 브라우저와 동일한 preflight(OPTIONS+Access-Control-Request-Headers) 재현 — 수정 전엔 X-Auth-PIN 미포함 확인, 수정 후 포함+후속 GET 200 확인. 사용자 실기기 테스트 확인("이제는 되네").
+- 핵심교훈: 인증 헤더를 새로 추가할 때 CORS Allow-Headers 동기화를 반드시 같이 확인해야 함 — 브라우저 콘솔 없이 서버 curl 테스트만으로는 이 클래스의 실패(로컬 재현은 되는데 브라우저에서만 실패)를 놓치기 쉽다. 다음에 커스텀 헤더 추가 시 Allow-Headers 체크리스트 항목으로.
+- 커밋: 43dd44f.
+
 ## [2026-07-03] 보안: 잔고조회 PIN을 DASHBOARD_PIN(사용자 지정 별도값)으로 분리 + rate-limit/재시도 수정
 tags: 보안, trade_api, PIN, 설계결함
 - 결정: 직전 커밋(6ee462f)에서 잔고조회 GET에 TRADE_PIN(40자리 랜덤)을 그대로 재사용한 설계 결함을 수정. DASHBOARD_PIN 신규 env var(사용자가 직접 짧은 숫자로 지정) 도입, require_view_auth() 신설(TRADE_PIN 또는 DASHBOARD_PIN 허용, 읽기전용 GET 6개만 적용). 쓰기 API는 기존 TRADE_PIN 전용 유지. IP당 10분/5회 실패 시 rate-limit(정답이어도 차단). 프론트 403 시 즉시 1회 재프롬프트 재시도(authedFetch 헬퍼).
