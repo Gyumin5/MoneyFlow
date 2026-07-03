@@ -1702,29 +1702,8 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 setTimeout(()=>{{status.innerHTML='';}}, 5000);
             }}
 
-            async function forceTrade(exchange) {{
-                const btn = document.getElementById('forceTradeUpbitBtn');
-                const status = document.getElementById('tradeStatus');
-                const pwd = prompt('PIN 4\uc790\ub9ac:');
-                if (!pwd) return;
-                const amtIn = prompt('\uc6b4\uc6a9 \uae08\uc561 (\uc6d0, 0=\uc804\uccb4):', '0');
-                if (amtIn === null) return;
-                const amt = parseInt(amtIn.replace(/,/g,'')) || 0;
-                const amtText = amt > 0 ? amt.toLocaleString()+'\uc6d0' : '\uc804\uccb4';
-                if (!confirm('Force Trade \uc2e4\ud589? ('+amtText+')')) return;
-                btn.disabled=true; btn.style.opacity='0.6';
-                status.innerHTML='\u23f3 \uc2e4\ud589 \uc911...'; status.style.color='#1967d2';
-                try {{
-                    const r = await fetch(API+'/api/trade/'+exchange, {{
-                        method:'POST', headers:{{'Content-Type':'application/json'}},
-                        body: JSON.stringify({{target_amount:amt, password:pwd}})
-                    }});
-                    const d = await r.json();
-                    status.innerHTML = r.ok ? '\u2705 '+d.message : '\u26a0\ufe0f '+(d.error||'Error');
-                    status.style.color = r.ok ? '#0d904f' : '#d93025';
-                }} catch(e) {{ status.innerHTML='\u274c API \uc2e4\ud328'; status.style.color='#d93025'; }}
-                setTimeout(()=>{{btn.disabled=false; btn.style.opacity='1';}}, 5000);
-            }}
+            // [2026-07-03 \ubcf4\uc548] forceTrade() \uc81c\uac70 \u2014 /api/trade/upbit \uac15\uc81c\uac70\ub798 \uc5d4\ub4dc\ud3ec\uc778\ud2b8 \ud3d0\uae30\uc5d0 \ub9de\ucd98
+            // \ud074\ub77c\uc774\uc5b8\ud2b8 \uc8fd\uc740 \ucf54\ub4dc \uc815\ub9ac. \uac15\uc81c\uac70\ub798\ub294 \uc11c\ubc84\uc5d0\uc11c \uc9c1\uc811 \uc218\ud589(\uc6f9 \ub178\ucd9c \uae08\uc9c0).
 
             function fmtKrwFull(n) {{
                 return Math.round(Number(n || 0)).toLocaleString() + '\uc6d0';

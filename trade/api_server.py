@@ -41,41 +41,8 @@ def require_auth():
 running_tasks = {}
 HOLDINGS_FILE = os.environ.get('HOLDINGS_FILE', os.path.join(APP_HOME, 'my_stock_holdings.json'))
 
-def run_trade_async(exchange: str, force: bool = False, trade: bool = True, target_amount: int = 0):
-    task_id = f"{exchange}_{int(os.times().elapsed)}"
-    running_tasks[task_id] = {"status": "running", "output": ""}
-    try:
-        # run_trade.sh 경유: flock 보호 일관 적용
-        cmd = [os.environ.get('RUN_TRADE_SCRIPT', os.path.join(APP_HOME, 'run_trade.sh')), exchange]
-        if trade: cmd.append("--trade")
-        if force: cmd.append("--force")
-        if target_amount > 0: cmd.extend(["--amount", str(target_amount)])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=APP_HOME)
-        running_tasks[task_id] = {"status": "completed", "output": result.stdout + result.stderr, "returncode": result.returncode}
-    except subprocess.TimeoutExpired:
-        running_tasks[task_id] = {"status": "timeout", "output": "Script timed out after 5 minutes"}
-    except Exception as e:
-        running_tasks[task_id] = {"status": "error", "output": str(e)}
-    return task_id
-
-@app.route('/api/trade/upbit', methods=['POST'])
-def trade_upbit():
-    # 암호 검증
-    data = request.get_json(silent=True) or {}
-    if str(data.get('password', '')) != TRADE_PIN:
-        return jsonify({"error": "잘못된 비밀번호"}), 403
-
-    # 중복 실행 방지: run_trade.sh의 flock이 담당
-    # API 측에서는 running_tasks로 중복 요청만 차단
-    for tid, task in running_tasks.items():
-        if "upbit" in tid and task.get("status") == "running":
-            return jsonify({"error": "Upbit trade is already running", "task_id": tid}), 409
-
-    target_amount = int(data.get('target_amount', 0))
-    thread = threading.Thread(target=run_trade_async, args=("upbit", True, True, target_amount))
-    thread.start()
-    msg = f"Upbit force trade started (Target: {target_amount} KRW)" if target_amount > 0 else "Upbit force trade started (Full Equity)"
-    return jsonify({"message": msg, "status": "running"})
+# [2026-07-03 보안] 강제거래 엔드포인트 /api/trade/upbit + run_trade_async 제거.
+# (이 파일은 미배포 구버전 사본 — 라이브는 trade/ops/trade_api_server.py. 일관성 위해 동일 제거.)
 
 # --- Stock Holdings API ---
 @app.route('/api/holdings', methods=['GET'])
