@@ -1,3 +1,13 @@
+## [2026-07-03] 보안: TRADE_PIN 노출 대응(히스토리 정리+엔드포인트 제거+rotate) + 문서 stale 전면 갱신
+tags: 보안, secrets-scan, git-history, trade_api, 문서정합, 자산배분
+- 결정: (1) git 히스토리 전체에서 TRADE_PIN 값 filter-repo 치환 제거 후 force-push. (2) 강제거래 엔드포인트 /api/trade/upbit + 헬퍼 run_trade_async 코드 삭제(웹 노출 폐기), recommend_personal.py orphan forceTrade() JS 정리, 미배포 사본 trade/api_server.py 동일. (3) TRADE_PIN 40자리 랜덤 rotate(crontab+실행프로세스). (4) 문서 stale 전면 갱신: 버전표기 주식V25/코인현물V24/선물V25, README·SERVER_OPS 재작성, CLAUDE.md 카나리 SMA300·2%→SMA200·0.5% dead-zone 정정, 자산배분 표기 60/25/15 통일(라이브 코드 recommend.py 정본).
+- 근거: TRADE_PIN(4자리)이 crontab/watchdog/구 SERVER_OPS 등 히스토리에 평문 노출 + 포트 5000 이 0.0.0.0 바인딩+iptables 0.0.0.0/0 로 외부 개방 → PIN 만으로 임의 강제매수(/api/trade/upbit) 트리거 가능한 실질 노출. UI 버튼 제거는 클라이언트만 없앤 것으로 서버 엔드포인트는 생존. rotate 만으론 4자리 브루트포스 여지+엔드포인트 생존 → 엔드포인트 제거 우선. config.py 등 실키는 gitignore 로 히스토리 무오염(확정 하드코딩 시크릿=TRADE_PIN 하나).
+- 검증: 서버 실측 POST /api/trade/upbit=404, /health=ok, /api/status=200. 옛 PIN 으로 /api/cash_buffer=403 거부. 히스토리 잔존 숫자 PIN 대입 0건. 백업 bundle+crontab.bak(옛 PIN 포함) 삭제.
+- 핵심교훈: UI 기능 제거 ≠ 서버 엔드포인트 비활성 — 프로세스·포트·방화벽 직접 확인. 히스토리 정리는 un-leak 아님(GitHub 옛커밋 캐시/외부 clone 잔존) → 노출 시크릿은 반드시 rotate. "push 누락"과 "commit 누락" 구분(GitHub 최신커밋 옛날=로컬 미커밋부터 확인). 자산배분 수치는 라이브 코드 정본으로 통일.
+- 되돌릴 조건: 강제거래 웹 트리거 재도입 필요 시 인증강화(길고 랜덤 PIN + 포트 5000 내부화 + rate-limit) 선행 후에만. 잔여 선택(미결): 포트 5000 리버스프록시 잠금(대시보드 유지), IP scrub.
+- 커밋: 0356283(문서 stale) / 2bdf1ed(엔드포인트 제거) / e6a940e(자산배분 표기). filter-repo force-push 8cad3f9→0356283.
+- Prediction: secrets-scan 클래스(하드코딩 시크릿·평문 PIN 노출·UI제거만으로 방치된 위험 엔드포인트)가 향후 6개월 repo 스캔/telemetry 상 재발하지 않으면 성공, 재발하면 재검토.
+
 ## [2026-06-16] 전략 성능 아웃라이어 의존도 + 일반화 기대성능 보정
 tags: 일반화, survivorship, 아웃라이어, 유니버스, 기대성능, ai-debate
 - 결정: 전략 기대성능을 헤드라인 단일값(전체포트 CAGR 72.5%)으로 제시 금지. 3층 보고 — 상방케이스 72.5%(freak 포함, 기대값 아님) / 계획기준 CAGR 30~45%·중앙 35~40%·Cal~2~3·Sharpe 1.5~1.7 / no-freak 스트레스 29%(비용·수동송금지연·레짐악화 얹으면 20%대 이하). 유니버스는 사후수익 아닌 구조적 사전필터(거래소토큰/밈/유동성/상장기간/규제/선물청산)로 정의, full 유지+BNB/DOGE 관찰플래그. 매매코드 무변경.
