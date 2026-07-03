@@ -31,9 +31,15 @@ def after_request(response):
     return response
 
 def require_auth():
-    """쓰기 API 인증 체크. PIN이 없거나 불일치하면 403."""
+    """API 인증 체크. PIN이 없거나 불일치하면 403.
+    localhost(127.0.0.1/::1) 호출은 신뢰(recommend_personal.py 등 서버 내부 cron/스크립트가
+    daily snapshot 저장 등에 인증 없이 호출) — TCP peer 스푸핑 불가능하므로 안전.
+    원격 요청은 헤더(X-Auth-PIN) 우선 — GET 요청도 URL/쿼리에 남기지 않고 인증 가능.
+    JSON body/쿼리파라미터는 기존 POST 호출과의 하위호환용 fallback."""
+    if request.remote_addr in ('127.0.0.1', '::1'):
+        return True
     data = request.get_json(silent=True) or {}
-    pwd = data.get('password', request.args.get('password', ''))
+    pwd = request.headers.get('X-Auth-PIN') or data.get('password') or request.args.get('password', '')
     if not TRADE_PIN or str(pwd) != TRADE_PIN:
         return False
     return True
@@ -50,6 +56,8 @@ HOLDINGS_FILE = os.environ.get('HOLDINGS_FILE', os.path.join(APP_HOME, 'my_stock
 # --- Stock Holdings API ---
 @app.route('/api/holdings', methods=['GET'])
 def get_holdings():
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     try:
         with open(HOLDINGS_FILE, 'r') as f:
             data = json.load(f)
@@ -157,6 +165,8 @@ init_assets_db()
 @app.route('/api/assets/snapshots', methods=['GET'])
 def get_snapshots():
     """전체 히스토리 조회."""
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     conn = sqlite3.connect(ASSETS_DB)
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT * FROM snapshots ORDER BY snapshot_date").fetchall()
@@ -247,6 +257,8 @@ def _get_coin_balance_data() -> dict:
 
 @app.route('/api/assets/coin_balance', methods=['GET'])
 def get_coin_balance():
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     try:
         return jsonify(_get_coin_balance_data())
     except Exception as e:
@@ -367,6 +379,8 @@ def _get_stock_balance_data() -> dict:
 
 @app.route('/api/assets/stock_balance', methods=['GET'])
 def get_stock_balance():
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     try:
         return jsonify(_get_stock_balance_data())
     except Exception as e:
@@ -513,6 +527,8 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
 
 @app.route('/api/assets/binance_balance', methods=['GET'])
 def get_binance_balance():
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     try:
         return jsonify(_get_binance_balance_data())
     except Exception as e:
@@ -522,6 +538,8 @@ def get_binance_balance():
 @app.route('/api/assets/live_overview', methods=['GET'])
 def get_live_overview():
     """한 번에 한투/업비트/바이낸스 실계좌 현황 조회."""
+    if not require_auth():
+        return jsonify({"error": "인증 필요"}), 403
     result = {"updated": datetime.now().strftime('%Y-%m-%d %H:%M'), "accounts": {}}
     total_krw = 0.0
 
