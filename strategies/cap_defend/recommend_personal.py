@@ -2491,6 +2491,10 @@ if __name__ == "__main__":
             stock_acct = accts.get("stock_kis") or {}
             spot_acct = accts.get("coin_upbit") or {}
             fut_acct = accts.get("coin_binance") or {}
+            _acct_errors = []
+            if 'error' in stock_acct: _acct_errors.append(f"주식(KIS): {str(stock_acct['error'])[:100]}")
+            if 'error' in spot_acct: _acct_errors.append(f"업비트: {str(spot_acct['error'])[:100]}")
+            if 'error' in fut_acct: _acct_errors.append(f"바이낸스: {str(fut_acct['error'])[:100]}")
             stock_krw = float(stock_acct.get("total_krw", 0))
             spot_krw = float(spot_acct.get("total_krw", 0))
             fut_krw = float(fut_acct.get("total_krw", 0))
@@ -2510,13 +2514,17 @@ if __name__ == "__main__":
                     w = krw / total if total > 0 else 0
                     lines.append(f"    {tk}: ₩{krw:,.0f} ({w*100:.1f}%)")
                 return lines
-            holdings_lines[0] = f"💼 보유 (총 ₩{alloc_total:,.0f})"
-            holdings_lines.extend(_hold_lines("주식", stock_acct, stock_krw))
-            holdings_lines.extend(_hold_lines("업비트", spot_acct, spot_krw))
-            holdings_lines.extend(_hold_lines("바이낸스", fut_acct, fut_krw))
+            holdings_lines[0] = f"💼 보유 (총 ₩{alloc_total:,.0f})" + (" ⚠️ 일부 조회실패(아래 참고)" if _acct_errors else "")
+            for _label, _acct, _krw in (("주식", stock_acct, stock_krw), ("업비트", spot_acct, spot_krw), ("바이낸스", fut_acct, fut_krw)):
+                if 'error' in _acct:
+                    holdings_lines.append(f"  [{_label}] ⚠️ 조회 실패: {str(_acct['error'])[:100]}")
+                else:
+                    holdings_lines.extend(_hold_lines(_label, _acct, _krw))
 
-            # 자산배분
-            if alloc_total > 0:
+            # 자산배분 — 잔고조회 실패 계좌가 있으면 트리거 평가 자체를 스킵(오류를 0으로 오인해 잘못된 리밸 알림 발송 방지)
+            if _acct_errors:
+                alloc_lines.append(f"  ⚠️ 잔고조회 실패로 자산배분 트리거 평가 스킵: {'; '.join(_acct_errors)}")
+            elif alloc_total > 0:
                 p_stock = stock_krw / alloc_total
                 p_spot = spot_krw / alloc_total
                 p_fut = fut_krw / alloc_total
@@ -2611,7 +2619,7 @@ if __name__ == "__main__":
                                     f"⚠️ V24 자산배분 트리거 ON",
                                     f"트리거: {reason}",
                                     f"현재 비중: 주식 {p_stock*100:.1f}% / 업비트 {p_spot*100:.1f}% / 바이낸스 {p_fut*100:.1f}%",
-                                    f"목표: 60/20/15 (B 안 + per-sleeve buffer stock 6/spot 1/fut 1)",
+                                    f"목표: 60/25/15 (B 안 + per-sleeve buffer stock 7/spot 1/fut 1)",
                                     f"현재 KRW: 주식 ₩{stock_krw:,.0f} / 업비트 ₩{spot_krw:,.0f} / 바이낸스 ₩{fut_krw:,.0f}",
                                     f"목표 KRW: 주식 ₩{tgt_stock_krw:,.0f} / 업비트 ₩{tgt_spot_krw:,.0f} / 바이낸스 ₩{tgt_fut_krw:,.0f}",
                                     f"송금 제안:",
