@@ -124,6 +124,12 @@ def save_daily_live_snapshot():
     upbit = accounts.get("coin_upbit", {}) or {}
     binance = accounts.get("coin_binance", {}) or {}
 
+    # 계좌 조회 실패(예: KIS API 다운) 시 0원으로 잘못 기록하지 않고 스냅샷 저장 자체를 스킵.
+    # (2026-07-04 KIS 주말 점검 추정 연결거부로 stock_krw=0 오기록 사고 후 추가)
+    _snap_errors = [f"{k}: {v['error']}" for k, v in accounts.items() if isinstance(v, dict) and 'error' in v]
+    if _snap_errors:
+        return {'skipped': True, 'snapshot_date': datetime.now().strftime("%Y-%m-%d"), 'errors': _snap_errors}
+
     # 보유주식 = KIS 총자산(RP 포함) − 현금(예수금+RP). account 기준이라 spot FX 환산 오차 없음.
     # total_krw/cash_krw 없으면(구버전 API) 기존 spot FX 환산으로 fallback.
     _stock_total = float(stock.get("total_krw", 0.0))
@@ -2184,10 +2190,13 @@ if __name__ == "__main__":
 
     try:
         snap = save_daily_live_snapshot()
-        print(
-            f"✅ Daily snapshot saved: {snap['snapshot_date']} "
-            f"(stock={snap['stock_krw']:,.0f}, coin={snap['coin_krw']:,.0f}, cash={snap['cash_krw']:,.0f}, total={snap['total_krw']:,.0f})"
-        )
+        if snap.get('skipped'):
+            print(f"⚠️ Daily snapshot 스킵 ({snap['snapshot_date']}) — 계좌 조회 실패: {'; '.join(snap['errors'])}")
+        else:
+            print(
+                f"✅ Daily snapshot saved: {snap['snapshot_date']} "
+                f"(stock={snap['stock_krw']:,.0f}, coin={snap['coin_krw']:,.0f}, cash={snap['cash_krw']:,.0f}, total={snap['total_krw']:,.0f})"
+            )
     except Exception as e:
         print(f"⚠️ daily snapshot 저장 실패: {e}")
 
