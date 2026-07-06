@@ -765,6 +765,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     holdings, total_usd, exrt = api.get_balance()
     if total_usd <= 0:
         log('  잔고 없음')
+        send_telegram('⚠️ V25 stock: KIS 잔고조회 실패(또는 0) — 오늘 매매 SKIP. 다음 주기에 재시도됩니다.')
         return {
             'holdings': {},
             'total_usd': 0.0,
