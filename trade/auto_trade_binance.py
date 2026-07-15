@@ -184,6 +184,9 @@ CAP = 1/3  # EW + 33% cap
 CASH_BUFFER_DEFAULT = 0.02  # 현금 버퍼 기본값 (state에서 동적 읽기)
 CASH_BUFFER = CASH_BUFFER_DEFAULT  # 런타임에 state에서 갱신
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
+# V25 cycle 9: 코인별 margin 변경 preflight 에서 "무관 심볼 먼지"로 간주하는 상한.
+# MIN_NOTIONAL 과 의미 분리 — 이 값 미만 잔존은 봇이 정상 주문으로 청산 불가(reduceOnly 도 min notional 미달).
+DUST_NOTIONAL_LIMIT = MIN_NOTIONAL
 DELTA_THRESHOLD = 0.01  # 리밸런싱 허용 편차 ±1% (MIN_NOTIONAL 미달 시 스킵)
 DISPLAY_DUST_NOTIONAL = 1.0  # 알림/대시보드에서 숨길 최소 포지션 금액
 ORDER_MAX_RETRIES = 3
@@ -1619,7 +1622,7 @@ def _v25_reconcile(intent: dict, actual: dict) -> List[str]:
         a = actual_pos.get(sym, {})
         if abs(i.get('notional', 0) - a.get('notional', 0)) > max(50.0, 0.05 * max(abs(i.get('notional', 0)), abs(a.get('notional', 0)), 1.0)):
             diffs.append(f"{sym} notional: intent=${i.get('notional', 0):.2f} actual=${a.get('notional', 0):.2f}")
-        if i.get('leverage') and a.get('leverage') and int(i['leverage']) != int(a['leverage']):
+        if i.get('leverage') and a.get('leverage') and abs(float(i['leverage']) - float(a['leverage'])) > 0.01:
             diffs.append(f"{sym} L: intent={i['leverage']} actual={a['leverage']}")
     if intent.get('margin_type') and actual.get('margin_type') and intent['margin_type'].lower() != actual['margin_type'].lower():
         diffs.append(f"margin: intent={intent['margin_type']} actual={actual['margin_type']}")
@@ -1749,6 +1752,52 @@ def preflight_zero_open_orders(client: Client, symbols=None) -> bool:
         return True
     except BinanceAPIException as e:
         log.error(f"preflight_zero_open_orders: {e}")
+        return False
+
+
+def preflight_target_symbols_zero(client: Client, symbols) -> bool:
+    """V25 cycle 9: 코인별 margin type 변경용 preflight — 대상 심볼만 zero 확인.
+
+    Binance 규칙상 코인별 margin type 변경은 "그 심볼"에 포지션·미체결이 없으면 된다(계정 전역 zero 불필요).
+    따라서 무관 심볼의 잔존(특히 DUST_NOTIONAL_LIMIT 미만 먼지 — 봇이 정상 주문으로 청산 불가)은 허용한다.
+    단 관측성 유지: 무관 먼지는 warning 으로 남긴다. 대상 심볼은 먼지라도 strict zero 요구(Binance 가 거부하므로).
+    Returns: True (대상 심볼 모두 zero), False (대상 심볼에 포지션/주문 잔존 → 호출자 ABORT).
+    """
+    try:
+        target = set(symbols)
+        acc = _with_retry(lambda: client.futures_account())
+        dust = []
+        for row in acc.get('positions', []):
+            sym = row.get('symbol')
+            amt = abs(float(row.get('positionAmt', 0) or 0))
+            if amt <= 1e-9:
+                continue
+            notional = abs(float(row.get('notional', 0) or 0))
+            if sym in target:
+                log.error(f"preflight_target_symbols_zero: 대상 심볼 {sym} 잔존 포지션 "
+                          f"amt={amt} notional=${notional:.2f} — margin 변경 불가")
+                return False
+            if 0.0 < notional < DUST_NOTIONAL_LIMIT:
+                dust.append((sym, round(notional, 4)))
+            else:
+                # 무관 심볼의 DUST 이상 포지션 — margin 변경 자체엔 영향 없으나 관측성 위해 기록
+                log.warning(f"preflight_target_symbols_zero: 무관 심볼 {sym} 잔존 "
+                            f"notional=${notional:.2f} (대상 아님, 허용)")
+        if dust:
+            log.warning(f"preflight_target_symbols_zero: 무관 심볼 먼지 {len(dust)}개 "
+                        f"(합 ${sum(d[1] for d in dust):.2f}) 허용: {dust[:10]}")
+        # 대상 심볼 미체결 주문도 0 이어야 margin 변경 가능
+        orders = _with_retry(lambda: client.futures_get_open_orders())
+        blocking = sorted({o.get('symbol') for o in orders if o.get('symbol') in target})
+        if blocking:
+            log.error(f"preflight_target_symbols_zero: 대상 심볼 미체결 주문 {blocking} — margin 변경 불가")
+            return False
+        if DEBUG_MARGIN:
+            log.info(f"  preflight_target_symbols_zero OK (targets={sorted(target)} zero, "
+                     f"무관 먼지 {len(dust)}개 허용)")
+        return True
+    except BinanceAPIException as e:
+        log.error(f"preflight_target_symbols_zero: {e}")
         return False
 
 
@@ -2345,37 +2394,43 @@ def main():
             #       force_cancel → execute_rebalance
             v25_abort = False
             target_symbols = [coin + 'USDT' for coin in target_lev_map.keys()]
-            # V25 cycle 3 P0: 설정 변경 전 preflight — zero position + zero open orders
-            # 잔존 포지션·주문이 있으면 마진모드/one-way 변경이 거부됨 → 사전 검증
-            need_setup_change = False
-            # 빠른 marginType / one-way mode 점검 — 변경 필요한 경우만 preflight zero 강제
+            # V25 cycle 9 (ai-debate 20260715 보완): 설정변경 preflight 를 두 종류로 분리.
+            #   need_mode_change: one-way/hedge 모드 변경 → Binance 계정단위 규칙 → 계정 전체 zero 엄격(먼지도 불가).
+            #   need_margin_change: 코인별 margin type 변경 → 해당 심볼만 zero 면 됨 → 무관 심볼 먼지는 tolerate.
+            # (기존엔 둘을 need_setup_change 로 묶어 계정전체 zero 를 강제 → 무관한 SOL 먼지에 margin 변경이 막혀 오ABORT.)
+            need_mode_change = False
+            need_margin_change = False
             try:
                 cur_mode = client.futures_get_position_mode()
                 if _normalize_dual_side(cur_mode.get('dualSidePosition', False)):
-                    need_setup_change = True
+                    need_mode_change = True
             except BinanceAPIException:
-                need_setup_change = True
-            if not need_setup_change:
-                for sym in target_symbols:
-                    info = _fetch_position_info(client, sym)
-                    if info is None:
-                        need_setup_change = True; break
-                    row = _pick_oneway_row(info)
-                    if row is None:
-                        need_setup_change = True; break
-                    # cycle 8: futures_account 는 isolated(bool), futures_position_information 은 marginType(str)
-                    if 'isolated' in row:
-                        if bool(row.get('isolated')):
-                            need_setup_change = True; break
-                    elif (row.get('marginType') or '').lower() != 'cross':
-                        need_setup_change = True; break
-            if need_setup_change:
-                # cycle 4 P0: 계정 단위 (one-way mode 변경은 계정 전체 영향)
+                need_mode_change = True
+            for sym in target_symbols:
+                info = _fetch_position_info(client, sym)
+                if info is None:
+                    need_margin_change = True; break
+                row = _pick_oneway_row(info)
+                if row is None:
+                    need_margin_change = True; break
+                # cycle 8: futures_account 는 isolated(bool), futures_position_information 은 marginType(str)
+                if 'isolated' in row:
+                    if bool(row.get('isolated')):
+                        need_margin_change = True; break
+                elif (row.get('marginType') or '').lower() != 'cross':
+                    need_margin_change = True; break
+            # (a) one-way 모드 변경: 계정 전체 zero 엄격 (먼지 불허 — 계정단위 변경)
+            if need_mode_change:
                 if not preflight_zero_positions(client):
-                    err = "V25 ABORT: 설정 변경 필요한데 계정에 잔존 포지션 있음 (one-way / margin 변경 거부됨)"
+                    err = "V25 ABORT: one-way 모드 변경 필요한데 계정에 잔존 포지션 있음 — 매매 차단"
                     log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
                 elif not preflight_zero_open_orders(client):
-                    err = "V25 ABORT: 설정 변경 필요한데 계정에 미체결 주문 있음 — 매매 차단"
+                    err = "V25 ABORT: one-way 모드 변경 필요한데 계정에 미체결 주문 있음 — 매매 차단"
+                    log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
+            # (b) 코인별 margin 변경: 대상 심볼만 zero 확인 (무관 심볼 먼지 tolerate)
+            if not v25_abort and need_margin_change:
+                if not preflight_target_symbols_zero(client, target_symbols):
+                    err = "V25 ABORT: margin 변경 대상 코인에 잔존 포지션/주문 있음 — 매매 차단"
                     log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
             if not v25_abort:
                 # one-way mode 자동 보장 (포지션 없을 때만)
