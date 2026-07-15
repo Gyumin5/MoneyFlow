@@ -1,3 +1,12 @@
+## [2026-07-15] fix: 선물 V25 preflight/reconciliation 오ABORT 2건 (먼지 게이트 분리 + 레버리지 허용오차)
+tags: 버그, 선물, V25, preflight, reconciliation, abort_streak, ai-debate
+- 결정: auto_trade_binance.py 두 곳 수정. (B) 설정변경 preflight 를 need_mode_change(one-way 모드변경 — Binance 계정단위 규칙이라 preflight_zero_positions 계정전체 zero 엄격 유지, 먼지 불허)와 need_margin_change(코인별 margin type 변경 — 신규 preflight_target_symbols_zero 로 "대상 심볼만" zero 확인, 무관 심볼의 DUST_NOTIONAL_LIMIT($5) 미만 먼지는 tolerate + warning 로그)로 분리. (C) _v25_reconcile 레버리지 비교를 int() 절삭 → abs(intent-actual)<=0.01 허용오차.
+- 근거: 2026-07-15 09:05 카나리 ON 플립으로 TRX/HYPE(마진 ISOLATED) 편입 필요했으나, 계정에 남은 SOL 0.01개($0.78, MIN_NOTIONAL 미만이라 봇 청산 불가한 먼지)가 계정전체 preflight_zero_positions 에 걸려 무관한 margin 변경까지 전체 ABORT → 매수 실패. 사용자 SOL 수동청산 후 재실행은 체결됐으나, HYPE 레버리지 actual 이 Binance 특성상 1.9999999999995504(=설정2배)로 반환되는데 int() 가 1로 절삭 → intent2≠1 오탐 → success=False → abort_streak 오염(HYPE 보유중 매일 재발, 3일이면 자동 lock 로 전체 선물매매 차단될 뻔).
+- 검증: ai-debate(run-20260715T003523Z) 조건부 승인 후 보완 반영(round() 단독은 실제 2.4배 드리프트 은폐 위험 → 허용오차 채택; 계정전체 게이트 통째 완화 반대 → mode/margin 분리). 단위테스트 C 8케이스(노이즈 통과 / 2.4·2.5 드리프트 차단), B 6시나리오(오늘 사고 재현시 통과, 대상코인 잔존/주문시 차단). 실매매 전용 함수라 BT 무관. 서버 scp+py_compile+--status 검증, 백업 auto_trade_binance.py.bak.20260715. streak 는 수동 0 리셋(오늘 거래 실제 성공).
+- 되돌릴 조건: 무관 먼지 tolerate 로 미관리 노출이 누적되거나(먼지 합계 급증), 허용오차 0.01 이 실제 레버리지 드리프트를 놓치는 사례 관측 시 재검토.
+- Prediction: 선물 "무관 먼지로 인한 margin변경 오ABORT" 및 "reconciliation 레버리지 float 오탐"이 30일 동안 telemetry/history 상 재발하지 않으면 성공, 재발하면 재검토.
+- 커밋: 1f42f1e.
+
 ## [2026-07-04] fix: KIS API 연결실패를 잔고 0원으로 오인 — 가짜 리밸알림 + 히스토리 오기록
 tags: 버그, KIS, 데이터정합성, alloc_transit, snapshot
 - 결정: recommend_personal.py 의 두 소비처(자산배분 트리거 알림 생성부 / 일간 스냅샷 DB 저장부) 모두, live_overview 응답의 계좌 dict에 'error' 키(조회 실패)가 있으면 0원으로 fallback하지 않고 해당 처리를 스킵하도록 수정. 트리거부는 "잔고조회 실패"로 알림 문구 명시, 스냅샷부는 저장 자체를 스킵(skipped 반환).
