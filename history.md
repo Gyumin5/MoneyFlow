@@ -1,3 +1,11 @@
+## [2026-07-15] 결정: 코인 현물 빈 스냅 재진입 — F0(현행) 유지, P2/H3 기각
+tags: 코인, 현물, V24, 재진입, 빈스냅, 백테스트, 과적합
+- 결정: "카나리 ON + 전 코인 헬스 OFF → 빈 스냅 트랜치가 자기 앵커까지 현금 방치" 문제에 대해 동적 재진입 변형을 도입하지 않고 F0(현행 anchor-only) 유지. 22변형 전수 백테스트(2026-07-12) + P2/H3 채택 게이트(2026-07-15) 모두 F0 우위 재확인.
+- 근거: (1) 문제 자체가 희소·약세장 집중(5.4yr 6.8%, 2022년 51%, 2023/2026 0) — 현금유지가 헬스필터로 작동. (2) 22변형 비용반영 rank-sum 에서 F0 를 안정적으로 이기는 변형 없음. (3) 채택게이트: P2(비례사이징)는 F0와 ±0.02 무승부·턴오버↑로 이득 없음. H3(vol_cap 10%)는 레짐 의존(2022·2023 Cal 열위) + 전구간 MDD 악화 + vol_cap plateau 비단조(7% 골짜기 Cal 3.10/MDD-0.24) = 과적합 신호로 기각.
+- 실험/재시도 금지: 재진입 변형을 더 발굴·스윕하지 말 것 — 설계공간 이미 22개로 소진, 추가는 다중검정 과적합. 방법론상 탐색 종료.
+- 되돌릴 조건: 빈 스냅 상태가 약세장 밖에서도 빈발하거나(레짐 변화), 라이브에서 기회손실이 실측으로 크게 관측되면 재검토.
+- 산출물: research/reentry_variants_registry.md, reentry_results.json, reentry_gate_p2h3.json. 실거래 로직 무수정.
+
 ## [2026-07-15] fix: 선물 V25 preflight/reconciliation 오ABORT 2건 (먼지 게이트 분리 + 레버리지 허용오차)
 tags: 버그, 선물, V25, preflight, reconciliation, abort_streak, ai-debate
 - 결정: auto_trade_binance.py 두 곳 수정. (B) 설정변경 preflight 를 need_mode_change(one-way 모드변경 — Binance 계정단위 규칙이라 preflight_zero_positions 계정전체 zero 엄격 유지, 먼지 불허)와 need_margin_change(코인별 margin type 변경 — 신규 preflight_target_symbols_zero 로 "대상 심볼만" zero 확인, 무관 심볼의 DUST_NOTIONAL_LIMIT($5) 미만 먼지는 tolerate + warning 로그)로 분리. (C) _v25_reconcile 레버리지 비교를 int() 절삭 → abs(intent-actual)<=0.01 허용오차.
