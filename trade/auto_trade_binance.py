@@ -2287,14 +2287,38 @@ def main():
         coins_combined = {k: f"{v:.1%}" for k, v in combined.items() if k != 'CASH' and v > 0}
         log.info(f"합산: {coins_combined or 'CASH 100%'}")
 
-        # V24 drift 트리거: cur_w (자본금 기준 비중, real_weight 사용) vs target_w
-        # half_turnover >= DRIFT_THRESHOLD_FUT(0.05) 이면 rebalancing_needed=True
-        # alloc_transit cap (옵션 D): real_weight 분모를 effective_pv 로 scale
+        # V24 drift 트리거: cur_w vs target_w, half_turnover >= DRIFT_THRESHOLD_FUT 이면 rebalancing_needed=True
+        # BT 정합 (2026-07-17): cur_w = (진입배분자본 + 미실현PnL) / equity — backtest_futures_v25.py:671
+        #   val = margins[coin](진입시 배분자본, 고정) + holdings[coin]*(cur-entry)(=PnL). w = val/pv(equity).
+        #   진입마진 = qty*entry/lev (진입 notional/lev). 주의: real_notional=positionInitialMargin(=현재 notional/lev,
+        #   현재가로 floating)은 PnL 을 1/lev 만큼 이미 반영해 BT 와 어긋남 → 반드시 진입마진 사용.
+        #   기존 real_weight(=현재마진/equity, PnL 미반영)에서 교체. total_pv 는 양쪽 equity 동일.
+        # alloc_transit cap (옵션 D, 현재 비활성): scale
         _drift_cap_ratio = _read_alloc_transit_cap_ratio_fut()
         _drift_scale = (1.0 / _drift_cap_ratio) if (_drift_cap_ratio is not None and 0 < _drift_cap_ratio < 1.0) else 1.0
         cur_w_fut: Dict[str, float] = {}
+        _drift_data_ok = True  # 포지션 데이터 이상 시 fail-closed (드리프트 발화 차단, 거래 안 함)
         for coin, pos in positions_before.items():
-            cur_w_fut[coin] = float(pos.get('real_weight', 0.0)) * _drift_scale
+            _lev = float(pos.get('leverage', 0.0)) or 0.0
+            _entry = float(pos.get('entry_price', 0.0))
+            _qty = abs(float(pos.get('qty', 0.0)))
+            _pnl = float(pos.get('pnl', 0.0))
+            # BT 정합: 진입마진 = qty*entry/lev (진입 배분자본, 고정) + 미실현PnL(전액).
+            # 주의: real_notional(=현재 PIM=현재notional/lev)+pnl 은 PnL 이중계상 → 금지.
+            # lev/entry/qty 가 이상하면 진입마진 계산 불가 → fail-closed (발화 차단, 거래 안 함).
+            if _lev <= 0 or _entry <= 0 or _qty <= 0:
+                _drift_data_ok = False
+                _pos_val = float(pos.get('real_notional', 0.0))  # 로깅용 degrade(마진만, PnL 미가산)
+                log.warning(f"drift: {coin} 포지션 데이터 이상(lev={_lev} entry={_entry} qty={_qty}) → 드리프트 발화 차단")
+            else:
+                _pos_val = _qty * _entry / _lev + _pnl  # 진입배분자본 + 미실현PnL = 실투자가치 (BT margins+pnl)
+            if not math.isfinite(_pos_val):
+                _drift_data_ok = False
+                _pos_val = 0.0
+            _pos_val = max(0.0, _pos_val)  # BT 청산 하한 정합 + 음수 비중 방지
+            cur_w_fut[coin] = (_pos_val / pv_before if pv_before > 0 else 0.0) * _drift_scale
+            if DEBUG_LEVERAGE:
+                log.info(f"  drift shadow {coin}: pos_val={_pos_val:.2f} pnl={_pnl:+.2f} w={cur_w_fut[coin]:.4f}")
         cash_w = max(0.0, 1.0 - sum(cur_w_fut.values()))
         cur_w_fut['CASH'] = cash_w
         # cash buffer 반영 — combined 은 risky-asset 100% 정규화, 실매매는 fut_cash_buffer KRW 유지
@@ -2318,10 +2342,12 @@ def main():
             tgt_w_norm = {k: float(v) for k, v in combined.items()}
         _all_keys = set(cur_w_fut) | set(tgt_w_norm)
         ht_fut = sum(abs(tgt_w_norm.get(k, 0.0) - cur_w_fut.get(k, 0.0)) for k in _all_keys) / 2
-        drift_fire_fut = ht_fut >= DRIFT_THRESHOLD_FUT
+        drift_fire_fut = ht_fut >= DRIFT_THRESHOLD_FUT and _drift_data_ok
         if not DRIFT_ENABLED_FUT:
             drift_fire_fut = False  # snap-only fallback
-        log.info(f"V24 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.2f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT}")
+        if not _drift_data_ok:
+            log.warning("drift: 포지션 데이터 이상으로 발화 차단(fail-closed) — 이번 cron 드리프트 리밸 skip")
+        log.info(f"V24 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.2f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT} data_ok={_drift_data_ok}")
         if drift_fire_fut and not state.get('rebalancing_needed', False):
             state['rebalancing_needed'] = True
             state['last_rebal_reason'] = 'drift'
