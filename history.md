@@ -1,3 +1,14 @@
+## [2026-07-17] 결정: 선물 드리프트 트리거를 BT 정의(진입마진+PnL)/equity 로 정합
+tags: 선물, V25, 드리프트, 트리거, BT정합, ai-debate, 실매매
+- 결정: auto_trade_binance.py 라이브 드리프트 cur_w_fut 를 real_weight(=현재 PIM=현재notional/lev, 미실현PnL 미반영, 마진기준)에서 (진입마진 qty*entry/lev + 미실현PnL)/pv_before(equity) 로 교체. 백테스트(backtest_futures_v25.py:559 margins[coin]=진입시 배분자본 고정, :671 val=margins+holdings*(cur-entry)=진입마진+PnL, w=val/equity)와 동일 정의로 통일. 대시보드(fc37210)·라이브 트리거·BT 셋 다 진입마진+PnL 기준.
+- 근거: 트리거 numerator 가 마진기준이라 손실 반영이 안 돼 발화 시점이 BT와 어긋남. parity_fut.py 는 selection/target picks 만 검증했고 drift cur_w 는 미검증이라 갭이 안 잡혔음. ai-debate(run-20260717T072800Z, 2AI 조건부보류): 산식 정합 확인, 단 fallback 이 PIM+PnL(현재마진+PnL) 이중계상을 되살리는 결함 지적 → 수정 필수.
+- 함정 회피: PIM(현재마진)+PnL 은 PIM 이 이미 현재가로 floating 이라 PnL 을 1/lev 만큼 이중계상(대시보드 90e4b4c 에서 실제로 밟았다 fc37210 에서 정정). 반드시 "진입마진"(진입시 배분자본, 고정)+PnL 이어야 BT margins+PnL 과 일치.
+- 가드: 이상 데이터(lev/entry/qty<=0, non-finite) 시 _drift_data_ok=False 로 fail-closed(발화 차단, 거래 안 함) + 경고로그. pos_val max(0,·) 청산 하한 + isfinite 방어. DEBUG_LEVERAGE 섀도 로그(코인별 pos_val/pnl/비중)로 실측 검증.
+- 검증: 서버 dry-run 재현 TRX 34.7%/HYPE 27.7% ht=0.0568>0.03 fire=True data_ok=True (옛 마진기준 오늘 09:05 cron ht=0.0139 미발화). ※ dry-run 이 line2591-2592 무조건 save_state 로 라이브 state 에 rebalancing_needed=True 를 기록 → 즉시 원복(False), 실매매 없음. (교훈: 라이브 state 대상 dry-run 금지, 임시 state 복사본만.)
+- 실험/재시도 금지: dry-run 을 라이브 binance_state.json 대상으로 돌리지 말 것 — rebalancing_needed 오염되어 다음 cron 오발화 위험.
+- Prediction: "선물 트리거 BT-라이브 발화 불일치(마진 vs 가치)"가 30일 동안 재발하지 않고, 섀도로그상 라이브 ht 가 BT 정의와 일관되면 성공. 되돌릴 조건: whipsaw(손실 포지션 되사기 → 추가하락 반복)로 실측 성과가 BT 대비 크게 악화되면 재검토.
+- 커밋: d3ff7de. 서버 배포(백업 bak_20260717_164350, md5 일치, compile OK).
+
 ## [2026-07-15] 결정: 코인 현물 빈 스냅 재진입 — F0(현행) 유지, P2/H3 기각
 tags: 코인, 현물, V24, 재진입, 빈스냅, 백테스트, 과적합
 - 결정: "카나리 ON + 전 코인 헬스 OFF → 빈 스냅 트랜치가 자기 앵커까지 현금 방치" 문제에 대해 동적 재진입 변형을 도입하지 않고 F0(현행 anchor-only) 유지. 22변형 전수 백테스트(2026-07-12) + P2/H3 채택 게이트(2026-07-15) 모두 F0 우위 재확인.
