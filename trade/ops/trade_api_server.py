@@ -522,7 +522,8 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
             "pnl_usdt": pnl,
             "pnl_krw": pnl * rate,
         })
-    weights = {}
+    # 전략 목표 비중(last_target) — 참고용 별도 필드로만 보존 (표시 기본값 아님)
+    target_weights = {}
     try:
         with open(os.environ.get('BINANCE_STATE_FILE', os.path.join(APP_HOME, 'binance_state.json')), 'r') as f:
             state = json.load(f)
@@ -531,11 +532,14 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
         if total_target > 0:
             for k, v in last_target.items():
                 if isinstance(v, (int, float)):
-                    weights['현금' if str(k).upper() == 'CASH' else str(k)] = float(v) / total_target
+                    target_weights['현금' if str(k).upper() == 'CASH' else str(k)] = float(v) / total_target
     except Exception:
         pass
     holdings.extend(spot_holdings)
-    if not weights and total_usdt > 0:
+    # 실제 구성비중 = 보유 실질가치(레버리지 반영된 margin/real_notional) 기준.
+    # 코인/주식 endpoint 와 동일 방식으로 통일 (이전엔 바이낸스만 last_target 목표값을 표시하던 예외였음).
+    weights = {}
+    if total_usdt > 0:
         total_krw = total_usdt * rate
         for h in holdings:
             weights[h['ticker']] = float(h.get('weight_value_krw', 0.0)) / total_krw
@@ -553,6 +557,7 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
         "exchange_rate": rate,
         "holdings": holdings,
         "weights": weights,
+        "target_weights": target_weights,
         "updated": datetime.now().strftime('%Y-%m-%d %H:%M')
     }
 
