@@ -514,9 +514,9 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
             "entry_price": entry,
             "price": mark,
             "price_krw": mark * rate,
-            "value_usdt": real_notional,
-            "value_krw": real_notional * rate,
-            "weight_value_krw": (margin_usdt or real_notional) * rate,
+            "value_usdt": real_notional + pnl,
+            "value_krw": (real_notional + pnl) * rate,
+            "weight_value_krw": (real_notional + pnl) * rate,  # 마진+미실현PnL = 현재 실투자가치(청산 시 실제 금액)
             "leverage": lev,
             "notional_usdt": notional,
             "pnl_usdt": pnl,
@@ -536,14 +536,18 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
     except Exception:
         pass
     holdings.extend(spot_holdings)
-    # 실제 구성비중 = 보유 실질가치(레버리지 반영된 margin/real_notional) 기준.
-    # 코인/주식 endpoint 와 동일 방식으로 통일 (이전엔 바이낸스만 last_target 목표값을 표시하던 예외였음).
+    # 실제 구성비중 = 보유 현재가치(선물=마진+미실현PnL, 현물=시장가치) / 실제 계좌가치(equity=totalMarginBalance).
+    # 손익을 포지션에 귀속시켜 물린 종목 비중이 실제로 줄어들게 함(현물/주식 카드와 동일하게 손익 반영).
+    # 현금 = equity 나머지(잔여 자산). 합계 100%. (이전엔 바이낸스만 last_target 목표값 표시 예외였음.)
     weights = {}
     if total_usdt > 0:
         total_krw = total_usdt * rate
+        pos_sum_krw = 0.0
         for h in holdings:
-            weights[h['ticker']] = float(h.get('weight_value_krw', 0.0)) / total_krw
-        weights['현금'] = (available_usdt * rate) / total_krw
+            wv = float(h.get('weight_value_krw', 0.0))
+            weights[h['ticker']] = wv / total_krw
+            pos_sum_krw += wv
+        weights['현금'] = max(0.0, (total_krw - pos_sum_krw) / total_krw)
     return {
         "total_krw": total_usdt * rate,
         "total_usdt": total_usdt,
