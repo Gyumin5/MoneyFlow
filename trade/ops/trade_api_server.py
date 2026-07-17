@@ -507,6 +507,11 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
         else:
             real_notional = notional
             lev = 1.0
+        # BT 정합: 포지션 현재가치 = 진입시 배분자본(진입마진 = qty*entry/lev) + 미실현PnL.
+        # 주의: positionInitialMargin(=notional/lev)은 현재가로 floating 이라 거기에 PnL 을 또 더하면
+        # 손익을 (1+1/lev)배로 중복 반영함 → backtest_futures_v25.py margins[coin](진입 고정)+pnl 와 일치시킴.
+        entry_margin = (abs(qty) * entry / lev) if lev > 0 else real_notional
+        pos_value = entry_margin + pnl
         holdings.append({
             "ticker": symbol.replace("USDT", ""),
             "symbol": symbol,
@@ -514,11 +519,12 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
             "entry_price": entry,
             "price": mark,
             "price_krw": mark * rate,
-            "value_usdt": real_notional + pnl,
-            "value_krw": (real_notional + pnl) * rate,
-            "weight_value_krw": (real_notional + pnl) * rate,  # 마진+미실현PnL = 현재 실투자가치(청산 시 실제 금액)
+            "value_usdt": pos_value,
+            "value_krw": pos_value * rate,
+            "weight_value_krw": pos_value * rate,  # 진입배분자본+미실현PnL = 실제 들고있는 금액(BT 정합)
             "leverage": lev,
             "notional_usdt": notional,
+            "entry_margin_usdt": entry_margin,
             "pnl_usdt": pnl,
             "pnl_krw": pnl * rate,
         })
