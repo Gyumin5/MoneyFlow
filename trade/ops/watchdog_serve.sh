@@ -70,7 +70,7 @@ restart_service "serve" "python3 serve.py" 8080 \
 # trade_api_server.py (port 5000)
 restart_service "trade_api" "python3 trade_api_server.py" 5000 \
     "http://localhost:5000/health" \
-    'cd /home/ubuntu && export TRADE_PIN=<redacted> ALLOWED_ORIGINS=http://152.69.225.8:8080 && nohup python3 trade_api_server.py > api_server.log 2>&1 &'
+    'nohup /home/ubuntu/start_trade_api.sh > /dev/null 2>&1 &'
 
 # === signal_state 신선도 감시 ===
 SIGNAL_FILE="/home/ubuntu/signal_state.json"
