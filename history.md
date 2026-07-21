@@ -1,3 +1,19 @@
+## [2026-07-21] 결정: 인증 env 단일출처화 + 미사용 TRADE_PIN 폐지 (watchdog drift 제거)
+tags: 보안, 인증, watchdog, cron, CORS, ai-debate, 서버운영
+- 결정: trade_api_server 기동 env 를 `/home/ubuntu/.trade_env`(600, git 미추적) 단일출처로 통일하고, 미사용 TRADE_PIN 은 아예 설정하지 않아 쓰기 API 3종(cash_buffer/holdings/snapshots)을 fail-closed 로 잠금. 신규 wrapper `start_trade_api.sh` 가 env 로드+검증 후 exec, 실패 시 기동 중단(fail-fast). watchdog_serve.sh 와 @reboot cron 둘 다 이 wrapper 사용.
+- 근거: 기동 경로 2개가 서로 다르게 불완전 — watchdog 은 옛 4자리 TRADE_PIN 하드코딩(추적 파일에 커밋=노출의 실체)+DASHBOARD_PIN 누락, @reboot cron 은 ALLOWED_ORIGINS 누락(코드상 빈 값이면 CORS 가 `*` 와일드카드로 개방). 즉 크래시복구든 재부팅이든 어느 쪽으로 올라와도 인증·CORS 가 열화됐음. TRADE_PIN 은 사용자·assistant 모두 미사용, 서버측 자동화 사용처 0건, api_server.log 쓰기 POST 이력 0건, 내부 cron 은 localhost bypass 라 무영향 — 주문실행(run_trade_async)은 이미 제거된 상태라 TRADE_PIN 은 쓰기 3종만 보호하고 있었음. 보존할 이유보다 secret 동기화 대상·공격면 유지 비용이 큼.
+- 검증: 실제 kill→watchdog 자동복구 경로로 재기동, 복구 프로세스 env 에 TRADE_PIN 0개. 읽기 API 정상PIN 200 / 오PIN·빈PIN·헤더없음 403(빈 값 우회 없음 코드로도 확인: `if not TRADE_PIN or ...`, `(DASHBOARD_PIN and ...)`). 쓰기 3종 전부 403. fail-fast 2종(env 부재·DASHBOARD_PIN 빈값) 종료코드 1 + FATAL 로그.
+- ai-debate: run-20260721T055129Z. B(단일출처) 단독 대신 B+C 하이브리드 채택, "DASHBOARD_PIN 로딩 실패 시 조용히 기동 금지(fail-fast)"를 필수조건으로 반영. 순수 B(TRADE_PIN 보존)는 미채택 — 미사용 기능 위해 secret 유지할 이유 없음.
+- 되돌릴 조건: 쓰기 3종이 실제로 필요해지면 새 강한 TRADE_PIN 을 .trade_env 에 추가(옛 4자리 값 재사용 절대 금지). 옛 PIN 은 폐기 처리 — 어디서도 수락되지 않음. 저장소가 공개였거나 제3자 클론 정황이 있으면 history rewrite 는 별도 작업.
+- 커밋: fc987d1. 백업: 서버 watchdog_serve.sh.bak_20260721_145455, crontab.bak_20260721_145455.
+
+## [2026-07-21] 발견: 코인 헬스 vol_cap 5% plateau 비단조 원인 = 고변동 아웃라이어(SAND 대표)
+tags: 코인, 현물, vol_cap, 헬스, 아웃라이어, 과적합, 조사
+- 내용: 메인 헬스 vol_threshold 스윕(라이브 SPOT_KW, 5.4yr, `research/vol_cap_outlier.py` read-only)에서 0.05 Cal 4.55/MDD-17.8% 가 뾰족한 봉우리, 0.06 Cal 3.03, 0.07 Cal 1.52/MDD-31.7%(골짜기), 0.08~0.12 Cal 1.8대 낮은 평지. vol_cap 풀면 SAND(수익기여 -0.588, 0.06에서 단독 편입되며 Cal 4.55→3.03 붕괴)·MANA(-0.54)·OP(-0.43) 등 폭락 후 약세 지속 고변동 알트가 편입돼 포트 전체를 끌어내림. 7% 골짜기는 SAND 손실이 온전히 박히는데 상쇄할 코인(ATOM +0.49, SUI +0.28)은 덜 들어온 지점이라 유독 깊음. 즉 vol_cap 5% 는 과적합 최적점이 아니라 아웃라이어 필터로 정확히 작동 중 — 완화 금지 근거 강화(H3 vol10% 기각과 정합, reentry_gate_p2h3 과 별개로 메인 selection vol_cap 은 훨씬 민감함을 추가 확인).
+- 추가확인(2026-07-21 vol_cap_below_and_fut.py): 0.05보다 조이는 것도 손해 — 현물 0.03 Cal 0.93/CAGR14%(6종만 통과, 현금과다), 0.045~0.055 가 4.55 중심 평지. 선물(V25 동적L)도 독립적으로 0.05 최적(Cal 7.58), 0.07 로 풀면 레버리지 탓 MDD -63% 폭발. 유니버스·레버리지·모멘텀 다른 두 sleeve 가 같은 0.05 로 수렴 = 강한 견고성. 결론: 현물·선물 모두 0.05 유지, 다른 값·완화·강화 모두 불리(단일 전체기간 방향성; 실변경 시 window rank-sum+ai-debate 필요).
+- 필터 유무(vol_filter_vs_none.py): 필터 있음 vs 무필터(vol=1.0) — 현물 Cal 4.55 vs 1.76·MDD -17.8% vs -32.4%, 선물 Cal 7.58 vs 3.10·MDD -38.3% vs -58.8%. 필터가 Cal 2.4~2.6배+수익↑+MDD 반감(위험만 아니라 수익도 개선하는 드문 필터). 과적합 판정: 아님 — 명확한 메커니즘(고변동 폭락코인 배제)+현물·선물 독립 0.05 수렴+양방향 인과 뚜렷+소평지 존재. 단 값 자체는 다소 민감(0.06서 SAND 편입)이라 소수점 신봉 금지, 원리는 견고.
+- 재현: `python3 strategies/cap_defend/research/{vol_cap_outlier,vol_cap_below_and_fut,vol_filter_vs_none}.py` (로컬 데이터).
+
 ## [2026-07-17] 결정: 선물 드리프트 트리거를 BT 정의(진입마진+PnL)/equity 로 정합
 tags: 선물, V25, 드리프트, 트리거, BT정합, ai-debate, 실매매
 - 결정: auto_trade_binance.py 라이브 드리프트 cur_w_fut 를 real_weight(=현재 PIM=현재notional/lev, 미실현PnL 미반영, 마진기준)에서 (진입마진 qty*entry/lev + 미실현PnL)/pv_before(equity) 로 교체. 백테스트(backtest_futures_v25.py:559 margins[coin]=진입시 배분자본 고정, :671 val=margins+holdings*(cur-entry)=진입마진+PnL, w=val/equity)와 동일 정의로 통일. 대시보드(fc37210)·라이브 트리거·BT 셋 다 진입마진+PnL 기준.
