@@ -1,3 +1,10 @@
+## [2026-07-23] 발견: 카나리 재진입 = 일괄진입(현행) 유지, 분할진입(스태거) 전 지표 열위
+tags: 코인, 현물, 선물, 카나리, 스냅샷, 진입, 백테스트, 기각
+- 내용: 사용자 아이디어 "카나리 OFF→ON flip 시 전 스냅 일괄매수 대신 각 스냅이 자기 스태거 offset에서 개별 진입(분할진입)". BT 엔진(unified_backtest.py / backtest_futures_v25.py) canary_flipped 블록에 env-gated 토글(CANARY_FLIP_ENTRY=bulk|stagger, 기본 bulk=현행 무변화) 임시 추가해 비교 후 되돌림. 결과(5.4~5.6yr): 현물 bulk Cal 4.55/CAGR+81.1%/MDD-17.8% vs stagger 3.29/+66.0%/-20.1%. 선물 bulk 7.58/+290.7%/-38.3% vs stagger 4.01/+169.1%/-42.2%. 분할진입은 수익 급감 + MDD 도 악화(전 지표 열위).
+- 왜 위험까지 악화(직관 반대): 카나리 ON은 이미 BTC>SMA42 로 추세확인된 시점이라 진입타이밍이 리스크가 아님. 분할하면 (a) 추세확인 직후 급등을 현금으로 놓쳐 수익 급감, (b) 풀포지션 도달이 늦어져 다음 눌림에 더 가까워짐 → 상승 덜 먹고 하락은 그대로 → MDD 악화. 스태거(스냅분산)는 평상시 리밸 execution 크라우딩 회피용으로만 유효, 재진입엔 부적합.
+- 결정: 현행 일괄진입 유지. 기각. 엔진 토글은 되돌려 SSoT clean(bulk=현행 수치 정확히 재현 확인, 토글 inert).
+- 재현: BT 엔진 canary_flipped 블록에 CANARY_FLIP_ENTRY env 분기(flip+ON+stagger 시 스냅 강제갱신 skip, 앵커 스태거 블록이 처리) 재삽입 후 bulk vs stagger 비교. OFF flip 은 양쪽 즉시 전량 CASH 유지.
+
 ## [2026-07-21] 결정: 인증 env 단일출처화 + 미사용 TRADE_PIN 폐지 (watchdog drift 제거)
 tags: 보안, 인증, watchdog, cron, CORS, ai-debate, 서버운영
 - 결정: trade_api_server 기동 env 를 `/home/ubuntu/.trade_env`(600, git 미추적) 단일출처로 통일하고, 미사용 TRADE_PIN 은 아예 설정하지 않아 쓰기 API 3종(cash_buffer/holdings/snapshots)을 fail-closed 로 잠금. 신규 wrapper `start_trade_api.sh` 가 env 로드+검증 후 exec, 실패 시 기동 중단(fail-fast). watchdog_serve.sh 와 @reboot cron 둘 다 이 wrapper 사용.
