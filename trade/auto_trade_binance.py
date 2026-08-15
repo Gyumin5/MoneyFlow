@@ -497,6 +497,31 @@ def get_target_coins(target: Dict[str, float]) -> List[str]:
     return [coin for coin, w in target.items() if coin != 'CASH' and w > 0]
 
 
+def fut_trade_gate(lev_abort: bool, target_lev_map: Dict[str, int],
+                   combined: Dict[str, float]) -> Tuple[bool, bool, str]:
+    """선물 매매 게이트 판정 (순수함수 — 오프라인 분기 테스트 대상).
+
+    2026-08-15 사고 수정: 목표가 전액 CASH 면 target_lev_map 은 정상적으로 빈다
+    (청산엔 코인별 L 이 필요없다). 이걸 "산출 실패"와 구분하지 못해 카나리 OFF
+    전량청산이 차단됐다. 이제 세 갈래로 판정한다.
+
+      lev_abort=True                → 차단 (데이터/봉 산출 실패, fail-closed)
+      전액 CASH + 산출 성공          → 통과, liquidation_only=True (reduceOnly 청산만)
+      목표 코인 ↔ lev_map 키 불일치  → 차단 (부분 universe 매매 = BT 가정 위반)
+
+    반환: (blocked, liquidation_only, reason)
+    """
+    target_coins = get_target_coins(combined)
+    noncash_w = sum(w for k, w in combined.items() if str(k).upper() != 'CASH')
+    liquidation_only = (not lev_abort) and (not target_coins) and noncash_w <= 1e-9
+    if lev_abort:
+        return True, False, "V25 ABORT: target_lev_map 산출 실패 — 매매 차단"
+    if not liquidation_only and set(target_lev_map) != set(target_coins):
+        return True, False, (f"V25 ABORT: target_lev_map 키 {sorted(target_lev_map)} != "
+                             f"목표 코인 {sorted(target_coins)} — 매매 차단")
+    return False, liquidation_only, ""
+
+
 def rank_coins_capmom(target: Dict[str, float], data_1h: Dict[str, pd.DataFrame]) -> List[str]:
     """실거래용 cap+momentum 순위.
 
@@ -1288,8 +1313,14 @@ def create_order_with_retry(client: Client, order_params: dict):
 def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                       target_lev_map: Dict[str, int],
                       order_alerts: Optional[List[str]] = None,
-                      error_alerts: Optional[List[str]] = None):
-    """목표 비중으로 delta 리밸런싱. 매도 먼저, 매수 나중."""
+                      error_alerts: Optional[List[str]] = None,
+                      liquidation_only: bool = False):
+    """목표 비중으로 delta 리밸런싱. 매도 먼저, 매수 나중.
+
+    liquidation_only=True (목표 전액 CASH): 매수 경로를 아예 타지 않고, 생성된 주문이
+    전부 reduceOnly 매도인지 불변식으로 검사한다. 하나라도 아니면 주문 없이 중단
+    (노출 비증가 보장 — 2026-08-15 ai-debate 요구사항).
+    """
     if total_pv <= 0:
         log.warning("PV <= 0, skip rebalance")
         return
@@ -1332,6 +1363,8 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
 
     # 매수 (target에 있지만 미보유거나 늘어야)
     for coin, w in target.items():
+        if liquidation_only:
+            break  # 전량청산 경로 — 매수 경로 자체를 타지 않음
         if coin == 'CASH' or w <= 0:
             continue
         sym = coin + 'USDT'
@@ -1373,6 +1406,17 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                 log.error(f"price fetch {sym}: {e}")
 
     log.info(f"REBALANCE planned_trades={trades}")
+
+    # 전량청산 불변식: 모든 주문이 reduceOnly 매도여야 한다. 위반 시 주문 없이 중단.
+    if liquidation_only:
+        bad = [t for t in trades if t[0] != 'SELL' or not t[3]]
+        if bad:
+            err = f"V25 ABORT: liquidation_only 인데 비-reduceOnly/매수 주문 감지 {bad} — 주문 없이 중단"
+            log.error(err)
+            if error_alerts is not None:
+                error_alerts.append(err)
+            return
+        log.info(f"REBALANCE liquidation_only: reduceOnly 매도 {len(trades)}건만 실행")
 
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
@@ -2382,35 +2426,43 @@ def main():
         # 5. 리밸런싱
         # V25: data['D'] 필수 — K2 per-coin SMA(7) + BTC_cap SMA(42) 모두 1D 기반.
         # data['D'] 누락 또는 BTC 1D 길이 부족 시 abort (silent L2 fallback 차단)
+        lev_abort = False  # True = 레버리지/봉 산출 자체 실패 → 매매 차단 (fail-closed)
         if 'D' not in data or 'BTC' not in data['D'] or data['D']['BTC'].empty:
             err = "V25 ABORT: data['D'] 또는 BTC 1D 누락 — K2/BTC_cap 평가 불가"
             log.error(err)
             error_alerts.append(err)
+            lev_abort = True
             target_lev_map = {}
         elif len(data['D']['BTC']) < BTC_CAP_SMA_PERIOD + 2:
             err = f"V25 ABORT: BTC 1D 길이 {len(data['D']['BTC'])} < SMA42+2"
             log.error(err)
             error_alerts.append(err)
+            lev_abort = True
             target_lev_map = {}
         else:
             try:
+                # 전액 CASH 목표면 get_coin_leverage_map 이 조기 return 해 봉 검증을 건너뛴다.
+                # 청산 경로에서도 stale/future 봉은 차단해야 하므로 여기서 명시 검증.
+                _finalize_daily_bar_for_signal(data['D']['BTC'])
                 target_lev_map = get_coin_leverage_map(combined, data['1h'], data['D'])
             except StaleBarError as e:
                 err = f"V25 ABORT: 봉 정합성 실패 (StaleBarError) — {e}. 매매 차단, 다음 cron 재시도."
                 log.error(err); error_alerts.append(err)
                 _v25_persist_abort_log(err)
                 send_telegram(f"⚠ {err}")
+                lev_abort = True
                 target_lev_map = {}
+        _fut_blocked, _fut_liquidation_only, _fut_block_reason = fut_trade_gate(
+            lev_abort, target_lev_map, combined)
         rebalance_needed = state.get('rebalancing_needed', False)
         v25_abort = False  # 버그 수정 2026-06-06: 비매매 경로에서도 항상 정의 (요약부 v25_success 참조)
         if not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
             positions_after, pv_after = positions_before, pv_before
-        elif not target_lev_map:
-            # V25: leverage map 산출 실패 → 매매 안 함 (안전)
-            err_msg = "V25 ABORT: target_lev_map 비어있음 — 매매 차단"
-            log.error(err_msg)
-            error_alerts.append(err_msg)
+        elif _fut_blocked:
+            # V25: leverage map 산출 실패 또는 목표 코인과 불일치 → 매매 안 함 (안전)
+            log.error(_fut_block_reason)
+            error_alerts.append(_fut_block_reason)
             positions_after, pv_after = positions_before, pv_before
         elif args.trade:
             # V25 정책: all-or-nothing — 한 코인이라도 verify 실패 시 매매 전체 ABORT
@@ -2547,9 +2599,12 @@ def main():
                     log.info(f"🔴 alloc_transit cap_ratio={_fut_cap_ratio:.3f} → pv ${pv_before:,.2f} → ${_effective_pv:,.2f}")
                 else:
                     _effective_pv = pv_before
+                if _fut_liquidation_only:
+                    log.info("V25 liquidation_only: 목표 전액 CASH → reduceOnly 전량청산만 수행")
                 execute_rebalance(
                     client, combined, _effective_pv, target_lev_map,
                     order_alerts=order_alerts, error_alerts=error_alerts,
+                    liquidation_only=_fut_liquidation_only,
                 )
 
             # 리밸런싱 후 포지션

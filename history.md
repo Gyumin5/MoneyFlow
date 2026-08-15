@@ -1,3 +1,14 @@
+## [2026-08-15] 결정: 선물 전량청산 차단 사고 수정 — liquidation_only 명시 + reduceOnly 불변식
+tags: 선물, V25, 사고, 가드, 청산, 카나리, ai-debate
+- 사고: 08-15 09:05 KST cron 에서 BTC 카나리 OFF 플립(ratio 0.9834) → 목표 CASH 100%, drift ht=0.69 발화. 그런데 "V25 ABORT: target_lev_map 비어있음" 가드가 매매를 차단해 전량청산이 실행되지 않음. 포지션 4종(equity $60.5k, 명목 $87.5k, 2x)이 전략 의도와 반대로 유지. 카나리 OFF 인 동안 매일 재발하는 구조였음. 현물은 정상 청산(UNI 매도 → 100% 현금).
+- 원인: get_coin_leverage_map 은 목표 코인이 없으면 {} 를 조기 return 한다(청산엔 코인별 L 불필요 — 정상 동작). 가드는 {} 를 무조건 "레버리지 산출 실패"로 보고 fail-closed 했다. 즉 fail-closed 가드가, 매매가 반드시 필요한 유일한 케이스(전량청산)를 막았다.
+- 결정: 빈 레버리지 맵을 세 갈래로 판정한다. (1) lev_abort=True(데이터 누락·BTC 1D 길이부족·StaleBarError) → 차단 유지, (2) 산출 성공 + 목표 코인 0 + 비-CASH 비중 0 → 통과하되 liquidation_only=True, (3) 목표 코인 ↔ 맵 키 불일치 → 차단(부분 universe 매매 방지, 기존보다 엄격). 판정은 순수함수 fut_trade_gate() 로 분리해 오프라인 테스트 대상으로 만들었다.
+- 근거: execute_rebalance 는 target_w=0 인 포지션을 reduceOnly 전량종료만 하고 target_lev_map 은 target_w>0 사이징에만 쓴다. preflight(margin/leverage set·verify)도 맵 키 루프라 빈 맵이면 no-op. 청산에 L 이 필요없다는 사실이 곧 빈 맵이 정상이라는 근거다.
+- ai-debate(run-20260815T071757Z, codex+gemini+claude-fable 만장일치 조건부): 방향은 맞으나 "목표 코인 없음"이라는 간접 조건만으로 청산을 허용하면 데이터 장애발 가짜 CASH 와 구분 불가 → (a) 청산 의도를 명시 플래그로 드러낼 것, (b) 노출 비증가를 구조적으로 보장할 것, (c) 배포 전 분기 테스트, (d) 코드 배포보다 수동 청산 우선. 전부 반영: liquidation_only 플래그를 execute_rebalance 로 전달해 매수 루프 미진입 + 생성 주문이 전부 reduceOnly 매도인지 불변식 검사(위반 시 주문 없이 중단), 전액현금 경로에도 _finalize_daily_bar_for_signal 봉 정합성 명시 검증 추가(기존엔 이 경로에서 스킵됐음).
+- 검증: state/fut-liq-fix/test_liquidation_only.py 14/14 PASS(네트워크·라이브 state 미사용) — 게이트 7분기 + 사고 당시 4포지션 픽스처로 주문 전량 SELL·reduceOnly·수량=보유전량·매수 0건. 실전 검증: 17:33:34 KST 수동 1회 실행에서 liquidation_only 경로 진입, reduceOnly 4건 체결, 포지션 0, PV $60,623.84 → $60,572.75(비용 $51 = 명목의 0.06%), rebalancing_needed=false, abort_streak=0.
+- 되돌릴 조건: 데이터 장애로 가짜 전액현금이 생겨 원치 않는 청산이 발생하면 provenance 방식(전략 결과에 CANARY_OFF/DATA_ERROR 라벨 부착)으로 승격. 현재는 data['D'] 누락·길이부족·stale/future 봉이 모두 lev_abort 로 차단되고, 같은 봉이면 last_combined 를 유지해 stale 피드가 가짜 flip 을 못 만든다는 점에 의존.
+- Prediction: 카나리 OFF·헬스 전탈락 등으로 목표가 전액 CASH 가 되는 사건에서 청산 차단(V25 ABORT + 포지션 잔존)이 6개월간 재발하지 않으면 성공. 재발하면 provenance 방식 재검토.
+
 ## [2026-07-23] 발견: 카나리 재진입 = 일괄진입(현행) 유지, 분할진입(스태거) 전 지표 열위
 tags: 코인, 현물, 선물, 카나리, 스냅샷, 진입, 백테스트, 기각
 - 내용: 사용자 아이디어 "카나리 OFF→ON flip 시 전 스냅 일괄매수 대신 각 스냅이 자기 스태거 offset에서 개별 진입(분할진입)". BT 엔진(unified_backtest.py / backtest_futures_v25.py) canary_flipped 블록에 env-gated 토글(CANARY_FLIP_ENTRY=bulk|stagger, 기본 bulk=현행 무변화) 임시 추가해 비교 후 되돌림. 결과(5.4~5.6yr): 현물 bulk Cal 4.55/CAGR+81.1%/MDD-17.8% vs stagger 3.29/+66.0%/-20.1%. 선물 bulk 7.58/+290.7%/-38.3% vs stagger 4.01/+169.1%/-42.2%. 분할진입은 수익 급감 + MDD 도 악화(전 지표 열위).
