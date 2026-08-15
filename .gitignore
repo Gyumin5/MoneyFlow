@@ -66,3 +66,6 @@ strategies/cap_defend/research/*.json
 
 # Progress (ephemeral)
 progress.md
+
+# 세션 산출물 (테스트·스크래치)
+state/
