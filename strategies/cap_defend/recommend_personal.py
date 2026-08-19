@@ -1829,9 +1829,23 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                         + '</div>';
                 }};
 
+                // 환율 (2026-08-19): USD/KRW 는 KIS 고시(주식 KRW 환산 기준), USDT/KRW 는 업비트 실거래가.
+                // 괴리 = USDT 김프. 조회 실패는 기본값으로 덮지 않고 그대로 표시.
+                const fx = (data && data.fx) ? data.fx : {{}};
+                const fxUsd = Number(fx.usdkrw || 0);
+                const fxUsdt = Number(fx.usdt_krw || 0);
+                const fxRate = n => '₩' + Number(n).toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+                let fxText = 'USD/KRW ' + (fxUsd > 0 ? fxRate(fxUsd) : '조회 실패')
+                    + ' · USDT/KRW ' + (fxUsdt > 0 ? fxRate(fxUsdt) : '조회 실패');
+                if (fxUsd > 0 && fxUsdt > 0) {{
+                    const prem = (fxUsdt / fxUsd - 1) * 100;
+                    fxText += ' · 김프 ' + (prem >= 0 ? '+' : '') + prem.toFixed(2) + '%';
+                }}
+
                 let html = '<div class="card" style="background:#f8f9fa;">'
                     + '<div style="font-size:0.95em;color:#666;">전체 실시간 자산</div>'
                     + '<div style="font-size:1.55em;font-weight:700;margin-top:6px;">' + fmtKrwFull(data.total_krw || 0) + '</div>'
+                    + '<div style="margin-top:6px;font-size:0.9em;color:#555;">💱 ' + fxText + '</div>'
                     + '<div style="margin-top:4px;font-size:0.85em;color:#777;">업데이트: ' + (data.updated || '-') + '</div>'
                     + '</div>';
 
@@ -2840,19 +2854,29 @@ if __name__ == "__main__":
         # 💱 환율 (2026-08-19 사용자 요청) — 원달러 고시환율 + 업비트 USDT/KRW 실거래가.
         # 계좌 KRW 환산 기준이 sleeve 마다 달라(주식=KIS 고시, 바이낸스=업비트 USDT 시세)
         # 두 값을 같이 봐야 위 보유 평가액 해석이 맞는다. 괴리 = USDT 김프.
+        # 1순위: live_overview 의 fx 블록(대시보드와 같은 단일 출처). 구버전 API 면 없으므로
+        # 2순위로 계좌 exchange_rate + 업비트 직접조회로 degrade.
         _fx_accts = accts if 'accts' in locals() and isinstance(accts, dict) else {}
+        _fx_blk = (ov.get('fx') or {}) if ('ov' in locals() and isinstance(ov, dict)) else {}
         _usdkrw = 0.0
-        try:
-            _usdkrw = float((_fx_accts.get('stock_kis') or {}).get('exchange_rate', 0.0) or 0.0)
-        except Exception:
-            _usdkrw = 0.0
         _usdt_krw = 0.0
         try:
-            _p_usdt = pyupbit.get_current_price("KRW-USDT")
-            if _p_usdt and float(_p_usdt) > 0:
-                _usdt_krw = float(_p_usdt)
+            _usdkrw = float(_fx_blk.get('usdkrw', 0.0) or 0.0)
+            _usdt_krw = float(_fx_blk.get('usdt_krw', 0.0) or 0.0)
         except Exception:
-            pass
+            _usdkrw, _usdt_krw = 0.0, 0.0
+        if _usdkrw <= 0:
+            try:
+                _usdkrw = float((_fx_accts.get('stock_kis') or {}).get('exchange_rate', 0.0) or 0.0)
+            except Exception:
+                _usdkrw = 0.0
+        if _usdt_krw <= 0:
+            try:
+                _p_usdt = pyupbit.get_current_price("KRW-USDT")
+                if _p_usdt and float(_p_usdt) > 0:
+                    _usdt_krw = float(_p_usdt)
+            except Exception:
+                pass
         if _usdt_krw <= 0:
             # live_overview 의 바이낸스 rate 는 업비트 USDT 시세지만, 업비트 실패 시
             # KIS 고시로 fallback 된다 — 같은 값이면 USDT 시세가 아니므로 쓰지 않는다.
