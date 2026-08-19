@@ -70,10 +70,16 @@ TRADE_PIN 실제값은 여기 기록하지 않는다 (서버 crontab 에만 존�
 1. 로컬 수정 + 문법/단위 테스트
 2. `scp -i ~/.ssh/id_rsa <local> ubuntu@152.69.225.8:/home/ubuntu/<remote>`
 3. 영향 영역 헬스체크 (위 표)
-4. API 서버 변경 시 재시작:
+4. API 서버 변경 시 재시작 (2026-07-21 인증 env 단일출처화 이후 — env 를 손으로 export 하지 않는다):
    ```
-   ssh ... 'pkill -f "python3 trade_api_server.py"; sleep 2; cd ~ && export TRADE_PIN=<설정값> ALLOWED_ORIGINS=http://152.69.225.8:8080; nohup python3 trade_api_server.py > api_server.log 2>&1 &'
+   ssh ... 'pkill -f "python3 trade_api_server.py"; sleep 2'
+   ssh ... 'setsid /home/ubuntu/start_trade_api.sh < /dev/null > /dev/null 2>&1 & exit 0'
    ```
+   env(DASHBOARD_PIN/ALLOWED_ORIGINS)는 `/home/ubuntu/.trade_env` 단일출처. TRADE_PIN 은 폐지됐으니
+   재도입 금지. 기동 실패 사유는 `~/api_server.log` 의 FATAL 줄.
+   주의: 재시작 명령을 한 ssh 로 이어붙이면(`... & sleep; curl ...`) 세션 종료와 함께 자식이 죽어
+   서버가 내려간 채로 남는다(2026-08-19 실제 발생). 반드시 위처럼 `setsid ... & exit 0` 로 분리.
+   깜빡 놓쳐도 watchdog 이 5분 내 복구하지만, 그 사이 대시보드 조회는 실패한다.
 5. cron 다음 실행 결과 로그 확인 (`tail -f ~/recommend.log` 등)
 6. git commit + push (서버는 git 저장소가 아님 — 로컬이 단일 source of truth)
 

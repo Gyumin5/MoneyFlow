@@ -606,11 +606,24 @@ def get_live_overview():
 
     try:
         rate = _get_upbit_usdt_krw_rate()
+    except Exception:
+        rate = 0.0
+    try:
         fut = _get_binance_balance_data(rate)
         result["accounts"]["coin_binance"] = fut
         total_krw += float(fut.get("total_krw", 0.0))
     except Exception as e:
         result["accounts"]["coin_binance"] = {"error": str(e)}
+
+    # 환율 (2026-08-19 추가) — 대시보드·Daily Report 공용 단일 출처.
+    # usdkrw = KIS 고시 기준환율(주식 계좌 KRW 환산 기준), usdt_krw = 업비트 KRW-USDT 실거래가.
+    # 조회 실패는 0 으로 두고 표시측에서 "조회 실패"로 노출한다(기본값으로 덮지 않음).
+    # coin_binance.exchange_rate 는 업비트 실패 시 KIS 로 fallback 되므로 여기선 쓰지 않는다.
+    try:
+        _fx_usdkrw = float((result["accounts"].get("stock_kis") or {}).get("exchange_rate", 0.0) or 0.0)
+    except Exception:
+        _fx_usdkrw = 0.0
+    result["fx"] = {"usdkrw": _fx_usdkrw, "usdt_krw": float(rate or 0.0)}
 
     result["total_krw"] = total_krw
     return jsonify(result)
