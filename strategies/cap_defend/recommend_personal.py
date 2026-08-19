@@ -2837,14 +2837,48 @@ if __name__ == "__main__":
         _show_pd = _params_fail
         _pd_block = ('\n'.join(params_drift_lines) + "\n\n") if _show_pd else ""
 
+        # 💱 환율 (2026-08-19 사용자 요청) — 원달러 고시환율 + 업비트 USDT/KRW 실거래가.
+        # 계좌 KRW 환산 기준이 sleeve 마다 달라(주식=KIS 고시, 바이낸스=업비트 USDT 시세)
+        # 두 값을 같이 봐야 위 보유 평가액 해석이 맞는다. 괴리 = USDT 김프.
+        _fx_accts = accts if 'accts' in locals() and isinstance(accts, dict) else {}
+        _usdkrw = 0.0
+        try:
+            _usdkrw = float((_fx_accts.get('stock_kis') or {}).get('exchange_rate', 0.0) or 0.0)
+        except Exception:
+            _usdkrw = 0.0
+        _usdt_krw = 0.0
+        try:
+            _p_usdt = pyupbit.get_current_price("KRW-USDT")
+            if _p_usdt and float(_p_usdt) > 0:
+                _usdt_krw = float(_p_usdt)
+        except Exception:
+            pass
+        if _usdt_krw <= 0:
+            # live_overview 의 바이낸스 rate 는 업비트 USDT 시세지만, 업비트 실패 시
+            # KIS 고시로 fallback 된다 — 같은 값이면 USDT 시세가 아니므로 쓰지 않는다.
+            try:
+                _b_rate = float((_fx_accts.get('coin_binance') or {}).get('exchange_rate', 0.0) or 0.0)
+                if _b_rate > 0 and abs(_b_rate - _usdkrw) > 1e-6:
+                    _usdt_krw = _b_rate
+            except Exception:
+                pass
+        fx_lines = ['💱 환율']
+        fx_lines.append(f"  USD/KRW (KIS 고시): ₩{_usdkrw:,.2f}" if _usdkrw > 0
+                        else "  USD/KRW (KIS 고시): 조회 실패")
+        fx_lines.append(f"  USDT/KRW (업비트): ₩{_usdt_krw:,.2f}" if _usdt_krw > 0
+                        else "  USDT/KRW (업비트): 조회 실패")
+        if _usdkrw > 0 and _usdt_krw > 0:
+            fx_lines.append(f"  USDT 프리미엄: {(_usdt_krw / _usdkrw - 1.0) * 100:+.2f}%")
+
         # 🎯 목표(2026-06-07) + 🌊 드리프트(2026-06-08) 섹션 제거 — 사용자 요청.
         # sleeve 내부 drift 는 executor 자동처리 → 사용자 행동 없음. 헤더 판정도 자산간
-        # 이동(T1/T3U)만 반영. 보유/카나리/자산배분만 표시.
+        # 이동(T1/T3U)만 반영. 보유/환율/카나리/자산배분만 표시.
         summary = (
                 f"[Daily Report] 📊 V24 신호 ({date_str})\n"
                 f"{_verdict_line}\n"
                 f"{_as_of_line}\n\n"
                 + '\n'.join(holdings_lines) + "\n\n"
+                + '\n'.join(fx_lines) + "\n\n"
                 + '\n'.join(canary_lines) + "\n\n"
                 + _pd_block
                 + '\n'.join(alloc_lines)
