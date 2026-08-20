@@ -1,6 +1,6 @@
 # 전략 진화 (V12 → V25)
 
-이 문서는 Cap Defend 전략의 버전별 변경점과 결정 근거를 정리한다. 자세한 백테스트 결과는 각 버전의 백테스트 코드 또는 [research/](./research/)의 결과 파일을 참조한다. V21 개발 중 실험은 [`../../V21_HISTORY.md`](../../V21_HISTORY.md) 별도 문서 참조.
+이 문서는 Cap Defend 전략의 버전별 변경점과 결정 근거를 정리한다. 자세한 백테스트 결과는 각 버전의 백테스트 코드 또는 [research/](./research/)의 결과 파일을 참조한다. V21 개발 중 실험은 [`../../history/V21_HISTORY.md`](../../history/V21_HISTORY.md) 별도 문서 참조.
 
 현재 운영: 주식 V25 / 코인현물 V24 / 선물 V25.
 
@@ -135,7 +135,7 @@ V19 호환: 표현 불가. backtest_official.py(legacy)는 V12~V19 재현용으�
 - 가드 없음 tail risk (코로나 빔/루나 같은 전방위 붕괴)
 - 포트폴리오 레벨 시스템 서킷브레이커 미도입
 
-상세: [`../../V21_HISTORY.md`](../../V21_HISTORY.md)
+상세: [`../../history/V21_HISTORY.md`](../../history/V21_HISTORY.md)
 
 ---
 

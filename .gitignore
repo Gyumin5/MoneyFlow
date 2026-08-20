@@ -22,8 +22,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Logs
+# Logs (중간로그·원시출력은 추적 안 함)
 *.log
+logs/
 
 # Generated reports
 portfolio_result*.html
@@ -69,3 +70,6 @@ progress.md
 
 # 세션 산출물 (테스트·스크래치)
 state/
+
+# progress updater 중간 제안본 (도구가 매번 재생성)
+proposed-progress.md
