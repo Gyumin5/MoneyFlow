@@ -73,3 +73,6 @@ state/
 
 # progress updater 중간 제안본 (도구가 매번 재생성)
 proposed-progress.md
+
+# active.md 는 update_active_memory.sh 가 매 Stop 재생성 — 손으로 고치지 않는다
+history/active.md
