@@ -1,3 +1,15 @@
+## [2026-08-20] 결정: 현금 키 정규화를 엔진 반환 경계로 이동 + executor 실자금 계층 이중 방어
+tags: 코인, 현물, V24, 사고, 정규화, refill, ai-debate
+- 사고: 08-20 09:06 KST 카나리 ON 재진입에서 executor 가 "매수 오류 CASH: Code not found" 헛주문 1건을 냈다. 업비트가 KRW-CASH 를 거부해 현금이 그대로 남아 결과 비중(LINK 32.9 / SOL 32.9 / 현금 34.1)은 의도와 일치했지만, 완료 판정이 유령 CASH 수요를 미달로 보고 rebalancing_needed 를 True 로 고착시켰다.
+- 원인: coin_live_engine.run() 이 combine_ensemble 결과를 normalize_cash_key 로 'Cash' 정규화한 뒤(1048), 그 아래 refill v2 가 combine_ensemble 로 combined 를 재계산한다(내부 규약대로 대문자 CASH 반환). 정규화가 재계산보다 앞서 있어 drift 발화일에만 EngineResult 의 문서화된 계약('Cash' 정규화됨)이 깨졌다. executor 는 대문자 CASH 를 코인 티커로 취급한다.
+- 결정: (1) 엔진은 refill 후처리가 모두 끝난 반환 경계에서 한 번 정규화하고 그 값으로 EngineResult 와 state['last_target_snapshot'] 을 동시에 만든다. combine_ensemble·_apply_refill_v2_to_state 의 내부 대문자 규약은 유지. (2) executor 는 상류 계약을 신뢰하지 않고 진입부에서 CASH/Cash/cash 를 'Cash' 로 병합(_norm_cash_map), apply_cash_buffer·apply_notional_cap·coin_needs_rebalance·execute_delta 도 각자 정규화. (3) 주문 후보 생성부에 하드 가드 — 표기 무관 현금 키는 주문 후보에서 제외하고 경고. (4) legacy 대문자 스냅샷은 로드 시점 정규화로 허위 target_changed 차단. (5) _targets_equal 을 모듈 함수 targets_equal 로 승격해 테스트 대상화.
+- 근거: 실자금 계층이 상류 표기 계약에 의존하면 계약 위반이 곧 주문 오류가 된다. 내부 함수까지 'Cash' 로 바꾸면 대문자를 전제한 내부 소비자를 깨뜨리므로 책임 위치는 경계다.
+- ai-debate(run-20260820T002120Z, codex+gemini+claude-fable, 1라운드 합의): 최초 "refill 뒤 정규화 한 줄" 안은 critic 2명 NO — 기존 state 비교와 실자금 경계의 재발 방지를 못 해서 기각. 위 복수 방어로 확대. 소수의견 생존: rebalancing_needed 해소는 키 수정만으로 보장되지 않으니 cap·delta·완료판정·state 지속성까지 확인할 것.
+- 손실 경로 판정: 오늘 결과가 맞은 건 우연. 유령 CASH 수요는 노셔널 cap gross 를 잡아먹어 실제 코인 주문을 축소하고, 완료 판정을 고착시키며, 장래 CASH 가 유효 심볼이 되면 직접 오매수가 된다.
+- 검증: tests/test_cash_key_normalization.py 26/26 PASS(네트워크·라이브 state 미사용) — 엔진 소스 순서 불변식(정규화가 refill 이후·반환 이전), 정규화 유틸, buffer/cap 불변, 완료판정 비고착, 사고 당일 목표로 execute_delta 실행 시 CASH 주문 0건·실제 코인만 매수. 실잔고 대입 확인: 현재 보유로 needs_rebalance=False → 다음 실행에서 플래그 자연 해소. 서버 dry-run rc=0(같은 봉이라 idempotent 스킵 — 전체 경로는 다음 09:05 감독 실행에서 확인).
+- 되돌릴 조건: 백업 executor_coin.py.bak_20260820_092925 / coin_live_engine.py.bak_20260820_092925 로 복원.
+- Prediction: 현금 키가 코인 티커로 취급되는 주문(어떤 표기든)이 6개월간 재발하지 않으면 성공. 재발하면 엔진 내부 규약 자체를 'Cash' 단일로 통일하는 안을 재검토.
+
 ## [2026-08-15] 결정: 선물 전량청산 차단 사고 수정 — liquidation_only 명시 + reduceOnly 불변식
 tags: 선물, V25, 사고, 가드, 청산, 카나리, ai-debate
 - 사고: 08-15 09:05 KST cron 에서 BTC 카나리 OFF 플립(ratio 0.9834) → 목표 CASH 100%, drift ht=0.69 발화. 그런데 "V25 ABORT: target_lev_map 비어있음" 가드가 매매를 차단해 전량청산이 실행되지 않음. 포지션 4종(equity $60.5k, 명목 $87.5k, 2x)이 전략 의도와 반대로 유지. 카나리 OFF 인 동안 매일 재발하는 구조였음. 현물은 정상 청산(UNI 매도 → 100% 현금).
