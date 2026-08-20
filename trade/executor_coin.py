@@ -881,6 +881,10 @@ def run_once(dry_run: bool = False) -> int:
         return 2
 
     for a in result.alerts:
+        log(f'  [engine] {a}')
+        # 카나리 플립 알림은 텔레그램 미전송 (2026-08-20 사용자 요청). 로그·엔진 상태는 그대로.
+        if '카나리' in a:
+            continue
         _tg(a)
 
     # Freshness 판정
