@@ -1087,6 +1087,14 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         except Exception as e:
             log.warning('refill v2 skipped due to error: %s', e, exc_info=True)
 
+    # 6c) 반환 경계 정규화 — refill v2 재계산(combine_ensemble)은 내부 규약대로 대문자 CASH 를
+    #     되돌려주므로, 모든 후처리가 끝난 여기서 한 번 더 'Cash' 로 통일한다. 이 값이
+    #     EngineResult.combined_target 과 state 스냅샷의 단일 출처다.
+    #     (2026-08-20: 정규화가 refill 앞에만 있어 drift 발화일에 executor 가 CASH 를
+    #      코인 티커로 오인해 헛주문을 냈다.)
+    combined = normalize_cash_key(combined)
+    state['last_target_snapshot'] = {**combined, '_ts': to_utc_iso(now_utc)}
+
     return EngineResult(
         combined_target=combined,
         member_targets=member_targets_norm,

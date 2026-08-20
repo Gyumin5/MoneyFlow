@@ -499,9 +499,43 @@ def liquidate_coins(coins: List[str], reason: str, api: UpbitAPI,
     return liquidated, failed
 
 
+# ═══ 현금 키 정규화 (실자금 계층 방어) ═══
+# 엔진 내부 규약은 'CASH', executor 규약은 'Cash'. 상류가 규약을 어겨도 실자금 계층에서
+# 현금이 코인 티커로 새지 않도록 여기서 다시 병합한다 (2026-08-20 헛주문 사고).
+def _is_cash_key(k) -> bool:
+    return str(k).lower() == 'cash'
+
+
+def _norm_cash_map(target: Dict[str, float]) -> Dict[str, float]:
+    """CASH/Cash/cash 를 'Cash' 하나로 병합. 메타키('_ts' 등)와 비수치 값은 제외."""
+    out: Dict[str, float] = {}
+    for k, v in (target or {}).items():
+        if str(k).startswith('_'):
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        kk = 'Cash' if _is_cash_key(k) else k
+        out[kk] = out.get(kk, 0.0) + fv
+    return out
+
+
+def targets_equal(a: Dict[str, float], b: Dict[str, float], tol: float = 0.005) -> bool:
+    """두 target 이 경제적으로 같은가. 현금 키 표기·메타키 차이는 무시한다."""
+    a, b = _norm_cash_map(a), _norm_cash_map(b)
+    if not a or not b:
+        return False
+    for k in set(a) | set(b):
+        if abs(a.get(k, 0.0) - b.get(k, 0.0)) > tol:
+            return False
+    return True
+
+
 # ═══ Cash Buffer / Notional Cap ═══
 def apply_cash_buffer(target: Dict[str, float], buffer_pct: float) -> Dict[str, float]:
     """최종 target × (1-buffer) 후 Cash += buffer."""
+    target = _norm_cash_map(target)
     if buffer_pct <= 0:
         return dict(target)
     out: Dict[str, float] = {}
@@ -516,6 +550,7 @@ def apply_cash_buffer(target: Dict[str, float], buffer_pct: float) -> Dict[str, 
 def apply_notional_cap(target: Dict[str, float], balance: Dict[str, float],
                        total_krw: float, cap_fraction: float) -> Tuple[Dict[str, float], float]:
     """이번 실행 Σ|delta| ≤ cap_fraction으로 제한. 잔여는 다음 실행에서 자연 재계산(carryover 저장 없음)."""
+    target = _norm_cash_map(target)
     if total_krw <= 0 or cap_fraction <= 0 or cap_fraction >= 1:
         return dict(target), 0.0
 
@@ -569,12 +604,18 @@ def execute_delta(target: Dict[str, float], api: UpbitAPI,
 
     current_value: Dict[str, float] = {k: v for k, v in balance.items() if k != 'KRW'}
 
+    # 주문 후보 하드 가드 — 어떤 표기의 현금 키도 티커가 되지 않는다.
+    _odd_cash = [k for k in (target or {}) if _is_cash_key(k) and k != 'Cash']
+    if _odd_cash:
+        log(f'  ⚠ 비정규 현금 키 {_odd_cash} 감지 → Cash 로 병합 (주문 후보 제외)')
+    target = _norm_cash_map(target)
+
     sells: List[Tuple[str, float, bool]] = []  # (coin, sell_krw, sell_all)
     buys: List[Tuple[str, float]] = []
 
     all_tickers = set(current_value.keys()) | set(target.keys())
     for ticker in all_tickers:
-        if ticker == 'Cash':
+        if _is_cash_key(ticker):
             continue
         tgt_w = target.get(ticker, 0.0)
         cur_v = current_value.get(ticker, 0.0)
@@ -757,10 +798,11 @@ def coin_needs_rebalance(target: Dict[str, float], balance: Dict[str, float],
     """
     if total <= 0:
         return False
+    target = _norm_cash_map(target)
     current_v = {k: v for k, v in balance.items() if k != 'KRW'}
     keys = set(current_v.keys()) | set(target.keys())
     for k in keys:
-        if k == 'Cash':
+        if _is_cash_key(k):
             continue
         tgt_v = target.get(k, 0.0) * total
         cur_v = current_v.get(k, 0.0)
@@ -812,9 +854,9 @@ def run_once(dry_run: bool = False) -> int:
     now = cle.utc_now()
 
     # 이전 사이클의 combined target 캡처 (engine 이 덮어쓰기 전)
+    # legacy 스냅샷이 대문자 CASH 로 저장돼 있을 수 있으므로 로드 시점에 정규화 (허위 target_changed 방지)
     _prev_snap = state.get('last_target_snapshot') or {}
-    prev_combined = {k: float(v) for k, v in _prev_snap.items()
-                     if k != '_ts' and isinstance(v, (int, float))}
+    prev_combined = _norm_cash_map(_prev_snap)
 
     log(f'═══ 코인 Executor 시작 (dry_run={dry_run}, now={cle.to_utc_iso(now)}) ═══')
 
@@ -880,6 +922,13 @@ def run_once(dry_run: bool = False) -> int:
         _flush_telegram(dry_run)
         return 2
 
+    # 엔진 결과 진입부 방어 — 상류 규약(‘Cash’)을 신뢰하지 않고 실자금 계층에서 한 번 더 병합
+    _eng_odd_cash = [k for k in (result.combined_target or {}) if _is_cash_key(k) and k != 'Cash']
+    if _eng_odd_cash:
+        log(f'  ⚠ 엔진 combined_target 현금 키 비정규 {_eng_odd_cash} → Cash 로 병합')
+    result.combined_target = _norm_cash_map(result.combined_target)
+    result.member_targets = {n: _norm_cash_map(t) for n, t in (result.member_targets or {}).items()}
+
     for a in result.alerts:
         log(f'  [engine] {a}')
         # 카나리 플립 알림은 텔레그램 미전송 (2026-08-20 사용자 요청). 로그·엔진 상태는 그대로.
@@ -939,16 +988,7 @@ def run_once(dry_run: bool = False) -> int:
     # - target이 prev 대비 변하면 rebalancing_needed=True (카나리/스냅 회전/유의 퇴출 등)
     # - 한 번 True면 실제 포지션이 목표에 근접할 때까지 다음 실행에서도 유지
     # - 가격 drift만으로는 여기 안 들어옴 (target 불변 + rebalancing_needed False)
-    def _targets_equal(a: Dict[str, float], b: Dict[str, float], tol: float = 0.005) -> bool:
-        if not a or not b:
-            return False
-        keys = set(a.keys()) | set(b.keys())
-        for k in keys:
-            if abs(a.get(k, 0.0) - b.get(k, 0.0)) > tol:
-                return False
-        return True
-
-    target_changed = not _targets_equal(result.combined_target, prev_combined)
+    target_changed = not targets_equal(result.combined_target, prev_combined)
     if target_changed:
         state['rebalancing_needed'] = True
         log(f'  🔔 target 변경 감지 → rebalancing_needed=True. prev={prev_combined}, new={result.combined_target}')
