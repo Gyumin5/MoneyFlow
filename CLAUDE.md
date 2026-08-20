@@ -399,9 +399,12 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - 중간로그·원시출력: `logs/` 또는 `state/<job-id>/` (둘 다 git 미추적)
 - 결론: `history.md` 한 항목 — 무엇을 재봤고 무엇이 판명됐나 + 보고서 경로. 본문을 옮기지 않는다.
   기각된 것은 "다시 하면 시간낭비"를 반드시 명시한다.
-- 현재 유효한 결정 compact view: `history/active.md` (120줄 이내, append-only 아님).
-  실험 시작 전 먼저 읽고, 거기 "재시도 금지"에 있으면 다시 돌리지 않는다.
+- 현재 유효한 결정 compact view: `history/active.md`. 이 파일은 손으로 고치지 않는다 —
+  `update_active_memory.sh` 가 매 Stop 에 history.md 로부터 재생성한다(git 미추적).
+  실험 시작 전 먼저 읽고, 거기 기각 목록에 있으면 다시 돌리지 않는다.
   의도적 재현이면 왜 다시 도는지를 남긴다.
+- 기각된 실험은 반드시 `- 실험/실패: <내용> 재시도 시 시간낭비` 형식 한 줄로 history.md 에 적는다.
+  생성기가 `^- 실험/실패` 로만 긁어가므로 형식이 다르면 다음 세션에 안 실린다.
 - 연구 스크립트는 `research/` 또는 `strategies/cap_defend/research/`. BT SSoT 엔진 오염 금지.
 
 ## 전략 연구 방법론

@@ -26,6 +26,7 @@ tags: 코인, 현물, 선물, 카나리, 스냅샷, 진입, 백테스트, 기각
 - 내용: 사용자 아이디어 "카나리 OFF→ON flip 시 전 스냅 일괄매수 대신 각 스냅이 자기 스태거 offset에서 개별 진입(분할진입)". BT 엔진(unified_backtest.py / backtest_futures_v25.py) canary_flipped 블록에 env-gated 토글(CANARY_FLIP_ENTRY=bulk|stagger, 기본 bulk=현행 무변화) 임시 추가해 비교 후 되돌림. 결과(5.4~5.6yr): 현물 bulk Cal 4.55/CAGR+81.1%/MDD-17.8% vs stagger 3.29/+66.0%/-20.1%. 선물 bulk 7.58/+290.7%/-38.3% vs stagger 4.01/+169.1%/-42.2%. 분할진입은 수익 급감 + MDD 도 악화(전 지표 열위).
 - 왜 위험까지 악화(직관 반대): 카나리 ON은 이미 BTC>SMA42 로 추세확인된 시점이라 진입타이밍이 리스크가 아님. 분할하면 (a) 추세확인 직후 급등을 현금으로 놓쳐 수익 급감, (b) 풀포지션 도달이 늦어져 다음 눌림에 더 가까워짐 → 상승 덜 먹고 하락은 그대로 → MDD 악화. 스태거(스냅분산)는 평상시 리밸 execution 크라우딩 회피용으로만 유효, 재진입엔 부적합.
 - 결정: 현행 일괄진입 유지. 기각. 엔진 토글은 되돌려 SSoT clean(bulk=현행 수치 정확히 재현 확인, 토글 inert).
+- 실험/실패: 카나리 재진입 분할진입(스냅별 stagger) — 현물 Cal 4.55→3.29, 선물 7.58→4.01, MDD 도 악화. 재시도 시 시간낭비.
 - 재현: BT 엔진 canary_flipped 블록에 CANARY_FLIP_ENTRY env 분기(flip+ON+stagger 시 스냅 강제갱신 skip, 앵커 스태거 블록이 처리) 재삽입 후 bulk vs stagger 비교. OFF flip 은 양쪽 즉시 전량 CASH 유지.
 
 ## [2026-07-21] 결정: 인증 env 단일출처화 + 미사용 TRADE_PIN 폐지 (watchdog drift 제거)
@@ -44,6 +45,8 @@ tags: 코인, 현물, vol_cap, 헬스, 아웃라이어, 과적합, 조사
 - 필터 유무(vol_filter_vs_none.py): 필터 있음 vs 무필터(vol=1.0) — 현물 Cal 4.55 vs 1.76·MDD -17.8% vs -32.4%, 선물 Cal 7.58 vs 3.10·MDD -38.3% vs -58.8%. 필터가 Cal 2.4~2.6배+수익↑+MDD 반감(위험만 아니라 수익도 개선하는 드문 필터). 과적합 판정: 아님 — 명확한 메커니즘(고변동 폭락코인 배제)+현물·선물 독립 0.05 수렴+양방향 인과 뚜렷+소평지 존재. 단 값 자체는 다소 민감(0.06서 SAND 편입)이라 소수점 신봉 금지, 원리는 견고.
 - 재현: `python3 strategies/cap_defend/research/{vol_cap_outlier,vol_cap_below_and_fut,vol_filter_vs_none}.py` (로컬 데이터).
 
+- 실험/실패: 헬스 vol_th 재스윕 — 0.06+ 완화는 고변동 알트(SAND) 편입으로 Cal 붕괴, 0.03~0.04 타이트화는 유니버스 축소로 CAGR 붕괴. 양방향 확인 끝. 재시도 시 시간낭비.
+
 ## [2026-07-17] 결정: 선물 드리프트 트리거를 BT 정의(진입마진+PnL)/equity 로 정합
 tags: 선물, V25, 드리프트, 트리거, BT정합, ai-debate, 실매매
 - 결정: auto_trade_binance.py 라이브 드리프트 cur_w_fut 를 real_weight(=현재 PIM=현재notional/lev, 미실현PnL 미반영, 마진기준)에서 (진입마진 qty*entry/lev + 미실현PnL)/pv_before(equity) 로 교체. 백테스트(backtest_futures_v25.py:559 margins[coin]=진입시 배분자본 고정, :671 val=margins+holdings*(cur-entry)=진입마진+PnL, w=val/equity)와 동일 정의로 통일. 대시보드(fc37210)·라이브 트리거·BT 셋 다 진입마진+PnL 기준.
@@ -51,7 +54,7 @@ tags: 선물, V25, 드리프트, 트리거, BT정합, ai-debate, 실매매
 - 함정 회피: PIM(현재마진)+PnL 은 PIM 이 이미 현재가로 floating 이라 PnL 을 1/lev 만큼 이중계상(대시보드 90e4b4c 에서 실제로 밟았다 fc37210 에서 정정). 반드시 "진입마진"(진입시 배분자본, 고정)+PnL 이어야 BT margins+PnL 과 일치.
 - 가드: 이상 데이터(lev/entry/qty<=0, non-finite) 시 _drift_data_ok=False 로 fail-closed(발화 차단, 거래 안 함) + 경고로그. pos_val max(0,·) 청산 하한 + isfinite 방어. DEBUG_LEVERAGE 섀도 로그(코인별 pos_val/pnl/비중)로 실측 검증.
 - 검증: 서버 dry-run 재현 TRX 34.7%/HYPE 27.7% ht=0.0568>0.03 fire=True data_ok=True (옛 마진기준 오늘 09:05 cron ht=0.0139 미발화). ※ dry-run 이 line2591-2592 무조건 save_state 로 라이브 state 에 rebalancing_needed=True 를 기록 → 즉시 원복(False), 실매매 없음. (교훈: 라이브 state 대상 dry-run 금지, 임시 state 복사본만.)
-- 실험/재시도 금지: dry-run 을 라이브 binance_state.json 대상으로 돌리지 말 것 — rebalancing_needed 오염되어 다음 cron 오발화 위험.
+- 실험/실패: dry-run 을 라이브 binance_state.json 대상으로 돌리지 말 것 (재시도 시 시간낭비) — rebalancing_needed 오염되어 다음 cron 오발화 위험.
 - Prediction: "선물 트리거 BT-라이브 발화 불일치(마진 vs 가치)"가 30일 동안 재발하지 않고, 섀도로그상 라이브 ht 가 BT 정의와 일관되면 성공. 되돌릴 조건: whipsaw(손실 포지션 되사기 → 추가하락 반복)로 실측 성과가 BT 대비 크게 악화되면 재검토.
 - 커밋: d3ff7de. 서버 배포(백업 bak_20260717_164350, md5 일치, compile OK).
 
@@ -59,7 +62,7 @@ tags: 선물, V25, 드리프트, 트리거, BT정합, ai-debate, 실매매
 tags: 코인, 현물, V24, 재진입, 빈스냅, 백테스트, 과적합
 - 결정: "카나리 ON + 전 코인 헬스 OFF → 빈 스냅 트랜치가 자기 앵커까지 현금 방치" 문제에 대해 동적 재진입 변형을 도입하지 않고 F0(현행 anchor-only) 유지. 22변형 전수 백테스트(2026-07-12) + P2/H3 채택 게이트(2026-07-15) 모두 F0 우위 재확인.
 - 근거: (1) 문제 자체가 희소·약세장 집중(5.4yr 6.8%, 2022년 51%, 2023/2026 0) — 현금유지가 헬스필터로 작동. (2) 22변형 비용반영 rank-sum 에서 F0 를 안정적으로 이기는 변형 없음. (3) 채택게이트: P2(비례사이징)는 F0와 ±0.02 무승부·턴오버↑로 이득 없음. H3(vol_cap 10%)는 레짐 의존(2022·2023 Cal 열위) + 전구간 MDD 악화 + vol_cap plateau 비단조(7% 골짜기 Cal 3.10/MDD-0.24) = 과적합 신호로 기각.
-- 실험/재시도 금지: 재진입 변형을 더 발굴·스윕하지 말 것 — 설계공간 이미 22개로 소진, 추가는 다중검정 과적합. 방법론상 탐색 종료.
+- 실험/실패: 재진입 변형을 더 발굴·스윕하지 말 것 (재시도 시 시간낭비) — 설계공간 이미 22개로 소진, 추가는 다중검정 과적합. 방법론상 탐색 종료.
 - 되돌릴 조건: 빈 스냅 상태가 약세장 밖에서도 빈발하거나(레짐 변화), 라이브에서 기회손실이 실측으로 크게 관측되면 재검토.
 - 산출물: research/reentry_variants_registry.md, reentry_results.json, reentry_gate_p2h3.json. 실거래 로직 무수정.
 
@@ -117,6 +120,8 @@ tags: 선물, 유지증거금, maint_rate, BT정밀도, ai-debate
 - 스크립트: research/bt_v25_maintrate_sensitivity.py.
 - 되돌릴 조건: 레버리지 상한 상향 또는 마진모드 변경 시 동일 스크립트로 재검증.
 
+- 실험/실패: 선물 유지증거금 tier-aware 구현 — 동적 L4 + CROSS 에서 0.4~0.65% 차이는 청산위험 dead zone. 레버리지 상한 상향이나 ISOLATED 복귀 때만 재검증. 재시도 시 시간낭비.
+
 ## [2026-07-03] 보안: TRADE_PIN 노출 대응(히스토리 정리+엔드포인트 제거+rotate) + 문서 stale 전면 갱신
 tags: 보안, secrets-scan, git-history, trade_api, 문서정합, 자산배분
 - 결정: (1) git 히스토리 전체에서 TRADE_PIN 값 filter-repo 치환 제거 후 force-push. (2) 강제거래 엔드포인트 /api/trade/upbit + 헬퍼 run_trade_async 코드 삭제(웹 노출 폐기), recommend_personal.py orphan forceTrade() JS 정리, 미배포 사본 trade/api_server.py 동일. (3) TRADE_PIN 40자리 랜덤 rotate(crontab+실행프로세스). (4) 문서 stale 전면 갱신: 버전표기 주식V25/코인현물V24/선물V25, README·SERVER_OPS 재작성, CLAUDE.md 카나리 SMA300·2%→SMA200·0.5% dead-zone 정정, 자산배분 표기 60/25/15 통일(라이브 코드 recommend.py 정본).
@@ -143,6 +148,8 @@ tags: 자산배분, 트리거, T3O, T3U, robustness, ai-debate, 유니버스
 - 핵심교훈: T3O 는 T3U 의 대칭(과대+카나리OFF) 아님. 비대 sleeve=랠리sleeve→카나리 거의 ON → OFF게이트 too late(+0.15), 무게이트 차익실현 트림이 정합. 카나리 ON 게이트=none 과 동일.
 - 되돌릴 조건(사용자 결정): (a) BNB 를 아웃라이어로 유니버스 제외 + (b) 목적함수를 위험조정(Cal/Sharpe/MDD) 우선으로 명시 + 연 ~6pp CAGR 보험료 수용 시, 해당 유니버스서 T3O(35% 근방) 재평가. 그 전엔 base 유지.
 - 스크립트: research/bt_v25_t1_t3u_t3o.py, bt_v25_t3o_robust.py, bt_v25_excl_compare.py, bt_v25_t3o_thresh_full.py. 정리 research/T3O_TRIGGER_FINDINGS.md.
+
+- 실험/실패: 자산간 T3O(과대-트림) 트리거 — 라이브 full 유니버스에서 CAGR 희생이 채택바 미달, 임계 상향해도 개선 평탄. 2차 토론으로 기각 확정. 재시도 시 시간낭비.
 
 ## [2026-06-03] KIS 잔고 외화RP 누락 → CTRP6548R 채택 + 자동RP 해지
 tags: KIS, 잔고, RP, 표시정합, executor
