@@ -392,6 +392,18 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   - 모니터 응급 fallback
 - 서로 다른 소스를 혼용하면 반드시 문서에 남긴다.
 
+## 실험 기록 위치 (2026-08-20)
+
+- 계획·현재 상태: `progress.md`
+- 보고서: `reports/YYYY-MM-DD-주제.html` 한 파일 (설명 문서는 HTML 기본)
+- 중간로그·원시출력: `logs/` 또는 `state/<job-id>/` (둘 다 git 미추적)
+- 결론: `history.md` 한 항목 — 무엇을 재봤고 무엇이 판명됐나 + 보고서 경로. 본문을 옮기지 않는다.
+  기각된 것은 "다시 하면 시간낭비"를 반드시 명시한다.
+- 현재 유효한 결정 compact view: `history/active.md` (120줄 이내, append-only 아님).
+  실험 시작 전 먼저 읽고, 거기 "재시도 금지"에 있으면 다시 돌리지 않는다.
+  의도적 재현이면 왜 다시 도는지를 남긴다.
+- 연구 스크립트는 `research/` 또는 `strategies/cap_defend/research/`. BT SSoT 엔진 오염 금지.
+
 ## 전략 연구 방법론
 
 ### 기본 원칙

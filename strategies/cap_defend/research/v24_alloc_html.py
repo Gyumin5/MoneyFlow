@@ -8,7 +8,7 @@ V23 sleeve 고정
 자산배분 그리드: 2.5% step, 주식 ≥ 현물 ≥ 선물 (3개 weight 합=100)
 베이스라인: 60/40/0
 
-산출: v23_alloc_report.html (정렬 가능 테이블, baseline 강조, plateau 시각화)
+산출: reports/v23_alloc_report.html (정렬 가능 테이블, baseline 강조, plateau 시각화)
 """
 import os, sys, time, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -128,7 +128,7 @@ df = df.sort_values('cal', ascending=False).reset_index(drop=True)
 
 # ─── HTML 출력 ───
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         '..', '..', '..', 'v23_alloc_report.html')
+                         '..', '..', '..', 'reports', 'v23_alloc_report.html')
 HTML_PATH = os.path.normpath(HTML_PATH)
 
 

@@ -66,7 +66,7 @@ python3 strategies/cap_defend/research/run_subperiod_ranksum.py  # window rank-s
 python3 strategies/cap_defend/research/run_block_bootstrap.py    # block bootstrap stress
 ```
 
-과거 V21 채택 근거·연구 기록은 [`V21_HISTORY.md`](./V21_HISTORY.md) 참조 (역사적 문서).
+과거 V21 채택 근거·연구 기록은 [`V21_HISTORY.md`](./history/V21_HISTORY.md) 참조 (역사적 문서).
 
 ---
 
@@ -257,4 +257,4 @@ MoneyFlow/
 - [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](./strategies/cap_defend/STRATEGY_EVOLUTION.md) — V12~V25 진화 요약
 - [`strategies/cap_defend/repo_backtest_guide.md`](./strategies/cap_defend/repo_backtest_guide.md) — 통합 백테스트 재현 가이드
 - [`history.md`](./history.md) — 결정 로그 (append-only ADR)
-- [`V21_HISTORY.md`](./V21_HISTORY.md) / [`V21_OPERATION_MANUAL.md`](./V21_OPERATION_MANUAL.md) — 역사적 문서 (V21 시절)
+- [`V21_HISTORY.md`](./history/V21_HISTORY.md) / [`V21_OPERATION_MANUAL.md`](./V21_OPERATION_MANUAL.md) — 역사적 문서 (V21 시절)
