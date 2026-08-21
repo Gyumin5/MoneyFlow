@@ -1131,10 +1131,17 @@ def get_current_positions(client: Client):
                     else:
                         real_notional = notional
                         lev = 1.0
+                    # 상시 무결성 검사(_v25_standing_check)가 마진모드 변경을 보려면 필요하다.
+                    # futures_position_information 은 marginType(str), futures_account 는 isolated(bool).
+                    if 'isolated' in p:
+                        _iso = bool(p.get('isolated'))
+                    else:
+                        _iso = (p.get('marginType') or '').lower() == 'isolated'
                     positions[coin] = {
                         'qty': amt,
                         'qty_raw': str(p.get('positionAmt') or ''),
                         'symbol': sym,
+                        'isolated': _iso,
                         'entry_price': _safe_float(p.get('entryPrice')),
                         'mark_price': mark,
                         'pnl': _safe_float(p.get('unRealizedProfit')),
@@ -1612,13 +1619,31 @@ def _v25_write_health(data: dict):
 
 def _v25_record_cron_result(success: bool, abort_reason: str = '',
                             intent: Optional[dict] = None,
-                            actual: Optional[dict] = None) -> int:
+                            actual: Optional[dict] = None,
+                            touch_streak: bool = True,
+                            baseline: Optional[dict] = None) -> int:
     """cycle 6: cron 완료 시 헬스 상태 갱신.
     Returns: abort_streak (성공시 0).
+
+    touch_streak=False (무거래일): streak 을 올리지도 리셋하지도 않는다 — streak 은 매매 시도의
+    연속 실패를 세는 값이다. 무거래일이 streak 을 리셋하면 실제 체결 실패가 묻히고,
+    올리면 2026-08-21 처럼 정상 보유일에 lock 까지 간다.
     """
     from datetime import datetime
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     h = _v25_read_health()
+    if baseline is not None:
+        h['post_trade_baseline'] = baseline
+    if not touch_streak:
+        h['last_run_at'] = now
+        h['last_run_traded'] = False
+        if not success:
+            h['last_abort_at'] = now
+            h['last_abort_reason'] = abort_reason[:500]
+        _v25_write_health(h)
+        return int(h.get('abort_streak', 0))
+    h['last_run_at'] = now
+    h['last_run_traded'] = True
     if success:
         h['last_success_at'] = now
         h['abort_streak'] = 0
@@ -1656,8 +1681,56 @@ def _v25_create_lock(reason: str):
         log.error(f"_v25_create_lock 실패: {e}")
 
 
-def _v25_reconcile(intent: dict, actual: dict) -> List[str]:
-    """주문 후 reconciliation — 의도 vs 실체결 차이 반환."""
+STANDING_QTY_TOL = 0.005  # 0.5% — 부분청산/ADL 은 이보다 크게 어긋난다
+
+
+def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], List[str]]:
+    """무거래일에도 도는 read-only 무결성 검사. (critical, info) 반환.
+
+    가격·PnL·명목은 보지 않는다 — 무거래일에 정상적으로 변하는 값이라 오탐이 된다
+    (2026-08-21 사고). 기준(마지막 성공 체결 스냅샷) 대비 수량·방향·레버리지·마진모드만 본다.
+    """
+    crit: List[str] = []
+    info: List[str] = []
+    base_pos = (baseline or {}).get('positions') or {}
+    if not base_pos:
+        return crit, ['standing: 기준 스냅샷 없음 → 검사 생략']
+    for coin, b in base_pos.items():
+        cur = positions.get(coin)
+        try:
+            bq = float(b.get('qty') or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if bq == 0:
+            continue
+        if cur is None:
+            crit.append(f"{coin} 포지션 소실 (기준 qty={bq}) — 강제청산/ADL/수동체결 의심")
+            continue
+        cq = float(cur.get('qty') or 0.0)
+        if (cq > 0) != (bq > 0):
+            crit.append(f"{coin} 방향 반전 (기준 {bq} → 현재 {cq})")
+        elif abs(cq - bq) > abs(bq) * STANDING_QTY_TOL:
+            crit.append(f"{coin} 수량 변동 {bq} → {cq} (허용 {STANDING_QTY_TOL:.1%})")
+        if cur.get('isolated'):
+            crit.append(f"{coin} 마진모드 ISOLATED — CROSS 기대")
+        try:
+            bl, cl = float(b.get('leverage') or 0), float(cur.get('leverage') or 0)
+        except (TypeError, ValueError):
+            bl = cl = 0
+        if bl and cl and abs(bl - cl) > 0.01:
+            crit.append(f"{coin} 레버리지 {bl:g} → {cl:g} 외부 변경")
+    for coin in positions:
+        if coin not in base_pos:
+            info.append(f"{coin} 기준에 없는 포지션 (먼지/수동진입?)")
+    return crit, info
+
+
+def _v25_exec_reconcile(intent: dict, actual: dict) -> List[str]:
+    """주문 후 reconciliation — 의도 vs 실체결 차이 반환.
+
+    매매를 시도한 실행에서만 호출한다. 무거래일에 부르면 "오늘 PV 기준 이론 명목" 과
+    "어제 체결분의 현재 명목" 을 비교하게 되어 가격이 움직인 만큼 항상 어긋난다.
+    """
     diffs = []
     intent_pos = intent.get('positions', {})
     actual_pos = actual.get('positions', {})
@@ -2456,6 +2529,10 @@ def main():
             lev_abort, target_lev_map, combined)
         rebalance_needed = state.get('rebalancing_needed', False)
         v25_abort = False  # 버그 수정 2026-06-06: 비매매 경로에서도 항상 정의 (요약부 v25_success 참조)
+        # 2026-08-21: 매매 경로를 탔는지 여기서 명시한다. 체결 검사(exec reconcile)와
+        # streak 증감은 이 플래그가 True 인 실행에만 적용한다.
+        _v25_traded_path = False
+        pos_after_ok = pos_ok  # 스킵 경로는 before 스냅샷을 그대로 쓴다
         if not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
             positions_after, pv_after = positions_before, pv_before
@@ -2465,6 +2542,7 @@ def main():
             error_alerts.append(_fut_block_reason)
             positions_after, pv_after = positions_before, pv_before
         elif args.trade:
+            _v25_traded_path = True
             # V25 정책: all-or-nothing — 한 코인이라도 verify 실패 시 매매 전체 ABORT
             # 부분 universe 매매 = BT 가정 (3 코인 균등) 위반. 다음 cron 에서 재시도.
             #
@@ -2726,7 +2804,9 @@ def main():
                 } for pos in positions_after.values()},
                 'pv': pv_after,
             }
-            recon_diffs = _v25_reconcile(intent_snapshot, actual_snapshot) if v25_success else []
+            # (a) 체결 검사 — 매매를 시도한 실행에서만. 무거래일엔 비교 대상이 없다.
+            recon_diffs = (_v25_exec_reconcile(intent_snapshot, actual_snapshot)
+                           if (v25_success and _v25_traded_path) else [])
             if recon_diffs:
                 recon_msg = "⚠ V25 reconciliation 차이:\n  - " + "\n  - ".join(recon_diffs[:5])
                 log.warning(recon_msg)
@@ -2734,13 +2814,53 @@ def main():
                 _v25_persist_abort_log(recon_msg)
                 v25_success = False
 
+            # (b) 상시 무결성 검사 — 무거래일에도 돈다. 수량·방향·레버리지·마진모드만 본다.
+            _standing_crit: List[str] = []
+            if pos_after_ok:
+                _base = _v25_read_health().get('post_trade_baseline') or {}
+                _standing_crit, _standing_info = _v25_standing_check(positions_after, _base)
+                for _m in _standing_info:
+                    log.info(f"  standing: {_m}")
+            else:
+                log.warning("  standing: 포지션 조회 실패 → 무결성 검사 생략 (소실로 단정하지 않음)")
+            if _standing_crit:
+                crit_msg = ("🔒 V25 무결성 위반 — 매매 차단\n  - "
+                            + "\n  - ".join(_standing_crit[:5]))
+                log.error(crit_msg)
+                send_telegram(crit_msg)
+                _v25_persist_abort_log(crit_msg)
+                _v25_create_lock("standing integrity: " + "; ".join(_standing_crit[:3]))
+                v25_success = False
+
+            _abort_reason = "; ".join(error_alerts[:3]) if error_alerts else ''
+            if not _abort_reason:
+                if _standing_crit:
+                    _abort_reason = 'standing integrity: ' + "; ".join(_standing_crit[:3])
+                elif recon_diffs:
+                    _abort_reason = 'reconcile diff'
+            # 성공한 체결 실행에서만 기준 스냅샷을 갱신한다(부분체결·스킵일엔 유지).
+            _baseline = None
+            if v25_success and _v25_traded_path and pos_after_ok:
+                _baseline = {
+                    'ts': datetime.now(timezone.utc).isoformat(),
+                    'positions': {coin: {'qty': pos.get('qty'),
+                                         'leverage': pos.get('leverage'),
+                                         'isolated': bool(pos.get('isolated'))}
+                                  for coin, pos in positions_after.items()},
+                }
+            # streak 은 (i) 매매를 시도한 실행, (ii) 실제 실패가 있는 실행에서만 움직인다.
+            # 조용한 무거래일은 증가도 리셋도 하지 않는다 — 리셋을 허용하면 무거래일이 끼는 것만으로
+            # 진짜 체결 문제의 연속성이 지워진다(2026-08-21).
+            _touch_streak = bool(_v25_traded_path or error_alerts or v25_abort or _standing_crit)
             streak = _v25_record_cron_result(
                 success=v25_success,
-                abort_reason="; ".join(error_alerts[:3]) if error_alerts else ('reconcile diff' if recon_diffs else ''),
+                abort_reason=_abort_reason,
                 intent=intent_snapshot,
                 actual=actual_snapshot,
+                touch_streak=_touch_streak,
+                baseline=_baseline,
             )
-            if not v25_success:
+            if not v25_success and _touch_streak:
                 if streak == 2:
                     send_telegram(f"⚠ V25 ABORT 2일 연속 — 다음 ABORT 시 자동 lock")
                 elif streak >= V25_ABORT_STREAK_LOCK_THRESHOLD:

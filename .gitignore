@@ -76,3 +76,4 @@ proposed-progress.md
 
 # active.md 는 update_active_memory.sh 가 매 Stop 재생성 — 손으로 고치지 않는다
 history/active.md
+history/.active.md.lock
