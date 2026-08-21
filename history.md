@@ -1,3 +1,14 @@
+## [2026-08-21] 결정: 선물 V25 체결 검사와 상시 무결성 검사 분리 (무거래일 오탐 → 자동 lock 경로 차단)
+tags: 선물, V25, reconciliation, 오탐, 가드, ai-debate
+- 사고: 08-21 09:05 KST 선물 크론이 "매매 스킵: rebalancing_needed=false" 직후 `⚠ V25 reconciliation 차이: SOLUSDT notional intent=$86434.31 actual=$81138.75` 를 냈다. 매매를 안 한 날인데 체결 검사가 돌았다. 돈 손실 없음. 다만 v25_success=False → abort_streak 0→1, 3연속이면 ~/.binance_v25_lock 생성으로 선물 매매 전체가 멈춘다.
+- 원인: intent 는 매 실행 pv_before × 목표비중 × 목표L 로 재계산되는 이론 명목이고 actual 은 전일 체결분의 현재 명목이다. 무거래일에 둘을 비교하면 하루 시세 변동만큼 항상 어긋난다(SOL 6.1%). 그 차이는 drift 문턱 0.03(ht=0.0177)이 이미 "건드리지 않는다"고 판정한 값 — 같은 상태를 한 검사는 정상, 다른 검사는 실패로 본 모순.
+- 결정: 검사를 둘로 나눈다. (1) `_v25_exec_reconcile` (구 `_v25_reconcile`) 는 거래소 상태를 실제로 바꾼 실행에서만 호출한다(`_v25_traded_path`). 허용오차 max($50, 5%) 는 그대로. (2) `_v25_standing_check` 는 무거래일에도 매일 도는 read-only 검사로, 마지막 성공 체결 스냅샷(`post_trade_baseline`) 대비 수량·방향·레버리지·마진모드만 본다 — 가격·markPrice·PnL·명목은 보지 않는다. 위반은 critical 로 즉시 lock. (3) 포지션 조회 실패는 소실로 단정하지 않고 검사 생략. (4) streak 은 매매 시도 실행 또는 실제 실패가 있는 실행에서만 움직인다 — 조용한 무거래일은 증가도 리셋도 안 한다. (5) 기준 스냅샷은 성공한 체결 실행에서만 갱신한다.
+- 근거: 검사 대상이 "체결이 의도대로 됐나" 와 "보유가 밖에서 훼손됐나" 로 다른데 한 함수가 겸했다. 허용오차를 넓히는 대응은 진짜 부분체결까지 함께 눈감게 되므로 기각. 무거래일 리셋을 허용하면 무거래일 하루 끼는 것만으로 진짜 체결 실패의 연속성이 지워진다.
+- 검증: tests/test_fut_reconcile_split.py 26/26 PASS(네트워크·라이브 state 미사용). 08-21 실제 값으로 재현 — 같은 입력에서 exec reconcile 은 여전히 diff 로 보지만 호출되지 않고, 상시 검사는 통과, streak 불변. 진짜 사고(포지션 소실·부분청산·방향반전·ISOLATED 전환·외부 레버리지 변경)는 전부 critical 로 잡히고, 명목 -50%·큰 평가손에는 발화하지 않음. 서버 배포 md5 일치 + 컴파일 확인.
+- 조치: 오탐으로 오른 abort_streak 1→0 복원, 사유를 `.binance_v25_health.json._note` 에 감사 기록. 기준 스냅샷은 08-20 09:05 체결 로그로 시드(BNB 94.38 L3 / SOL 926.03 L4, CROSS).
+- 되돌릴 조건: 백업 auto_trade_binance.py.bak_20260821_093331 / .binance_v25_health.json.bak_20260821_093331 로 복원.
+- Prediction: 매매하지 않은 날의 reconciliation 경고가 6개월간 0건이고 그 사이 실제 포지션 훼손을 상시 검사가 놓치지 않으면 성공. 무거래일 오탐이 재발하면 검사 분리가 아니라 intent 스냅샷 자체를 체결 시점 고정값으로 바꾸는 안을 재검토.
+
 ## [2026-08-20] 결정: 현금 키 정규화를 엔진 반환 경계로 이동 + executor 실자금 계층 이중 방어
 tags: 코인, 현물, V24, 사고, 정규화, refill, ai-debate
 - 사고: 08-20 09:06 KST 카나리 ON 재진입에서 executor 가 "매수 오류 CASH: Code not found" 헛주문 1건을 냈다. 업비트가 KRW-CASH 를 거부해 현금이 그대로 남아 결과 비중(LINK 32.9 / SOL 32.9 / 현금 34.1)은 의도와 일치했지만, 완료 판정이 유령 CASH 수요를 미달로 보고 rebalancing_needed 를 True 로 고착시켰다.
