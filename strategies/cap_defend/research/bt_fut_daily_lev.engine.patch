@@ -1,0 +1,91 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 2c6e84a..3f3b627 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -281,6 +281,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+     cat_stop_count = 0
+     cushion_force_count = 0
+     gross_cap_count = 0
++    relev_count = 0  # 변형 실험(DAILY_LEV): L 재조정 체결 건수
++    _relev_diag = {'opp': 0, 'bars': 0}  # 진단: 기회(코인-일) / 무리밸 보유 봉
+ 
+     # leverage 처리: scalar / pd.Series (date->L, 공통) / dict {coin: pd.Series} (per-coin)
+     if isinstance(leverage, dict) and leverage and hasattr(next(iter(leverage.values())), 'asof'):
+@@ -486,6 +488,49 @@ def run(bars, funding, interval='D', leverage=3.0,
+             return None
+         return liq_price
+ 
++    # ── 변형 실험 (2026-08-21, env DAILY_LEV=on 일 때만. 결론 후 제거) ──
++    # 현행(off): 진입 시점 L 을 유지하고 리밸런싱 하는 날에만 새 L 로 명목을 맞춘다(라이브와 동일).
++    # 변형(on): 목표 L 이 바뀐 날 바로 명목을 margin × L_today 로 맞춘다. 증거금은 그대로 두고
++    #           노출만 바꾸며(레버리지 조정의 정의) 델타 명목에 거래비용·슬리피지를 물린다.
++    #           "공짜로 배수만 갈아끼우기" 는 실제로 불가능하므로 반드시 체결로 모델링한다.
++    _DAILY_LEV = os.environ.get('DAILY_LEV', 'off') == 'on'
++
++    def _relever(date):
++        """보유 포지션 명목을 오늘 목표 L 로 맞춘다. 조정한 포지션 수 반환."""
++        nonlocal capital, trade_count, relev_count
++        n_adj = 0
++        for coin in list(holdings.keys()):
++            _relev_diag['opp'] += 1
++            new_L = _cur_lev(date, coin)
++            old_L = entry_levs.get(coin, new_L)
++            if abs(new_L - old_L) < 1e-9:
++                continue
++            cur = _get_fill_price(coin, date)
++            if cur <= 0:
++                continue
++            slip = SLIPPAGE_MAP.get(coin, 0.0005)
++            tgt_qty = margins[coin] * new_L / cur
++            delta = tgt_qty - holdings[coin]
++            if delta > 0:
++                entry_p = cur * (1 + slip)
++                tx = delta * cur * tx_cost
++                total = holdings[coin] + delta
++                entry_prices[coin] = (entry_prices[coin] * holdings[coin] + entry_p * delta) / total
++                holdings[coin] = total
++                capital -= tx
++            else:
++                sell_qty = -delta
++                exit_p = cur * (1 - slip)
++                pnl = sell_qty * (exit_p - entry_prices[coin])
++                tx = sell_qty * cur * tx_cost
++                capital += pnl - tx
++                holdings[coin] -= sell_qty
++            entry_levs[coin] = new_L
++            trade_count += 1
++            relev_count += 1
++            n_adj += 1
++        return n_adj
++
+     def _execute_rebalance(target_weights, date, pv_date=None):
+         """Delta 리밸런싱 with 선물 비용. pv_date=None 이면 date 사용 (legacy)."""
+         nonlocal capital, trade_count
+@@ -1054,9 +1099,15 @@ def run(bars, funding, interval='D', leverage=3.0,
+             })
+ 
+         # ── 리밸런싱 실행 ──
+-        if need_rebal:
+-            _execute_rebalance(combined, date, pv_date=prev_date)
+-            rebal_count += 1
++        # 변형 실험(DAILY_LEV=on): 리밸을 안 하는 날에도 L 이 바뀌면 명목을 맞춘다.
++        # 리밸하는 날은 _execute_rebalance 가 이미 오늘 L 로 목표를 잡으므로 중복 적용하지 않는다.
++        if _DAILY_LEV and not need_rebal and holdings:
++            _relev_diag['bars'] += 1
++        _relev_now = _relever(date) if (_DAILY_LEV and not need_rebal) else 0
++        if need_rebal or _relev_now:
++            if need_rebal:
++                _execute_rebalance(combined, date, pv_date=prev_date)
++                rebal_count += 1
+             # 신규/추가된 포지션 same-bar liq 검사 (entry 시 같은 봉 Low 이미 알려진 경우 fairness)
+             for coin in list(holdings.keys()):
+                 ci2 = btc_idx_map.get(date, -1) if coin == 'BTC' else (bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1)
+@@ -1098,6 +1149,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+         'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,
+         'Stops': stop_count, 'Stop': stop_count,
+         'Cat': cat_stop_count, 'Cushion': cushion_force_count, 'GrossCap': gross_cap_count,
++        'Relev': relev_count,  # 변형 실험(DAILY_LEV) L 재조정 체결 건수
++        'RelevOpp': _relev_diag['opp'], 'RelevBars': _relev_diag['bars'],
+     }
+     result['_equity'] = eq  # equity curve (pd.Series)
+     result['_liq_log'] = liq_log
