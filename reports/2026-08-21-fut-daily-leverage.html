@@ -152,6 +152,44 @@ footer{margin-top:3rem; padding-top:1rem; border-top:1px solid var(--line); colo
 sleeve 단독은 현행이 이기고 합성은 변형이 이긴다. 이 모순이 이 실험의 핵심이라서 따로 파봤다.
 </p>
 
+<h3>Cal 차이가 어디서 왔나 — 낙폭 한 번의 바닥 깊이</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>분해</th><th>Cal</th><th>기여</th></tr></thead>
+<tbody>
+<tr><td>현행</td><td>4.889</td><td>-</td></tr>
+<tr><td>CAGR 만 변형 값으로</td><td>4.916</td><td>+0.027</td></tr>
+<tr><td>MDD 만 변형 값으로</td><td>5.141</td><td class="lose-tag">+0.252</td></tr>
+<tr><td>변형</td><td>5.169</td><td>+0.281</td></tr>
+</tbody>
+</table>
+</div>
+<p>
+Cal 격차의 90% 가 MDD 에서 나온다. 그런데 두 곡선의 MDD 는 같은 사건이다 —
+<span class="mono">2024-12-16 → 2025-03-10</span> 동일 구간이고, 바닥이 -12.58% 대 -11.97% 로
+0.61%p 얕을 뿐이다. Calmar 는 단일 극값 하나로 나누는 지표라 그 0.61%p 가 곧바로 순위를 만든다.
+</p>
+<p>
+두 합성 곡선은 사실상 같은 시계열이다 — 일수익률 상관 <span class="mono">0.99944</span>,
+추적오차 연 <span class="mono">0.78%</span>, 연평균 수익률 차이 <span class="mono">+0.34%p</span>.
+</p>
+
+<h3>지표를 바꾸면 우위가 사라진다</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>윈도우 순위 기준</th><th>우세</th><th>avg_rank</th><th>승 (n=54)</th></tr></thead>
+<tbody>
+<tr><td>Calmar</td><td>매일 재조정</td><td>1.259 vs 1.741</td><td>40 vs 14</td></tr>
+<tr><td>Sharpe</td><td class="win-tag">진입 고정 (현행)</td><td>1.333 vs 1.667</td><td>36 vs 18</td></tr>
+<tr><td>CAGR</td><td>사실상 동률</td><td>1.481 vs 1.519</td><td>28 vs 26</td></tr>
+</tbody>
+</table>
+</div>
+<p>
+합성에서의 우위는 Calmar 로 매길 때만 나타난다. Sharpe 로 매기면 현행이 이기고 CAGR 로 매기면 동률이다.
+그 한 번의 낙폭에서 바닥이 조금 얕았다는 것 말고 남는 게 없다.
+</p>
+
 <h3>우위의 취약성</h3>
 <ul>
 <li>5.5년 누적 수익률 차이는 <span class="mono">+1.18%p</span> 가 전부다. 차이가 발생한 날은 1,370일 중 242일.</li>
