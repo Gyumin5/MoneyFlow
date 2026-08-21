@@ -1,0 +1,243 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>앵커 갱신 시점 — 시간조건 vs 사건구동 (선물·현물)</title>
+<style>
+  :root{
+    --bg:#fbfaf8; --fg:#1d1c1a; --dim:#5d5b57; --line:#e2ded6;
+    --card:#ffffff; --accent:#8a5a2b; --good:#1f6b46; --bad:#9b2c2c;
+    --chip:#f1ece3;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14140f; --fg:#eae7e0; --dim:#a09c93; --line:#2f2e28;
+      --card:#1c1c16; --accent:#d8a26a; --good:#6fca9a; --bad:#e08585;
+      --chip:#26251d;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14140f; --fg:#eae7e0; --dim:#a09c93; --line:#2f2e28;
+    --card:#1c1c16; --accent:#d8a26a; --good:#6fca9a; --bad:#e08585;
+    --chip:#26251d;
+  }
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:'Noto Sans CJK KR',system-ui,sans-serif;
+    font-size:17px; line-height:1.7; margin:0; padding:20px 16px 64px;
+  }
+  main{max-width:860px; margin:0 auto;}
+  h1{font-size:1.5rem; line-height:1.35; margin:8px 0 4px;}
+  h2{font-size:1.18rem; margin:38px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--line);}
+  h3{font-size:1.02rem; margin:24px 0 6px; color:var(--accent);}
+  p{margin:10px 0;}
+  .meta{color:var(--dim); font-size:0.9rem; margin-bottom:24px;}
+  .verdict{
+    background:var(--card); border:1px solid var(--line); border-left:4px solid var(--accent);
+    border-radius:8px; padding:14px 16px; margin:18px 0;
+  }
+  .verdict strong{font-weight:600;}
+  .chip{
+    display:inline-block; background:var(--chip); border-radius:999px;
+    padding:2px 10px; font-size:0.82rem; color:var(--dim); margin:0 6px 6px 0;
+  }
+  .scroll{overflow-x:auto; -webkit-overflow-scrolling:touch; margin:12px 0;}
+  table{border-collapse:collapse; font-size:0.9rem; min-width:100%;}
+  th,td{border-bottom:1px solid var(--line); padding:8px 10px; text-align:right; white-space:nowrap;}
+  th:first-child,td:first-child{text-align:left;}
+  thead th{color:var(--dim); font-weight:600; font-size:0.84rem;}
+  tr.win td{background:var(--chip); font-weight:600;}
+  code{font-family:'Noto Sans Mono CJK KR',monospace; font-size:0.88em; background:var(--chip); padding:1px 5px; border-radius:4px;}
+  .good{color:var(--good);} .bad{color:var(--bad);}
+  ul{padding-left:1.2em;} li{margin:6px 0;}
+  .note{color:var(--dim); font-size:0.9rem;}
+</style>
+<main>
+
+<h1>앵커 갱신 시점 — 시간조건(현행) vs 사건구동(드리프트 발화)</h1>
+<div class="meta">2026-08-21 KST · Cap Defend · 선물 V25 + 현물 V24 두 슬리브 · 기간 2020-11-13 ~ 2026-05-14 (2009봉)</div>
+
+<div class="verdict">
+<strong>결론: 기각. 현행 시간조건 앵커를 유지한다.</strong><br>
+선물·현물 두 슬리브에서 <em>독립적으로</em> 같은 결과가 나왔다. 윈도우 rank-sum 을 Calmar·Sharpe·CAGR
+세 지표로 각각 매겼을 때 여섯 판정 전부 현행이 1위였고, 거래비용 5배 stress 와 자산배분 60/25/15
+합성에서도 현행이 1위였다. 사건구동은 위험을 줄이지 못하면서 수익만 깎았다.
+</div>
+
+<h2>1. 물음과 축</h2>
+<p>
+현재 앵커는 달력이다. <code>(bar_i + phase) % snap_interval == 슬롯오프셋</code> 이 되는 날에
+그 슬롯 하나를 새로 뽑는다. 선물은 95봉 간격 5슬롯(스태거 19봉), 현물은 217봉 7슬롯(스태거 31봉).
+</p>
+<p>
+가설: 달력이 아니라 사건이 갱신을 정하게 하면 어떨까. 매일 드리프트를 확인해서, 발화할 때마다
+다음 슬롯을 새로 뽑는다. 포트폴리오가 실제로 어긋난 순간에만 종목을 다시 고르니 반응성이 좋아질 수 있다.
+</p>
+<p>축은 그것 하나만 바꿨다. 선정·헬스·카나리·드리프트 문턱·레버리지·거래비용은 전부 동일.</p>
+
+<h3>팔 4개</h3>
+<ul>
+<li><code>off</code> — 현행. 시간조건만.</li>
+<li><code>pure</code> — 시간조건 제거. 드리프트 발화 때만 다음 슬롯 갱신.</li>
+<li><code>spaced19</code> — pure + 최소간격(= snap_interval/n, 선물 19봉·현물 31봉). 현행 스태거 간격은 지킨다.</li>
+<li><code>hybrid</code> — 시간 OR 사건, 먼저 오는 쪽.</li>
+</ul>
+<p class="note">
+구현은 정본 엔진(<code>backtest_futures_v25.py</code>, <code>unified_backtest.py</code>)의 env 토글
+<code>ANCHOR_EVENT</code>. 결론 후 SSoT 오염 방지를 위해 되돌렸고, 재현용 diff 는
+<code>strategies/cap_defend/research/bt_anchor_event.engine.patch</code> 에 보존했다.
+</p>
+
+<h2>2. 선물 sleeve (V25, 드리프트 0.03)</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>팔</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>최종배수</th><th>Trades</th><th>사건갱신</th></tr></thead>
+<tbody>
+<tr class="win"><td>off (현행)</td><td>7.57</td><td>+290.4%</td><td>-38.3%</td><td>1.88</td><td>1787x</td><td>859</td><td>0</td></tr>
+<tr><td>pure</td><td>5.67</td><td>+212.6%</td><td>-37.5%</td><td>1.93</td><td>527x</td><td>1138</td><td>617</td></tr>
+<tr><td>spaced19</td><td>6.33</td><td>+284.4%</td><td class="bad">-45.0%</td><td>1.83</td><td>1641x</td><td>874</td><td>49</td></tr>
+<tr><td>hybrid</td><td>4.76</td><td>+184.3%</td><td>-38.7%</td><td>1.82</td><td>312x</td><td>1178</td><td>602</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>윈도우 rank-sum (n=105, sizes 504/756/1008 × strides 63/126/252, 낮을수록 우세)</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>지표</th><th>off (현행)</th><th>pure</th><th>spaced19</th><th>hybrid</th></tr></thead>
+<tbody>
+<tr><td>Calmar</td><td class="good">1.267</td><td>3.200</td><td>1.981</td><td>3.552</td></tr>
+<tr><td>Sharpe</td><td class="good">1.638</td><td>2.571</td><td>2.429</td><td>3.362</td></tr>
+<tr><td>CAGR</td><td class="good">1.524</td><td>3.219</td><td>1.676</td><td>3.581</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>거래비용 5배 (tx 0.30%) — 격차가 더 벌어진다</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>팔</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Sharpe</th></tr></thead>
+<tbody>
+<tr class="win"><td>off (현행)</td><td>6.53</td><td>+256.1%</td><td>-39.2%</td><td>1.78</td></tr>
+<tr><td>pure</td><td class="bad">2.66</td><td>+146.1%</td><td class="bad">-54.9%</td><td>1.63</td></tr>
+<tr><td>spaced19</td><td>5.91</td><td>+253.0%</td><td>-42.8%</td><td>1.76</td></tr>
+<tr><td>hybrid</td><td>4.04</td><td>+172.8%</td><td>-42.8%</td><td>1.74</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>자산배분 60/25/15 합성 (선물 sleeve 만 교체)</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>팔</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>alloc rank cal</th><th>sharpe</th><th>cagr</th></tr></thead>
+<tbody>
+<tr class="win"><td>off (현행)</td><td>4.89</td><td>+61.5%</td><td>-12.6%</td><td>2.19</td><td class="good">1.389</td><td class="good">1.648</td><td class="good">1.593</td></tr>
+<tr><td>pure</td><td>4.28</td><td>+54.1%</td><td>-12.6%</td><td>2.27</td><td>3.019</td><td>2.278</td><td>3.111</td></tr>
+<tr><td>spaced19</td><td>4.67</td><td>+61.6%</td><td>-13.2%</td><td>2.14</td><td>2.000</td><td>3.130</td><td>1.611</td></tr>
+<tr><td>hybrid</td><td>4.09</td><td>+51.6%</td><td>-12.6%</td><td>2.25</td><td>3.593</td><td>2.944</td><td>3.685</td></tr>
+</tbody>
+</table>
+</div>
+<p class="note">
+지난 L 적용시점 실험에서 합성 단계의 Cal 순위가 단일 저점 하나에 뒤집힌 일이 있어(2026-08-21 history)
+이번엔 처음부터 세 지표로 매겼다. 이번 건은 세 지표가 같은 방향이라 그런 취약성이 없다.
+</p>
+
+<h2>3. 현물 sleeve (V24, 드리프트 0.10)</h2>
+<p>선물과 조건이 다르다 — 문턱이 3배 높고(0.10) 스태거가 길다(31봉). 사건 빈도 자체가 훨씬 낮다.</p>
+<div class="scroll">
+<table>
+<thead><tr><th>팔</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>최종배수</th><th>Trades</th><th>사건갱신</th></tr></thead>
+<tbody>
+<tr class="win"><td>off (현행)</td><td>4.61</td><td>+80.8%</td><td>-17.5%</td><td>2.01</td><td>25.94x</td><td>238</td><td>0</td></tr>
+<tr><td>pure</td><td>4.08</td><td>+72.0%</td><td>-17.6%</td><td>2.01</td><td>19.69x</td><td>151</td><td>13</td></tr>
+<tr><td>spaced31</td><td>4.26</td><td>+75.1%</td><td>-17.6%</td><td>1.97</td><td>21.78x</td><td>147</td><td>8</td></tr>
+<tr><td>hybrid</td><td>3.69</td><td>+68.5%</td><td>-18.6%</td><td>1.98</td><td>17.62x</td><td>246</td><td>14</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>윈도우 rank-sum (n=105)</h3>
+<div class="scroll">
+<table>
+<thead><tr><th>지표</th><th>off (현행)</th><th>pure</th><th>spaced31</th><th>hybrid</th></tr></thead>
+<tbody>
+<tr><td>Calmar</td><td class="good">1.733</td><td>3.219</td><td>2.486</td><td>2.562</td></tr>
+<tr><td>Sharpe</td><td class="good">1.971</td><td>3.114</td><td>2.543</td><td>2.371</td></tr>
+<tr><td>CAGR</td><td class="good">1.476</td><td>3.152</td><td>2.552</td><td>2.819</td></tr>
+</tbody>
+</table>
+</div>
+<p>
+거래비용 5배(tx 2.0%)에서만 spaced31 이 Cal 2.36 으로 현행 2.26 을 살짝 넘는다. 다만 CAGR 은
++56.5% 대 +58.3% 로 여전히 아래고, Sharpe 는 1.59 동률이다. 비용이 5배가 되는 세계에서
+거래를 덜 하는 팔이 근소하게 나은 건 축의 우위가 아니라 턴오버 감소 효과다.
+</p>
+
+<h2>4. 왜 나빠지는가 — 메커니즘</h2>
+<p>
+드리프트는 보유 종목이 <em>잘 올라서</em> 비중이 목표에서 벌어질 때 가장 자주 발화한다.
+그 순간에 슬롯을 새로 뽑으면, 오르고 있는 종목을 잘라내고 다시 고르게 된다.
+사건구동은 구조적으로 "승자를 조기에 교체하는 규칙"이 된다.
+</p>
+<p>증거 두 가지:</p>
+<ul>
+<li>
+선물 pure 는 MDD 가 -38.3% → -37.5% 로 0.8pp 밖에 안 나아지는데 최종배수는 1787x → 527x 로 3분의 1 이 된다.
+위험은 그대로인데 복리 꼬리만 잘렸다.
+</li>
+<li>
+현물 pure 는 거래 수가 오히려 <em>줄었다</em>(238 → 151). 비용이 줄었는데도 CAGR 이 +80.8% → +72.0% 로 떨어졌다.
+비용 이야기가 아니라 타이밍 이야기라는 뜻이다.
+</li>
+</ul>
+<p>
+hybrid 가 pure 보다도 나쁜 것(선물 Cal 4.76 &lt; 5.67)이 같은 얘기의 확인이다.
+시간조건에 사건을 더하면 갱신이 과해져서 승자 절단이 더 자주 일어난다.
+</p>
+<p>
+스태거 분산 붕괴도 실측됐다. 선물 pure 는 5.6년에 사건갱신 617회 — 슬롯당 평균 3.3봉마다 하나씩 새로 뽑는다.
+현행 95봉 앵커의 29배다. 5슬롯이 사실상 같은 시점을 보게 되어 다중 스냅샷의 시점분산 효과가 사라진다.
+<code>spaced19</code> 가 이걸 막으려 최소간격을 걸었지만(609회 스킵, 49회만 통과) 대신 MDD 가
+-38.3% → -45.0% 로 6.7pp 나빠졌다 — 간격에 걸려 갱신이 지연되는 사이 나빠진 종목을 더 오래 들고 있게 된다.
+</p>
+
+<h2>5. 사건 빈도를 바꿔봐도 같다</h2>
+<p>드리프트 문턱을 바꾸면 사건 빈도가 바뀐다. 축이 세게 작동하는 조건에서 우열이 뒤집히는지 봤다.</p>
+<div class="scroll">
+<table>
+<thead><tr><th>슬리브 / 문턱</th><th>off Cal</th><th>pure Cal</th><th>spaced Cal</th><th>hybrid Cal</th><th>pure 사건수</th></tr></thead>
+<tbody>
+<tr><td>선물 drift 0.03 (라이브)</td><td class="good">7.57</td><td>5.67</td><td>6.33</td><td>4.76</td><td>617</td></tr>
+<tr><td>선물 drift 0.10</td><td>6.60</td><td>4.66</td><td class="good">6.80</td><td>4.17</td><td>230</td></tr>
+<tr><td>현물 drift 0.05</td><td>4.24</td><td>2.84</td><td class="good">4.25</td><td>3.27</td><td>31</td></tr>
+<tr><td>현물 drift 0.10 (라이브)</td><td class="good">4.61</td><td>4.08</td><td>4.26</td><td>3.69</td><td>13</td></tr>
+<tr><td>현물 drift 0.20</td><td>4.59</td><td class="good">4.79</td><td>4.77</td><td>4.35</td><td>6</td></tr>
+</tbody>
+</table>
+</div>
+<p>
+사건구동이 앞서는 칸은 사건이 <em>거의 없는</em> 칸뿐이다. 현물 drift 0.20 에서 pure 가 4.79 로 이기는데
+5.6년에 사건 6회다 — 그건 사건구동의 승리가 아니라 "현행과 거의 같은 전략"의 노이즈다.
+사건이 실제로 많이 발생하는 칸(선물 0.03 의 617회, 현물 0.05 의 31회)에서는 예외 없이 현행이 앞선다.
+가설이 요구하는 방향과 정확히 반대다.
+</p>
+
+<h2>6. 판정</h2>
+<ul>
+<li><strong>기각.</strong> 앵커는 시간조건으로 유지한다. 선물 95봉/5슬롯, 현물 217봉/7슬롯 그대로.</li>
+<li>두 슬리브가 유니버스·문턱·스태거·비용이 다른데도 같은 방향으로 나왔다 — 단일 슬리브 노이즈가 아니다.</li>
+<li>드리프트는 <em>리밸런싱 트리거</em>로만 남긴다. 종목 교체 시점까지 드리프트에 묶으면 승자를 조기 절단한다.
+지금 구조(교체는 앵커, 비중복원은 드리프트)가 두 일을 분리해 두는 게 우연이 아니었다.</li>
+<li>다시 하면 시간낭비. 재검토 조건: 드리프트 정의 자체가 "승자 비중 확대"와 무관해지도록 바뀔 때
+(예: 하락 이탈만 세는 단방향 드리프트). 그때만 이 축을 다시 본다.</li>
+</ul>
+
+<h2>부록 — 재현</h2>
+<p class="note">
+<code>git apply strategies/cap_defend/research/bt_anchor_event.engine.patch</code> 후<br>
+<code>cd strategies/cap_defend/research &amp;&amp; WITH_ALLOC=on python3 bt_anchor_event.py</code> (선물, 157초)<br>
+<code>python3 bt_anchor_event_spot.py</code> (현물, 75초)<br>
+패치 없이 돌리면 네 팔이 모두 현행이 되어 차이 0 이 나온다(가짜 동률). 원시 로그는
+<code>state/anchor-event-0821/run.log</code>, <code>run_spot.log</code>.
+</p>
+
+</main>

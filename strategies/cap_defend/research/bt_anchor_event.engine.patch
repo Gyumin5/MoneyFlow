@@ -1,0 +1,148 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 2c6e84a..4248255 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -316,6 +316,14 @@ def run(bars, funding, interval='D', leverage=3.0,
+         def _cur_lev(d, coin=None):
+             return _lev_scalar
+ 
++    # 변형 실험(ANCHOR_EVENT): 사건구동 앵커 상태
++    _ANCHOR_EVENT = os.environ.get('ANCHOR_EVENT', 'off')
++    _ev_ptr = 0                      # 다음에 갱신할 슬롯
++    _ev_last_bar = -10 ** 9          # 마지막 사건 갱신 봉
++    _ev_min_gap = max(1, int(snap_interval_bars / max(n_snapshots, 1)))  # spaced 최소간격(=스태거)
++    _ev_count = 0                    # 사건 갱신 횟수
++    _ev_skipped = 0                  # 최소간격에 걸려 넘긴 횟수
++
+     snapshots = [{'CASH': 1.0} for _ in range(n_snapshots)]
+     # 앵커일: n_snapshots에 따라 균등 배분
+     if n_snapshots <= 3:
+@@ -889,7 +897,11 @@ def run(bars, funding, interval='D', leverage=3.0,
+             # ── 앵커 리밸런싱 (Risk-On + 미플립) ──
+             import os as _osa
+             _anchor_defer = _osa.environ.get('ANCHOR_TRADE_MODE', 'on') == 'defer'
+-            if canary_on and not canary_flipped:
++            # 변형 실험(2026-08-21, ANCHOR_EVENT): 앵커 갱신 시점을 시간조건에서 사건조건으로.
++            #   off(기본) = 현행 시간조건만 | pure = 시간조건 제거, 드리프트 발화 때만 다음 슬롯
++            #   spaced = pure + 최소간격(스태거 = snap_interval/n) | hybrid = 시간 OR 사건
++            _time_anchor = _ANCHOR_EVENT in ('off', 'hybrid')
++            if canary_on and not canary_flipped and _time_anchor:
+                 if snap_interval_bars > 0:
+                     for si in range(n_snapshots):
+                         offset = int(si * snap_interval_bars / n_snapshots)
+@@ -942,9 +954,11 @@ def run(bars, funding, interval='D', leverage=3.0,
+ 
+         # ── Drift (daily_gate 시 일 1회만) ──
+         # 변종: DRIFT_HEALTH_MODE = 'off' | 'refill' | 'cash'
++        _drift_fired = False
+         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
+             if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
+                 need_rebal = True
++                _drift_fired = True
+                 # 변종: 헬스 fail 슬롯 처리 (mode != off 일 때만)
+                 import os as _os
+                 _drift_mode = _os.environ.get('DRIFT_HEALTH_MODE', 'refill')  # V24 default ON
+@@ -1017,6 +1031,21 @@ def run(bars, funding, interval='D', leverage=3.0,
+                             snapshots[si] = new_sn
+                         combined = _merge_snapshots()
+ 
++        # ── 변형 실험(ANCHOR_EVENT): 드리프트 발화 시 다음 슬롯 갱신 ──
++        # 사건이 앵커를 앞당긴다. spaced 는 지난 갱신 후 최소간격(스태거)이 지났을 때만.
++        if (_ANCHOR_EVENT in ('pure', 'spaced', 'hybrid') and _drift_fired
++                and canary_on and not canary_flipped):
++            if _ANCHOR_EVENT == 'spaced' and (bar_i - _ev_last_bar) < _ev_min_gap:
++                _ev_skipped += 1
++            else:
++                _new_w = _compute_weights(prev_date)
++                if _new_w != snapshots[_ev_ptr]:
++                    snapshots[_ev_ptr] = _new_w
++                    combined = _merge_snapshots()
++                _ev_ptr = (_ev_ptr + 1) % n_snapshots
++                _ev_last_bar = bar_i
++                _ev_count += 1
++
+         # ── A 안 cooldown: no_reentry 코인 combined 에서 제거 ──
+         if no_reentry:
+             for c in list(combined.keys()):
+@@ -1098,6 +1127,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+         'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,
+         'Stops': stop_count, 'Stop': stop_count,
+         'Cat': cat_stop_count, 'Cushion': cushion_force_count, 'GrossCap': gross_cap_count,
++        'AnchorEvents': _ev_count, 'AnchorSkipped': _ev_skipped,
+     }
+     result['_equity'] = eq  # equity curve (pd.Series)
+     result['_liq_log'] = liq_log
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 53311de..a466218 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -307,6 +307,14 @@ def run(bars, funding, interval='1h', leverage=1.0,
+     entry_bar_index = {}  # {coin: first entry bar index}
+     margins = {}  # {coin: margin}
+ 
++    # 변형 실험(ANCHOR_EVENT, 2026-08-21): 사건구동 앵커 상태
++    _ANCHOR_EVENT = os.environ.get('ANCHOR_EVENT', 'off')
++    _ev_ptr = 0                      # 다음에 갱신할 슬롯
++    _ev_last_bar = -10 ** 9          # 마지막 사건 갱신 봉
++    _ev_min_gap = max(1, int(snap_interval_bars / max(n_snapshots, 1)))  # spaced 최소간격(=스태거)
++    _ev_count = 0                    # 사건 갱신 횟수
++    _ev_skipped = 0                  # 최소간격에 걸려 넘긴 횟수
++
+     snapshots = [{'CASH': 1.0} for _ in range(n_snapshots)]
+     # 앵커일: n_snapshots에 따라 균등 배분
+     if n_snapshots <= 3:
+@@ -961,7 +969,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         # ANCHOR_TRADE_MODE=defer 시 snap 갱신만 하고 need_rebal 안 켬 → drift 만 trade trigger
+         import os as _osa
+         _anchor_defer = _osa.environ.get('ANCHOR_TRADE_MODE', 'on') == 'defer'
+-        if canary_on and not canary_flipped:
++        # 변형 실험(2026-08-21, ANCHOR_EVENT): 앵커 갱신 시점을 시간조건에서 사건조건으로.
++        #   off(기본) = 현행 시간조건만 | pure = 시간조건 제거, 드리프트 발화 때만 다음 슬롯
++        #   spaced = pure + 최소간격(스태거 = snap_interval/n) | hybrid = 시간 OR 사건
++        _time_anchor = _ANCHOR_EVENT in ('off', 'hybrid')
++        if canary_on and not canary_flipped and _time_anchor:
+             if snap_interval_bars > 0:
+                 # 봉 기반 앵커: bar_i % interval로 트리거
+                 for si in range(n_snapshots):
+@@ -987,9 +999,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
+ 
+         # ── Drift (daily_gate 시 일 1회만) ──
+         combined = _merge_snapshots(sig_date_for_health=prev_date)
++        _drift_fired = False
+         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
+             if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
+                 need_rebal = True
++                _drift_fired = True
+                 import os as _os
+                 # 라이브 정합 refill_v2: drift 발화 시 mom2 음수 슬롯 → fresh healthy 교체
+                 # (coin_live_engine._apply_refill_v2_to_state 와 동일). DRIFT_HEALTH_MODE='refill'.
+@@ -1026,6 +1040,21 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                             snapshots[si] = new_sn
+                         combined = _merge_snapshots(sig_date_for_health=prev_date)
+ 
++        # ── 변형 실험(ANCHOR_EVENT): 드리프트 발화 시 다음 슬롯 갱신 ──
++        # 사건이 앵커를 앞당긴다. spaced 는 지난 갱신 후 최소간격(스태거)이 지났을 때만.
++        if (_ANCHOR_EVENT in ('pure', 'spaced', 'hybrid') and _drift_fired
++                and canary_on and not canary_flipped):
++            if _ANCHOR_EVENT == 'spaced' and (bar_i - _ev_last_bar) < _ev_min_gap:
++                _ev_skipped += 1
++            else:
++                _new_w = _compute_weights(prev_date)
++                if _new_w != snapshots[_ev_ptr]:
++                    snapshots[_ev_ptr] = _new_w
++                    combined = _merge_snapshots(sig_date_for_health=prev_date)
++                _ev_ptr = (_ev_ptr + 1) % n_snapshots
++                _ev_last_bar = bar_i
++                _ev_count += 1
++
+         if crash_cooldown > 0:
+             need_rebal = False
+ 
+@@ -1079,6 +1108,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
+         'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,
+         'Stops': stop_count,
++        'AnchorEvents': _ev_count, 'AnchorSkipped': _ev_skipped,
+     }
+     result['_equity'] = eq  # equity curve (pd.Series)
+     return result
