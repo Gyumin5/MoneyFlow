@@ -2805,7 +2805,13 @@ def main():
                     elif not ensure_margin_type(client, sym, MARGIN_TYPE):
                         err = f"V25 ABORT: {sym} 마진모드 {MARGIN_TYPE} 보장 실패 — 매매 차단"
                         log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
-                    if not set_leverage(client, sym, lev):
+                    # 2026-08-22: 이미 목표 L 이면 set 을 부르지 않는다. 바이낸스는 같은 값으로
+                    # 불러도 성공을 주므로 매번 '계좌 변경' 으로 표시되고, 그러면 상시 무결성
+                    # 검사가 매매경로 실행마다 생략돼 외부개입 탐지가 사실상 꺼진다.
+                    if verify_leverage(client, sym, lev):
+                        if DEBUG_LEVERAGE:
+                            log.info(f"  leverage {sym} 이미 {lev}x — set 생략")
+                    elif not set_leverage(client, sym, lev):
                         err = f"V25 ABORT: set_leverage({sym}={lev}) 실패 — 매매 차단"
                         log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
                     # P1: propagation 짧은 재조회

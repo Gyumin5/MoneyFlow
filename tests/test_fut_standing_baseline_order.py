@@ -236,6 +236,10 @@ def main():
     ):
         check(f"{site} 지점에 표시", re.search(pat, src) is not None)
 
+    check("이미 목표 L 이면 set 을 부르지 않는다 (무의미한 변경표시 차단)",
+          re.search(r'if verify_leverage\(client, sym, lev\):[\s\S]{0,200}?'
+                    r'elif not set_leverage\(client, sym, lev\):', src) is not None)
+
     a._v25_touch_reset()
     check("초기 상태는 무변경", a._v25_account_changed() is False)
     c_lev = FakeLevClient()
