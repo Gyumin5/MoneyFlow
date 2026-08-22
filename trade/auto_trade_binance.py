@@ -1442,11 +1442,14 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                 order_params['reduceOnly'] = 'true'
 
             order = create_order_with_retry(client, order_params)
+            _v25_mark_touch(f"order {side} {symbol} {qty_str}")
             log.info(f"ORDER {side} {symbol} qty={qty_str}: {order.get('status', 'OK')}")
             if order_alerts is not None:
                 order_alerts.append(f"{side} {symbol} {qty_str}")
             time.sleep(0.1)
         except BinanceAPIException as e:
+            # 예외라도 거래소가 접수했을 수 있다(타임아웃). 계좌를 건드렸다고 본다.
+            _v25_mark_touch(f"order {side} {symbol} 시도 실패(체결 불명)")
             log.error(f"ORDER FAILED {side} {symbol} qty={qty_str}: {e}")
             if error_alerts is not None:
                 error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
@@ -1527,10 +1530,37 @@ def needs_rebalance(client: Client, target: Dict[str, float], current_positions:
     return False
 
 
+# ── 계좌 변경 표시 (2026-08-22) ───────────────────────────────────────────────
+# "이 실행이 계좌를 건드렸는가" 의 단일 근거. 상시 무결성 검사를 돌릴지, 기준 스냅샷을
+# 갱신할지가 여기서 갈린다. 보고용 리스트(order_alerts)를 근거로 쓰면 안 된다 —
+# 주문 요청이 예외로 끝났는데 거래소는 접수한 경우(타임아웃) 를 '무거래' 로 오분류하고,
+# 레버리지·마진모드 변경처럼 주문이 아닌 변경도 놓친다. 둘 다 기준 스냅샷을 낡게 만들어
+# 다음 무거래일에 우리 변경을 외부 개입으로 신고하게 된다(08-22 자기잠김 사고).
+# 확정(적용됨)과 불명(적용됐는지 모름)을 나누지 않는다 — 이 설계의 세 판정
+# (상시검사 생략 / 기준 갱신 / 조회실패 시 무효화)에서 둘의 처분이 같기 때문이다.
+_V25_ACCOUNT_TOUCH: List[str] = []
+
+
+def _v25_mark_touch(what: str):
+    """계좌를 건드렸(을 수 있)다고 표시."""
+    _V25_ACCOUNT_TOUCH.append(what)
+    log.info(f"  계좌 변경 표시: {what}")
+
+
+def _v25_touch_reset():
+    """실행 시작 시 초기화 (한 프로세스에서 두 번 도는 경우 대비)."""
+    del _V25_ACCOUNT_TOUCH[:]
+
+
+def _v25_account_changed() -> bool:
+    return bool(_V25_ACCOUNT_TOUCH)
+
+
 def set_leverage(client: Client, symbol: str, leverage: int) -> bool:
     """레버리지 설정. V25 — bool 반환, 실패 시 False. transient retry."""
     try:
         resp = _with_retry(lambda: client.futures_change_leverage(symbol=symbol, leverage=leverage))
+        _v25_mark_touch(f"leverage {symbol}={leverage}x")
         if DEBUG_LEVERAGE:
             log.info(f"  set_leverage OK {symbol}={leverage}x resp={resp}")
         return True
@@ -1539,6 +1569,8 @@ def set_leverage(client: Client, symbol: str, leverage: int) -> bool:
             if DEBUG_LEVERAGE:
                 log.info(f"  set_leverage {symbol}={leverage}x idempotent (code={getattr(e,'code',None)})")
             return True
+        # 적용 여부 불명 — 적용됐다고 가정하고 표시한다(기준 스냅샷을 낡게 두는 쪽이 위험).
+        _v25_mark_touch(f"leverage {symbol}={leverage}x 시도 실패(적용 불명)")
         log.error(f"set_leverage FAILED {symbol}={leverage}: code={getattr(e,'code',None)} msg={e}")
         return False
 
@@ -1547,6 +1579,7 @@ def set_margin_type(client: Client, symbol: str, margin_type: str = 'CROSSED') -
     """마진 모드 설정. V25 — bool 반환. transient retry."""
     try:
         resp = _with_retry(lambda: client.futures_change_margin_type(symbol=symbol, marginType=margin_type))
+        _v25_mark_touch(f"margin {symbol}={margin_type}")
         if DEBUG_MARGIN:
             log.info(f"  set_margin OK {symbol}={margin_type} resp={resp}")
         return True
@@ -1555,6 +1588,7 @@ def set_margin_type(client: Client, symbol: str, margin_type: str = 'CROSSED') -
             if DEBUG_MARGIN:
                 log.info(f"  set_margin {symbol}={margin_type} idempotent (code={getattr(e,'code',None)})")
             return True
+        _v25_mark_touch(f"margin {symbol}={margin_type} 시도 실패(적용 불명)")
         log.error(f"set_margin FAILED {symbol}={margin_type}: code={getattr(e,'code',None)} msg={e}")
         return False
 
@@ -1658,6 +1692,22 @@ def _v25_record_cron_result(success: bool, abort_reason: str = '',
         h['last_abort_reason'] = abort_reason[:500]
     _v25_write_health(h)
     return int(h.get('abort_streak', 0))
+
+
+def _v25_invalidate_baseline(reason: str):
+    """기준 스냅샷을 무효화한다(상시 무결성 검사 일시 중지).
+
+    주문은 나갔는데 사후 포지션을 못 읽은 실행에서 부른다. 기준을 옛 값으로 남기면
+    다음 무거래일에 우리 체결이 '외부 변경' 으로 신고되고 자동 lock 까지 간다(2026-08-22).
+    검사 공백은 다음 체결 실행이 기준을 다시 심으면서 닫힌다.
+    """
+    from datetime import datetime
+    h = _v25_read_health()
+    h.pop('post_trade_baseline', None)
+    h['baseline_invalidated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    h['baseline_invalidated_reason'] = reason[:300]
+    _v25_write_health(h)
+    log.warning(f"  standing: 기준 스냅샷 무효화 — {reason}")
 
 
 def _v25_check_lock() -> Optional[str]:
@@ -1872,6 +1922,76 @@ def preflight_zero_open_orders(client: Client, symbols=None) -> bool:
         return False
 
 
+def _margin_state_of(client: Client, symbol: str):
+    """심볼의 현재 마진모드. 'cross' | 'isolated' | None(조회 불명).
+
+    2026-08-22: 조회 불명(None)을 "변경 필요"와 섞지 않기 위해 판정을 분리했다.
+    섞으면 일시적 API 장애가 margin 변경 필요로 오기록되고 같은 오ABORT 를 재현한다.
+    """
+    info = _fetch_position_info(client, symbol)
+    if info is None:
+        return None
+    row = _pick_oneway_row(info)
+    if row is None:
+        return None
+    # cycle 8: futures_account 는 isolated(bool), futures_position_information 은 marginType(str)
+    if 'isolated' in row:
+        return 'isolated' if bool(row.get('isolated')) else 'cross'
+    mt = (row.get('marginType') or '').lower()
+    if mt in ('cross', 'crossed'):
+        return 'cross'
+    if mt == 'isolated':
+        return 'isolated'
+    return None
+
+
+def build_margin_plan(client: Client, symbols, expected: str = 'CROSSED',
+                      retries: int = 2, sleep_s: float = 0.5):
+    """심볼별 마진모드 작업계획. preflight·변경·사후검증이 모두 이 계획 하나를 쓴다.
+
+    2026-08-22 사고 대응(ai-debate run-20260822T001138Z): 판정이 여러 군데서 갈리면
+    "변경 필요"와 "검사 대상"이 어긋난다. 계획을 한 번 만들어 공유한다.
+    Returns: (plan, unknown) — plan={sym: {'cur': 'cross'|'isolated', 'need': bool}},
+             unknown=[조회 불명 심볼] (재시도 후에도 불명 → 호출자가 UNKNOWN 사유로 ABORT)
+    """
+    import time as _t
+    want = 'isolated' if str(expected).lower() == 'isolated' else 'cross'
+    plan, unknown = {}, []
+    for sym in symbols:
+        st = _margin_state_of(client, sym)
+        attempt = 0
+        while st is None and attempt < max(0, retries):
+            attempt += 1
+            _t.sleep(sleep_s)
+            st = _margin_state_of(client, sym)
+        if st is None:
+            unknown.append(sym)
+            continue
+        plan[sym] = {'cur': st, 'need': st != want}
+    return plan, unknown
+
+
+def _open_algo_symbols(client: Client):
+    """algo/조건부 주문이 걸린 심볼 집합. 미지원 SDK 면 None(검사 불가) 반환.
+
+    2026-08-22: 일반 미체결(futures_get_open_orders)만 보면 algo 주문을 놓친다는 지적 반영.
+    우리 봇은 algo 주문을 내지 않지만, 사람이 걸어둔 게 있으면 margin 변경이 거부된다.
+    """
+    for name in ('futures_get_open_algo_orders', 'futures_algo_open_orders',
+                 'futures_get_algo_open_orders'):
+        fn = getattr(client, name, None)
+        if fn is None:
+            continue
+        try:
+            resp = _with_retry(lambda: fn())
+        except BinanceAPIException as e:
+            log.warning(f"_open_algo_symbols({name}): {e} — algo 검사 생략")
+            return None
+        rows = resp.get('orders', resp) if isinstance(resp, dict) else resp
+        return {r.get('symbol') for r in (rows or []) if isinstance(r, dict)}
+    return None
+
+
 def preflight_target_symbols_zero(client: Client, symbols) -> bool:
     """V25 cycle 9: 코인별 margin type 변경용 preflight — 대상 심볼만 zero 확인.
 
@@ -1909,6 +2029,15 @@ def preflight_target_symbols_zero(client: Client, symbols) -> bool:
         if blocking:
             log.error(f"preflight_target_symbols_zero: 대상 심볼 미체결 주문 {blocking} — margin 변경 불가")
             return False
+        # algo/조건부 주문도 margin 변경을 거부시킨다 (2026-08-22 보강)
+        algo = _open_algo_symbols(client)
+        if algo is None:
+            log.info("  preflight_target_symbols_zero: algo 주문 조회 미지원 — 일반 주문만 검사")
+        else:
+            algo_blocking = sorted(s for s in algo if s in target)
+            if algo_blocking:
+                log.error(f"preflight_target_symbols_zero: 대상 심볼 algo 주문 {algo_blocking} — margin 변경 불가")
+                return False
         if DEBUG_MARGIN:
             log.info(f"  preflight_target_symbols_zero OK (targets={sorted(target)} zero, "
                      f"무관 먼지 {len(dust)}개 허용)")
@@ -2020,7 +2149,8 @@ def verify_leverage(client: Client, symbol: str, expected: int) -> bool:
 
 
 def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notional: float,
-                                        target_notional: float, mark_price: float) -> bool:
+                                        target_notional: float, mark_price: float,
+                                        order_alerts: Optional[List[str]] = None) -> bool:
     """V25 cycle 8 P1: L 낮춤 전 사전 부분 매도 (reduceOnly).
 
     new_L < current_L 인 코인은 used_margin 증가로 wallet 부족 (-4131) 위험.
@@ -2054,15 +2184,24 @@ def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notion
         order = client.futures_create_order(
             symbol=sym, side='SELL', type='MARKET', quantity=sell_qty, reduceOnly=True
         )
+        _v25_mark_touch(f"presell SELL {sym} {sell_qty}")
+        # 2026-08-22: 이 주문도 order_alerts 에 남긴다. 보고에 보이게 하는 목적이 하나,
+        # "이 실행이 계좌를 건드렸는가"(_v25_did_order) 판정의 단일 근거가 되는 목적이 하나.
+        # 여기서 빠지면 사전매도만 나가고 ABORT 한 실행이 '무거래' 로 오분류돼,
+        # 다음 무거래일에 상시 무결성 검사가 우리 체결을 외부변경으로 신고한다.
+        if order_alerts is not None:
+            order_alerts.append(f"SELL {sym} {sell_qty} (L↓ 사전매도)")
         if DEBUG_LEVERAGE:
             log.info(f"  사전매도 OK {sym} orderId={order.get('orderId')}")
         import time as _t
         _t.sleep(0.5)  # 체결 안정화
         return True
     except BinanceAPIException as e:
+        _v25_mark_touch(f"presell SELL {sym} 시도 실패(체결 불명)")
         log.error(f"  {sym} 사전매도 실패: code={getattr(e,'code',None)} msg={e}")
         return False
     except Exception as e:
+        _v25_mark_touch(f"presell SELL {sym} 예외(체결 불명)")
         log.error(f"  {sym} 사전매도 예외: {e}")
         return False
 
@@ -2342,6 +2481,7 @@ def main():
         canary_alerts: List[str] = []
         order_alerts: List[str] = []
         error_alerts: List[str] = []
+        _v25_touch_reset()  # 계좌 변경 표시 초기화 (이 실행의 근거만 센다)
         log.info(f"=== 바이낸스 선물 매매 시작 (run_id={run_id}) ===")
 
         if args.trade:
@@ -2532,6 +2672,9 @@ def main():
         # 2026-08-21: 매매 경로를 탔는지 여기서 명시한다. 체결 검사(exec reconcile)와
         # streak 증감은 이 플래그가 True 인 실행에만 적용한다.
         _v25_traded_path = False
+        # 2026-08-22: 이 실행이 실제로 주문을 냈는가. 상시 무결성 검사(외부변경 탐지)와
+        # 기준 스냅샷 갱신은 이 축으로 갈린다 — traded_path 는 "시도" 이고 이건 "계좌 변경" 이다.
+        _v25_did_order = False
         pos_after_ok = pos_ok  # 스킵 경로는 before 스냅샷을 그대로 쓴다
         if not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
@@ -2562,21 +2705,22 @@ def main():
                     need_mode_change = True
             except BinanceAPIException:
                 need_mode_change = True
-            for sym in target_symbols:
-                info = _fetch_position_info(client, sym)
-                if info is None:
-                    need_margin_change = True; break
-                row = _pick_oneway_row(info)
-                if row is None:
-                    need_margin_change = True; break
-                # cycle 8: futures_account 는 isolated(bool), futures_position_information 은 marginType(str)
-                if 'isolated' in row:
-                    if bool(row.get('isolated')):
-                        need_margin_change = True; break
-                elif (row.get('marginType') or '').lower() != 'cross':
-                    need_margin_change = True; break
+            # 2026-08-22: 작업계획을 한 번 만들어 preflight·변경·검증이 같은 판정을 쓴다.
+            # Binance margin type 변경은 그 심볼만 zero 면 되므로 preflight 범위도 그 심볼들뿐이다.
+            # 대상 전체를 검사하면 정상 보유 코인에 걸려 오ABORT (08-22 ETH ISOLATED 잔재 사고).
+            margin_plan, margin_unknown = build_margin_plan(client, target_symbols, MARGIN_TYPE)
+            if margin_unknown:
+                err = ("V25 ABORT: 마진모드 조회 불명(재시도 후) — 매매 차단 "
+                       f"{sorted(margin_unknown)}")
+                log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
+            margin_change_syms = sorted(s for s, v in margin_plan.items() if v['need'])
+            need_margin_change = bool(margin_change_syms)
+            _plan_txt = ", ".join(f"{s}={v['cur']}{'→' + MARGIN_TYPE if v['need'] else ''}"
+                                  for s, v in sorted(margin_plan.items()))
+            log.info(f"  margin plan: {_plan_txt or '(대상 없음)'} "
+                     f"| 변경 필요 {margin_change_syms or '없음'}")
             # (a) one-way 모드 변경: 계정 전체 zero 엄격 (먼지 불허 — 계정단위 변경)
-            if need_mode_change:
+            if not v25_abort and need_mode_change:
                 if not preflight_zero_positions(client):
                     err = "V25 ABORT: one-way 모드 변경 필요한데 계정에 잔존 포지션 있음 — 매매 차단"
                     log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
@@ -2585,8 +2729,9 @@ def main():
                     log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
             # (b) 코인별 margin 변경: 대상 심볼만 zero 확인 (무관 심볼 먼지 tolerate)
             if not v25_abort and need_margin_change:
-                if not preflight_target_symbols_zero(client, target_symbols):
-                    err = "V25 ABORT: margin 변경 대상 코인에 잔존 포지션/주문 있음 — 매매 차단"
+                if not preflight_target_symbols_zero(client, margin_change_syms):
+                    err = ("V25 ABORT: margin 변경 필요 심볼에 잔존 포지션/주문 있음 — 매매 차단 "
+                           f"({margin_change_syms})")
                     log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err)
             if not v25_abort:
                 # one-way mode 자동 보장 (포지션 없을 때만)
@@ -2597,8 +2742,14 @@ def main():
                 # cycle 8 P1: L 낮춤 전 사전 부분매도 — set_leverage 가 used_margin 증가로 -4131 거부하는 케이스 방지
                 # 룰: new_L < current_L 이면 비율(new_L/current_L) 만큼 reduceOnly 매도 → set_leverage → 잔여 미세조정은 execute_rebalance
                 # L 올림은 그대로 두고 execute_rebalance 가 매수 처리
+                # 2026-08-22 불변식: 마진 변경 대기 심볼에는 이 사전매도가 절대 닿지 않는다.
+                # 변경 필요 심볼은 preflight 에서 strict zero 를 통과한 것뿐이므로 포지션이 0 이고
+                # (0 이면 아래 pos_amt<=0 에서 걸러진다), 통과 못 했으면 이미 ABORT 라 여기 못 온다.
+                # 명시적으로도 건너뛴다 — 설정 미완 심볼에 주문이 나가는 경로를 코드로 막는다.
                 for coin, new_lev in target_lev_map.items():
                     sym = coin + 'USDT'
+                    if sym in margin_change_syms:
+                        continue
                     info = _fetch_position_info(client, sym)
                     if info is None:
                         continue
@@ -2631,7 +2782,8 @@ def main():
                     current_notional = pos_amt * mark
                     target_notional = current_notional * (new_lev / cur_lev)
                     log.info(f"V25 L↓ {sym}: {cur_lev}x → {new_lev}x, 사전매도 notional ${current_notional:.2f} → ${target_notional:.2f}")
-                    if not _v25_partial_sell_for_leverage_down(client, sym, current_notional, target_notional, mark):
+                    if not _v25_partial_sell_for_leverage_down(client, sym, current_notional, target_notional, mark,
+                                                              order_alerts=order_alerts):
                         err = f"V25 ABORT: {sym} L 낮춤 사전매도 실패 — 매매 차단"
                         log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
             if not v25_abort:
@@ -2640,7 +2792,17 @@ def main():
                     sym = coin + 'USDT'
                     if DEBUG_LEVERAGE:
                         log.info(f"V25 prep {sym}: ensure margin={MARGIN_TYPE}, leverage={lev}x")
-                    if not ensure_margin_type(client, sym, MARGIN_TYPE):
+                    # 2026-08-22: 같은 작업계획을 쓴다. 계획이 "변경 불필요"라 한 심볼은
+                    # preflight 를 타지 않았으므로 set 을 시도하지 않는다(포지션 보유 시 Binance 거부).
+                    # 검증만 하고, 어긋나면 계획과 실제가 갈린 것이니 ABORT.
+                    _mplan = margin_plan.get(sym)
+                    if _mplan is not None and not _mplan['need']:
+                        if not verify_margin_type(client, sym, MARGIN_TYPE):
+                            err = (f"V25 ABORT: {sym} 마진모드가 작업계획과 불일치"
+                                   f"(계획={_mplan['cur']} 변경불필요) — 매매 차단")
+                            log.error(err); error_alerts.append(err); v25_abort = True
+                            _v25_persist_abort_log(err); break
+                    elif not ensure_margin_type(client, sym, MARGIN_TYPE):
                         err = f"V25 ABORT: {sym} 마진모드 {MARGIN_TYPE} 보장 실패 — 매매 차단"
                         log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
                     if not set_leverage(client, sym, lev):
@@ -2685,11 +2847,32 @@ def main():
                     liquidation_only=_fut_liquidation_only,
                 )
 
-            # 리밸런싱 후 포지션
+            # 이 실행이 계좌를 건드렸는가(주문·사전매도·레버리지·마진 변경, 결과 불명 포함).
+            _v25_did_order = _v25_account_changed()
+            if _v25_did_order:
+                log.info(f"  계좌 변경 근거 {len(_V25_ACCOUNT_TOUCH)}건: {_V25_ACCOUNT_TOUCH[:6]}")
+
+            # 리밸런싱 후 포지션 — 계좌를 건드렸으면 조회 실패를 그냥 넘기지 않는다(제한 재시도).
             positions_after, pv_after, pos_after_ok = get_current_positions(client)
+            if not pos_after_ok and _v25_did_order:
+                for _try in range(1, 4):
+                    time.sleep(2 * _try)
+                    log.warning(f"  post-trade 포지션 재조회 {_try}/3")
+                    positions_after, pv_after, pos_after_ok = get_current_positions(client)
+                    if pos_after_ok:
+                        break
             if not pos_after_ok:
                 log.error("리밸런싱 후 포지션 조회 실패. kill-switch/미달 판정 없이 종료.")
                 send_telegram("⚠️ 바이낸스 포지션 조회 실패 — 리밸런싱 후 상태 확인을 건너뜁니다.")
+                if _v25_did_order:
+                    # 계좌는 건드렸는데 사후 조회를 못 했다 → 기준 스냅샷이 실제와 어긋난 채 남는다.
+                    # 그대로 두면 다음 무거래일에 우리 변경이 외부 개입으로 신고되고 lock 까지 간다.
+                    # 검사를 잠시 잃는 쪽을 택한다 — 다음 실행이 조회에 성공하면 기준을 다시 심는다.
+                    _v25_invalidate_baseline(
+                        "post-trade 포지션 조회 실패(재시도 3회 포함) — 기준 스냅샷 무효화, "
+                        f"변경근거={_V25_ACCOUNT_TOUCH[:6]}")
+                    send_telegram("⚠ 선물: 계좌 변경 후 상태 확인 실패 — 무결성 기준 무효화. "
+                                  "다음 실행에서 재시딩(그때까지 외부개입 탐지 공백)")
                 return
             log.info(f"리밸런싱 완료: PV ${pv_before:.2f} → ${pv_after:.2f}")
             if positions_after:
@@ -2814,9 +2997,14 @@ def main():
                 _v25_persist_abort_log(recon_msg)
                 v25_success = False
 
-            # (b) 상시 무결성 검사 — 무거래일에도 돈다. 수량·방향·레버리지·마진모드만 본다.
+            # (b) 상시 무결성 검사 — 주문이 나가지 않은 실행에서만. 이 검사는 "우리가 안 건드렸는데
+            #     계좌가 변했나" 를 보는 것이라, 우리가 방금 체결한 실행에서는 정의상 성립하지 않는다.
+            #     기준 스냅샷은 체결 전 상태이므로 우리 주문 결과가 그대로 위반으로 잡힌다(2026-08-22 사고).
+            #     체결한 실행의 검증은 (a) 체결 검사가 맡는다.
             _standing_crit: List[str] = []
-            if pos_after_ok:
+            if _v25_did_order:
+                log.info("  standing: 이 실행이 주문을 냈다 → 상시 검사 생략 (체결 검사가 담당)")
+            elif pos_after_ok:
                 _base = _v25_read_health().get('post_trade_baseline') or {}
                 _standing_crit, _standing_info = _v25_standing_check(positions_after, _base)
                 for _m in _standing_info:
@@ -2838,16 +3026,34 @@ def main():
                     _abort_reason = 'standing integrity: ' + "; ".join(_standing_crit[:3])
                 elif recon_diffs:
                     _abort_reason = 'reconcile diff'
-            # 성공한 체결 실행에서만 기준 스냅샷을 갱신한다(부분체결·스킵일엔 유지).
-            _baseline = None
-            if v25_success and _v25_traded_path and pos_after_ok:
-                _baseline = {
+            # 주문이 나간 실행에서는 기준 스냅샷을 실제 포지션으로 갱신한다.
+            # v25_success 에 묶지 않는다(2026-08-22): 성공을 조건으로 걸면, 검사 실패가
+            # 기준 갱신을 막고 낡은 기준이 다음 실패를 만드는 자기잠김 고리가 된다.
+            # 체결 결과가 의도와 어긋났다면 그 사실은 (a) 체결 검사가 이미 알린다 —
+            # 기준은 '우리가 마지막으로 만든 실제 상태' 이고 판정과 별개다.
+            def _snap_baseline(reseeded: bool = False) -> dict:
+                out = {
                     'ts': datetime.now(timezone.utc).isoformat(),
                     'positions': {coin: {'qty': pos.get('qty'),
                                          'leverage': pos.get('leverage'),
                                          'isolated': bool(pos.get('isolated'))}
                                   for coin, pos in positions_after.items()},
                 }
+                if reseeded:
+                    out['reseeded'] = True
+                return out
+
+            _baseline = None
+            if _v25_did_order and pos_after_ok:
+                _baseline = _snap_baseline()
+            elif pos_after_ok and not ((_v25_read_health().get('post_trade_baseline') or {})
+                                       .get('positions')):
+                # 기준이 없다(최초 실행 또는 무효화 후). 지금 상태로 심어 감시를 재개한다 —
+                # 비어 있는 채로 두면 검사가 영구 생략돼 감시 공백이 남는다(08-22 토론).
+                # 과거 구간의 개입은 판정할 수 없다는 걸 명시한다.
+                _baseline = _snap_baseline(reseeded=True)
+                log.warning("  standing: 기준 스냅샷 없음 → 현재 포지션으로 재시딩(감시 재개, "
+                            "이전 구간 개입은 판정 불가)")
             # streak 은 (i) 매매를 시도한 실행, (ii) 실제 실패가 있는 실행에서만 움직인다.
             # 조용한 무거래일은 증가도 리셋도 하지 않는다 — 리셋을 허용하면 무거래일이 끼는 것만으로
             # 진짜 체결 문제의 연속성이 지워진다(2026-08-21).
