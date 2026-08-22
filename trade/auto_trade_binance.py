@@ -2676,7 +2676,36 @@ def main():
         # 기준 스냅샷 갱신은 이 축으로 갈린다 — traded_path 는 "시도" 이고 이건 "계좌 변경" 이다.
         _v25_did_order = False
         pos_after_ok = pos_ok  # 스킵 경로는 before 스냅샷을 그대로 쓴다
-        if not rebalance_needed:
+
+        # ── 상시 무결성 검사: 계좌를 건드리기 전에 본다 (2026-08-22 2차 수정) ──
+        # 체결 뒤에 부르면 (a) 우리 변경이 위반으로 잡히거나(자기잠김), (b) 주문을 낸 실행마다
+        # 검사를 생략해야 해서 사실상 꺼진다. 변경 전에 보면 둘 다 안 생기고, "매매 차단" 이라는
+        # 이 검사의 선언이 실제로 성립한다(발화하면 이번 실행이 매매를 안 한다).
+        _standing_crit: List[str] = []
+        _standing_block = False
+        if args.trade:
+            if pos_ok:
+                _sbase = _v25_read_health().get('post_trade_baseline') or {}
+                _standing_crit, _standing_info = _v25_standing_check(positions_before, _sbase)
+                for _m in _standing_info:
+                    log.info(f"  standing: {_m}")
+                if not _standing_crit:
+                    log.info(f"  standing: 기준({_sbase.get('ts') or '없음'}) 대비 이상 없음")
+            else:
+                log.warning("  standing: 포지션 조회 실패 → 무결성 검사 생략 (소실로 단정하지 않음)")
+            if _standing_crit:
+                crit_msg = ("🔒 V25 무결성 위반 — 매매 차단\n  - "
+                            + "\n  - ".join(_standing_crit[:5]))
+                log.error(crit_msg)
+                send_telegram(crit_msg)
+                _v25_persist_abort_log(crit_msg)
+                _v25_create_lock("standing integrity: " + "; ".join(_standing_crit[:3]))
+                _standing_block = True
+
+        if _standing_block:
+            log.error("standing 무결성 위반 → 이번 실행은 매매하지 않는다 (lock 생성됨)")
+            positions_after, pv_after = positions_before, pv_before
+        elif not rebalance_needed:
             log.info("매매 스킵: rebalancing_needed=false")
             positions_after, pv_after = positions_before, pv_before
         elif _fut_blocked:
@@ -3003,27 +3032,9 @@ def main():
                 _v25_persist_abort_log(recon_msg)
                 v25_success = False
 
-            # (b) 상시 무결성 검사 — 주문이 나가지 않은 실행에서만. 이 검사는 "우리가 안 건드렸는데
-            #     계좌가 변했나" 를 보는 것이라, 우리가 방금 체결한 실행에서는 정의상 성립하지 않는다.
-            #     기준 스냅샷은 체결 전 상태이므로 우리 주문 결과가 그대로 위반으로 잡힌다(2026-08-22 사고).
-            #     체결한 실행의 검증은 (a) 체결 검사가 맡는다.
-            _standing_crit: List[str] = []
-            if _v25_did_order:
-                log.info("  standing: 이 실행이 주문을 냈다 → 상시 검사 생략 (체결 검사가 담당)")
-            elif pos_after_ok:
-                _base = _v25_read_health().get('post_trade_baseline') or {}
-                _standing_crit, _standing_info = _v25_standing_check(positions_after, _base)
-                for _m in _standing_info:
-                    log.info(f"  standing: {_m}")
-            else:
-                log.warning("  standing: 포지션 조회 실패 → 무결성 검사 생략 (소실로 단정하지 않음)")
+            # (b) 상시 무결성 검사는 이 블록에서 부르지 않는다 — 매매 전에 이미 봤다(위).
+            #     여기서는 그 결과를 판정에만 반영한다.
             if _standing_crit:
-                crit_msg = ("🔒 V25 무결성 위반 — 매매 차단\n  - "
-                            + "\n  - ".join(_standing_crit[:5]))
-                log.error(crit_msg)
-                send_telegram(crit_msg)
-                _v25_persist_abort_log(crit_msg)
-                _v25_create_lock("standing integrity: " + "; ".join(_standing_crit[:3]))
                 v25_success = False
 
             _abort_reason = "; ".join(error_alerts[:3]) if error_alerts else ''

@@ -197,11 +197,17 @@ def main():
     check("did_order 는 계좌변경 표시로 판정 (보고 리스트가 근거가 아니다)",
           '_v25_did_order = _v25_account_changed()' in src
           and '_v25_did_order = bool(order_alerts)' not in src)
-    check("주문 낸 실행은 상시 검사 생략",
-          re.search(r'if _v25_did_order:\s*\n\s*log\.info\([^\n]*상시 검사 생략', src) is not None)
-    check("무거래 실행에서는 여전히 상시 검사가 돈다",
-          re.search(r'elif pos_after_ok:\s*\n\s*_base = _v25_read_health\(\)'
-                    r'[\s\S]{0,200}?_v25_standing_check\(positions_after, _base\)', src) is not None)
+    check("상시 검사는 계좌를 건드리기 전에, 체결 전 포지션으로 돈다",
+          re.search(r'_v25_standing_check\(positions_before, _sbase\)', src) is not None)
+    check("체결 후 포지션으로 상시 검사하는 경로가 없다",
+          '_v25_standing_check(positions_after' not in src)
+    check("위반이면 그 실행이 매매를 안 한다 (선언과 동작 일치)",
+          re.search(r'if _standing_block:\s*\n\s*log\.error\([^\n]*매매하지 않는다', src) is not None
+          and re.search(r'_standing_block = True', src) is not None)
+    check("검사가 매매 분기보다 앞에 있다",
+          src.index('_v25_standing_check(positions_before') < src.index("elif not rebalance_needed:"))
+    check("lock 은 검사 지점에서 한 번만 만든다",
+          src.count('_v25_create_lock("standing integrity: ') == 1)
     check("기준 갱신 조건에서 v25_success 가 빠졌다",
           'if _v25_did_order and pos_after_ok:' in src)
     check("옛 자기잠김 조건이 남아있지 않다",
