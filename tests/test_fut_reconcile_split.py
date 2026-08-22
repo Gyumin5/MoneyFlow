@@ -84,8 +84,14 @@ check("옛 이름 _v25_reconcile( 은 남아 있지 않다",
       re.search(r'(?<!exec)_v25_reconcile\(', _src) is None)
 check("_v25_traded_path 는 args.trade 분기에서만 True 가 된다",
       len(re.findall(r'_v25_traded_path = True', _src)) == 1)
-check("상시 검사는 pos_after_ok 일 때만 돈다(조회 실패를 소실로 단정하지 않음)",
-      re.search(r'if pos_after_ok:\s*\n\s*_base = _v25_read_health\(\)', _src) is not None)
+check("상시 검사는 포지션 조회 성공일 때만 돈다(조회 실패를 소실로 단정하지 않음)",
+      re.search(r'if pos_ok:\s*\n\s*_sbase = _v25_read_health\(\)', _src) is not None)
+# 2026-08-22: 상시 검사 위치가 체결 후 → 체결 전(positions_before)으로 바뀌었다.
+# 체결 후에 부르면 우리 변경이 위반으로 잡히고(자기잠김), 주문 낸 실행마다 생략해야 해서
+# 검사가 사실상 꺼진다. 아래 두 줄이 그 되돌림을 막는다.
+check("상시 검사 입력은 체결 전 포지션",
+      '_v25_standing_check(positions_before, _sbase)' in _src
+      and '_v25_standing_check(positions_after' not in _src)
 
 # ── 3. streak 회계 ──────────────────────────────────────────────────────────
 print("[3] abort_streak 회계")
