@@ -9,7 +9,7 @@
 | 자산 | 버전 | 거래소 | 핵심 전략 | 단독 백테스트 |
 |------|------|--------|-----------|--------------|
 | 주식 | V25 (2026-05-29) | 한국투자증권 | R7 ETF, EEM SMA200±0.5% 카나리, Z-score(가중Mom+Sharpe126) → 3-mom 필터 → Top3 cap 1/3 + 7% Cash, 3트랜치 | window rank-sum 채택 (C안 avg_rank 1.246) |
-| 현물코인 | V24 (2026-04-30) | 업비트 | D_SMA42 단일, n_snap=7 snap_int=217 drift=0.10, BTC SMA42±1.5% 카나리 | Cal 4.63, CAGR +82%, MDD -18% (5.4yr) |
+| 현물코인 | V24 (2026-04-30) | 업비트 | D_SMA42 단일, n_snap=7 snap_int=217 drift=0.10, BTC SMA42±1.5% 카나리 | Cal 4.35, CAGR +77.6%, MDD -17.8% (5.8yr, 라이브 체결규칙 정합) |
 | 선물 | V25 (2026-05-28) | 바이낸스 | D_SMA42 sleeve, 동적 per-coin L=min(BTC_cap,K2), CROSSED 마진 | Cal 8.12, CAGR 312%, MDD -38.3% (5.6yr) |
 
 ### 자산배분

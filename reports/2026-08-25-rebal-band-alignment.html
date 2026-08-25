@@ -1,0 +1,138 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>체결 밴드 정합과 채택값 불변성 — 2026-08-25</title>
+<style>
+:root{--bg:#fbfbf9;--fg:#1b1b1a;--mut:#5f5f5c;--line:#e2e0da;--card:#fff;--ok:#1f6f43;--no:#9a3412;--warn:#8a6d1f}
+@media (prefers-color-scheme: dark){:root{--bg:#16171a;--fg:#e9e8e4;--mut:#a3a29d;--line:#2e3034;--card:#1d1f23;--ok:#5fbf8a;--no:#e08258;--warn:#d6b45c}}
+*{box-sizing:border-box}
+body{margin:0;padding:20px 16px 64px;background:var(--bg);color:var(--fg);
+ font-family:'Noto Sans CJK KR',system-ui,sans-serif;font-size:17px;line-height:1.75}
+main{max-width:820px;margin:0 auto}
+h1{font-size:25px;line-height:1.35;margin:0 0 6px}
+h2{font-size:20px;margin:38px 0 10px;padding-top:14px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:22px 0 6px;color:var(--mut)}
+.sub{color:var(--mut);font-size:15px;margin:0 0 26px}
+p{margin:10px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+.verdict{font-size:15px;font-weight:600;letter-spacing:.02em}
+.ok{color:var(--ok)} .no{color:var(--no)} .warn{color:var(--warn)}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:12px 0}
+table{border-collapse:collapse;width:100%;min-width:520px;font-size:15px}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{color:var(--mut);font-weight:600;font-size:14px}
+tr.mark td{background:rgba(127,127,127,.10);font-weight:600}
+code{font-family:'Noto Sans Mono CJK KR',monospace;font-size:14px;background:rgba(127,127,127,.12);
+ padding:1px 5px;border-radius:5px}
+ul{margin:8px 0;padding-left:20px} li{margin:5px 0}
+.note{color:var(--mut);font-size:15px}
+</style>
+<main>
+<h1>체결 밴드 정합과 채택값 불변성</h1>
+<p class="sub">2026-08-25 · 현물 백테스트를 라이브 체결규칙에 맞추고, 그 밑에 깔려 있던 채택값들이 그대로인지 확인했다. 선물 밴드 확대는 토론 결과 보류.</p>
+
+<div class="card">
+<p class="verdict">결론 네 줄</p>
+<ul>
+<li>현물 백테스트의 5% 체결 밴드는 라이브에 없는 규칙이었다. 엔진을 밴드 0 으로 고쳤다. 라이브 코드는 안 건드렸다.</li>
+<li>그 밑에서 고른 값들 — 드리프트 문턱 0.10, 변동성 상한 0.05, 스냅 간격 217 — 전부 제자리다.</li>
+<li>현물에 밴드를 새로 넣는 안(5·10·20·30%)은 기각. 두 비용 조건이 다른 값을 가리키고 20% 이상은 낙폭이 나빠진다.</li>
+<li>선물 밴드를 5%에서 15%로 넓히는 안은 <span class="no">보류</span>. 슬리브 단독에선 낫지만 합성에선 사라지고, 오늘 이미 한 번 바꿨다.</li>
+</ul>
+</div>
+
+<h2>1. 무엇이 어긋나 있었나</h2>
+<p>업비트 실매매 코드(<code>trade/executor_coin.py</code>)에는 상대 밴드가 없다. 목표와 현재의 차이가 5,000원을 넘으면 주문을 낸다. 반면 채택 백테스트는 보유 수량 대비 ±5% 를 벗어날 때만 체결했다. 백테스트가 실제보다 덜 거래하는 셈이라, 인용하던 성과가 실제 도는 것보다 좋았다.</p>
+<p>토론(run-20260825T071922Z)은 만장일치로 "라이브를 건드리지 말고 백테스트를 라이브에 맞춰라" 였다. 5.8년 칼마 0.06 을 얻자고 실매매 판정 경로를 하나 더 만드는 건 값이 안 맞는다는 이유다.</p>
+
+<h3>절대 최소주문은 모형화할 필요가 있나</h3>
+<p>중재자가 조건을 달았다 — 밴드만 0 으로 바꾸고 정합이 끝났다고 하지 마라, 라이브의 실제 무거래 구간은 5,000원 절대 문턱과 잔돈 정리가 만든다. 그래서 계좌 규모별로 그 문턱이 성과를 바꾸는지 쟀다.</p>
+<div class="scroll"><table>
+<thead><tr><th>가정</th><th>문턱 비율</th><th>최종 배수</th><th>자산곡선 최대괴리</th></tr></thead>
+<tbody>
+<tr><td>문턱 없음</td><td>0</td><td>27.58배</td><td>기준</td></tr>
+<tr><td>5천원 / 1.38억</td><td>0.0036%</td><td>27.58배</td><td>0.000%</td></tr>
+<tr><td>5천원 / 1000만</td><td>0.05%</td><td>27.58배</td><td>0.012%</td></tr>
+<tr><td>5천원 / 100만</td><td>0.5%</td><td>27.56배</td><td>0.218%</td></tr>
+<tr class="mark"><td>(비교) 상대 밴드 5%</td><td>5%</td><td>28.41배</td><td>3.020%</td></tr>
+</tbody></table></div>
+<p>100만원 계좌를 가정해도 5.8년 최대 괴리가 0.2% 다. 절대 문턱은 모형화하지 않는다. 밴드 0 으로 충분하다.</p>
+<p class="note">덧붙임: 이 판정에서 순위 지표는 못 쓴다. 자산곡선이 0.01% 차이인데도 평균순위는 1.0 이상 벌어진다 — 잡음을 순위로 증폭한 것이라 "유의차"로 읽으면 안 된다. 그래서 자산곡선 괴리를 직접 쟀다.</p>
+
+<h2>2. 밴드를 0 으로 바꾸면 그 밑의 값들이 흔들리나</h2>
+<p>밴드는 회전수를 정하고, 드리프트 문턱·변동성 상한·스냅 간격도 회전수를 통해 성과에 닿는다. 그래서 밴드를 바꾼 뒤 이 값들이 여전히 봉우리 안인지 확인해야 한다. 재최적화가 아니라 불변성 확인이다.</p>
+
+<h3>드리프트 문턱 (후보 0.02~0.12, 위상 5종, 윈도우 585개)</h3>
+<div class="scroll"><table>
+<thead><tr><th>문턱</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>체결</th><th>Cal (비용 5배)</th></tr></thead>
+<tbody>
+<tr><td>0.02</td><td>3.79</td><td>+74.6%</td><td>-20.0%</td><td>818</td><td>1.54</td></tr>
+<tr><td>0.04</td><td>4.09</td><td>+72.8%</td><td>-17.9%</td><td>518</td><td>1.92</td></tr>
+<tr><td>0.06</td><td>4.10</td><td>+73.2%</td><td>-17.9%</td><td>390</td><td>1.97</td></tr>
+<tr><td>0.08</td><td>4.08</td><td>+73.2%</td><td>-18.0%</td><td>353</td><td>1.98</td></tr>
+<tr class="mark"><td>0.10 (채택)</td><td>4.13</td><td>+74.2%</td><td>-18.0%</td><td>327</td><td>1.99</td></tr>
+<tr><td>0.12</td><td>4.15</td><td>+74.5%</td><td>-18.0%</td><td>313</td><td>2.02</td></tr>
+</tbody></table></div>
+<p>0.04~0.12 가 칼마 0.07 폭 안에 몰린 평지고, 확실히 나쁜 건 0.02 하나다. 순위 지표는 기본비용에서 0.02 를, 비용 5배에서 0.12 를 1위로 놓아 방향이 반대다. 대안이 하나로 모이지 않고 평지 안에서 고르는 건 잡음을 고르는 것이라 <span class="ok">0.10 유지</span>.</p>
+
+<h3>변동성 상한 × 스냅 간격 (9조합, 위상 3종, 윈도우 351개)</h3>
+<div class="scroll"><table>
+<thead><tr><th>조합</th><th>평균순위</th><th>승률</th><th>Cal</th><th>CAGR</th><th>MDD</th></tr></thead>
+<tbody>
+<tr><td>vol 0.05 / snap 248</td><td>2.011</td><td>38.5%</td><td>4.12</td><td>+74.1%</td><td>-18.0%</td></tr>
+<tr class="mark"><td>vol 0.05 / snap 217 (채택)</td><td>2.202</td><td>35.6%</td><td>4.16</td><td>+74.3%</td><td>-17.9%</td></tr>
+<tr><td>vol 0.05 / snap 186</td><td>2.476</td><td>17.9%</td><td>3.87</td><td>+72.0%</td><td>-18.7%</td></tr>
+<tr><td>vol 0.06 / snap 248</td><td>5.533</td><td>1.1%</td><td>2.62</td><td>+62.1%</td><td>-23.8%</td></tr>
+<tr><td>vol 0.06 / snap 217</td><td>5.561</td><td>2.3%</td><td>2.54</td><td>+61.9%</td><td>-24.6%</td></tr>
+<tr><td>vol 0.04 / snap 217</td><td>6.558</td><td>0.0%</td><td>1.80</td><td>+38.4%</td><td>-21.3%</td></tr>
+<tr><td>vol 0.04 / snap 248</td><td>6.707</td><td>1.1%</td><td>1.82</td><td>+37.8%</td><td>-20.8%</td></tr>
+</tbody></table></div>
+<p>변동성 상한이 지배적이다. 0.05 세 조합이 위를 독점하고 0.04·0.06 은 칼마가 절반으로 떨어진다. 스냅은 217 과 248 이 사실상 동률(칼마 4.16 대 4.12)이고 186 만 열위다. <span class="ok">둘 다 불변 확인</span>.</p>
+
+<h2>3. 현물에 밴드를 새로 넣을 것인가</h2>
+<p>지금 라이브에 없는 규칙을 새로 넣는 안이므로 채택 문턱을 높게 뒀다 — 두 비용 조건이 같은 값을 가리키고 칼마 0.3 이상 차이날 때만 후보로 올린다.</p>
+<div class="scroll"><table>
+<thead><tr><th>밴드</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>체결/년</th><th>순위(기본)</th><th>순위(5배)</th></tr></thead>
+<tbody>
+<tr class="mark"><td>0% (현행=라이브)</td><td>4.35</td><td>+77.6%</td><td>-17.8%</td><td>54.5</td><td>3.051</td><td>2.256</td></tr>
+<tr><td>5%</td><td>4.41</td><td>+78.5%</td><td>-17.8%</td><td>47.4</td><td>2.103</td><td>1.564</td></tr>
+<tr><td>10%</td><td>4.44</td><td>+79.2%</td><td>-17.8%</td><td>43.8</td><td>1.974</td><td>2.803</td></tr>
+<tr><td>20%</td><td>4.00</td><td>+78.5%</td><td>-19.6%</td><td>38.9</td><td>3.521</td><td>4.060</td></tr>
+<tr><td>30%</td><td>4.24</td><td>+82.1%</td><td>-19.4%</td><td>37.2</td><td>4.350</td><td>4.316</td></tr>
+</tbody></table></div>
+<p>20% 이상은 최대낙폭이 -17.8% 에서 -19.5% 근처로 확실히 나빠진다. 0·5·10% 는 사실상 동률이고 순위는 조건마다 다른 값을 가리킨다(기본 10%, 5배 5%). 사전 문턱 미달 → <span class="no">도입 안 함. 현물 밴드 건 종결.</span></p>
+
+<h2>4. 선물 밴드를 넓힐 것인가 (5 → 15%)</h2>
+<p>선물은 밴드가 실제 라이브 파라미터다. 오늘 오전에 1% 에서 5% 로 올려 배포했고, 그때 "10% 가 더 좋게 나오지만 채택안 자체를 바꾸는 축이라 보류" 로 남겨뒀던 항목이다.</p>
+<div class="scroll"><table>
+<thead><tr><th>밴드</th><th>Cal</th><th>CAGR</th><th>MDD</th><th>체결</th><th>순위(기본)</th><th>순위(5배)</th><th>합성 Cal</th></tr></thead>
+<tbody>
+<tr class="mark"><td>5% (현행)</td><td>7.42</td><td>+284.7%</td><td>-38.3%</td><td>873</td><td>3.650</td><td>3.812</td><td>4.68</td></tr>
+<tr><td>10%</td><td>7.25</td><td>+284.0%</td><td>-39.2%</td><td>763</td><td>2.735</td><td>2.940</td><td>4.67</td></tr>
+<tr><td>15%</td><td>7.41</td><td>+283.3%</td><td>-38.2%</td><td>715</td><td>1.872</td><td>2.094</td><td>4.62</td></tr>
+<tr><td>20%</td><td>7.46</td><td>+285.0%</td><td>-38.2%</td><td>704</td><td>2.393</td><td>1.974</td><td>4.64</td></tr>
+<tr><td>30%</td><td>7.17</td><td>+287.1%</td><td>-40.0%</td><td>534</td><td>4.350</td><td>4.179</td><td>4.72</td></tr>
+</tbody></table></div>
+<p>30% 에서 확실히 꺾인다(비용 5배 칼마 5.90, 최대낙폭 -44.5%). 꺾이는 지점이 구간 안에 있으니 10~20% 는 진짜 평지고 현행 5% 는 그 바깥 가장자리다. 슬리브만 보면 넓히는 게 맞다.</p>
+<p>그런데 자산배분 60/25/15 로 합치면 칼마 4.62~4.72 로 차이가 사라진다. 선물 비중이 15% 라서다.</p>
+<div class="card">
+<p class="verdict no">토론 결론 (run-20260825T073831Z, 만장일치): 지금 바꾸지 않는다</p>
+<ul>
+<li>오전의 1→5% 는 1% 가 모든 지표에서 열위였다는 지배 관계가 있었다. 5→15% 에는 그게 없다 — 절대 칼마 차이가 없고 순위 우위만 있다.</li>
+<li>수익 목적함수는 합성 포트폴리오다. 슬리브 단독 순위는 실행 효율 진단으로 읽는다. 합성에서 안 잡히면 실거래 상수를 흔들 이유가 없다.</li>
+<li>넓은 밴드가 실전에서 유리하다는 것도 확정이 아니다. 주문 횟수는 줄지만 한 번에 나가는 주문이 커져 시장충격·부분체결·거절 위험이 는다. 백테스트는 양쪽 다 못 잰다.</li>
+<li>오늘 이미 한 번 바꿨고 관측이 1회다. 여기서 또 바꾸면 원인 귀속을 잃는다.</li>
+</ul>
+</div>
+<h3>토론이 새로 짚은 위험</h3>
+<p>레버리지가 4배에서 2배로 내려갈 때 목표 명목이 줄어드는데, 편차가 밴드 안이면 주문을 안 낸다. 위험을 줄여야 하는 상황에서 과다노출이 밴드 안에 머물며 방치된다. 5% 에서는 폭이 작지만 15% 면 커진다. 밴드 값과 별개로 "위험을 줄이는 매도" 를 밴드에서 분리하는 구조 변경이 선행 조건으로 붙었다.</p>
+<p>재심사 조건: 남은 9~13회 관측에서 매수·매도별 편차, 밴드 발화 여부, 주문 크기, 슬리피지, 부분체결·거절, 체결 후 잔여 편차, 레버리지 단계, 마진 여유를 모으고, 같은 상태를 5% 와 15% 로 재생해 비교한다. 향후 후보는 15% 하나. 20%·30% 는 제외.</p>
+
+<h2>5. 바뀐 것과 안 바뀐 것</h2>
+<ul>
+<li>바뀜: <code>unified_backtest.py</code> 체결 밴드가 자산군별로 갈린다 — 현물 0(라이브 무밴드), 선물 0.05(라이브 <code>DELTA_THRESHOLD</code>). 상수 두 개가 하나의 규칙으로 정리됐다.</li>
+<li>바뀜: 현물 슬리브 인용 수치 — 칼마 4.63 → 4.35, 연복리 +82% → +77.6%, 최대낙폭 -18% → -17.8%. 기간도 5.4년 → 5.8년. <code>CLAUDE.md</code> / <code>README.md</code> / <code>OPERATION_MANUAL.md</code> / <code>STRATEGY_EVOLUTION.md</code> 반영.</li>
+<li>안 바뀜: 라이브 코드 전부(<code>trade/</code> 무변경). 드리프트 0.10, 변동성 상한 0.05, 스냅 217, 선물 밴드 5%.</li>
+<li>연구 스크립트: <code>bt_spot_min_order.py</code> / <code>bt_spot_drift_recheck.py</code> / <code>bt_spot_invariance_band0.py</code> / <code>bt_spot_band_wide.py</code> / <code>bt_fut_band_wide.py</code>. 엔진 임시 토글은 측정 후 전부 원복.</li>
+</ul>
+</main>

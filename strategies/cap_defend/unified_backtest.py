@@ -445,6 +445,13 @@ def run(bars, funding, interval='1h', leverage=1.0,
     def _execute_rebalance(target_weights, date):
         """Delta 리밸런싱 with 선물 비용."""
         nonlocal capital, trade_count
+        # 체결 밴드 = 각 sleeve 의 라이브 규칙 (2026-08-25 정합).
+        #   spot: trade/executor_coin.py 는 상대 밴드가 없다. 절대 최소주문 5,000원만 있고
+        #         그건 슬리브 규모 대비 0.004%~0.5% 라 성과 영향이 5.8년 최대괴리 0.2% 로
+        #         무의미하다(research/bt_spot_min_order.py). → 0.
+        #   fut:  trade/auto_trade_binance.py DELTA_THRESHOLD=0.05.
+        # 밴드를 축으로 재실험하려면 research/bt_spot_rebal_band.engine.patch 를 적용한다.
+        _band = 0.0 if asset_type == 'spot' else 0.05
         pv = _port_val(date)
         if pv <= 0:
             return
@@ -481,7 +488,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 trade_count += 1
             else:
                 delta = target_qty[coin] - holdings[coin]
-                if delta < -holdings[coin] * 0.05:
+                if delta < -holdings[coin] * _band:
                     sell_qty = -delta
                     sell_frac = sell_qty / holdings[coin]
                     sell_margin = margins[coin] * sell_frac
@@ -514,7 +521,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     trade_count += 1
             else:
                 delta = tqty - holdings[coin]
-                if delta > holdings[coin] * 0.05:
+                if delta > holdings[coin] * _band:
                     entry_p = cur * (1 + slip)
                     add_notional = delta * entry_p
                     add_margin = add_notional / leverage
