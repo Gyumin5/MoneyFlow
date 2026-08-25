@@ -530,17 +530,31 @@ def _get_binance_balance_data(exchange_rate: float | None = None) -> dict:
         })
     # 전략 목표 비중(last_target) — 참고용 별도 필드로만 보존 (표시 기본값 아님)
     target_weights = {}
+    raw_target = {}
+    fut_cash_buf = 0.01
     try:
         with open(os.environ.get('BINANCE_STATE_FILE', os.path.join(APP_HOME, 'binance_state.json')), 'r') as f:
             state = json.load(f)
         last_target = state.get('last_target') or {}
+        fut_cash_buf = float(state.get('fut_cash_buffer', state.get('cash_buffer', 0.01)))
         total_target = sum(float(v) for v in last_target.values() if isinstance(v, (int, float)))
         if total_target > 0:
             for k, v in last_target.items():
                 if isinstance(v, (int, float)):
                     target_weights['현금' if str(k).upper() == 'CASH' else str(k)] = float(v) / total_target
+                    raw_target[str(k).upper()] = float(v) / total_target
     except Exception:
         pass
+    # 선물 실행이 실제로 맞추는 값은 명목(=equity×(1-buffer)×목표비중×L)이다.
+    # value_usdt(진입마진+미실현PnL) 기준 비중만 보면 이익난 고레버리지 종목이 목표보다
+    # 높게 보인다(08-25 SOL 0.374 vs 목표 0.261, 실제 명목은 목표의 -1.8%).
+    # 그래서 명목 목표와 편차를 같이 실어 보낸다 — 편차가 체결 밴드(5%) 밖이면 다음 실행에서 주문이 나간다.
+    for h in holdings:
+        tw = raw_target.get(str(h.get('ticker', '')).upper(), 0.0)
+        lev = float(h.get('leverage') or 0.0)
+        tgt_notional = fut_total_usdt * (1 - fut_cash_buf) * tw * lev if tw > 0 and lev > 0 else 0.0
+        h['target_notional_usdt'] = tgt_notional
+        h['notional_dev'] = (float(h.get('notional_usdt', 0.0)) / tgt_notional - 1) if tgt_notional > 0 else None
     holdings.extend(spot_holdings)
     # 실제 구성비중 = 보유 현재가치(선물=마진+미실현PnL, 현물=시장가치) / 실제 계좌가치(equity=totalMarginBalance).
     # 손익을 포지션에 귀속시켜 물린 종목 비중이 실제로 줄어들게 함(현물/주식 카드와 동일하게 손익 반영).

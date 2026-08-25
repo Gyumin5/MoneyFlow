@@ -2799,16 +2799,17 @@ def main():
                         continue
                     if pos_amt <= 0 or cur_lev <= 0 or new_lev >= cur_lev:
                         continue
-                    # mark_price: futures_account row 의 entryPrice/markPrice 또는 ticker fallback
+                    # mark_price: futures_account row 의 markPrice, 없으면 mark price API.
+                    # entryPrice 로 대체하지 않는다 — 진입가는 현재 시세가 아니라서 명목이
+                    # 실제와 다르게 찍히고(08-24 BNB $643.51 vs 실제 $702.93) min_notional
+                    # 판정도 어긋난다. 매도 수량은 비율이라 가격이 약분돼 영향 없다.
                     mark = 0.0
-                    for k in ('markPrice', 'entryPrice'):
-                        v = row.get(k)
-                        if v:
-                            try:
-                                mark = float(v)
-                                if mark > 0: break
-                            except (TypeError, ValueError):
-                                pass
+                    v = row.get('markPrice')
+                    if v:
+                        try:
+                            mark = float(v)
+                        except (TypeError, ValueError):
+                            mark = 0.0
                     if mark <= 0:
                         try:
                             mark = float(_with_retry(lambda: client.futures_mark_price(symbol=sym))['markPrice'])
