@@ -25,7 +25,6 @@
 
 # params drift check 는 Daily Report(recommend_personal 09:15) 안에 통합 — 별도 cron 없음.
 #
-# 없어진 항목 (2026-08-25 확인): 월 1회 BT replay
-#   30 9 1 * * cd /home/ubuntu && python3 bt_replay_monthly.py >> /home/ubuntu/bt_replay.log 2>&1
-#   스크립트 ~/bt_replay_monthly.py 는 서버에 그대로 있는데 cron 등록만 사라졌고 bt_replay.log 도 없다.
-#   즉 라이브↔BT drift 감시가 언제부턴가 안 돌고 있었다. 되살릴지는 사용자 판단 대기.
+# 2026-08-25 폐기: 월 1회 BT replay (30 9 1 * * bt_replay_monthly.py).
+#   서버 crontab 에 없었고 로그도 없어 한 번도 돈 적이 없다. 서버에 백테스트 코드가 없어 등록됐어도
+#   ImportError 였고 baseline 은 V24 고정 L3 시절 상수였다. 스크립트도 지웠다 — 되살리지 않는다.

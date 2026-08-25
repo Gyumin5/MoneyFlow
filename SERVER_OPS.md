@@ -25,13 +25,18 @@
 - `~/kis_trade_state.json` — 주식 V25 live state (snapshots: snap0/snap1/snap2, last_rebal_date)
 - `~/binance_state.json` — 선물 V25 live state (strat.canary_on 등)
 - `~/signal_state.json` — recommend 출력, executor 입력
-- `~/state_backups/` — `watchdog_serve.sh` 가 하루 한 번 복사, 14일 보관
+- `~/state_backups/YYYY-MM-DD/` — `watchdog_serve.sh` 가 하루 한 번 만드는 cohort. 14일 보관
 
-2026-08-25 점검: 백업이 `signal_state.json` 과 `kis_trade_state.json` 둘만 담고 있다.
-watchdog 이 복사하려는 `coin_trade_state.json` 은 서버에 없는 이름이고(실제 파일은 `trade_state.json`),
-선물 `binance_state.json` 은 아예 대상이 아니다. 즉 코인현물·선물 상태는 백업된 적이 없다.
-저장소 `trade/ops/watchdog_serve.sh` 에는 고쳐 뒀고 서버 반영은 사용자 승인 대기.
-(`~/daily_history.py` 는 V14 시절 스크립트로 아무데서도 안 불린다 — 저장소에서는 삭제했다.)
+state 백업 (2026-08-25 전면 수정)
+- 넷을 한 묶음으로 본다: `signal_state.json` `trade_state.json` `kis_trade_state.json` `binance_state.json`.
+- 임시 디렉토리에 모아 JSON 유효성까지 확인한 뒤 디렉토리 이름을 바꿔 한 번에 공개한다.
+  이름이 붙은 `state_backups/YYYY-MM-DD/` 만 복원에 쓴다 — 반쯤 만들어진 백업은 이름이 없다.
+- 하나라도 실패하면 공개하지 않고 텔레그램으로 알린 뒤 5분마다 재시도한다. 복구되면 복구 알림 1회.
+- 그 전에는 서버에 없는 이름 `coin_trade_state.json` 을 복사하고 선물은 대상이 아니었으며,
+  `cp` 실패가 삼켜진 채 성공 플래그가 찍혀 코인현물·선물 상태가 한 번도 백업되지 않았다.
+- 복원 절차는 `OPERATION_MANUAL.md` 의 "state 복원 런북" 을 따른다. 넷을 같은 날짜로 기계적으로
+  되돌리지 않는다.
+- 미결: 서버 밖 사본이 없다. VM 이 통째로 사라지면 백업도 같이 사라진다(사용자 판단 대기).
 
 ## 2. cron 일정
 
@@ -49,9 +54,16 @@ watchdog 이 복사하려는 `coin_trade_state.json` 은 서버에 없는 이름
 인증 env 는 crontab 이 아니라 `start_trade_api.sh` 가 단일 출처로 읽는다(2026-07-21 TRADE_PIN 폐지,
 DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 않는다.
 
-2026-08-25 대조 결과 저장소 사본과 서버가 한 곳 달랐다: 월 1회 BT replay(`30 9 1 * * bt_replay_monthly.py`)가
-서버 crontab 에서 사라져 있다. 스크립트 `~/bt_replay_monthly.py` 는 남아 있지만 `~/bt_replay.log` 가 없어
-실제로 돈 적이 없다 — 라이브↔BT drift 감시가 꺼진 상태다. 되살릴지는 사용자 판단 대기.
+저장소 `trade/ops/crontab.txt` 가 선언 기준이다. 서버와 다르면 서버가 truth 고 사본을 고친다.
+대조: `ssh ... 'crontab -l'` 출력과 그 파일을 비교한다.
+
+2026-08-25 폐기: 월 1회 BT replay(`30 9 1 * * bt_replay_monthly.py`). 서버 crontab 에 등록돼 있지
+않았고 `~/bt_replay.log` 도 없어 한 번도 돈 적이 없다. 게다가 `strategies/cap_defend` 를 import 하는데
+서버에는 그 디렉토리가 없어 등록됐더라도 ImportError 로 죽는 구조였고, baseline 도 V24 고정 레버리지
+3배 시절 상수라 지금 돌리면 무조건 경보다. 스크립트를 지웠다.
+남는 공백은 선물·주식의 신호 수준 자동 감시다(현물은 `v24_shadow_today.py` 가 매일 본다).
+대체 감시 — 라이브 목표 포지션과 채택 BT 목표의 일별 패리티, 입력 데이터 fingerprint, 버전 고정
+회귀 테스트 — 는 구현 비용이 있어 사용자 판단 대기 항목으로 `progress.md` 에 올려 뒀다.
 
 설계 의도 (V24/V25 — 모든 자산 1D 단일)
 - 코인/선물은 D봉 닫힘 직후 09:05 동시 실행 (4h 멤버 제거, 1일 1회). bar-idempotency 로 같은 봉 중복 매매 방지
