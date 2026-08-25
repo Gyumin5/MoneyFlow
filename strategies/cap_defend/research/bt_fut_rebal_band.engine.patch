@@ -1,0 +1,32 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 2c6e84a..88be3a1 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -489,6 +489,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+     def _execute_rebalance(target_weights, date, pv_date=None):
+         """Delta 리밸런싱 with 선물 비용. pv_date=None 이면 date 사용 (legacy)."""
+         nonlocal capital, trade_count
++        # 연구 토글 (2026-08-25): 체결 밴드. 기본 0.05 = 현행 BT.
++        # 라이브(auto_trade_binance.DELTA_THRESHOLD)는 0.01 이라 정합 여부를 재는 축.
++        _band = float(os.environ.get('REBAL_BAND', '0.05'))
+         pv = _port_val(pv_date if pv_date is not None else date)
+         if pv <= 0:
+             return
+@@ -526,7 +529,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 trade_count += 1
+             else:
+                 delta = target_qty[coin] - holdings[coin]
+-                if delta < -holdings[coin] * 0.05:
++                if delta < -holdings[coin] * _band:
+                     sell_qty = -delta
+                     sell_frac = sell_qty / holdings[coin]
+                     sell_margin = margins[coin] * sell_frac
+@@ -561,7 +564,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                     trade_count += 1
+             else:
+                 delta = tqty - holdings[coin]
+-                if delta > holdings[coin] * 0.05:
++                if delta > holdings[coin] * _band:
+                     entry_p = cur * (1 + slip)
+                     add_notional = delta * entry_p
+                     add_margin = add_notional / entry_levs.get(coin, _cur_lev(date, coin))

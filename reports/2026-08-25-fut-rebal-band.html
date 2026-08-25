@@ -1,0 +1,128 @@
+<meta charset="utf-8">
+<title>선물 리밸런싱 체결 밴드 — BT 5% vs 라이브 1% (2026-08-25)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: 'Noto Sans CJK KR', system-ui, sans-serif;
+    line-height: 1.65; font-size: 17px;
+    max-width: 900px; margin: 0 auto; padding: 20px 16px 80px;
+    background: #fff; color: #1a1a1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16181c; color: #e6e6e6; }
+    th { background: #23262c !important; }
+    tr:nth-child(even) td { background: #1c1f24; }
+    .box { background: #1c1f24 !important; border-color: #333 !important; }
+    code { background: #23262c; }
+  }
+  h1 { font-size: 22px; line-height: 1.35; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 34px 0 10px; padding-top: 12px; border-top: 2px solid #ddd; }
+  h3 { font-size: 17px; margin: 22px 0 8px; }
+  .sub { color: #777; font-size: 15px; margin: 0 0 18px; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 12px 0; }
+  table { border-collapse: collapse; font-size: 15px; min-width: 100%; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid #ddd; text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { background: #f2f4f7; font-weight: 600; }
+  .win { font-weight: 700; }
+  .bad { color: #c0392b; }
+  .box { background: #f7f8fa; border: 1px solid #e2e5ea; border-radius: 8px; padding: 14px 16px; margin: 16px 0; }
+  code { font-family: 'Noto Sans Mono CJK KR', monospace; font-size: 14px; padding: 1px 4px; border-radius: 3px; }
+  ul { padding-left: 22px; } li { margin: 5px 0; }
+</style>
+
+<h1>선물 리밸런싱 체결 밴드 재측정 — 백테스트 5% vs 라이브 1%</h1>
+<p class="sub">2026-08-25 · 선물 V25 sleeve · 기간 2020-10-01 ~ 2026-08-20 (5.5년)</p>
+
+<h2>왜 쟀나</h2>
+<p>라이브 <code>auto_trade_binance.DELTA_THRESHOLD = 0.01</code> 은 목표 명목 대비 1% 만 벌어져도 체결한다.
+채택 백테스트 <code>backtest_futures_v25._execute_rebalance</code> 는 수량 ±5% 밴드를 벗어날 때만 체결한다.
+드리프트 트리거가 사실상 매일 발화하는 구조(레버리지 4배에서 진입가 대비 ±1.5%)라
+<b>실제 회전수를 정하는 값은 드리프트 문턱이 아니라 이 밴드</b>다. 즉 라이브가 백테스트 가정보다 자주 돌고,
+그만큼 실비용이 백테스트보다 크다. 어느 쪽으로 맞춰야 하는지를 잰다.</p>
+
+<div class="box">
+축은 하나다. 선정·헬스·카나리·스냅샷·드리프트(0.03)·레버리지·비용 전부 동일하고 체결 밴드만 바꿨다.
+변형은 정본 엔진의 환경변수 <code>REBAL_BAND</code> 로 구현했고 측정 후 엔진은 원복했다(diff 0).
+</div>
+
+<h2>결과 1 — sleeve 단독 (거래비용 0.06%)</h2>
+<div class="scroll">
+<table>
+<tr><th>밴드</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>체결수</th><th>회/년</th><th>최종배수</th></tr>
+<tr><td>1% (라이브 현재)</td><td class="bad">7.03</td><td>+288.5%</td><td class="bad">-41.0%</td><td>1.87</td><td>1,454</td><td>264.5</td><td>1739x</td></tr>
+<tr><td>2%</td><td>7.07</td><td>+290.8%</td><td>-41.1%</td><td>1.88</td><td>1,183</td><td>215.2</td><td>1797x</td></tr>
+<tr><td>3%</td><td>7.08</td><td>+286.0%</td><td>-40.4%</td><td>1.86</td><td>991</td><td>180.3</td><td>1678x</td></tr>
+<tr><td class="win">5% (현행 백테스트)</td><td class="win">7.57</td><td>+290.4%</td><td class="win">-38.3%</td><td>1.88</td><td>859</td><td>156.2</td><td>1787x</td></tr>
+<tr><td>10%</td><td>7.40</td><td>+289.7%</td><td>-39.2%</td><td>1.88</td><td>749</td><td>136.2</td><td>1769x</td></tr>
+</table>
+</div>
+<p>수익은 사실상 같다(CAGR 286~291%). 갈리는 건 낙폭이다. 1% 는 MDD -41.0%, 5% 는 -38.3% 로
+2.7%p 차이가 나고 그게 Calmar 7.03 대 7.57 로 나타난다. 밴드를 좁힌다고 목표를 더 정확히 따라가서
+이득이 생기지는 않았고, 체결만 1.69배로 늘었다.</p>
+
+<h2>결과 2 — 윈도우 rank-sum (낮을수록 우세, n=105)</h2>
+<div class="scroll">
+<table>
+<tr><th>밴드</th><th>기본비용 avg_rank</th><th>wins</th><th>비용 5배 avg_rank</th><th>wins</th></tr>
+<tr><td>1% (라이브 현재)</td><td class="bad">3.686</td><td>15/105</td><td class="bad">4.019</td><td>1/105</td></tr>
+<tr><td>2%</td><td>2.419</td><td>48/105</td><td>3.867</td><td>4/105</td></tr>
+<tr><td>3%</td><td>3.476</td><td>9/105</td><td>3.124</td><td>3/105</td></tr>
+<tr><td>5% (현행 백테스트)</td><td>3.105</td><td>17/105</td><td>2.552</td><td>17/105</td></tr>
+<tr><td class="win">10%</td><td class="win">2.314</td><td>16/105</td><td class="win">1.438</td><td>80/105</td></tr>
+</table>
+</div>
+<p>기본비용 구간의 순서는 깔끔하지 않다(2% 가 2위, 3% 가 4위). 밴드 중간대는 대체로 잡음이라는 뜻이다.
+반면 비용을 5배로 올리면 순서가 <b>넓을수록 좋다</b>로 단조롭게 정렬된다(10% → 5% → 3% → 2% → 1%).
+어느 구간에서도 라이브의 1% 가 우세한 적은 없다. 비용 스트레스에서는 105 윈도우 중 1승이다.</p>
+
+<h2>결과 3 — 자산배분 60/25/15 합성</h2>
+<div class="scroll">
+<table>
+<tr><th>밴드</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th></tr>
+<tr><td>1% (라이브 현재)</td><td>4.86</td><td>+61.5%</td><td>-12.6%</td><td>2.18</td></tr>
+<tr><td>2%</td><td>4.89</td><td>+61.6%</td><td>-12.6%</td><td>2.19</td></tr>
+<tr><td>3%</td><td>4.85</td><td>+61.3%</td><td>-12.6%</td><td>2.18</td></tr>
+<tr><td>5% (현행 백테스트)</td><td>4.89</td><td>+61.5%</td><td>-12.6%</td><td>2.19</td></tr>
+<tr><td>10%</td><td>4.87</td><td>+61.4%</td><td>-12.6%</td><td>2.20</td></tr>
+</table>
+</div>
+<p>선물 비중이 15% 라 합성 단계에서는 차이가 씻긴다(Calmar 4.85~4.89). 합성 rank-sum 도 순서가
+뒤섞여(2% 1위, 5% 5위) 신호로 보기 어렵다. 판단 근거는 sleeve 단독과 비용 스트레스다.</p>
+
+<h2>해석</h2>
+<ul>
+<li><b>밴드를 좁히는 방향은 이득이 없다.</b> 1~3% 는 5% 대비 수익이 같거나 낮고 낙폭은 같거나 크며 체결만 늘었다.
+좁은 밴드는 목표 추종을 정밀하게 만드는 대신, 이미 목표 근처인 포지션을 매일 흔들어 비용만 남긴다.</li>
+<li><b>낙폭이 커지는 이유</b>는 잦은 재조정이 하락 구간에서 명목을 계속 목표로 되돌리기 때문이다.
+넓은 밴드는 하락 중 자연히 줄어든 노출을 얼마간 그대로 두는데, 그게 레버리지 4배에서는 완충으로 작동한다.</li>
+<li><b>10% 가 더 나을 가능성</b>은 있다(기본·스트레스 rank-sum 모두 1위). 다만 전 기간 Calmar 는 5% 가 위고(7.57 대 7.40),
+10% 로 가는 건 채택 전략 자체를 바꾸는 일이다. 지금 필요한 건 라이브를 채택안에 맞추는 것이라 5% 를 기준으로 둔다.</li>
+</ul>
+
+<h2>권고</h2>
+<div class="box">
+라이브 <code>DELTA_THRESHOLD</code> 를 <b>0.01 → 0.05</b> 로 올려 채택 백테스트와 정합시킨다.
+이 상수 하나가 매도 게이트·매수 게이트·<code>needs_rebalance</code> 세 곳을 동시에 지배하므로 변경 지점은 한 줄이다.
+기대 효과는 연 264회 수준의 체결이 156회 수준으로 줄고(-41%), 백테스트가 가정한 비용 구조로 돌아오는 것.
+실거래 파라미터 변경이므로 ai-debate 검토와 사용자 승인 뒤에 배포한다.
+</div>
+<p>부수 관측: 현물도 같은 구조다. 현물 백테스트(<code>unified_backtest</code>)는 5% 밴드인데
+라이브(<code>executor_coin</code>)는 최소주문 ₩5,000 초과면 전부 체결한다 — 사실상 밴드가 없다.
+다만 현물은 드리프트 문턱이 0.10 이고 발화가 드물어(08-21 ht 0.0041) 실효 노출이 작다. 별도 확인 대상으로 남긴다.</p>
+
+<h2>재현</h2>
+<ul>
+<li>패치 적용: <code>git apply strategies/cap_defend/research/bt_fut_rebal_band.engine.patch</code> (적용 안 하면 전 팔이 5% 로 돌아 차이 0 이 나온다)</li>
+<li>실행: <code>cd strategies/cap_defend/research &amp;&amp; python3 bt_fut_rebal_band.py</code> (약 96초)</li>
+<li>원시 출력: <code>state/rebal-band/sweep.log</code></li>
+<li>측정 후 엔진 원복 필수 — 정본 오염 금지</li>
+</ul>
+
+<h2>한계</h2>
+<ul>
+<li>백테스트 밴드는 수량 기준, 라이브는 명목 기준이다. 같은 레버리지에서는 사실상 같은 값이지만 정확히 같은 정의는 아니다.</li>
+<li>라이브에는 거래소 최소주문·최소수량 필터가 더 있어 아주 작은 주문은 밴드와 무관하게 걸러진다.</li>
+<li>밴드 10% 이상은 재보지 않았다. 채택안 변경 축이라 별도 판단이 필요하다.</li>
+</ul>
