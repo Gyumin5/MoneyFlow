@@ -1,0 +1,43 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 2c6e84a..8f4dffe 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -271,6 +271,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+     pfd_bars = pfd_bars_override if pfd_bars_override > 0 else post_flip_delay * bpd
+ 
+     # State
++    _sv_rows = []  # [임시·연구용] FUT_SOLVENCY_DUMP 일별 포지션 덤프
+     capital = initial_capital
+     holdings = {}  # {coin: qty}  — spot-equivalent units (leverage는 PnL에만 적용)
+     entry_prices = {}  # {coin: entry_price}
+@@ -1074,6 +1075,19 @@ def run(bars, funding, interval='D', leverage=3.0,
+                     liq_count += 1
+ 
+         pv_list.append({'Date': date, 'Value': _port_val(date)})
++        # [임시·연구용] FUT_SOLVENCY_DUMP=<path> 일 때만 일별 포지션 상태를 남긴다.
++        # 청산 여유를 일봉이 아닌 1시간봉 해상도로 재생하기 위한 읽기전용 덤프.
++        # 측정이 끝나면 이 블록은 되돌리고 research/bt_fut_solvency.engine.patch 로만 보존한다.
++        if os.environ.get('FUT_SOLVENCY_DUMP'):
++            _sv_rows.append({
++                'date': str(date.date()), 'wallet': float(capital),
++                'maint_rate': float(maint_rate),
++                'pos': {c: {'qty': float(holdings[c]),
++                            'entry': float(entry_prices[c]),
++                            'margin': float(margins[c]),
++                            'lev': float(entry_levs.get(c, 0) or 0)}
++                        for c in holdings},
++            })
+         prev_canary = canary_on
+ 
+     # ── 결과 ──
+@@ -1093,6 +1107,10 @@ def run(bars, funding, interval='D', leverage=3.0,
+     sh = dr.mean() / dr.std() * np.sqrt(bars_per_year) if dr.std() > 0 else 0
+     mdd = (eq / eq.cummax() - 1).min()
+     cal = cagr / abs(mdd) if mdd != 0 else 0
++    _sv_path = os.environ.get('FUT_SOLVENCY_DUMP')
++    if _sv_path and _sv_rows:
++        with open(_sv_path, 'w') as _f:
++            json.dump(_sv_rows, _f)
+     result = {
+         'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
+         'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,

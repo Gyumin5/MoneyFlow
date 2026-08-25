@@ -1,0 +1,32 @@
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 53311de..da6a42c 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -445,6 +445,9 @@ def run(bars, funding, interval='1h', leverage=1.0,
+     def _execute_rebalance(target_weights, date):
+         """Delta 리밸런싱 with 선물 비용."""
+         nonlocal capital, trade_count
++        # 연구 토글 (2026-08-25): 체결 밴드. 기본 0.05 = 현행 BT.
++        # 라이브 현물(executor_coin)은 밴드가 없다(최소주문 5,000원 넘으면 전부 체결).
++        _band = float(os.environ.get('REBAL_BAND', '0.05'))
+         pv = _port_val(date)
+         if pv <= 0:
+             return
+@@ -481,7 +484,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 trade_count += 1
+             else:
+                 delta = target_qty[coin] - holdings[coin]
+-                if delta < -holdings[coin] * 0.05:
++                if delta < -holdings[coin] * _band:
+                     sell_qty = -delta
+                     sell_frac = sell_qty / holdings[coin]
+                     sell_margin = margins[coin] * sell_frac
+@@ -514,7 +517,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     trade_count += 1
+             else:
+                 delta = tqty - holdings[coin]
+-                if delta > holdings[coin] * 0.05:
++                if delta > holdings[coin] * _band:
+                     entry_p = cur * (1 + slip)
+                     add_notional = delta * entry_p
+                     add_margin = add_notional / leverage
