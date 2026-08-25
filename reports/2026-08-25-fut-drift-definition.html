@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>선물 드리프트 트리거 정의 3경로 판정 (2026-08-25)</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#5a5a5a; --line:#dcdcdc;
+          --keep:#0b6b3a; --keepbg:#eaf6ef; --drop:#8a1c1c; --dropbg:#fbeeee;
+          --note:#7a5300; --notebg:#fdf6e3; }
+  body { background:var(--bg); color:var(--fg); margin:0; padding:18px 14px 60px;
+         font-family:'Noto Sans CJK KR',system-ui,sans-serif; font-size:16px; line-height:1.7; }
+  main { max-width:900px; margin:0 auto; }
+  h1 { font-size:22px; line-height:1.4; margin:0 0 6px; }
+  h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  h3 { font-size:17px; margin:22px 0 8px; }
+  .sub { color:var(--muted); font-size:14px; margin:0 0 22px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:16px 0; }
+  .keep { border-color:var(--keep); background:var(--keepbg); }
+  .drop { border-color:var(--drop); background:var(--dropbg); }
+  .note { border-color:#e0c56a; background:var(--notebg); }
+  .card p { margin:6px 0; }
+  .tag { display:inline-block; font-size:13px; padding:2px 9px; border-radius:99px;
+         border:1px solid currentColor; margin-right:8px; vertical-align:2px; }
+  .t-keep { color:var(--keep); } .t-drop { color:var(--drop); } .t-note { color:var(--note); }
+  .scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:12px 0; }
+  table { border-collapse:collapse; font-size:14px; min-width:100%; }
+  th, td { border:1px solid var(--line); padding:7px 10px; text-align:right; white-space:nowrap; }
+  th { background:#f4f4f4; font-weight:600; }
+  td:first-child, th:first-child { text-align:left; }
+  tr.win td { background:var(--keepbg); font-weight:600; }
+  code { font-family:'Noto Sans Mono CJK KR',monospace; font-size:14px;
+         background:#f2f2f2; padding:1px 5px; border-radius:4px; }
+  ul { padding-left:22px; } li { margin:5px 0; }
+  .foot { color:var(--muted); font-size:14px; margin-top:34px;
+          border-top:1px solid var(--line); padding-top:14px; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#151515; --fg:#e9e9e9; --muted:#a5a5a5; --line:#3a3a3a;
+      --keep:#5fcf94; --keepbg:#16291f; --drop:#f08a8a; --dropbg:#2a1717;
+      --note:#e0c56a; --notebg:#2a2415; }
+    :root:not([data-theme="light"]) th { background:#242424; }
+    :root:not([data-theme="light"]) code { background:#242424; }
+  }
+  :root[data-theme="dark"] { --bg:#151515; --fg:#e9e9e9; --muted:#a5a5a5; --line:#3a3a3a;
+    --keep:#5fcf94; --keepbg:#16291f; --drop:#f08a8a; --dropbg:#2a1717;
+    --note:#e0c56a; --notebg:#2a2415; }
+  :root[data-theme="dark"] th { background:#242424; }
+  :root[data-theme="dark"] code { background:#242424; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>선물 드리프트 트리거 정의 3경로 판정</h1>
+<p class="sub">2026-08-25 · 축은 정의 하나, 문턱은 고정(0.03) · 2020-10-01 ~ 2026-08-24 (5.8년)<br>
+측정 <code>strategies/cap_defend/research/bt_fut_drift_def.py</code> · 원시로그 <code>logs/2026-08-25-fut-drift-def.log</code></p>
+
+<div class="card keep">
+<p><span class="tag t-keep">결론</span>현행 정의(A)를 유지한다. 라이브 변경 없음.</p>
+<p>합성 60/25/15 에서 A 가 1위이고(윈도우 승 42 대 18), 최근 3년도 A 우위다. 슬리브 단독으로는 B 가 앞서지만
+성과 차이가 1~2% 수준이라 그것만으로 실거래 정의를 바꿀 근거가 되지 못한다. 결정층은 합성이다.</p>
+<p><span class="tag t-drop">기각</span>드리프트 트리거 제거(C) — 세 관점 모두 꼴찌, 낙폭 3%포인트 악화. 다시 하면 시간낭비.</p>
+<p><span class="tag t-note">남는 사실</span>현행 트리거는 발화 768번에 체결 873건(발화당 1.14건)이다. 추가 발화 386번이 만든
+체결은 187건뿐이라 대부분이 헛발화다. 성능 문제는 아니지만 "언제 리밸런싱할지"를 정하는 장치로는 퇴화해 있다.</p>
+</div>
+
+<h2>왜 쟀나</h2>
+<p>드리프트는 <code>half_turnover(cur_w, tgt_w) &gt;= 0.03</code> 으로 재는데 현행 <code>cur_w</code> 가
+(진입마진 + 평가손익) / equity 다. 레버리지가 걸리면 목표 명목을 정확히 맞춘 직후에도 평가손익 때문에
+비중이 목표에서 벌어진다.</p>
+<p>감도로 쓰면 위험자산 합 2/3, 레버리지 균등일 때 <code>ht ≈ (2/3)(L-1)g</code> 이고 g 는 평가손익을 명목으로 나눈 값이다.
+문턱 0.03 은 4배에서 g 1.5%, 3배에서 2.25% 에 해당한다. 코인 일일 변동이 이걸 넘으므로 트리거가 상시 켜진다
+(라이브 실측 08-22 ht 0.12, 08-23 ht 0.16 — 둘 다 목표를 맞춘 상태였다). 실제 게이트 역할은 체결 밴드(5%)가 하고 있다.</p>
+
+<h3>세 팔</h3>
+<ul>
+<li><strong>A 현행</strong> — <code>cur_w = (진입마진 + 평가손익) / equity</code>, 문턱 0.03</li>
+<li><strong>B 명목편차</strong> — <code>cur_w = 명목 / (equity × 0.95 × L)</code>, 문턱 0.03.
+    실행이 실제로 맞추는 값이 명목이라, 목표 명목을 맞춘 상태면 편차가 0 이 된다. 가격이 움직여도 목표 명목이
+    같이 움직이므로 레버리지 전환과 목표 변경 때만 벌어진다.</li>
+<li><strong>C 제거</strong> — 드리프트 트리거 없음. 앵커(95봉)와 카나리만 리밸런싱을 만든다.</li>
+</ul>
+<p>변형은 정본 엔진의 env 토글 <code>FUT_DRIFT_DEF</code> 하나로 넣었고 결론 후 되돌렸다(SSoT diff 0).
+재현하려면 <code>git apply strategies/cap_defend/research/bt_fut_drift_def.engine.patch</code> 를 먼저 적용한다.
+적용 없이 돌리면 A 와 B 가 같은 값으로 나온다.</p>
+
+<h2>슬리브 단독</h2>
+<div class="scroll">
+<table>
+<tr><th>팔</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>체결</th><th>리밸 발화</th><th>최종배수</th></tr>
+<tr><td>A 현행(마진+평가손익)</td><td>7.42</td><td>+284.7%</td><td>-38.3%</td><td>1.89</td><td>873</td><td>768</td><td>2,399배</td></tr>
+<tr class="win"><td>B 명목편차</td><td>7.57</td><td>+289.2%</td><td>-38.2%</td><td>1.91</td><td>686</td><td>382</td><td>2,565배</td></tr>
+<tr><td>C 드리프트 제거</td><td>6.67</td><td>+275.7%</td><td>-41.3%</td><td>1.93</td><td>271</td><td>143</td><td>2,093배</td></tr>
+</table>
+</div>
+<p>윈도우 rank-sum(크기 504·756·1008 × 보폭 63·126·252, n=117, 낮을수록 우세):
+기본비용 B 1.470 / A 1.880 / C 2.650, 비용 5배 B 1.624 / A 2.043 / C 2.333.
+두 비용 조건 모두 B 가 1위다.</p>
+
+<h3>회전 부담</h3>
+<div class="scroll">
+<table>
+<tr><th>팔</th><th>체결/년</th><th>현행 대비</th><th>발화/년</th><th>현행 대비</th><th>발화당 체결</th></tr>
+<tr><td>A 현행</td><td>151.1</td><td>1.00배</td><td>132.9</td><td>1.00배</td><td>1.14건</td></tr>
+<tr><td>B 명목편차</td><td>118.7</td><td>0.79배</td><td>66.1</td><td>0.50배</td><td>1.80건</td></tr>
+<tr><td>C 제거</td><td>46.9</td><td>0.31배</td><td>24.8</td><td>0.19배</td><td>1.89건</td></tr>
+</table>
+</div>
+
+<h2>합성 60/25/15 — 결정층</h2>
+<p>주식·현물 슬리브를 고정하고 선물만 교체했다. 윈도우 n=60.</p>
+<div class="scroll">
+<table>
+<tr><th>팔</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>윈도우 순위</th><th>승</th></tr>
+<tr class="win"><td>A 현행</td><td>4.58</td><td>+57.7%</td><td>-12.6%</td><td>2.12</td><td>1.533</td><td>42/60</td></tr>
+<tr><td>B 명목편차</td><td>4.53</td><td>+57.9%</td><td>-12.8%</td><td>2.13</td><td>1.700</td><td>18/60</td></tr>
+<tr><td>C 제거</td><td>4.15</td><td>+56.4%</td><td>-13.6%</td><td>2.14</td><td>2.767</td><td>0/60</td></tr>
+</table>
+</div>
+<p>슬리브 단독과 합성이 서로 다른 팔을 가리킨다. 운영 기준은 합성이다 — 실제로 돈이 놓인 형태가 합성이고,
+슬리브 단독 우열은 다른 두 슬리브와 섞였을 때 남지 않을 수 있다.</p>
+
+<h2>연도별 (수익률 / 최대낙폭)</h2>
+<div class="scroll">
+<table>
+<tr><th>연도</th><th>A 현행</th><th>B 명목편차</th><th>C 제거</th></tr>
+<tr><td>2020</td><td>+161.2% / -37.5%</td><td>+174.9% / -35.8%</td><td>+194.2% / -30.8%</td></tr>
+<tr><td>2021</td><td>+942.1% / -38.3%</td><td>+1102.0% / -34.3%</td><td>+1299.9% / -41.3%</td></tr>
+<tr><td>2022</td><td>+99.2% / -32.6%</td><td>+96.3% / -32.6%</td><td>+69.8% / -30.7%</td></tr>
+<tr><td>2023</td><td>+971.2% / -23.6%</td><td>+1015.4% / -21.4%</td><td>+1018.6% / -24.6%</td></tr>
+<tr><td>2024</td><td>+133.4% / -27.7%</td><td>+122.2% / -28.9%</td><td>+112.4% / -35.6%</td></tr>
+<tr><td>2025</td><td>-9.6% / -24.7%</td><td>-14.2% / -25.2%</td><td>-27.2% / -29.2%</td></tr>
+<tr><td>2026</td><td>+69.0% / -17.4%</td><td>+60.4% / -20.6%</td><td>+59.9% / -15.5%</td></tr>
+</table>
+</div>
+<p>B 는 2021·2023 같은 큰 상승장에서 앞서고 2024·2025·2026 은 A 가 낫다. 하락장이었던 2025 는 A 가 4.6%포인트 앞선다.
+그 격차가 A 의 잦은 발화 덕분인지 우연인지는 이번 측정으로 분해되지 않았다.</p>
+
+<h2>ai-debate 판정</h2>
+<p>run-20260825T131221Z. 세 참여자 모두 B 를 지지했으나 비판 역할은 전원 "즉시 배포 반대" 였고,
+중재자 결론은 조건부 승인 + 즉시 전환 보류였다. 배포 전 요구 조건으로 든 것:</p>
+<ul>
+<li>A 에서만 발화한 날을 전부 뽑아 그 체결이 실제로 위험을 줄였는지, 아니면 헛돌았는지 반사실 재생으로 분해</li>
+<li>2025 년 4.6%포인트 격차가 어느 주문에서 났는지 설명</li>
+<li>B 계산을 라이브와 백테스트가 같은 함수로 쓰게 만들고 레버리지 2·3·4 전환·부분체결·반올림까지 테스트</li>
+<li>최소 30회 cron 동안 주문은 현행으로 두고 두 정의를 병행 기록(그림자 관측)</li>
+</ul>
+<p>이 조건은 그대로 살아 있다. 다만 운영 기준이 합성이라는 점에서 이번 결론은 한 단계 더 단순하다 —
+합성이 A 를 가리키므로 정의는 바꾸지 않는다. 위 조건들은 나중에 이 문제를 다시 열 때의 착수 목록으로 남긴다.</p>
+
+<h2>바뀐 것과 안 바뀐 것</h2>
+<ul>
+<li>라이브 코드 변경 0. <code>auto_trade_binance.py</code> 의 <code>cur_w</code> 산출은 그대로다.</li>
+<li>정본 백테스트 엔진 변경 0 (토글 넣고 측정 후 되돌림, diff 0 확인).</li>
+<li>새로 생긴 것 — 연구 스크립트 1개, 재현 패치 1개, 이 보고서, 원시로그 1개.</li>
+<li>닫힌 것 — "드리프트를 없애도 되나"(아니다), "정의를 명목편차로 바꿔야 하나"(지금 근거로는 아니다).</li>
+</ul>
+
+<p class="foot">측정 <code>strategies/cap_defend/research/bt_fut_drift_def.py</code> ·
+재현 패치 <code>strategies/cap_defend/research/bt_fut_drift_def.engine.patch</code> ·
+원시로그 <code>logs/2026-08-25-fut-drift-def.log</code> ·
+결론 <code>history.md</code> 2026-08-25 항목</p>
+
+</main>
+</body>
+</html>

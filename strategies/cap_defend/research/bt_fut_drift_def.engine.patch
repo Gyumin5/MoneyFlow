@@ -1,0 +1,31 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 2c6e84a..3c2829a 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -665,6 +665,26 @@ def run(bars, funding, interval='D', leverage=3.0,
+         pv = _port_val(date)
+         if pv <= 0:
+             return {'CASH': 1.0}
++        # [실험 토글 FUT_DRIFT_DEF] 기본 'margin' = 현행(진입마진+PnL)/equity.
++        # 'notional' = 실행이 실제로 맞추는 값(명목)을 목표비중 척도로 환산.
++        #   목표 명목 = pv × w × 0.95 × L 이므로 cur_w = 명목 / (pv × 0.95 × L).
++        # research/bt_fut_drift_def.py 전용. 결론 후 되돌린다.
++        if os.environ.get('FUT_DRIFT_DEF', 'margin') == 'notional':
++            wn = {}
++            used = 0.0
++            for coin in holdings:
++                cur = _get_price(coin, date)
++                lev = _cur_lev(date, coin)
++                if cur <= 0 or lev <= 0:
++                    continue
++                ww = (holdings[coin] * cur) / (pv * 0.95 * lev)
++                if ww > 0:
++                    wn[coin] = ww
++                    used += ww
++            cash_w = max(0.0, 1.0 - used)
++            if cash_w > 0.001:
++                wn['CASH'] = cash_w
++            return wn
+         w = {}
+         for coin in holdings:
+             cur = _get_price(coin, date)
