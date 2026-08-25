@@ -187,7 +187,14 @@ MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
 # V25 cycle 9: 코인별 margin 변경 preflight 에서 "무관 심볼 먼지"로 간주하는 상한.
 # MIN_NOTIONAL 과 의미 분리 — 이 값 미만 잔존은 봇이 정상 주문으로 청산 불가(reduceOnly 도 min notional 미달).
 DUST_NOTIONAL_LIMIT = MIN_NOTIONAL
-DELTA_THRESHOLD = 0.01  # 리밸런싱 허용 편차 ±1% (MIN_NOTIONAL 미달 시 스킵)
+# 리밸런싱 체결 밴드. 현재 명목 대비 이만큼 벗어나야 주문한다(MIN_NOTIONAL 미달은 별도 스킵).
+# 2026-08-25: 0.01 → 0.05. 채택 BT(backtest_futures_v25._execute_rebalance)가 수량 ±5% 밴드라
+# 라이브만 1% 로 돌아 회전이 1.69배였다(연 264회 대 156회). 측정 결과 좁힌다고 수익이 늘지 않고
+# 낙폭만 악화(Cal 7.03 대 7.57, MDD -41.0% 대 -38.3%), 비용 스트레스 전 구간 열위.
+# 근거·측정 = history.md 2026-08-25 / reports/2026-08-25-fut-rebal-band.html.
+# 이 상수는 매도 게이트·매수 게이트·needs_rebalance(=완료 판정) 세 곳을 함께 지배한다.
+# 밴드를 타지 않는 경로: 목표비중 0 전량청산, 미보유 신규진입, 레버리지·마진 변경.
+DELTA_THRESHOLD = 0.05
 DISPLAY_DUST_NOTIONAL = 1.0  # 알림/대시보드에서 숨길 최소 포지션 금액
 ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
@@ -2915,9 +2922,14 @@ def main():
                     pnl = pos.get('pnl', 0.0)
                     log.info(f"  보유: {coin} ${pos['notional']:.0f} ({pos['weight']:.1%}, PnL {pnl:+.2f})")
             # 이벤트가 발생해서 시작한 리밸런싱은 목표에 근접하면 종료, 아니면 다음 실행에서 재시도.
-            if needs_rebalance(client, combined, positions_after, pv_after, target_lev_map):
+            # 주문 상태 검증은 경제적 완료 판정(밴드)과 분리한다 — 밴드가 5% 로 넓어졌으므로
+            # 거절·실패한 주문의 잔차가 밴드 안에 묻혀 "달성" 으로 선언되면 안 된다.
+            # (2026-08-25 ai-debate run-20260825T013824Z action step 3)
+            _order_failed = any(str(m).startswith('ORDER FAILED') for m in error_alerts)
+            if needs_rebalance(client, combined, positions_after, pv_after, target_lev_map) or _order_failed:
                 state['rebalancing_needed'] = True
-                log.info("  ⏳ 미달, rebalancing_needed 유지")
+                log.info("  ⏳ 미달, rebalancing_needed 유지"
+                         + (" (주문 실패 있음 — 밴드와 무관하게 유지)" if _order_failed else ""))
             else:
                 state['rebalancing_needed'] = False
                 log.info("  ✅ 목표 달성, rebalancing_needed=false")
