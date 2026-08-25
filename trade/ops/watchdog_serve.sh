@@ -96,20 +96,74 @@ if [ -f "$SIGNAL_FILE" ]; then
     fi
 fi
 
-# === state 파일 매일 백업 (1일 1회) ===
+# === state 파일 매일 백업 (cohort 단위, 하루 1회) ===
+#
+# 2026-08-25 전면 수정. 그 전에는 (a) 서버에 없는 이름 coin_trade_state.json 을 복사하고 있어
+# 코인현물 상태가 한 번도 백업되지 않았고, (b) 선물 binance_state.json 은 대상이 아니었으며,
+# (c) cp 가 실패해도 성공 플래그가 찍혀 침묵 실패가 영구화됐다.
+#
+# 설계: 넷을 임시 디렉토리에 모아 JSON 유효성까지 확인한 뒤, 디렉토리 이름을 바꿔 한 번에 공개한다.
+# 완성된 cohort 디렉토리(state_backups/YYYY-MM-DD/)만 복원에 쓴다 — 반쯤 만들어진 백업은 이름이 없다.
+# 하나라도 실패하면 공개하지 않으므로 다음 5분 실행이 자동으로 다시 시도한다.
+# 시각은 09:10 KST 이후로 잡는다(코인·선물 09:05 체결 반영. 주식은 전날 23:35 분이 들어간다).
 BACKUP_DIR="/home/ubuntu/state_backups"
+BACKUP_SRC=(signal_state.json trade_state.json kis_trade_state.json binance_state.json)
+BACKUP_FAIL_LATCH="/tmp/wd_backup_fail_alerted"
 mkdir -p "$BACKUP_DIR"
 TODAY=$(date +%Y-%m-%d)
-BACKUP_FLAG="$BACKUP_DIR/.backup_$TODAY"
-if [ ! -f "$BACKUP_FLAG" ]; then
-    # 2026-08-25: coin_trade_state.json 은 서버에 없는 이름이라 코인현물 상태가 백업된 적이 없었고,
-    # 선물 binance_state.json 은 대상에서 빠져 있었다. 실제 파일명으로 고치고 선물을 추가한다.
-    cp -f /home/ubuntu/signal_state.json "$BACKUP_DIR/signal_state_$TODAY.json" 2>/dev/null
-    cp -f /home/ubuntu/trade_state.json "$BACKUP_DIR/trade_state_$TODAY.json" 2>/dev/null
-    cp -f /home/ubuntu/kis_trade_state.json "$BACKUP_DIR/kis_trade_state_$TODAY.json" 2>/dev/null
-    cp -f /home/ubuntu/binance_state.json "$BACKUP_DIR/binance_state_$TODAY.json" 2>/dev/null
-    touch "$BACKUP_FLAG"
-    find "$BACKUP_DIR" -name "*.json" -mtime +14 -delete 2>/dev/null
-    find "$BACKUP_DIR" -name ".backup_*" -mtime +14 -delete 2>/dev/null
-    echo "[$(date)] State backup created: $TODAY"
+COHORT="$BACKUP_DIR/$TODAY"
+STAGING="$BACKUP_DIR/.staging_$TODAY"
+
+wd_backup_alert() {   # 하루 1회만 — 5분마다 재시도하되 알림은 래치로 묶는다
+    local text="$1" latch="$2"
+    if [ ! -f "$latch" ] || [ $(find "$latch" -mmin +1440 2>/dev/null | wc -l) -gt 0 ]; then
+        local TOKEN=$(python3 -c "from config import TELEGRAM_BOT_TOKEN; print(TELEGRAM_BOT_TOKEN)" 2>/dev/null)
+        local CHAT=$(python3 -c "from config import TELEGRAM_CHAT_ID; print(TELEGRAM_CHAT_ID)" 2>/dev/null)
+        if [ -n "$TOKEN" ] && [ -n "$CHAT" ]; then
+            curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+                -d chat_id="${CHAT}" -d text="$text" > /dev/null 2>&1
+        fi
+        touch "$latch"
+    fi
+}
+
+if [ ! -d "$COHORT" ] && [ "$((10#$(date +%H%M)))" -ge 910 ]; then
+    rm -rf "$STAGING"
+    mkdir -p "$STAGING"
+    BACKUP_ERR=""
+    for f in "${BACKUP_SRC[@]}"; do
+        src="/home/ubuntu/$f"
+        if [ ! -s "$src" ]; then BACKUP_ERR="$BACKUP_ERR $f(없음/빈파일)"; continue; fi
+        if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$src" 2>/dev/null; then
+            BACKUP_ERR="$BACKUP_ERR $f(JSON깨짐)"; continue
+        fi
+        if ! cp -f "$src" "$STAGING/$f" 2>/dev/null; then BACKUP_ERR="$BACKUP_ERR $f(복사실패)"; continue; fi
+        if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$STAGING/$f" 2>/dev/null; then
+            BACKUP_ERR="$BACKUP_ERR $f(복사본깨짐)"
+        fi
+    done
+
+    if [ -z "$BACKUP_ERR" ]; then
+        date '+%Y-%m-%d %H:%M:%S %Z' > "$STAGING/MANIFEST"
+        (cd "$STAGING" && ls -l *.json >> MANIFEST 2>/dev/null)
+        if mv -T "$STAGING" "$COHORT" 2>/dev/null; then
+            echo "[$(date)] State backup cohort 생성: $TODAY (${#BACKUP_SRC[@]}종)"
+            if [ -f "$BACKUP_FAIL_LATCH" ]; then
+                wd_backup_alert "✅ state 백업 정상 복구 — $TODAY cohort 생성" "/tmp/wd_backup_ok_alerted"
+                rm -f "$BACKUP_FAIL_LATCH"
+            fi
+            # 보관 14일. 삭제 대상은 이 디렉토리의 날짜 cohort 와 옛 평면 파일로만 한정한다.
+            find "$BACKUP_DIR" -maxdepth 1 -type d -name '20*-*-*' -mtime +14 -exec rm -rf {} + 2>/dev/null
+            find "$BACKUP_DIR" -maxdepth 1 -type f -name '*_20*.json' -mtime +14 -delete 2>/dev/null
+            find "$BACKUP_DIR" -maxdepth 1 -type f -name '.backup_*' -mtime +14 -delete 2>/dev/null
+            find "$BACKUP_DIR" -maxdepth 1 -type d -name '.staging_*' -mtime +1 -exec rm -rf {} + 2>/dev/null
+        else
+            echo "[$(date)] ⚠️ state backup 공개 실패(mv): $TODAY"
+            wd_backup_alert "🚨 state 백업 실패 — cohort 공개(mv) 실패. 디스크·권한 확인 필요" "$BACKUP_FAIL_LATCH"
+        fi
+    else
+        rm -rf "$STAGING"
+        echo "[$(date)] ⚠️ state backup 미완성 — 다음 실행 재시도:$BACKUP_ERR"
+        wd_backup_alert "🚨 state 백업 실패:$BACKUP_ERR (5분마다 재시도 중)" "$BACKUP_FAIL_LATCH"
+    fi
 fi
