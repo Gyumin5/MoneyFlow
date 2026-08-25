@@ -23,7 +23,7 @@ import unified_backtest as ub
 import coin_live_engine as cle
 
 START = '2020-10-01'
-END = '2026-05-10'
+END = '2026-08-24'
 
 # ── 고정 후보 유니버스 (상수 순서) ──
 # 유니버스 소스 변수를 제거. mcap 기준 순서를 한 번 고정해 양쪽에 동일 주입.

@@ -19,7 +19,7 @@ import unified_backtest as ub
 import auto_trade_binance as atb
 
 START = '2020-10-01'
-END = '2026-05-09'   # 마지막 날은 in-progress 봉 필요 → 하루 여유
+END = '2026-08-24'   # 마지막 날은 in-progress 봉 필요 → 하루 여유
 
 _REF_ORDER = ['BTC','ETH','BNB','SOL','XRP','ADA','AVAX','DOGE','DOT','MATIC',
               'TRX','LINK','LTC','UNI','ATOM','BCH','XLM','VET','FIL','THETA',

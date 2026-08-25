@@ -1,0 +1,232 @@
+<meta charset="utf-8">
+<title>P0 전제 검증 3건 — 선물 지급능력 · 주식 선정 정합 · 현물 체결 규칙</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: 'Noto Sans CJK KR', system-ui, sans-serif;
+    max-width: 900px; margin: 0 auto; padding: 20px 16px 80px;
+    font-size: 17px; line-height: 1.75; color: #1c1c1e; background: #fff;
+  }
+  h1 { font-size: 26px; line-height: 1.35; margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 40px 0 10px; padding-top: 14px; border-top: 2px solid #e2e2e6; }
+  h3 { font-size: 18px; margin: 24px 0 8px; }
+  .sub { color: #6b6b70; font-size: 15px; margin: 0 0 28px; }
+  .verdict { display: inline-block; padding: 3px 11px; border-radius: 6px;
+             font-size: 14px; font-weight: 600; letter-spacing: .02em; }
+  .pass { background: #d9f2e0; color: #17563a; }
+  .warn { background: #fdf0d0; color: #6b4a08; }
+  .info { background: #dde8fb; color: #1b3f78; }
+  .box { background: #f5f5f7; border-left: 4px solid #8a8a8f; padding: 12px 16px;
+         margin: 18px 0; border-radius: 0 8px 8px 0; }
+  .box.key { border-left-color: #2f6fd0; background: #eef4fd; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 16px 0; }
+  table { border-collapse: collapse; min-width: 100%; font-size: 15px; }
+  th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid #e2e2e6; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { background: #f0f0f3; font-weight: 600; border-bottom: 2px solid #d4d4d8; }
+  tr.mark td { background: #eef4fd; font-weight: 600; }
+  code { font-family: 'Noto Sans Mono CJK KR', monospace; font-size: 14px;
+         background: #f0f0f3; padding: 1px 5px; border-radius: 4px; }
+  ul { padding-left: 22px; }
+  li { margin: 7px 0; }
+  .note { font-size: 15px; color: #6b6b70; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e8e8ea; background: #17171a; }
+    h2 { border-top-color: #38383c; }
+    .sub, .note { color: #9a9aa0; }
+    .box { background: #232327; border-left-color: #5a5a60; }
+    .box.key { background: #1c2738; border-left-color: #4a86e0; }
+    th, td { border-bottom-color: #38383c; }
+    thead th { background: #232327; border-bottom-color: #48484e; }
+    tr.mark td { background: #1c2738; }
+    code { background: #232327; }
+    .pass { background: #17563a; color: #b8ecc9; }
+    .warn { background: #5a3f08; color: #f5dda0; }
+    .info { background: #1b3f78; color: #cfe0f8; }
+  }
+  @media (max-width: 480px) {
+    body { font-size: 16px; padding: 16px 12px 60px; }
+    h1 { font-size: 22px; }
+    h2 { font-size: 19px; }
+    table { font-size: 14px; }
+    th, td { padding: 8px 9px; }
+  }
+</style>
+
+<h1>P0 전제 검증 3건</h1>
+<p class="sub">선물 지급능력 · 주식 선정 정합 · 현물 체결 규칙 — 2026-08-25 측정 · 읽기전용</p>
+
+<div class="box key">
+<p>세 건 다 판정 기준을 결과 보기 전에 고정하고 돌렸다. 결론부터.</p>
+<ul>
+<li><b>선물 지급능력</b> <span class="verdict pass">PASS</span> 5.8년 보유 927일 동안 청산 근처에 간 적이 없다. 가장 나빴던 순간에도 보유 전체가 추가로 30% 더 동시에 빠져야 청산이었다.</li>
+<li><b>주식 선정 정합</b> <span class="verdict pass">PASS</span> 2423일 중 카나리 불일치 0일, 공격 국면 종목·비중 불일치 0일. 방어 국면 비중식만 구조가 다르고, 그 차이는 성과상 무차별에 가깝다.</li>
+<li><b>현물 체결 규칙</b> <span class="verdict warn">미세 열위</span> 라이브 무밴드가 백테스트 5% 밴드보다 5.8년 Calmar 4.35 대 4.41 로 조금 낮다. 거래비용 5배에서도 방향이 같다. 즉 현물 슬리브 채택 수치가 약 1% 과대평가돼 있다.</li>
+</ul>
+</div>
+
+<h2>1. 선물 지급능력 — 청산까지 실제로 얼마나 남았나</h2>
+
+<p>채택 백테스트는 일봉 저가로 청산을 판정하고 5.8년 청산 0건을 보고한다. 일봉 저가는 하루에 한 점이고
+코인별 저가가 같은 시각이라는 가정이 들어간다. 더 촘촘하게 다시 봤다.</p>
+
+<p>방법: 채택 설정으로 백테스트를 돌리면서 매일의 계좌 상태(지갑 현금, 코인별 수량·진입가·증거금)를
+덤프하고, 그 상태를 다음 날까지의 1시간봉에 대해 다시 평가했다. CROSS 마진이라 계좌 하나로 합산한다.
+각 1시간봉에서 보유 코인이 모두 그 봉의 저가를 동시에 찍는다고 봤다 — 실제보다 나쁘게 잡는 방향이다.</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>측정</th><th>값</th><th>시점</th></tr></thead>
+<tbody>
+<tr><td>보유일 수 (평가 대상)</td><td>927일</td><td>2020-10 ~ 2026-08</td></tr>
+<tr><td>청산 발생 봉</td><td>0</td><td>—</td></tr>
+<tr class="mark"><td>최소 임계하락 (추가로 이만큼 동시 하락하면 청산)</td><td>30.0%</td><td>2025-01-07 22:00 (BNB·BTC·ETH)</td></tr>
+<tr><td>최소 여유비율 (자기자본 ÷ 유지증거금)</td><td>75.8배</td><td>같은 시점</td></tr>
+<tr><td>스트레스 1 — 보유 전 코인 즉시 -20%</td><td>여유 32.2배 (청산 없음)</td><td>같은 시점</td></tr>
+<tr><td>스트레스 2 — 실행 3일 누락하고 방치</td><td>여유 67.5배 (청산 없음)</td><td>같은 시점</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>여유비율 75배 같은 숫자는 사실 해석이 어렵다. 유지증거금률이 0.4% 라 분모가 워낙 작아서
+평소에도 수백 배가 나온다. 읽을 수 있는 값은 <b>임계하락</b> 이다 — 지금 가격에서 보유 코인이
+동시에 몇 % 더 빠져야 청산되는가.</p>
+
+<h3>가장 아슬아슬했던 날들 (임계하락 대비 실제 하락)</h3>
+
+<div class="scroll">
+<table>
+<thead><tr><th>날짜</th><th>보유</th><th>필요했던 하락</th><th>실제 하락</th><th>예산 사용률</th></tr></thead>
+<tbody>
+<tr class="mark"><td>2022-11-08</td><td>ETH, MATIC</td><td>62.3%</td><td>25.2%</td><td>40.5%</td></tr>
+<tr><td>2020-11-26</td><td>BTC, XRP</td><td>54.5%</td><td>21.1%</td><td>38.7%</td></tr>
+<tr><td>2020-12-23</td><td>BTC, ETH, LTC, XRP</td><td>54.9%</td><td>20.8%</td><td>37.9%</td></tr>
+<tr><td>2021-01-11</td><td>BTC, DOGE, ETH, LTC</td><td>70.8%</td><td>26.3%</td><td>37.2%</td></tr>
+<tr><td>2025-10-10</td><td>BNB, BTC</td><td>76.8%</td><td>25.3%</td><td>33.0%</td></tr>
+<tr><td colspan="4">전체 보유일 927일 — 중앙값</td><td>2.8%</td></tr>
+<tr><td colspan="4">전체 보유일 927일 — 상위 5% 지점</td><td>11.5%</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>가장 나빴던 날조차 청산까지 여유의 41% 만 썼다. 절반 이상 남기고 끝났다는 뜻이다.
+평범한 날은 2.8% 를 쓰고, 나쁜 쪽 5% 에 드는 날도 11.5% 다. 청산 위험은 실재하지만
+역사 경로에서는 가까이 간 적이 없다. (실현 하락 = 보유 코인 일중 최저가의 시작가 대비
+하락률 평균, 임계하락과 같은 정의로 맞춘 값이다.)</p>
+
+<div class="box">
+<p class="note">한계: 1시간봉 저가를 동시 발생으로 가정했고, 부분체결·거래소 장애·펀딩 급등 같은
+실행층 사고는 반영하지 않았다. 미래에 더 나쁜 경로가 없다는 증명이 아니라, 채택 성과를 만든
+경로에서 청산이 우연히 비껴간 게 아님을 확인한 것이다.</p>
+</div>
+
+<h2>2. 주식 선정 정합 — 라이브가 백테스트와 같은 종목을 고르나</h2>
+
+<p>코인 현물·선물에는 라이브 선정함수와 채택 백테스트에 같은 가격을 주입해 일별로 대조하는
+하니스가 이미 있었다. 주식만 없었다. 2026-06-06 에 라이브 Z-랭킹 모멘텀이 순수 252일
+(V15 잔재)로 들어가 백테스트와 종목이 16.8% 날 어긋난 사고가 그때는 뒤늦게 발견된 자리다.
+같은 종류의 어긋남을 잡을 기준선을 만들었다.</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>구간</th><th>일수</th><th>불일치</th></tr></thead>
+<tbody>
+<tr><td>전체 (2017-01-03 ~ 2026-08-24)</td><td>2423일</td><td>—</td></tr>
+<tr class="mark"><td>카나리 (위험 on/off 판정)</td><td>2423일</td><td>0일</td></tr>
+<tr class="mark"><td>공격 국면 종목·비중</td><td>1631일</td><td>0일 (정합률 100%)</td></tr>
+<tr><td>방어 국면 종목</td><td>792일</td><td>0일</td></tr>
+<tr><td>방어 국면 비중</td><td>792일</td><td>310일</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>한 군데만 갈린다. 방어자산(IEF·BIL·BNDX·GLD·PDBC) 중 6개월 수익이 양수인 게 3개 미만인 날,
+라이브는 뽑힌 것에 균등하게 다 몰고(2개면 50/50), 백테스트는 하나당 3분의 1만 주고 남은 몫을
+현금으로 둔다. 792 방어일 중 310일이 여기 해당한다. 라이브가 그 날들에 방어자산을 더 많이 든다.</p>
+
+<h3>그 차이가 성과를 바꾸나</h3>
+
+<p>방어 비중식만 바꾼 두 판을 11개 앵커 전부에서 돌려 윈도우 순위로 비교했다.
+나머지는 채택 설정 그대로다.</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>방어 비중식</th><th>평균순위</th><th>승률</th><th>CAGR</th><th>MDD</th><th>Calmar</th><th>Sharpe</th></tr></thead>
+<tbody>
+<tr><td>백테스트 (1/3씩 + 현금)</td><td>1.582</td><td>41.8%</td><td>+12.65%</td><td>-11.70%</td><td>1.098</td><td>1.182</td></tr>
+<tr class="mark"><td>라이브 (뽑힌 것에 균등)</td><td>1.418</td><td>58.2%</td><td>+13.24%</td><td>-12.33%</td><td>1.083</td><td>1.183</td></tr>
+<tr><td colspan="7" class="note">거래비용 5배 스트레스: 백테스트 순위 1.562 / Calmar 0.856, 라이브 순위 1.438 / Calmar 0.857</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>방향이 엇갈린다. 윈도우 순위와 CAGR 은 라이브가 앞서고(58% 승), 낙폭과 전기간 Calmar 는
+백테스트가 근소하게 앞선다. 5배 비용에서는 Calmar 가 사실상 동률(0.857 대 0.856)이다.
+사전에 정한 문턱(평균순위 차 0.1)은 0.164 로 넘겼지만, 넘긴 방향이 지표마다 달라
+"어느 쪽이 낫다" 고 말할 근거가 못 된다.</p>
+
+<div class="box key">
+<p><b>판단:</b> 라이브를 고치지 않는다. 얻을 게 없는데 실거래 코드를 건드리는 건 손해다.
+대신 주식 슬리브 수치를 인용할 때 방어 비중식이 라이브와 다르다는 걸 명시하고,
+다음에 주식 백테스트를 돌릴 때는 라이브 쪽(균등)을 기본으로 둔다 — 백테스트는 실제로 도는 것을
+모형화해야 한다. 연구 코드만 바뀌므로 실거래 위험은 없다.</p>
+</div>
+
+<h3>덧붙여 — 코인 현물·선물 정합 재확인</h3>
+<p>기존 하니스를 최신 데이터(2026-08-24)로 다시 돌렸다. 현물 2111일, 선물 2111일,
+종목·비중 불일치 각각 0일. 지난 3개월의 코드 변경(체결 밴드, 가드 수정)이 선정층을 건드리지 않았음을 확인.</p>
+
+<h2>3. 현물 체결 규칙 — 라이브에 밴드가 없다</h2>
+
+<p>라이브 현물 executor 는 체결 밴드가 없다. 목표와 현재가 조금만 달라도 최소주문(5,000원)만
+넘으면 그대로 낸다. 채택 백테스트는 수량 ±5% 를 벗어날 때만 체결한다. 선물은 같은 축을
+8월 25일에 쟀지만 현물은 안 쟀다.</p>
+
+<p>백테스트 엔진에 밴드를 환경변수로 빼서 5개 값을 비교했다. 축은 밴드 하나뿐이고
+선정·헬스·카나리·스냅샷·드리프트·비용은 전부 채택 설정 고정. 측정 후 엔진은 되돌렸고
+재현용 패치만 <code>research/bt_spot_rebal_band.engine.patch</code> 로 남겼다.</p>
+
+<div class="scroll">
+<table>
+<thead><tr><th>밴드</th><th>평균순위</th><th>승률</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>체결/년</th></tr></thead>
+<tbody>
+<tr class="mark"><td>0% (라이브)</td><td>3.368</td><td>5.1%</td><td>4.35</td><td>+77.6%</td><td>-17.8%</td><td>2.01</td><td>54.5</td></tr>
+<tr><td>1%</td><td>3.111</td><td>4.3%</td><td>4.35</td><td>+77.6%</td><td>-17.8%</td><td>2.01</td><td>52.5</td></tr>
+<tr><td>2%</td><td>4.453</td><td>0.0%</td><td>4.35</td><td>+77.5%</td><td>-17.8%</td><td>2.01</td><td>50.9</td></tr>
+<tr class="mark"><td>5% (현행 백테스트)</td><td>2.000</td><td>34.2%</td><td>4.41</td><td>+78.5%</td><td>-17.8%</td><td>2.03</td><td>47.4</td></tr>
+<tr><td>10%</td><td>2.068</td><td>56.4%</td><td>4.44</td><td>+79.2%</td><td>-17.8%</td><td>2.03</td><td>43.8</td></tr>
+<tr><td colspan="8" class="note">거래비용 5배 스트레스에서도 순서 유지 — 0% 순위 2.812 / 5% 순위 1.709. 다만 10% 는 4.145 로 뒤집힌다(플래토 없음).</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>라이브 무밴드가 5.8년에 걸쳐 Calmar 0.06, CAGR 0.9%p 만큼 낮고 체결은 15% 많다.
+최대낙폭은 다섯 값 모두 -17.8% 로 동일하다. 비용 5배에서도 방향이 같으니 우연이 아니다.
+10% 가 기본 비용에서는 제일 좋지만 스트레스에서 무너지므로 밴드를 넓히자는 근거는 없다.</p>
+
+<div class="box key">
+<p><b>판단:</b> 두 가지 중 하나다.</p>
+<ul>
+<li>라이브에 5% 밴드를 넣는다 → 5.8년 Calmar +0.06 을 얻는다. 선물 밴드 변경 때 겪었듯
+새 판정 경로가 하나 늘고 배포·관측 주기가 붙는다. 이득 대비 값이 안 맞는다.</li>
+<li>백테스트를 라이브에 맞춘다(밴드 0) → 현물 슬리브 채택 수치가 Calmar 4.41 → 4.35,
+CAGR 78.5% → 77.6% 로 내려간다. 코드 위험 0, 대신 숫자가 정직해진다.</li>
+</ul>
+<p>두 번째를 권한다. 현물 드리프트 문턱이 0.10 이라 발화가 드물어서, 밴드가 실제로 걸리는
+경우 자체가 많지 않다는 게 이 작은 차이의 이유다. 어느 쪽이든 실행은 승인 사항이다.</p>
+</div>
+
+<h2>남은 것</h2>
+<ul>
+<li><b>P1-a</b> 선물 드리프트 정의 3경로 판정(현행 / 명목편차 / 제거). 문턱 스윕은 하지 않는다 — 문제는 값이 아니라 정의다.</li>
+<li><b>P1-b</b> 세 슬리브 꼬리 동조 + 실제 송금지연을 반영한 합성 재계산. 현행 합성 수치는 "알림 시점 100% 송금" 가정이다.</li>
+<li><b>P2</b> 무상태 주문 안전검사와 상장폐지·거래정지 대응(그림자 모드 선행).</li>
+<li><b>데이터</b> <code>historical_universe.json</code> 이 2025-12-01 에서 끝난다. 2026년 구간은 12월 시총 순위로 고정된 채 돈다. 확장 스크립트가 저장소에 없다.</li>
+<li><b>감시</b> 지금 만든 세 하니스는 상시 감시가 아니라 기준선이다. 매일 도는 감시로 올릴지는 별도 판단.</li>
+</ul>
+
+<p class="note">측정 스크립트 — 선물 지급능력 <code>research/fut_solvency_replay.py</code>,
+주식 정합 <code>research/parity_stock.py</code>, 방어 비중식 <code>research/bt_stock_defense_weight.py</code>,
+현물 밴드 <code>research/bt_spot_rebal_band.py</code>. 모두 <code>strategies/cap_defend/</code> 아래.
+원시 출력은 <code>state/solvency/</code> · <code>state/parity/</code> · <code>state/spot_band/</code>.</p>
