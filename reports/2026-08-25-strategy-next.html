@@ -1,0 +1,208 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>다음에 무엇을 할 것인가 — 강화·추가 검토 (2026-08-25)</title>
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1a1a1a; --muted:#5b6470; --line:#e2e6ea;
+    --card:#f7f9fb; --accent:#0b6bcb; --warn:#b23c17; --ok:#1a7f4b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14171a; --fg:#e8eaed; --muted:#a3adb8; --line:#2b3138;
+      --card:#1c2126; --accent:#6bb0f5; --warn:#ff9a6b; --ok:#5fd39b;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14171a; --fg:#e8eaed; --muted:#a3adb8; --line:#2b3138;
+    --card:#1c2126; --accent:#6bb0f5; --warn:#ff9a6b; --ok:#5fd39b;
+  }
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:'Noto Sans CJK KR', system-ui, sans-serif;
+    font-size:17px; line-height:1.75; margin:0;
+    padding:20px 16px 64px; max-width:820px;
+  }
+  h1{font-size:1.45rem; line-height:1.4; margin:0 0 6px}
+  h2{font-size:1.18rem; margin:2.2em 0 .6em; padding-top:.6em; border-top:1px solid var(--line)}
+  h3{font-size:1.02rem; margin:1.5em 0 .4em; color:var(--accent)}
+  p,li{margin:.5em 0}
+  ul,ol{padding-left:1.3em}
+  .sub{color:var(--muted); font-size:.92rem; margin:0 0 1.4em}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:1em 0}
+  .tag{display:inline-block; font-size:.78rem; padding:2px 9px; border-radius:99px;
+       border:1px solid var(--line); color:var(--muted); margin-right:6px}
+  .p0{color:#fff; background:var(--warn); border-color:transparent}
+  .p1{color:#fff; background:var(--accent); border-color:transparent}
+  .p2{color:var(--muted)}
+  .no{color:#fff; background:#6b7280; border-color:transparent}
+  .wrap{overflow-x:auto; -webkit-overflow-scrolling:touch}
+  table{border-collapse:collapse; width:100%; min-width:520px; font-size:.94rem}
+  th,td{border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top}
+  th{background:var(--card); font-weight:600}
+  code{font-family:'Noto Sans Mono CJK KR', monospace; font-size:.9em;
+       background:var(--card); padding:1px 5px; border-radius:4px}
+  .ok{color:var(--ok)} .warn{color:var(--warn)}
+  .lead{font-size:1.05rem}
+  footer{margin-top:3em; padding-top:1em; border-top:1px solid var(--line); color:var(--muted); font-size:.88rem}
+</style>
+
+<h1>다음에 무엇을 할 것인가</h1>
+<p class="sub">현행 3슬리브에서 강화할 축과 새로 추가할 전략 검토 · 2026-08-25 KST<br>
+ai-debate run-20260825T063540Z (1라운드 합의) + 코드·데이터 사실 확인</p>
+
+<p class="lead">결론부터. 지금은 새 전략을 붙이거나 파라미터를 더 뒤질 때가 아니라,
+<strong>이미 가진 성과 숫자가 진짜인지 확인할 때다.</strong>
+파라미터 축은 대부분 소진됐고(기각 목록 12건), 남은 불확실성은 알파가 아니라 전제 쪽에 있다.</p>
+
+<h2>1. 토론이 내린 판단</h2>
+
+<div class="card">
+<p>세 참여자(codex · gemini · claude-fable)가 1라운드에서 같은 결론에 도달했다. 비판 역할 셋 모두
+"새 알파 추가는 아니오".</p>
+<ul>
+<li>기존 모멘텀·카나리·스냅 파라미터를 더 탐색하지 않는다. 사전확률이 낮고 다중검정 위험이 크다.</li>
+<li>새 수익 슬리브·새 자산군도 추가하지 않는다. 운영 복잡도가 최근 사고의 원인이었지 수익의 원인이 아니었다.</li>
+<li>대신 성과의 전제와 지급능력(청산 안 나는가)을 먼저 검증한다.</li>
+<li>덧붙일 값어치가 있는 건 규칙층이 아니라 방어층 — 주문 안전검사, 상장폐지 대응. 알파로 치지 않는다.</li>
+</ul>
+</div>
+
+<p>소수의견 중 살아남은 것: 펀딩비·유니버스 생존편향·수동 송금지연·장중 청산경로를
+"성과 개선보다 먼저 볼 것"으로 올린 지적. 기각된 것: 하드 스탑을 지금 붙이자는 안
+(효과 미측정 + 회복 구간 절단 위험. 지급능력 검증이 실패하면 그때 여는 조건부 트리거로 남김).</p>
+
+<h2>2. 토론이 미해결로 남긴 전제 — 직접 확인한 결과</h2>
+
+<p>중재자가 "이게 안 맞으면 성과표를 철회해야 한다"고 지목한 항목들이다. 코드와 데이터에서 바로 확인했다.</p>
+
+<div class="wrap">
+<table>
+<tr><th>전제</th><th>확인 결과</th><th>판정</th></tr>
+<tr>
+  <td>선물 백테스트에 펀딩비가 들어가 있나</td>
+  <td>들어간다. 코인별 <code>*_funding.csv</code> 를 읽어 보유 구간 합산으로 자본에서 차감한다
+      (40종 중 38종 보유, SHIB·PEPE 만 파일 없음 → 그 둘은 펀딩 0으로 계산됨).
+      2026-05-14 펀딩 버그 수정 이력도 있다.</td>
+  <td class="ok">해소</td>
+</tr>
+<tr>
+  <td>유니버스가 그 시점 기준(생존편향 방지)인가</td>
+  <td>그렇다. 현물·선물 백테스트 둘 다 <code>historical_universe.json</code> 의 시점별 시총을 쓴다.
+      라이브만 실시간 상위 40이라 선정이 5.7% 갈리는데, 이건 의도된 차이로 이미 기록돼 있다.</td>
+  <td class="ok">해소</td>
+</tr>
+<tr>
+  <td>장중 청산이 모델링돼 있나 (일봉 낙폭은 청산을 대표 못 한다)</td>
+  <td>부분적으로 된다. CROSS 청산 여유를 <strong>일중 저가</strong> 기준으로 계산한다
+      (보유 전체의 저가 손실 합 + 유지증거금 대비). 다만 해상도가 일봉 저가이고
+      코인별 저가가 같은 시각에 나온다고 가정한다.</td>
+  <td class="warn">부분</td>
+</tr>
+<tr>
+  <td>합성 성과가 즉시 자금이동을 가정하나</td>
+  <td>미확인. 자산배분 백테스트는 "알림 시점 100% 송금" 가정으로 돌렸다는 기록이 있다.
+      실제로는 사람이 손으로, 며칠 걸린다.</td>
+  <td class="warn">남음</td>
+</tr>
+</table>
+</div>
+
+<p>추가로 확인된 것 하나. <strong>백테스트 데이터가 2026-05-14 에서 끝난다</strong>(현물은 04-28).
+지금 쓰는 성과 숫자는 최근 3개월을 포함하지 않는다. 그리고 선물 15분봉·1시간봉이
+이미 받아져 있어서, 청산 재생을 더 높은 해상도로 돌리는 데 새 데이터 수집이 필요 없다.</p>
+
+<h2>3. 우선순위</h2>
+
+<h3><span class="tag p0">P0</span> 선물 지급능력 — 청산이 실제로 안 났나</h3>
+<div class="card">
+<p><strong>왜</strong> — 일봉 최대낙폭 -38.3% 는 청산을 대표하지 못한다. CROSS·레버리지 4배·스탑 없음이면
+계좌 전체가 한 번에 날아가는 경로가 존재하는지가 수익률보다 먼저다. 지금 모델은 일중 저가까지는 보지만
+코인별 저가 동시 발생을 가정한다.</p>
+<p><strong>어떻게</strong> — 실제 보유 이력을 15분봉으로 재생해 계좌 최소 마진율, 청산가까지의 최소 거리,
+청산 발생 횟수를 뽑는다. 결과를 보기 <em>전에</em> 허용 최소여유를 못 박는다.
+동시급락·부분체결·주문 거절·1~3일 실행 누락을 스트레스로 얹는다.</p>
+<p><strong>기각/발동 조건</strong> — 역사 경로에서 청산이 한 번이라도 나거나 사전 고정한 최소여유에 미달하면,
+선물 성과 주장을 철회하고 레버리지 상한·마진 안전규칙을 사람 판단으로 올린다.</p>
+<p><strong>비용</strong> — 데이터 있음. 재생 스크립트 한 개.</p>
+</div>
+
+<h3><span class="tag p0">P0</span> 주식·선물 그림자 검증</h3>
+<div class="card">
+<p><strong>왜</strong> — 현물에는 매일 도는 대조(라이브 목표 vs 채택 백테스트 목표)가 있는데
+주식·선물에는 없다. 지난 3개월 사고가 전부 실행·정합 층에서 났다는 게 이 공백의 값어치다.
+방금 폐기한 월간 재실행이 메우려던 자리이기도 하다.</p>
+<p><strong>어떻게</strong> — 이미 있는 패리티 하니스를 주식·선물로 이식해 매일 카나리·헬스·선정·스냅 목표·
+앵커 카운터·레버리지를 대조한다. 처음엔 알림만.</p>
+<p><strong>통과 기준</strong> — 30일 연속 100% 일치. 불일치 1건도 원인 해소 전엔 통과로 안 본다.</p>
+</div>
+
+<h3><span class="tag p0">P0</span> 현물 체결 규칙 정합</h3>
+<div class="card">
+<p><strong>왜</strong> — 현물 백테스트는 5% 밴드인데 라이브는 밴드가 없다(최소주문 5,000원만 넘으면 체결).
+선물에서 같은 종류의 미정합이 회전율 1.7배로 드러났다. 현물은 드리프트 문턱이 10pp 라 발화가 드물어
+노출은 작지만, 모르고 있는 것과 작다고 아는 것은 다르다.</p>
+<p><strong>어떻게</strong> — 라이브의 무밴드 규칙을 백테스트에 그대로 이식해 목표·주문·회전율·비용·Calmar 를 비교한다.
+차이가 없으면 코드를 바꾸지 않고 결론만 기록한다. 5% 도입은 별도 후보로 rank-sum + 비용 5배를 통과해야 채택.</p>
+</div>
+
+<h3><span class="tag p1">P1</span> 선물 드리프트 정의 — 유지·교체·제거 판정</h3>
+<div class="card">
+<p><strong>왜</strong> — 문턱 3pp 가 사실상 매일 발화한다. 비중을 (진입마진+평가손익)/자기자본으로 재기 때문에
+목표를 이미 맞춰도 미실현 이익이 크면 넘는다. 실제 회전을 정하는 건 체결 밴드 5% 이고,
+드리프트는 신호로서 의미가 희석돼 있다.</p>
+<p><strong>어떻게</strong> — 앵커 규칙은 건드리지 않고 세 경로만 같은 입력으로 재생한다:
+현행 공식 / 목표 명목 대비 편차 / 드리프트 신호 제거. 주문과 목표 상태가 같다면
+제어규칙에서 빼고 계측값으로만 남긴다. <strong>문턱 그리드 스윕은 하지 않는다</strong> — 그건 소진된 축이다.</p>
+</div>
+
+<h3><span class="tag p1">P1</span> 세 슬리브 꼬리 동조 + 송금지연을 반영한 합성</h3>
+<div class="card">
+<p><strong>왜</strong> — 코인 두 슬리브는 같은 종목을 잡을 수 있고 셋 다 결국 위험자산이다.
+합성 낙폭 -18.6% 는 슬리브 간 상쇄를 전제하는데, 그 전제는 하락장에서 가장 약하다.
+게다가 자산배분 백테스트는 알림 즉시 송금을 가정했지만 실제로는 사람이 며칠 뒤에 보낸다.</p>
+<p><strong>어떻게</strong> — 세 카나리 동시 ON 비율, 코인 두 슬리브 종목 중복률, 하방 동시손실, 위기구간 상관을 잰다.
+합성 성과를 "무송금" 과 "실제 관측 지연" 두 시나리오로 다시 계산한다.</p>
+<p class="sub" style="margin:.4em 0 0">주의: 이건 측정이지 배분 변경 제안이 아니다. 배분 비율은 사용자 영역이다.</p>
+</div>
+
+<h3><span class="tag p2">P2</span> 운영 방어층 (알파 아님)</h3>
+<div class="card">
+<p>무상태 주문 전 검사 — 데이터 신선도, 상태파일 체크섬, 앵커 카운터 단조성, 중복 실행,
+목표 합, 레버리지 상한, 잔고·마진, 거래 가능 상태, 부분체결 후 재시작. 먼저 그림자 모드로 돌리고,
+검증 후엔 위험을 늘리는 주문만 막고 청산 방향 주문은 통과시킨다(2026-08-15 사고의 교훈 — 매매가 꼭
+필요한 유일한 경우를 가드가 막았다).</p>
+<p>상장폐지·유의종목·거래정지 대응 — 즉시 강제매도 규칙을 새로 만들지 말고, 과거 실제 사건을 먼저 재생한다.</p>
+</div>
+
+<h2>4. 하지 말 것</h2>
+<div class="wrap">
+<table>
+<tr><th>매력적으로 보이지만</th><th>이 구조에서 손해인 이유</th></tr>
+<tr><td>새 슬리브·새 자산군 추가</td>
+    <td>수익원 하나가 늘 때 상태·실행·정합 층이 셋 늘어난다. 지난 3개월 사고가 전부 그 층에서 났다.</td></tr>
+<tr><td>파라미터 그리드 재탐색</td>
+    <td>주요 축 12건이 이미 기각됐다. 남은 건 plateau 안쪽 미세조정이고, 그건 다중검정이지 개선이 아니다.</td></tr>
+<tr><td>선물에 하드 스탑·마진가드 즉시 도입</td>
+    <td>효과가 측정된 적 없고 회복 구간을 절단한다. 지급능력 검증 결과를 보고 열 조건부 카드로 남긴다.</td></tr>
+<tr><td>드리프트 문턱 스윕</td>
+    <td>문제는 값이 아니라 정의다. 값을 흔들면 정의 문제가 숨는다.</td></tr>
+<tr><td>백테스트 데이터 연장 없이 새 실험</td>
+    <td>지금 데이터는 2026-05-14 에서 끝난다. 무슨 실험을 하든 최근 3개월이 빠진 채로 결론이 난다.</td></tr>
+</table>
+</div>
+
+<h2>5. 순서 제안</h2>
+<ol>
+<li>데이터 최신화 (2026-05-14 → 현재). 이게 없으면 아래 전부가 3개월 낡은 채로 결론난다.</li>
+<li>P0 선물 지급능력 재생 — 가장 큰 미측정 위험이고 데이터는 이미 있다.</li>
+<li>P0 주식·선물 그림자 검증 — 매일 도는 감시가 생기면 이후 모든 변경이 싸진다.</li>
+<li>P0 현물 체결 규칙 정합 — 범위가 좁고 결론이 빨리 난다.</li>
+<li>P1 드리프트 판정 / 꼬리 동조 + 송금지연.</li>
+<li>P2 방어층.</li>
+</ol>
+
+<footer>
+ai-debate run-20260825T063540Z (codex·gemini·claude-fable, 1라운드 합의, 중재 codex).<br>
+사실 확인은 <code>backtest_futures_v25.py</code> · <code>unified_backtest.py</code> · <code>data/futures/</code> 직접 조회.<br>
+이 문서는 착수 승인용 정리다 — 여기 적힌 것 중 어느 것도 아직 시작하지 않았다.
+</footer>
