@@ -60,7 +60,11 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - drift 발화 시 refill v2 (라이브 `_apply_refill_v2_to_state`): mom2 음수(ms<0&ml<0) 코인 → fresh healthy 교체. BT 정합 = `unified_backtest.py` DRIFT_HEALTH_MODE='refill' (v24_shadow_today.py 가 설정). 검증(2026-06-06, strategies/cap_defend/research/bt_spot_refill_vs_anchor.py): drift=0.10 에서 refill ≡ anchor-only (5.4yr 종목교체 0일, CAGR/MDD/Cal 동일) — 발화일 보유코인이 항상 모멘텀 양수. 즉 현물 종목교체는 사실상 앵커(217)에서만. refill 은 미래 모멘텀급락+drift 동시 발생 대비 dormant 방어.
 - 가드 없음. Upbit warning/delisting 코인은 universe 에서 즉시 제외.
 - TX: 0.04% (BT), 실매매는 Upbit 수수료
-- 단독 sleeve (BT 5.4yr): CAGR +82%, MDD -18%, Cal 4.63
+- 단독 sleeve (BT 5.8yr, 2020-10-01~2026-08-24, 라이브 체결규칙 정합): CAGR +77.6%, MDD -17.8%, Cal 4.35
+  · 옛 표기 "Cal 4.63 / CAGR +82% (5.4yr)" 는 BT 에만 있던 5% 체결 밴드로 잰 값이라 stale.
+    라이브(executor_coin)에는 상대 밴드가 없고 5,000원 절대 최소주문만 있어 BT 밴드를 0 으로 정합했다
+    (2026-08-25, ai-debate run-20260825T071922Z). 절대 문턱은 슬리브 규모 대비 무의미함을 확인
+    (research/bt_spot_min_order.py — 100만원 계좌 가정에서도 5.8년 자산곡선 최대괴리 0.2%).
 
 ### 실행 파라미터
 

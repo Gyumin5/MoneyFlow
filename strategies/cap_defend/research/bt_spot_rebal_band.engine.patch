@@ -1,32 +1,49 @@
 diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
-index 53311de..da6a42c 100644
+index 53311de..f0504b3 100644
 --- a/strategies/cap_defend/unified_backtest.py
 +++ b/strategies/cap_defend/unified_backtest.py
-@@ -445,6 +445,9 @@ def run(bars, funding, interval='1h', leverage=1.0,
+@@ -445,6 +445,13 @@ def run(bars, funding, interval='1h', leverage=1.0,
      def _execute_rebalance(target_weights, date):
          """Delta 리밸런싱 with 선물 비용."""
          nonlocal capital, trade_count
 +        # 연구 토글 (2026-08-25): 체결 밴드. 기본 0.05 = 현행 BT.
-+        # 라이브 현물(executor_coin)은 밴드가 없다(최소주문 5,000원 넘으면 전부 체결).
++        # 라이브 현물(executor_coin)은 상대 밴드가 없다 — 절대 최소주문 5,000원과
++        # dust 정리(잔여 5,000원 미만이면 전량매도)만 있다.
++        # MIN_ORDER_FRAC = 최소주문액 / 포트폴리오 가치. DUST_FRAC 도 같은 척도.
 +        _band = float(os.environ.get('REBAL_BAND', '0.05'))
++        _minord = float(os.environ.get('MIN_ORDER_FRAC', '0'))
++        _dust = float(os.environ.get('DUST_FRAC', '0'))
          pv = _port_val(date)
          if pv <= 0:
              return
-@@ -481,7 +484,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+@@ -481,8 +488,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
                  trade_count += 1
              else:
                  delta = target_qty[coin] - holdings[coin]
 -                if delta < -holdings[coin] * 0.05:
-+                if delta < -holdings[coin] * _band:
++                if delta < -holdings[coin] * _band and (-delta) * cur >= _minord * pv:
                      sell_qty = -delta
++                    # 라이브 dust 정리: 남는 잔여가 dust 미만이면 전량매도
++                    if _dust > 0 and (holdings[coin] - sell_qty) * cur < _dust * pv:
++                        sell_qty = holdings[coin]
                      sell_frac = sell_qty / holdings[coin]
                      sell_margin = margins[coin] * sell_frac
-@@ -514,7 +517,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     exit_p = cur * (1 - slip)
+@@ -505,6 +515,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 notional = margin * leverage
+                 qty = notional / entry_p
+                 tx = notional * tx_cost
++                if notional < _minord * pv:
++                    continue
+                 if capital >= margin + tx:
+                     capital -= margin + tx
+                     holdings[coin] = qty
+@@ -514,7 +526,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                      trade_count += 1
              else:
                  delta = tqty - holdings[coin]
 -                if delta > holdings[coin] * 0.05:
-+                if delta > holdings[coin] * _band:
++                if delta > holdings[coin] * _band and delta * cur >= _minord * pv:
                      entry_p = cur * (1 + slip)
                      add_notional = delta * entry_p
                      add_margin = add_notional / leverage

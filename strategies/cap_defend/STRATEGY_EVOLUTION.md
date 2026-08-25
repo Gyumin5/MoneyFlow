@@ -302,7 +302,8 @@ V22 의 4h 멤버를 전부 걷어내고 자산군마다 D_SMA42 하나만 남�
 - drift 정의: `half_turnover = Σ|tgt − cur| / 2`, 자본금 기준. `need_rebal = is_daily_bar AND (snap_fire OR (canary_on AND ht ≥ threshold))`.
 - 현물 drift 발화 시 refill v2 (모멘텀 둘 다 음수인 코인만 교체). 2026-06-06 검증 결과 drift 0.10 에서는
   refill 이 앵커 전용과 사실상 동일(5.4yr 종목교체 0일) — 미래의 모멘텀 급락 대비 방어로만 남겼다.
-- 단독 sleeve BT(5.4yr): 현물 Cal 4.63 / CAGR +82% / MDD -18%.
+- 단독 sleeve BT(5.8yr, 2020-10-01~2026-08-24, 라이브 체결규칙 정합): 현물 Cal 4.35 / CAGR +77.6% / MDD -17.8%.
+  옛 표기 4.63/+82% 는 BT 에만 있던 5% 체결 밴드 기준 — 2026-08-25 에 밴드 0 으로 정합하며 정정.
 
 ## V25 선물 (2026-05-28) — 동적 per-coin 레버리지 + CROSS
 
