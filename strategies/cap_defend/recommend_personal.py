@@ -48,6 +48,27 @@ try:
 except Exception:
     CONFIG_PORTFOLIO_PUBLIC_URL = ""
 
+def backup_status_text():
+    """마지막 정상 state 백업의 날짜와 경과. 실패해야만 알림이 오는 구조라, 며칠째
+    정상인지가 사람 눈에 안 보였다(2026-08-25). 워치독이 cohort 디렉토리를 통째로
+    rename 해서 공개하므로 디렉토리 존재 자체가 4종 파일 검증 통과를 뜻한다."""
+    try:
+        root = os.path.join(os.path.expanduser('~'), 'state_backups')
+        if not os.path.isdir(root):
+            return '백업 없음'
+        days = sorted(d for d in os.listdir(root)
+                      if os.path.isdir(os.path.join(root, d)) and d[:2] == '20')
+        if not days:
+            return '백업 없음'
+        last = days[-1]
+        mtime = os.path.getmtime(os.path.join(root, last))
+        hours = (time.time() - mtime) / 3600
+        age = f'{hours:.0f}시간 전' if hours < 48 else f'{hours/24:.0f}일 전'
+        return f'백업 {last} ({age})'
+    except Exception:
+        return '백업 확인 불가'
+
+
 def send_telegram(msg, button_text=None, button_url=None):
     """텔레그램 알림 전송. 실패해도 프로그램은 계속 진행."""
     try:
@@ -1631,7 +1652,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     <body>
         <div class="container">
             <h1>\U0001f680 Cap Defend {STRATEGY_VERSION}</h1>
-            <p style="color:#666; font-size:0.9em;">{datetime.now().strftime('%Y-%m-%d %H:%M')} | \uc885\uac00 {date_today.strftime('%Y-%m-%d')}</p>
+            <p style="color:#666; font-size:0.9em;">{datetime.now().strftime('%Y-%m-%d %H:%M')} | \uc885\uac00 {date_today.strftime('%Y-%m-%d')} | {backup_status_text()}</p>
 
             <!-- ===== 실계좌 현황 (기본 펼침) ===== -->
             <div class="section-header" onclick="toggleSection('secAsset')">
@@ -2794,6 +2815,18 @@ if __name__ == "__main__":
                 _p = ht_f / thr_f if thr_f > 0 else 0
                 _f_lbl, _f_ic = _trig_status(_p)
                 drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.0f}pp {_p*100:.0f}% [{_f_lbl}]")
+            # 위 ht 는 (진입마진+미실현PnL)/equity 기준이라 이익난 고레버리지 종목이 목표보다
+            # 높게 보인다. 실행이 실제로 맞추는 값은 명목이므로 코인별 명목 편차를 같이 적는다.
+            # 편차가 체결 밴드(5%) 밖인 코인만 다음 실행에서 주문이 나간다.
+            _devs = []
+            for h in (fut_acct_d.get('holdings') or []):
+                d = h.get('notional_dev')
+                if d is None:
+                    continue
+                _devs.append(f"{(h.get('ticker') or '?').upper()} {d*100:+.1f}%"
+                             + ("*" if abs(d) > 0.05 else ""))
+            if _devs:
+                drift_lines.append("  명목 편차(목표 대비, * = 밴드 5% 밖): " + " / ".join(_devs))
         except Exception as ex_df:
             drift_lines.append(f"  바이낸스: 계산 실패 ({ex_df})")
 
