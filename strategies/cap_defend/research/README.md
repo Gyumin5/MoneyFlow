@@ -49,7 +49,26 @@
 - `backtest_rebal_sweep.py` — 리밸런싱 스윕
 - `backtest_rwa_defense.py` / `backtest_rwa_gold.py` / `backtest_rwa_gold_2.py` / `backtest_rwa_v2.py` — RWA 방어 전략
 
-### 연구 결과 요약
+### 현행(V24/V25) 검증 스크립트
+
+여기 있는 대부분은 V21 이전 탐색이라 바로 안 돌아간다. 아래는 현행 엔진 기준으로 쓰인 것들이다.
+
+- `parity_spot.py` / `parity_fut.py` — 라이브 선정함수와 채택 BT 에 같은 입력을 넣어 일별 종목·비중이
+  일치하는지 증명하는 read-only 하니스 (2026-06-06, 2,000여 일 100% 일치)
+- `bt_spot_refill_vs_anchor.py` — 현물 drift 발화 시 refill 이 앵커 전용과 같은 결과인지 확인
+- `bt_fut_rebal_band.py` (+ `.engine.patch`) — 선물 체결 밴드 스윕. 정본 엔진은 env 토글로만 바꾸고
+  측정 후 원복한다. 패치는 재현용으로만 보관
+
+변형 실험은 정본 엔진(`unified_backtest.py`, `backtest_futures_v25.py`)에 코드를 남기지 않는다.
+env 토글로 재고 끝나면 되돌리며(diff 0), 재현 패치만 `*.engine.patch` 로 남긴다.
+
+### 연구 결과 요약 (읽을 가치가 남은 것)
 
 - `futures_research_history.md` — 선물 연구 히스토리
-- `stoploss_summary.md` — 스탑로스 연구 요약
+- `futures_short_research_history.md` — 숏 전략 연구 기록 (숏은 채택된 적 없다)
+- `stoploss_summary.md` — 스탑로스 연구 요약 (현행 세 sleeve 는 스탑이 없다. 그 근거)
+- `T3O_TRIGGER_FINDINGS.md` — 자산간 T3O 트리거. 기각됨
+- `reentry_variants_registry.md` — 빈 스냅 재진입 22개 변형. 탐색 종료
+
+V21 시절 재설계 플랜·phase0 리포트류는 2026-08-25 에 삭제했다(전부 V22→V24→V25 로 대체됨).
+결론은 `../STRATEGY_EVOLUTION.md` 와 `../../../history/V21_HISTORY.md`, 원문은 git 이력에 있다.

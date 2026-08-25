@@ -11,7 +11,6 @@
 | 워치독 (5분 주기) | `trade/ops/watchdog_serve.sh` | `~/watchdog_serve.sh` |
 | executor 래퍼 (flock + 랜덤 지연) | `trade/ops/run_executor.sh` | `~/run_executor.sh` |
 | recommend 래퍼 (flock + 재시도) | `trade/ops/run_recommend.sh` | `~/run_recommend.sh` |
-| 일별 history 갱신 | `trade/ops/daily_history.py` | `~/daily_history.py` |
 | crontab 사본 | `trade/ops/crontab.txt` | `crontab -l` |
 | 코인 executor | `trade/executor_coin.py` | `~/executor_coin.py` |
 | 코인 live engine | `trade/coin_live_engine.py` | `~/coin_live_engine.py` |
@@ -19,20 +18,26 @@
 | 선물 자동매매 | `trade/auto_trade_binance.py` | `~/auto_trade_binance.py` |
 | 추천 (general) | `strategies/cap_defend/recommend.py` | `~/recommend.py` |
 | 추천 (personal) | `strategies/cap_defend/recommend_personal.py` | `~/recommend_personal.py` |
-| 운영 매뉴얼 | `V25_OPERATION_MANUAL.md` | `~/V25_OPERATION_MANUAL.md` |
+| 운영 매뉴얼 | `OPERATION_MANUAL.md` | (서버 배포 대상 아님 — 저장소에서 본다) |
 
 상태 파일 (서버에만 존재, gitignore)
 - `~/trade_state.json` — 코인현물 V24 live state (members, last_target_snapshot, rebalancing_needed, schema_version)
 - `~/kis_trade_state.json` — 주식 V25 live state (snapshots: snap0/snap1/snap2, last_rebal_date)
 - `~/binance_state.json` — 선물 V25 live state (strat.canary_on 등)
 - `~/signal_state.json` — recommend 출력, executor 입력
-- `~/state_backups/` — 매일 1회 자동 백업, 14일 보관
+- `~/state_backups/` — `watchdog_serve.sh` 가 하루 한 번 복사, 14일 보관
+
+2026-08-25 점검: 백업이 `signal_state.json` 과 `kis_trade_state.json` 둘만 담고 있다.
+watchdog 이 복사하려는 `coin_trade_state.json` 은 서버에 없는 이름이고(실제 파일은 `trade_state.json`),
+선물 `binance_state.json` 은 아예 대상이 아니다. 즉 코인현물·선물 상태는 백업된 적이 없다.
+저장소 `trade/ops/watchdog_serve.sh` 에는 고쳐 뒀고 서버 반영은 사용자 승인 대기.
+(`~/daily_history.py` 는 V14 시절 스크립트로 아무데서도 안 불린다 — 저장소에서는 삭제했다.)
 
 ## 2. cron 일정
 
 ```
 @reboot                        cd ~ && nohup python3 serve.py > http.log 2>&1 &
-@reboot                        export TRADE_PIN=<설정값> && nohup python3 ~/trade_api_server.py > ~/api_server.log 2>&1 &
+@reboot                        nohup ~/start_trade_api.sh > /dev/null 2>&1 &
 */5 * * * *                    ~/watchdog_serve.sh >> ~/watchdog.log
 15 9 * * *                     ~/run_recommend.sh general              # 09:15 매일
 15 9 * * *                     ~/run_recommend.sh personal             # 09:15 매일
@@ -41,7 +46,12 @@
 5 9 * * *                      python3 ~/auto_trade_binance.py --trade # 선물 V25, 매일 09:05 1회
 ```
 
-TRADE_PIN 실제값은 여기 기록하지 않는다 (서버 crontab 에만 존재, 문서/채팅/커밋 금지).
+인증 env 는 crontab 이 아니라 `start_trade_api.sh` 가 단일 출처로 읽는다(2026-07-21 TRADE_PIN 폐지,
+DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 않는다.
+
+2026-08-25 대조 결과 저장소 사본과 서버가 한 곳 달랐다: 월 1회 BT replay(`30 9 1 * * bt_replay_monthly.py`)가
+서버 crontab 에서 사라져 있다. 스크립트 `~/bt_replay_monthly.py` 는 남아 있지만 `~/bt_replay.log` 가 없어
+실제로 돈 적이 없다 — 라이브↔BT drift 감시가 꺼진 상태다. 되살릴지는 사용자 판단 대기.
 
 설계 의도 (V24/V25 — 모든 자산 1D 단일)
 - 코인/선물은 D봉 닫힘 직후 09:05 동시 실행 (4h 멤버 제거, 1일 1회). bar-idempotency 로 같은 봉 중복 매매 방지

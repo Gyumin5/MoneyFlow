@@ -269,7 +269,7 @@ Top 5:
 - 실거래 운영 기준으로는 최종 교체 가치가 충분하다고 판단
 
 최종 전략 설명:
-- `strategies/cap_defend/futures_strategy_final.md`
+- 선물 V19 시절 최종 전략 문서 (2026-08-25 삭제 — git 이력 참조)
 
 - 실매매 코드에 조건부 스탑 반영 여부 결정
 - 실거래에서 stop order 체결 정책 구체화

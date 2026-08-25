@@ -116,6 +116,7 @@ sleeve:   D_SMA42 단일 (주식/코인과 동일 sleeve 정의)
 마진모드: CROSSED (V24 ISOLATED 에서 전환)
 스탑:     없음 (STOP_PCT=0). 캐시가드 없음. 가드 없음 (분산 + 동적 L 이 유일 방어)
 거래비용: 0.04% (바이낸스 maker)
+체결밴드: 명목 ±5% (DELTA_THRESHOLD=0.05) — 채택 BT 수량 ±5% 와 정합 (2026-08-25)
 Cron:     매일 09:05 KST (일 1회)
 ```
 
@@ -169,8 +170,6 @@ MoneyFlow/
 │   ├── STRATEGY_EVOLUTION.md          V12→V25 전략 진화 기록
 │   ├── repo_backtest_guide.md         통합 백테스트 재현 가이드
 │   ├── stock_backtest_howto.md        주식 백테스트 설명
-│   ├── futures_backtest_howto.md      선물 백테스트 설명
-│   ├── futures_strategy_final.md      선물 최종 전략 명세
 │   │
 │   ├── legacy/                        레거시 엔진/백테스트 (참조용)
 │   └── research/                      연구/실험 파일 (재현에 불필요)
@@ -186,7 +185,11 @@ MoneyFlow/
 │   ├── config.py                      서버 설정 (API 키, 비밀번호 등)
 │   └── config.example.py              설정 템플릿
 │
-├── V25_OPERATION_MANUAL.md            현행 운영 매뉴얼 (선물 V25 중심)
+├── tests/                             라이브 엔진 회귀 테스트 (python3 tests/test_*.py)
+├── reports/                           실험 보고서 (reports/YYYY-MM-DD-주제.html)
+├── logs/                              중간로그·원시출력 (git 미추적)
+│
+├── OPERATION_MANUAL.md                현행 운영 매뉴얼 (세 sleeve 공통)
 └── SERVER_OPS.md                      서버 매핑/cron/헬스체크/복구 (운영 정본)
 ```
 
@@ -243,7 +246,7 @@ MoneyFlow/
 | V12 | 2026-01 | 초기 버전 |
 
 전체 변경 근거와 폐기된 아이디어는 [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](strategies/cap_defend/STRATEGY_EVOLUTION.md),
-운영 절차/롤백은 [`V25_OPERATION_MANUAL.md`](./V25_OPERATION_MANUAL.md) 참조.
+운영 절차/롤백은 [`OPERATION_MANUAL.md`](./OPERATION_MANUAL.md) 참조.
 
 ## 한 줄 요약
 
@@ -252,9 +255,10 @@ MoneyFlow/
 ## 문서 인덱스
 
 - [`CLAUDE.md`](./CLAUDE.md) — 전략 정의 정본 + 프로젝트 규칙 (변경 시 최우선 동기화 대상)
-- [`V25_OPERATION_MANUAL.md`](./V25_OPERATION_MANUAL.md) — 현행 운영 스펙, 전환 절차, 롤백
+- [`OPERATION_MANUAL.md`](./OPERATION_MANUAL.md) — 현행 운영 흐름, 가드, 사고 대응, 롤백
 - [`SERVER_OPS.md`](./SERVER_OPS.md) — 서버 파일 매핑, cron, 헬스체크, 복구 절차
 - [`strategies/cap_defend/STRATEGY_EVOLUTION.md`](./strategies/cap_defend/STRATEGY_EVOLUTION.md) — V12~V25 진화 요약
 - [`strategies/cap_defend/repo_backtest_guide.md`](./strategies/cap_defend/repo_backtest_guide.md) — 통합 백테스트 재현 가이드
 - [`history.md`](./history.md) — 결정 로그 (append-only ADR)
-- [`V21_HISTORY.md`](./history/V21_HISTORY.md) / [`V21_OPERATION_MANUAL.md`](./V21_OPERATION_MANUAL.md) — 역사적 문서 (V21 시절)
+- [`V21_HISTORY.md`](./history/V21_HISTORY.md) — V21 개발기 (역사적 문서)
+- [`reports/`](./reports) — 실험 보고서 (날짜-주제.html). 결론 한 줄은 `history.md` 에 있다

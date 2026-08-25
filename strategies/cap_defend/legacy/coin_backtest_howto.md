@@ -16,7 +16,7 @@
 - 가격 데이터:
   - `data/*.csv`
 - 월별 유니버스 히스토리:
-  - [../../data/historical_universe.json](../../data/historical_universe.json)
+  - [../../data/historical_universe.json](../../../data/historical_universe.json)
 
 현물 코인 전략은 로컬 CSV와 월별 시총 히스토리를 기준으로 동작한다. 즉, 백테스트 재현성은 로컬 데이터 상태에 직접적으로 의존한다.
 

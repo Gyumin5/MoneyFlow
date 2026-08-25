@@ -278,12 +278,68 @@ V21 trade path 에서도 merged target 을 execute_delta 에 사용해 C 포지�
 ### 구현
 - 실매매: `trade/coin_live_engine.py` (C_SLEEVE_CFG, CIntent, compute_c_intent, apply_c_to_target, fetch_c_bars)
 - 실매매: `trade/executor_coin.py` (handle_c_only, finalize_c_state, _market_buy_krw/_market_sell_coin)
-- 매뉴얼: `V22_OPERATION_MANUAL.md`
+- 매뉴얼: V22 운영 매뉴얼 (2026-08-25 삭제 — 내용은 git 이력에 있고 현행 매뉴얼은 `../../OPERATION_MANUAL.md`)
 
 ### V22 미채택 (추가 검증 후 보류)
 - 선물 C 업그레이드 (f_dthr14 + G3): 2022 bear MDD 악화
 - dip_thr-only 완화 (선물): 22건 검증 범위 밖
 - BTC regime 가드 (SMA200): V22 목표 단순성과 충돌
+
+---
+
+## V24 (2026-04-30) — 모든 자산 1D 단일 + drift 트리거
+
+V22 의 4h 멤버를 전부 걷어내고 자산군마다 D_SMA42 하나만 남겼다. 대신 종목 교체가 앵커일에만
+일어나던 구조에 "목표에서 얼마나 벌어졌나"(drift) 를 트리거로 더했다.
+
+- 코인현물: D_SMA42 단일, snap_interval=217 (=7×31), n_snap=7, drift 0.10, 카나리 BTC SMA42±1.5%,
+  헬스 mom2vol(vol_cap 5%, 90d), universe 3종 cap 1/3.
+- 선물(당시): D_SMA42 단일, snap=57 n=3 drift=0.05 → V25 에서 95/5/0.03 으로 갱신.
+- 주식: SNAP_PERIOD 126→69, STAGGER 42→23, N_SNAPS 3 유지.
+- 스태거는 자산군마다 서로 다른 소수(주식 23 / 현물 31 / 선물 19), 스냅 개수는 서로소로 두어
+  같은 날 세 자산이 동시에 갈아타지 않게 했다.
+- cron 4h×6 → 1d×1 (09:05 KST).
+- drift 정의: `half_turnover = Σ|tgt − cur| / 2`, 자본금 기준. `need_rebal = is_daily_bar AND (snap_fire OR (canary_on AND ht ≥ threshold))`.
+- 현물 drift 발화 시 refill v2 (모멘텀 둘 다 음수인 코인만 교체). 2026-06-06 검증 결과 drift 0.10 에서는
+  refill 이 앵커 전용과 사실상 동일(5.4yr 종목교체 0일) — 미래의 모멘텀 급락 대비 방어로만 남겼다.
+- 단독 sleeve BT(5.4yr): 현물 Cal 4.63 / CAGR +82% / MDD -18%.
+
+## V25 선물 (2026-05-28) — 동적 per-coin 레버리지 + CROSS
+
+고정 L3 ISOLATED 를 코인별 동적 레버리지와 CROSS 마진으로 바꿨다.
+
+- L = min(BTC_cap, K2_per_coin), Lmin/Lmid/Lmax = 2/3/4.
+  · BTC_cap: BTC/SMA42 > 1.05 → 4, > 1.015 → 3, else 2 (시장 전체 상태)
+  · K2_per_coin: close/SMA7 > 1.075 → 4, > 1.025 → 3, else 2 (개별 코인 단기 강도)
+- 마진 CROSSED, 스냅 95/5, drift 0.03, 스탑·캐시가드 없음.
+- 채택 근거: K2(SMA 7, 문턱 2.5%) 가 25개 설정 window rank-sum 1위이자 plateau 중심.
+  모멘텀 기반 대안(J) Cal 7.45 대비 K2 8.12, MDD 7pp 개선.
+- 단독 sleeve BT(5.6yr): Cal 8.12 / CAGR 312% / MDD -38.3%. 자산배분 60/25/15 합성 Cal 5.72.
+
+## V25 주식 (2026-05-29) — Z-score + 3-mom 필터 + cap/Cash
+
+- 유니버스 R7 (R7B 의 EWJ 를 VNQ 로 교체 — 채택 BT 와 일치시킴).
+- 선정: Z-score(가중Mom + Sharpe126) 랭킹 → 3-mom(30/72/230) 필터 → Top3 cap 1/3 + Cash.
+  · 가중Mom = 0.5×ret63 + 0.3×ret126 + 0.2×ret252.
+- 카나리 EEM SMA200 ±0.5%, 드리프트 0.05, 스냅 69/23/3.
+- 종목 교체는 앵커일 OR drift 발화일(그날 fresh 재선정). 코인·선물의 "앵커일에만" 원칙과 다른 유일한 곳.
+- 아키텍처 통일: 순수 전략 함수 `stock_strategy_v25.py` 를 executor 와 recommend 가 함께 호출(단일 출처).
+  signal_state.json 은 fallback 으로만 남았다.
+- 채택 근거: window rank-sum 5게이트 통과(C안 avg_rank 1.246 vs 현행 2.471).
+
+## V25 이후 (2026-06 ~ 2026-08) — 파라미터가 아니라 정합·가드의 시간
+
+버전이 올라가지 않은 기간이지만 실제로 손을 댄 곳이 많다. 전략 정의는 그대로 두고
+"라이브가 채택 백테스트와 같은 일을 하는가" 를 맞추는 작업이었다. 항목별 근거는 `../../history.md`.
+
+- 주식 선정 점수 정합(06-06): 라이브가 순수 252일 모멘텀(V15 잔재)을 쓰고 있어 채택 BT 의 가중 모멘텀과
+  종목이 16.8% 어긋났다 → 가중으로 수정, replay 100% 일치. 함수 이름이 아니라 구현을 봐야 한다는 사례.
+- 코인 현물·선물 선정 패리티 증명(06-06): 같은 입력을 주입해 라이브와 BT 의 일별 종목·비중이
+  2,000여 일 100% 일치함을 확인(`research/parity_spot.py`, `parity_fut.py`).
+- 선물 드리프트 정의 정합(07-17): cur_w 를 (진입마진+PnL)/equity 로 통일.
+- 헬스 vol_cap 0.05 양방향 재검증(07-21): 완화도 타이트화도 모두 열위 — 재실험 대상 아님.
+- 선물 전량청산 차단 사고 수정(08-15), 마진 preflight 범위 수정과 상시 무결성 검사 분리(08-21~22).
+- 체결 밴드 정합(08-25): 라이브 ±1% → ±5% 로 채택 BT 와 일치. 회전 연 264회 → 156회.
 
 ---
 
@@ -296,7 +352,14 @@ V21 trade path 에서도 merged target 을 execute_delta 에 사용해 C 포지�
 | 2h/1h 봉 추가 멤버 | 2026-04 | 노이즈, 동일 universe/canary로 직교성 약함 |
 | TLT 방어 추가 | 2026-04 | V19 대비 한계효용 낮음 |
 | Post-Flip Delay (PFD) | 2026-04 | 포트폴리오 레벨 무차별 |
-| 단일 D봉 코인 (V18 유지) | 2026-04-13 | 4h 결합으로 이벤트 탈동기화 이득 |
+| 단일 D봉 코인 (V18 유지) | 2026-04-13 | 4h 결합으로 이벤트 탈동기화 이득 (V24 에서 다시 단일 D봉으로 회귀) |
+| 선물 유지증거금 tier 반영 | 2026-06 | 동적 L4 + CROSS 에서 0.4~0.65% 차이는 청산위험 dead zone |
+| 자산간 T3O(과대 트림) 트리거 | 2026-06 | CAGR 희생이 채택바 미달, 임계 올려도 개선 평탄 |
+| 헬스 vol_th 재조정(0.03~0.04 / 0.06+) | 2026-07-21 | 타이트화는 유니버스 축소로 CAGR 붕괴, 완화는 고변동 알트 편입으로 Cal 붕괴 |
+| 카나리 재진입 분할진입(스냅별 stagger) | 2026-07-23 | 현물 Cal 4.55→3.29, 선물 7.58→4.01, MDD 도 악화 |
+| 선물 매일 레버리지 재조정 | 2026-08-21 | sleeve rank-sum·비용 스트레스 열위, 작동 조건에선 MDD 악화 |
+| 앵커 갱신을 drift 사건구동으로 | 2026-08-21 | 드리프트는 승자 확대로 발화 → 그때 재선정하면 승자를 조기 절단 |
+| 체결 밴드 1~3% 로 좁히기 | 2026-08-25 | 수익 동률·낙폭 악화·체결 1.7배, 비용 스트레스 전 구간 열위 |
 
 ---
 

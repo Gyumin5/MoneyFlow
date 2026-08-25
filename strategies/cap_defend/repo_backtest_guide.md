@@ -10,7 +10,6 @@
 2. 주식:
    - [stock_backtest_howto.md](./stock_backtest_howto.md)
 3. 선물:
-   - [futures_backtest_howto.md](./futures_backtest_howto.md)
 
 ## 전략별 실행 명령
 

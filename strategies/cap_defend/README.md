@@ -76,8 +76,6 @@ python3 backtest_futures_v25.py             # 선물 V25 (CROSS 청산 + 동적 
 | `STRATEGY_EVOLUTION.md` | V12→V25 전략 진화 기록 (변경 근거, 폐기 아이디어) |
 | `repo_backtest_guide.md` | 통합 백테스트 재현 가이드 |
 | `stock_backtest_howto.md` | 주식 백테스트 상세 설명 |
-| `futures_backtest_howto.md` | 선물 백테스트 상세 설명 |
-| `futures_strategy_final.md` | 선물 최종 전략 명세 |
 
 ### 레거시
 
