@@ -102,9 +102,12 @@ mkdir -p "$BACKUP_DIR"
 TODAY=$(date +%Y-%m-%d)
 BACKUP_FLAG="$BACKUP_DIR/.backup_$TODAY"
 if [ ! -f "$BACKUP_FLAG" ]; then
+    # 2026-08-25: coin_trade_state.json 은 서버에 없는 이름이라 코인현물 상태가 백업된 적이 없었고,
+    # 선물 binance_state.json 은 대상에서 빠져 있었다. 실제 파일명으로 고치고 선물을 추가한다.
     cp -f /home/ubuntu/signal_state.json "$BACKUP_DIR/signal_state_$TODAY.json" 2>/dev/null
-    cp -f /home/ubuntu/coin_trade_state.json "$BACKUP_DIR/coin_trade_state_$TODAY.json" 2>/dev/null
+    cp -f /home/ubuntu/trade_state.json "$BACKUP_DIR/trade_state_$TODAY.json" 2>/dev/null
     cp -f /home/ubuntu/kis_trade_state.json "$BACKUP_DIR/kis_trade_state_$TODAY.json" 2>/dev/null
+    cp -f /home/ubuntu/binance_state.json "$BACKUP_DIR/binance_state_$TODAY.json" 2>/dev/null
     touch "$BACKUP_FLAG"
     find "$BACKUP_DIR" -name "*.json" -mtime +14 -delete 2>/dev/null
     find "$BACKUP_DIR" -name ".backup_*" -mtime +14 -delete 2>/dev/null

@@ -1,35 +1,31 @@
-# 서버 재부팅시 자동 시작
-@reboot cd /home/ubuntu && nohup python3 serve.py > http.log 2>&1 &
-@reboot export TRADE_PIN=<redacted> && nohup python3 /home/ubuntu/trade_api_server.py > /home/ubuntu/api_server.log 2>&1 &
+# 서버 crontab 사본 — 2026-08-25 서버 실물(`crontab -l`)과 대조해 갱신.
+# 이 파일은 기록이지 배포물이 아니다. 서버와 다르면 서버가 truth 고, 이 파일을 고친다.
+# 비밀값(PIN·토큰)은 절대 여기 쓰지 않는다 — 인증 env 는 start_trade_api.sh 가 단일 출처로 읽는다.
 
-# 매일 9:15 KST 포트폴리오 추천
+# 재부팅 시 자동 시작
+@reboot cd /home/ubuntu && nohup python3 serve.py > http.log 2>&1 &
+@reboot nohup /home/ubuntu/start_trade_api.sh > /dev/null 2>&1 &
+
+# 09:15 KST 매일 — 추천 HTML + 자산배분 트리거(T1/T3U) + 텔레그램
 15 9 * * * /home/ubuntu/run_recommend.sh general >> /home/ubuntu/recommend.log 2>&1
 15 9 * * * /home/ubuntu/run_recommend.sh personal >> /home/ubuntu/recommend_personal.log 2>&1
 
-# 5분마다 serve.py 생존 체크
+# 5분마다 serve.py 생존 체크 (실패 시에만 재시작)
 */5 * * * * /home/ubuntu/watchdog_serve.sh >> /home/ubuntu/watchdog.log 2>&1
 
-# ═══ executor (단일 모드 + 랜덤 지연) ═══
-# 코인: 09:20 이후 매 10분 (24시간, 급락 대응)
-
-
-
-# V24 주식: 1d 1회 (US 정규장 개장 후 23:35 KST, 월~금)
+# 주식 V25 — 평일 23:35 KST 1회 (executor_stock.py 가 직접 전략 계산)
 35 23 * * 1-5 /home/ubuntu/run_executor.sh stock > /dev/null 2>&1
 
-# ═══ 바이낸스 선물 (Cap Defend Futures Ensemble) ═══
-# 매 1시간: 시그널 체크 + 매매
-
-# 매일 09:00 KST: 일일 리포트
-#0 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --report >> /home/ubuntu/binance_trade.log 2>&1
-
-
-# V24 선물: 1d 1회 (09:05 KST, recommend 09:15 보다 먼저 실행 → binance_state.json fresh → recommend 카나리 source 일치)
+# 선물 V25 — 매일 09:05 KST 1회. recommend(09:15) 보다 먼저 돌아 binance_state.json 이 fresh 해야
+# recommend 의 카나리 source 와 일치한다
 5 9 * * * cd /home/ubuntu && python3 auto_trade_binance.py --trade >> /home/ubuntu/binance_trade.log 2>&1
-# V24 코인: 1d 1회 (09:05 KST, 선물과 동시) — D봉 닫힘 직후 동기 실행
+
+# 코인현물 V24 — 매일 09:05 KST 1회 (선물과 동시, D봉 닫힘 직후)
 5 9 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1
 
-# ═══ V24 모니터링 ═══
-# 월 1회 BT replay: 매월 1일 09:30 KST (라이브 파라미터로 BT 재실행, baseline 대비 drift 알림)
-30 9 1 * * cd /home/ubuntu && python3 bt_replay_monthly.py >> /home/ubuntu/bt_replay.log 2>&1
-# params drift check 는 Daily Report (recommend_personal 09:15) 안에 통합됨 — 별도 cron 불필요
+# params drift check 는 Daily Report(recommend_personal 09:15) 안에 통합 — 별도 cron 없음.
+#
+# 없어진 항목 (2026-08-25 확인): 월 1회 BT replay
+#   30 9 1 * * cd /home/ubuntu && python3 bt_replay_monthly.py >> /home/ubuntu/bt_replay.log 2>&1
+#   스크립트 ~/bt_replay_monthly.py 는 서버에 그대로 있는데 cron 등록만 사라졌고 bt_replay.log 도 없다.
+#   즉 라이브↔BT drift 감시가 언제부턴가 안 돌고 있었다. 되살릴지는 사용자 판단 대기.

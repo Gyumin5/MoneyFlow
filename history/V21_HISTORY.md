@@ -2,7 +2,7 @@
 
 V20 → V21 전환 과정에서 수행된 실험, 결정, 검증 및 배포 절차 정리.
 
-상세 운영 스펙은 [V21_OPERATION_MANUAL.md](./V21_OPERATION_MANUAL.md), 버전 진화는 [strategies/cap_defend/STRATEGY_EVOLUTION.md](./strategies/cap_defend/STRATEGY_EVOLUTION.md) 참조.
+V21 시절 운영 매뉴얼은 2026-08-25 에 삭제했다(git 이력 참조). 버전 진화는 [strategies/cap_defend/STRATEGY_EVOLUTION.md](../strategies/cap_defend/STRATEGY_EVOLUTION.md) 참조.
 
 ---
 

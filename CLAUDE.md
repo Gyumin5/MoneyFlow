@@ -23,7 +23,7 @@
   - `strategies/cap_defend/unified_backtest.py` (V24 spot/fut BT 엔진, asset_type='spot'; 호출 `trade/v24_shadow_today.py`)
   - `strategies/cap_defend/recommend.py`
   - `strategies/cap_defend/recommend_personal.py`
-  - `V24_OPERATION_MANUAL.md`
+  - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
   - 상태파일: `trade_state.json`
 - 주식 전략 변경 시 최소 동기화 대상:
@@ -31,18 +31,21 @@
   - `strategies/cap_defend/recommend.py`
   - `strategies/cap_defend/recommend_personal.py`
   - `signal_state.json` / `kis_trade_state.json` 사용 규칙
-  - `V24_OPERATION_MANUAL.md`
+  - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
 - 선물 전략 변경 시 최소 동기화 대상 (V25):
   - `strategies/cap_defend/futures_live_config.py`
   - `strategies/cap_defend/backtest_futures_v25.py` (V25 BT 엔진, CROSS + 동적 L)
   - `strategies/cap_defend/futures_ensemble_engine.py`
   - `strategies/cap_defend/backtest_futures_full.py`
-  - `trade/auto_trade_binance.py` (구현 예정)
+  - `trade/auto_trade_binance.py`
   - `strategies/cap_defend/recommend_personal.py`
+  - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
+  - 상태파일: `binance_state.json`
 - 앵커일, 버퍼, 상태키, 모니터 기준통화가 다르면 "같은 전략"이라고 쓰지 않는다.
-- 현재 저장소에는 `1/10/19`와 `1/11/21` 표기가 혼재할 수 있으므로, 변경 시 관련 파일을 반드시 함께 정리한다.
+- 현행 전략의 앵커는 전부 봉 단위 스냅(snap_interval_bars)이다. `1/10/19`·`1/11/21` 같은 달력 앵커 표기는
+  `legacy/` 와 `research/` 의 옛 스크립트에만 남아 있다 — 현행 스펙 근거로 인용하지 않는다.
 
 ## 코인 현물 전략 규칙 (V24, 재정의 2026-04-30)
 
@@ -54,7 +57,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - snap_interval_bars=217, n_snapshots=7 (217 = 7 × 31, prime stagger=31)
 - canary_hyst=0.015, universe_size=3, cap=1/3, health=mom2vol (vol_cap 5%, vol_lookback 90d)
 - drift_threshold=0.10 (자본금 기준 half-turnover)
-- drift 발화 시 refill v2 (라이브 `_apply_refill_v2_to_state`): mom2 음수(ms<0&ml<0) 코인 → fresh healthy 교체. BT 정합 = `unified_backtest.py` DRIFT_HEALTH_MODE='refill' (v24_shadow_today.py 가 설정). 검증(2026-06-06, research/bt_spot_refill_vs_anchor.py): drift=0.10 에서 refill ≡ anchor-only (5.4yr 종목교체 0일, CAGR/MDD/Cal 동일) — 발화일 보유코인이 항상 모멘텀 양수. 즉 현물 종목교체는 사실상 앵커(217)에서만. refill 은 미래 모멘텀급락+drift 동시 발생 대비 dormant 방어.
+- drift 발화 시 refill v2 (라이브 `_apply_refill_v2_to_state`): mom2 음수(ms<0&ml<0) 코인 → fresh healthy 교체. BT 정합 = `unified_backtest.py` DRIFT_HEALTH_MODE='refill' (v24_shadow_today.py 가 설정). 검증(2026-06-06, strategies/cap_defend/research/bt_spot_refill_vs_anchor.py): drift=0.10 에서 refill ≡ anchor-only (5.4yr 종목교체 0일, CAGR/MDD/Cal 동일) — 발화일 보유코인이 항상 모멘텀 양수. 즉 현물 종목교체는 사실상 앵커(217)에서만. refill 은 미래 모멘텀급락+drift 동시 발생 대비 dormant 방어.
 - 가드 없음. Upbit warning/delisting 코인은 universe 에서 즉시 제외.
 - TX: 0.04% (BT), 실매매는 Upbit 수수료
 - 단독 sleeve (BT 5.4yr): CAGR +82%, MDD -18%, Cal 4.63
@@ -140,7 +143,11 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - 유지증거금: BTC/ETH 0.4%, 알트 0.5~0.65% (실 tier 기준, BT 0.4% 보수적)
 - 마진모드: CROSSED (auto_trade_binance.py MARGIN_TYPE = 'CROSSED')
 - 4h fetch 제거, 1d 1회 cron (`5 9 * * *`)
-- 디버그 로그: DEBUG_LEVERAGE=True, DEBUG_MARGIN=True (V25 검증 기간)
+- 디버그 로그: DEBUG_LEVERAGE=True, DEBUG_MARGIN=True
+- 체결 밴드: DELTA_THRESHOLD=0.05 (명목 편차 ±5%). 채택 BT `_execute_rebalance` 수량 ±5% 와 정합(2026-08-25).
+  매도·매수 게이트와 needs_rebalance(완료 판정) 세 곳을 함께 지배한다. 목표비중 0 전량청산·미보유 신규진입·
+  카나리 OFF 청산·레버리지/마진 변경은 밴드를 타지 않는다. 주문 실패 시엔 밴드와 무관하게 rebalancing_needed 유지.
+- cash buffer: 1% (CASH_BUFFER)
 
 ### V24 → V25 마이그레이션 (2026-05-28)
 
@@ -154,29 +161,14 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   · `strategies/cap_defend/recommend_personal.py` (STRATEGY_VERSION='V25', 선물 sleeve 설명)
 - 채택 근거: K2 (SMA=7 h=2.5%) plateau center 검증 (25 cfg window rank-sum 1위). J (mom-based) Cal 7.45 대비 K2 8.12 + MDD 7pp 개선.
 
-### V22 → V24 마이그레이션 (2026-04-30) [이전 — 참고]
+### 스냅·스태거 서로소 설계 (V24 이후 유지)
 
-- 모든 자산 1D 단일 + drift trigger (4h 멤버 제거)
-- 주식: SNAP_PERIOD=126→69, STAGGER=42→23, N_SNAPS=3 유지
-- 코인 spot: 1D+4h EW → D_SMA42 단일 sn=217 n=7 drift=0.10
-- 선물 sleeve: 1D+4h EW → D_SMA42 단일 sn=57 n=3 drift=0.05 (V24 도입 후 sn=95 n=5 drift=0.03 갱신)
-- spot n_snap=7 vs fut n_snap=5 (gcd=1, 서로소)
-- stagger: stock=23, spot=31, fut=19 (모두 distinct prime)
-- cron 4h x 6 → 1d x 1 (5 9 * * *)
-- 마이그레이션 스크립트: `trade/migrate_v22_to_v24.py`
-- 운영 매뉴얼: `V24_OPERATION_MANUAL.md` (V25 도입 후 deprecated, `V25_OPERATION_MANUAL.md` 참조)
-
-### V22 → V24 마이그레이션 (2026-04-30)
-
-- 모든 자산 1D 단일 + drift trigger (4h 멤버 제거)
-- 주식: SNAP_PERIOD=126→69, STAGGER=42→23, N_SNAPS=3 유지
-- 코인 spot: 1D+4h EW → D_SMA42 단일 sn=217 n=7 drift=0.10
-- 선물: 1D+4h EW → D_SMA42 단일 sn=57 n=3 drift=0.05
-- spot n_snap=7 vs fut n_snap=3 (gcd=1, 서로소)
-- stagger: stock=23, spot=31, fut=19 (모두 distinct prime)
-- cron 4h x 6 → 1d x 1 (5 9 * * *)
-- 마이그레이션 스크립트: `trade/migrate_v22_to_v24.py`
-- 운영 매뉴얼: `V24_OPERATION_MANUAL.md`
+- 스냅 개수는 자산군끼리 서로소: spot n=7, fut n=5, stock n=3 (gcd=1).
+- 스태거는 서로 다른 소수: stock=23, spot=31, fut=19.
+- 목적은 하나다 — 세 자산이 같은 날 동시에 종목을 갈아타지 않게 한다. 파라미터를 바꿀 때
+  이 성질을 깨지 않는지 먼저 확인한다.
+- cron 은 전 자산 1일 1회(`5 9 * * *`), 주식만 23:35 평일.
+- V22→V24 전환 절차와 마이그레이션 스크립트는 2026-04-30 에 끝났고 삭제했다(git 이력 참조).
 
 ### 자산배분 (V24 갱신 2026-05-26, B 안 채택 — per-sleeve buffer + 수동 송금)
 
@@ -379,7 +371,6 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - `trade/ops/watchdog_serve.sh` → `~/watchdog_serve.sh`
 - `trade/ops/run_executor.sh` → `~/run_executor.sh`
 - `trade/ops/run_recommend.sh` → `~/run_recommend.sh`
-- `trade/ops/daily_history.py` → `~/daily_history.py`
 - `trade/ops/crontab.txt` → `crontab -l` 사본
 
 ## 데이터 품질
@@ -459,7 +450,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - [ ] health/selection/weighting/risk 키가 엔진 인식값과 정확히 일치하는지 확인
 - [ ] cooldown / drift threshold 값 확인
 - [ ] `trade_state.json` 스키마 영향 확인
-- [ ] `V24_OPERATION_MANUAL.md` 업데이트
+- [ ] `OPERATION_MANUAL.md` 업데이트
 - [ ] 메모리(`MEMORY.md`) 업데이트
 - [ ] `CLAUDE.md`에 새 교훈 반영
 - [ ] 서버 배포 + 실행 확인
@@ -470,7 +461,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - 백테스트: tx 0.4%로 단순화. 실매매: 거래소 수수료 + 유동성 제약 + 분할체결.
 - 백테스트: 엔진 내부 `CASH`. 실매매/리포트: `Cash`.
 - 백테스트 앵커와 실매매 트랜치일이 다르면 성과를 직접 1:1 비교하지 않는다.
-- `V24_OPERATION_MANUAL.md`는 운영 기준 문서이고, 실제 truth는 코드와 상태 전이까지 포함한다.
+- `OPERATION_MANUAL.md`는 운영 기준 문서이고, 실제 truth는 코드와 상태 전이까지 포함한다.
 
 ## BT↔라이브 선정 정합 (통제 패리티 증명, 2026-06-06)
 
@@ -478,9 +469,9 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 동일 BTC 카나리를 주입해 일별 picks/weights 100% 일치를 증명. read-only 하니스.
 
 - 현물: `coin_live_engine.compute_member_target` vs `unified_backtest.run(asset_type='spot')`
-  → 2005일 picks/weights 100% 일치 (`research/parity_spot.py`).
+  → 2005일 picks/weights 100% 일치 (`strategies/cap_defend/research/parity_spot.py`).
 - 선물: `auto_trade_binance.compute_strategy_target` vs `unified_backtest.run(asset_type='fut')`
-  → 2004일 picks/weights 100% 일치 (`research/parity_fut.py`).
+  → 2004일 picks/weights 100% 일치 (`strategies/cap_defend/research/parity_fut.py`).
 - 결론: 선정 로직(후보순→mom2vol헬스→top3→greedy흡수→cap→카나리 hyst→snap merge)이
   라이브=BT 완전 동일. 주식 같은 점수정의(순수252 vs 가중) 버그 없음 확인.
 

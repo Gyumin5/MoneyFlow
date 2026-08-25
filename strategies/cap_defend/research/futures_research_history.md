@@ -13,7 +13,7 @@
 ### 1. 선물 백테스트 엔진 정비
 
 - 초기 선물 엔진은 일봉/시간봉 혼합 실험 단계였고, 인덱싱, 레버리지 적용, 격리마진, look-ahead 성격의 버그를 수정했다.
-- 이 단계의 중심 파일은 [backtest_futures_full.py](./backtest_futures_full.py)다.
+- 이 단계의 중심 파일은 [backtest_futures_full.py](../backtest_futures_full.py)다.
 - 이 엔진은 두 가지 트랜치 방식을 모두 지원한다.
   - 구방식: 달력 앵커 `1/10/19일`
   - 신방식: `snap_interval_bars` 기반 bar-based tranche
@@ -86,7 +86,7 @@
 
 ## 달력 앵커와 bar-based의 관계
 
-헷갈리기 쉬운 지점은 [backtest_futures_full.py](./backtest_futures_full.py)에 구방식과 신방식이 함께 남아 있다는 점이다.
+헷갈리기 쉬운 지점은 [backtest_futures_full.py](../backtest_futures_full.py)에 구방식과 신방식이 함께 남아 있다는 점이다.
 
 - 파일 기본 fallback:
   - `n_snapshots <= 3`일 때 `snap_days = [1, 10, 19]`
@@ -97,7 +97,7 @@
 
 ## 실거래 반영 결과
 
-실거래 코드는 [auto_trade_binance.py](../../trade/auto_trade_binance.py)에 반영했다.
+실거래 코드는 [auto_trade_binance.py](../../../trade/auto_trade_binance.py)에 반영했다.
 
 주요 운영 보강:
 
@@ -113,10 +113,10 @@
 ## 관련 파일
 
 - 엔진: [backtest_futures_full.py](../backtest_futures_full.py)
-- 최종 전략 문서: [futures_strategy_final.md](../futures_strategy_final.md)
-- 실행 가이드: [futures_backtest_howto.md](../futures_backtest_howto.md)
+- 당시 최종 전략 문서·실행 가이드는 2026-08-25 에 삭제했다(V19 시절 4h 앙상블. git 이력 참조).
+- 현행 선물 스펙은 `../../../OPERATION_MANUAL.md`, 엔진은 `../backtest_futures_v25.py`.
 - 숏 연구 히스토리: [futures_short_research_history.md](./futures_short_research_history.md)
 - 스탑 연구 요약: [stoploss_summary.md](./stoploss_summary.md)
 - 조합 탐색: [run_signal_combo_search.py](./run_signal_combo_search.py)
 - 트랜치 미세조정: [run_snap_finetune.py](./run_snap_finetune.py)
-- 실거래 코드: [auto_trade_binance.py](../../trade/auto_trade_binance.py)
+- 실거래 코드: [auto_trade_binance.py](../../../trade/auto_trade_binance.py)
