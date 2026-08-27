@@ -63,6 +63,7 @@ def cg_rows(symbols=('btc', 'eth', 'sol'), pad=37):
     """시총 목록. 채움은 거래소 채움과 같은 이름이라 교집합에 들어간다.
 
     유니버스 최소 크기(MIN_UNIVERSE_SIZE) 문턱이 있으므로 교집합이 실제로 커야 한다.
+    라이브 실측 교집합은 22~25종이다(2026-03-31~08-27, 321회).
     상장 안 된 심볼을 섞는 검사는 cg_rows_unlisted 를 쓴다.
     """
     return ([{'symbol': s, 'market_cap': 10 ** 12} for s in symbols]
@@ -290,7 +291,7 @@ try:
     # 여기서는 겹치는 걸 5종으로 줄여 유니버스 바닥을 확인한다.
     thin_cg = ([{'symbol': s, 'market_cap': 10 ** 12} for s in ('btc', 'eth', 'sol')]
                + [{'symbol': f'FILL{i}', 'market_cap': 10 ** 9} for i in range(2)]
-               + [{'symbol': f'nolist{i}', 'market_cap': 10 ** 9} for i in range(35)])
+               + [{'symbol': f'nolist{i}', 'market_cap': 10 ** 9} for i in range(35)])  # 교집합 5종
     reset(TMP, cg=thin_cg)
     try:
         a.refresh_universe(FakeClient(info=small))
@@ -374,6 +375,9 @@ try:
           "EXCHANGE_INFO_CACHE_PATH = os.path.join(SCRIPT_DIR" in _src
           and "UNIVERSE_CACHE_PATH = os.path.join(SCRIPT_DIR" in _src)
     check("TTL 은 36시간", 'MARKET_META_MAX_AGE_H = 36.0' in _src)
+    # 라이브 실측 교집합 22~25종. 바닥이 그 범위에 닿으면 멀쩡한 실행이 멈춘다.
+    check("유니버스 바닥이 실측 최소(22)보다 충분히 낮다",
+          a.MIN_UNIVERSE_SIZE <= 15, str(a.MIN_UNIVERSE_SIZE))
     check("거래소 최소 심볼 문턱이 요청 top N 보다 훨씬 크다",
           a.MIN_EXCHANGE_INFO_SYMBOLS >= 200, str(a.MIN_EXCHANGE_INFO_SYMBOLS))
     check("시총 목록 문턱은 고유 심볼 수로 잰다", 'MIN_CG_UNIQUE' in _src and 'MIN_CG_ROWS' not in _src)
