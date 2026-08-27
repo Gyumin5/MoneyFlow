@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>위험축소 매도를 체결 밴드에서 뺄지 (2026-08-27)</title>
+<style>
+  :root { --bg:#ffffff; --fg:#1a1a1a; --muted:#5a5a5a; --line:#dcdcdc;
+          --keep:#0b6b3a; --keepbg:#eaf6ef; --drop:#8a1c1c; --dropbg:#fbeeee;
+          --note:#7a5300; --notebg:#fdf6e3; }
+  body { background:var(--bg); color:var(--fg); margin:0; padding:18px 14px 60px;
+         font-family:'Noto Sans CJK KR',system-ui,sans-serif; font-size:16px; line-height:1.7; }
+  main { max-width:900px; margin:0 auto; }
+  h1 { font-size:22px; line-height:1.4; margin:0 0 6px; }
+  h2 { font-size:19px; margin:34px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  h3 { font-size:17px; margin:22px 0 8px; }
+  .sub { color:var(--muted); font-size:14px; margin:0 0 22px; }
+  .card { border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:16px 0; }
+  .keep { border-color:var(--keep); background:var(--keepbg); }
+  .drop { border-color:var(--drop); background:var(--dropbg); }
+  .note { border-color:#e0c56a; background:var(--notebg); }
+  .card p { margin:6px 0; }
+  .tag { display:inline-block; font-size:13px; padding:2px 9px; border-radius:99px;
+         border:1px solid currentColor; margin-right:8px; vertical-align:2px; }
+  .t-keep { color:var(--keep); } .t-drop { color:var(--drop); } .t-note { color:var(--note); }
+  .scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; margin:12px 0; }
+  table { border-collapse:collapse; font-size:14px; min-width:100%; }
+  th, td { border:1px solid var(--line); padding:7px 10px; text-align:right; white-space:nowrap; }
+  th { background:#f4f4f4; font-weight:600; }
+  td:first-child, th:first-child { text-align:left; }
+  tr.win td { background:var(--keepbg); font-weight:600; }
+  code { font-family:'Noto Sans Mono CJK KR',monospace; font-size:14px;
+         background:#f2f2f2; padding:1px 5px; border-radius:4px; }
+  ul { padding-left:22px; } li { margin:5px 0; }
+  .foot { color:var(--muted); font-size:14px; margin-top:34px;
+          border-top:1px solid var(--line); padding-top:14px; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#151515; --fg:#e9e9e9; --muted:#a5a5a5; --line:#3a3a3a;
+      --keep:#5fcf94; --keepbg:#16291f; --drop:#f08a8a; --dropbg:#2a1717;
+      --note:#e0c56a; --notebg:#2a2415; }
+    :root:not([data-theme="light"]) th { background:#242424; }
+    :root:not([data-theme="light"]) code { background:#242424; }
+  }
+  :root[data-theme="dark"] { --bg:#151515; --fg:#e9e9e9; --muted:#a5a5a5; --line:#3a3a3a;
+    --keep:#5fcf94; --keepbg:#16291f; --drop:#f08a8a; --dropbg:#2a1717;
+    --note:#e0c56a; --notebg:#2a2415; }
+  :root[data-theme="dark"] th { background:#242424; }
+  :root[data-theme="dark"] code { background:#242424; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>위험을 줄이는 매도를 체결 밴드에서 뺄지</h1>
+<p class="sub">2026-08-27 · 축은 매도 밴드 하나, 매수는 5% 고정 · 2020-10-01 ~ 2026-08-24 (5.8년)<br>
+측정 <code>strategies/cap_defend/research/bt_fut_sell_band.py</code> · 원시로그 <code>logs/2026-08-27-fut-sell-band.log</code></p>
+
+<div class="card drop">
+<p><span class="tag t-drop">결론</span>기각. 매도 밴드를 1% 로 좁히는 것도 0% 로 없애는 것도 채택하지 않는다. 라이브 변경 없음.</p>
+<p>합성 60/25/15 에서 Calmar 차이가 0.02 이고 MDD 는 세 팔이 소수점까지 같다. 성과로는 완전 동률이다.
+그런데 선물 슬리브 단독으로는 현행이 낫고, 거래비용 5배에서는 현행이 117 구간 중 92 승으로 압도한다.
+회전은 1.28~1.49배로 늘어난다. 얻는 게 없고 비용에만 약해진다.</p>
+<p><span class="tag t-note">뒤집힌 것</span>가설은 "밴드가 과다노출에 관대해서 위험축소가 늦는다" 였는데, 매도 밴드를 없애자
+슬리브 낙폭이 -38.3% 에서 -40.9% 로 <em>나빠졌다</em>. 하락 국면에서 노출을 더 자주 깎는 건 방어가 아니었다.</p>
+</div>
+
+<h2>왜 쟀나</h2>
+<p>08-26 라이브에서 레버리지 하향 3건(BNB 3→2, SOL 4→3, ETH 3→2) 뒤 목표 명목이 줄었는데
+남은 과다노출 -2.1 ~ -3.0% 가 밴드(5%) 안이라 주문이 안 나갔다. 위험을 줄여야 하는 자리에서
+"밴드 안이니 달성" 으로 넘어간 것이다.</p>
+<p>게다가 밴드는 방향이 비대칭이다. <code>delta = (목표 - 현재) / 현재</code> 라 분모가 현재값이어서,
+같은 금액이 어긋나도 부족한 쪽은 +5.0% 로 발화하고 넘치는 쪽은 -4.76% 라 발화하지 않는다.
+구조가 과다노출에 더 관대한데 레버리지 하향 국면에서는 정확히 반대여야 한다 — 이게 측정을 건 이유다.</p>
+
+<h3>세 팔</h3>
+<ul>
+<li><b>S0 대칭 5%(현행)</b> — 매도·매수 모두 5%</li>
+<li><b>S1 매도 1%</b> — 과다노출은 1% 만 넘으면 줄인다</li>
+<li><b>S2 매도 0%</b> — 과다노출은 무조건 줄인다(최소주문 제약만 남음)</li>
+</ul>
+<p>매수 밴드는 셋 다 5% 로 고정했다. 축이 둘이 되면 무엇이 효과인지 못 가른다.
+파라미터 최적화가 아니라서 0/1/5% 셋만 보고 그 사이는 훑지 않았다.</p>
+
+<h2>합성 60/25/15 — 결정층</h2>
+<div class="scroll">
+<table>
+<tr><th>팔</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>윈도우 avg_rank</th><th>승</th></tr>
+<tr class="win"><td>S0 대칭 5%(현행)</td><td>4.58</td><td>+57.7%</td><td>-12.6%</td><td>2.12</td><td>2.400</td><td>18/60</td></tr>
+<tr><td>S1 매도 1%</td><td>4.57</td><td>+57.4%</td><td>-12.6%</td><td>2.12</td><td>1.367</td><td>39/60</td></tr>
+<tr><td>S2 매도 0%</td><td>4.56</td><td>+57.3%</td><td>-12.6%</td><td>2.11</td><td>2.233</td><td>3/60</td></tr>
+</table>
+</div>
+<p>윈도우 순위만 S1 이 앞선다. 그런데 Calmar·CAGR·MDD·Sharpe 네 수준값이 전부 같거나 현행이 미세하게 높다.
+순위는 구간마다 누가 몇 bp 앞서느냐만 세는 값이라, 수준 차이가 없을 때는 방향만 있고 크기가 없다.
+사전에 정해둔 문턱(합성 Calmar 차이 0.3)의 15분의 1이다.</p>
+
+<h2>선물 슬리브 단독 — 참고</h2>
+<div class="scroll">
+<table>
+<tr><th>팔</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>체결</th><th>리밸</th><th>청산</th><th>최종배수</th></tr>
+<tr class="win"><td>S0 대칭 5%(현행)</td><td>7.42</td><td>+284.7%</td><td>-38.3%</td><td>1.89</td><td>873</td><td>768</td><td>0</td><td>2399.4x</td></tr>
+<tr><td>S1 매도 1%</td><td>6.86</td><td>+280.9%</td><td>-40.9%</td><td>1.88</td><td>1115</td><td>766</td><td>0</td><td>2265.1x</td></tr>
+<tr><td>S2 매도 0%</td><td>6.82</td><td>+279.2%</td><td>-40.9%</td><td>1.87</td><td>1297</td><td>768</td><td>0</td><td>2208.2x</td></tr>
+</table>
+</div>
+<p>낙폭이 2.6%포인트 <em>악화</em>했다. 매도 밴드를 풀면 하락 도중 목표가 조금 줄 때마다 곧바로 판다.
+그 다음 봉에 되돌아오면 다시 사야 하므로, 바닥 근처에서 팔고 반등에 되사는 왕복이 생긴다.
+밴드 5% 는 이 왕복을 흡수하는 완충이었고, 없애자 완충이 사라졌다.</p>
+
+<h3>비용 5배 스트레스 (tx 0.30%)</h3>
+<div class="scroll">
+<table>
+<tr><th>팔</th><th>Calmar</th><th>CAGR</th><th>MDD</th><th>Sharpe</th><th>체결</th><th>윈도우 avg_rank</th><th>승</th></tr>
+<tr class="win"><td>S0 대칭 5%(현행)</td><td>6.41</td><td>+251.5%</td><td>-39.2%</td><td>1.79</td><td>867</td><td>1.385</td><td>92/117</td></tr>
+<tr><td>S2 매도 0%</td><td>5.84</td><td>+243.1%</td><td>-41.6%</td><td>1.77</td><td>1284</td><td>2.171</td><td>11/117</td></tr>
+<tr><td>S1 매도 1%</td><td>5.82</td><td>+242.2%</td><td>-41.6%</td><td>1.76</td><td>1094</td><td>2.444</td><td>14/117</td></tr>
+</table>
+</div>
+<p>기본비용 슬리브 순위(S0 1.761 / S1 1.786 / S2 2.453)에서는 S0 과 S1 이 거의 붙어 있는데,
+비용을 올리면 격차가 벌어진다. 회전 증가분이 전부 비용으로 나간다는 뜻이다.</p>
+
+<h2>08-26 라이브 관측은 어떻게 되나</h2>
+<p>남은 과다노출 -2.1 ~ -3.0% 는 실제로 있었다. 다만 그게 손해였다는 증거가 백테스트에 없다.
+밴드 5% 관측 2회차(08-26, 08-27)에서 잔차가 누적되지 않고 부호가 뒤집힌 것과 같은 얘기다 —
+가격이 움직이면 다음 봉에 반대쪽으로 어긋나므로, 밴드 안의 편차는 쌓이는 게 아니라 상쇄된다.</p>
+<p>밴드의 방향 비대칭(+5.0% 대 -4.76%)도 그대로 남는다. 다만 그 비대칭이 만드는 실제 차이가
+5.8년 낙폭에 나타나지 않았고, 없애면 오히려 나빠졌다. 구조가 이상해 보이는 것과 그 구조가
+손해를 낳는 것은 다른 얘기이고, 여기서는 후자가 성립하지 않았다.</p>
+
+<h2>다시 안 볼 것</h2>
+<div class="card note">
+<p><span class="tag t-note">시간낭비</span>선물 체결 밴드의 매도쪽만 0% 또는 1% 로 분리하는 안.
+합성 Calmar 차이 0.02, MDD 동일, 슬리브 낙폭 2.6%포인트 악화, 비용 5배에서 완패.</p>
+<p>다시 열 조건은 하나다 — 밴드 안 잔여 편차가 실제로 누적되는 게 라이브에서 관측될 때.
+그때는 밴드 폭이 아니라 "레버리지 변경 직후에는 밴드를 안 태운다" 같은 이벤트 조건을 본다.
+지금 라이브에서 목표비중 0 전량청산, 미보유 신규진입, 카나리 OFF 청산, 레버리지·마진 변경은
+이미 밴드를 안 탄다. 레버리지 변경으로 <em>목표 명목이 줄어드는</em> 경우만 밴드에 걸린다.</p>
+</div>
+
+<h2>재현</h2>
+<p>정본 엔진에는 실험 코드를 남기지 않았다(<code>backtest_futures_v25.py</code> diff 0 확인).
+다시 돌리려면 토글을 되붙인다.</p>
+<div class="scroll">
+<table>
+<tr><th>단계</th><th>명령</th></tr>
+<tr><td>토글 적용</td><td>git apply strategies/cap_defend/research/bt_fut_sell_band.engine.patch</td></tr>
+<tr><td>측정</td><td>cd strategies/cap_defend/research &amp;&amp; python3 bt_fut_sell_band.py</td></tr>
+<tr><td>되돌리기</td><td>git checkout -- strategies/cap_defend/backtest_futures_v25.py</td></tr>
+</table>
+</div>
+
+<p class="foot">측정 45초 · 윈도우 n=117 (크기 504/756/1008 × 보폭 63/126/252), 합성은 n=60 ·
+판정 규칙은 결과를 보기 전에 스크립트 docstring 에 고정했다 ·
+결정층이 합성이라는 원칙은 2026-08-25 채택.</p>
+
+</main>
+</body>
+</html>

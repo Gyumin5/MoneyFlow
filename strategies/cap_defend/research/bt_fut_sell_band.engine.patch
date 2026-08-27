@@ -1,0 +1,15 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 2c6e84a..1251651 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -526,7 +526,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 trade_count += 1
+             else:
+                 delta = target_qty[coin] - holdings[coin]
+-                if delta < -holdings[coin] * 0.05:
++                # [실험 토글 FUT_SELL_BAND] 위험을 줄이는 매도(목표 명목 축소)의 밴드.
++                # 기본값은 매수와 같은 0.05 = 현행 대칭. research/bt_fut_sell_band.py 전용.
++                if delta < -holdings[coin] * float(os.environ.get('FUT_SELL_BAND', '0.05')):
+                     sell_qty = -delta
+                     sell_frac = sell_qty / holdings[coin]
+                     sell_margin = margins[coin] * sell_frac
