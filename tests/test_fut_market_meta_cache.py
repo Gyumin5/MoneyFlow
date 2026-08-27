@@ -330,6 +330,16 @@ try:
     check("그 정상 응답이 캐시를 갱신한다", len(_names(blob['data'])) == 380)
 
     reset(TMP)
+    dup = {'symbols': [sym_row('BTCUSDT') for _ in range(300)]}
+    check("같은 심볼 300행은 문턱을 못 넘는다", a._count_tradable_symbols(dup) == 1,
+          str(a._count_tradable_symbols(dup)))
+    try:
+        a.get_exchange_info(FakeClient(info=dup))
+        check("중복으로 채운 거래소 응답은 중단", False, '예외가 안 났다')
+    except a.MarketMetaUnavailable:
+        check("중복으로 채운 거래소 응답은 중단", True)
+
+    reset(TMP)
     a._save_market_cache(a.UNIVERSE_CACHE_PATH, cg_rows())                          # 고유 40
     blob = json.load(open(a.UNIVERSE_CACHE_PATH))
     blob['fetched_at'] = (datetime.now(timezone.utc) - timedelta(hours=40)).isoformat()
