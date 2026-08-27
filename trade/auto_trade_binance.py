@@ -1234,7 +1234,9 @@ def _count_tradable_symbols(info) -> int:
         syms = info.get('symbols')
         if not isinstance(syms, list) or not syms:
             return -1
-        n = 0
+        # 개수는 행이 아니라 고유 심볼로 센다. 같은 심볼을 반복한 응답이
+        # 문턱을 부풀리는 걸 막는다 (ai-debate run-20260827T095253Z).
+        tradable = set()
         for s in syms:
             if not isinstance(s, dict):
                 return -1
@@ -1258,8 +1260,8 @@ def _count_tradable_symbols(info) -> int:
                     except (TypeError, ValueError):
                         return -1
             if step > 0:
-                n += 1
-        return n
+                tradable.add(name)
+        return len(tradable)
     except Exception:
         return -1
 
