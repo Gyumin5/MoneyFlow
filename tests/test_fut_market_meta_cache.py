@@ -51,18 +51,27 @@ def sym_row(name, status='TRADING'):
 
 
 def filler(n):
-    """최소 개수 문턱을 넘기기 위한 채움. 실제 바이낸스는 수백 종이다."""
+    """최소 개수 문턱을 넘기기 위한 채움. 실제 바이낸스는 524종(2026-08-27 실측)이다."""
     return [sym_row(f'FILL{i}USDT') for i in range(n)]
 
 
-def good_exchange_info(symbols=('BTCUSDT', 'ETHUSDT', 'SOLUSDT'), pad=60):
+def good_exchange_info(symbols=('BTCUSDT', 'ETHUSDT', 'SOLUSDT'), pad=240):
     return {'symbols': [sym_row(s) for s in symbols] + filler(pad)}
 
 
-def cg_rows(symbols=('btc', 'eth', 'sol'), pad=30):
-    # 채움 이름은 거래소 채움(FILL{i}USDT)과 겹치지 않게 둔다 — 겹치면 교집합 검사가 무의미해진다.
+def cg_rows(symbols=('btc', 'eth', 'sol'), pad=37):
+    """시총 목록. 채움은 거래소 채움과 같은 이름이라 교집합에 들어간다.
+
+    유니버스 최소 크기(MIN_UNIVERSE_SIZE) 문턱이 있으므로 교집합이 실제로 커야 한다.
+    상장 안 된 심볼을 섞는 검사는 cg_rows_unlisted 를 쓴다.
+    """
     return ([{'symbol': s, 'market_cap': 10 ** 12} for s in symbols]
-            + [{'symbol': f'cgpad{i}', 'market_cap': 10 ** 9} for i in range(pad)])
+            + [{'symbol': f'FILL{i}', 'market_cap': 10 ** 9} for i in range(pad)])
+
+
+def cg_rows_unlisted(pad=40):
+    """형태는 멀쩡하지만 거래소에 하나도 상장 안 된 목록."""
+    return [{'symbol': f'nolist{i}', 'market_cap': 10 ** 9} for i in range(pad)]
 
 
 class FakeClient:
@@ -138,7 +147,8 @@ try:
     reset(TMP)
     uni = a.refresh_universe(FakeClient())
     check("유니버스가 교집합으로 만들어진다",
-          uni == ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'], str(uni))
+          uni[:3] == ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'] and len(uni) >= a.MIN_UNIVERSE_SIZE,
+          str(uni[:5]) + f' len={len(uni)}')
 
     # ── 2. 조회 실패 + 12시간 캐시 → 진행 ────────────────────────────────
     print("\n[2] 조회 실패 + 12시간 캐시")
@@ -165,7 +175,8 @@ try:
     a.time = _NoSleep()
     SENT.clear()
     uni = a.refresh_universe(FakeClient(fail=True))
-    check("양쪽 degraded 여도 유니버스는 만들어진다", uni == ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'], str(uni))
+    check("양쪽 degraded 여도 유니버스는 만들어진다",
+          uni[:3] == ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'], str(uni[:5]))
     check("알림은 한 건이다", len(SENT) == 1, str(SENT))
     check("그 한 건에 두 사유가 다 들어간다",
           len(SENT) == 1 and '심볼정보' in SENT[0] and '시총 목록' in SENT[0], str(SENT))
@@ -251,12 +262,59 @@ try:
     except a.MarketMetaUnavailable:
         check("시총 목록을 못 얻으면 중단", True)
 
-    reset(TMP, cg=cg_rows(('doge', 'shib')))
+    reset(TMP, cg=cg_rows_unlisted())
     try:
         a.refresh_universe(FakeClient())
         check("교집합이 비면 중단(고정 목록으로 안 샌다)", False, '예외가 안 났다')
     except a.MarketMetaUnavailable:
         check("교집합이 비면 중단(고정 목록으로 안 샌다)", True)
+
+    # 부분 성공 입력 — 형태는 멀쩡한데 내용이 모자란 응답들. 전부 거부해야 한다.
+    # (ai-debate run-20260827T093109Z codex 지적: 개수만 세면 중복으로 채운 응답이 통과한다.)
+    for label, rows in [
+        ("고유 심볼이 문턱 미만", cg_rows(('btc',), pad=10)),
+        ("같은 심볼로 채운 응답", [{'symbol': 'btc', 'market_cap': 1} for _ in range(40)]),
+        ("빈 심볼이 섞임", cg_rows() + [{'symbol': '', 'market_cap': 1}]),
+        ("심볼 타입이 문자열이 아님", cg_rows() + [{'symbol': 123, 'market_cap': 1}]),
+    ]:
+        reset(TMP, cg=rows)
+        try:
+            a.refresh_universe(FakeClient())
+            check(f"{label} → 중단", False, '예외가 안 났다')
+        except a.MarketMetaUnavailable:
+            check(f"{label} → 중단", True)
+
+    reset(TMP, cg=cg_rows(('btc', 'eth', 'sol'), pad=37))
+    small = {'symbols': [sym_row(s) for s in ('BTCUSDT', 'ETHUSDT', 'SOLUSDT')] + filler(240)}
+    # 거래소엔 많은데 시총 목록과 겹치는 게 적은 경우는 위 pad 로 이미 크다.
+    # 여기서는 겹치는 걸 5종으로 줄여 유니버스 바닥을 확인한다.
+    thin_cg = ([{'symbol': s, 'market_cap': 10 ** 12} for s in ('btc', 'eth', 'sol')]
+               + [{'symbol': f'FILL{i}', 'market_cap': 10 ** 9} for i in range(2)]
+               + [{'symbol': f'nolist{i}', 'market_cap': 10 ** 9} for i in range(35)])
+    reset(TMP, cg=thin_cg)
+    try:
+        a.refresh_universe(FakeClient(info=small))
+        check("교집합이 바닥 미만이면 중단", False, '예외가 안 났다')
+    except a.MarketMetaUnavailable as e:
+        check("교집합이 바닥 미만이면 중단", '너무 작다' in str(e), str(e))
+
+    # ── 7b. 거래소 심볼정보 부분 응답 ────────────────────────────────────
+    print("\n[7b] 거래소 부분 응답")
+    reset(TMP)
+    try:
+        a.get_exchange_info(FakeClient(info=good_exchange_info(pad=100)))
+        check("콜드 스타트에서 잘린 응답(103종)은 중단", False, '예외가 안 났다')
+    except a.MarketMetaUnavailable:
+        check("콜드 스타트에서 잘린 응답(103종)은 중단", True)
+    check("잘린 응답은 캐시에 저장되지 않는다", not os.path.isfile(a.EXCHANGE_INFO_CACHE_PATH))
+
+    reset(TMP)
+    a.get_exchange_info(FakeClient(info=good_exchange_info(pad=500)))   # 503종 정상 캐시
+    reset(TMP, wipe=False)
+    info = a.get_exchange_info(FakeClient(info=good_exchange_info(pad=300)))  # 303종 = 60%
+    check("직전 대비 급감한 응답은 캐시로 대체한다", len(_names(info)) == 503, str(len(_names(info))))
+    blob = json.load(open(a.EXCHANGE_INFO_CACHE_PATH))
+    check("급감 응답이 정상 캐시를 덮지 않았다", len(_names(blob['data'])) == 503)
 
     # ── 8. 상장폐지 심볼이 유니버스에 남지 않는다 ────────────────────────
     print("\n[8] 상장폐지 재현")
@@ -268,7 +326,7 @@ try:
     reset(TMP)
     uni = a.refresh_universe(FakeClient(info=delisted))
     check("정산 단계 심볼은 유니버스에서 빠진다", 'SOLUSDT' not in uni, str(uni))
-    check("나머지는 그대로 남는다", uni == ['BTCUSDT', 'ETHUSDT'], str(uni))
+    check("나머지는 그대로 남는다", uni[:2] == ['BTCUSDT', 'ETHUSDT'], str(uni[:5]))
 
     # ── 9. 회귀 — 고정 목록이 코드에서 사라졌다 ──────────────────────────
     print("\n[9] 회귀")
@@ -283,6 +341,9 @@ try:
           "EXCHANGE_INFO_CACHE_PATH = os.path.join(SCRIPT_DIR" in _src
           and "UNIVERSE_CACHE_PATH = os.path.join(SCRIPT_DIR" in _src)
     check("TTL 은 36시간", 'MARKET_META_MAX_AGE_H = 36.0' in _src)
+    check("거래소 최소 심볼 문턱이 요청 top N 보다 훨씬 크다",
+          a.MIN_EXCHANGE_INFO_SYMBOLS >= 200, str(a.MIN_EXCHANGE_INFO_SYMBOLS))
+    check("시총 목록 문턱은 고유 심볼 수로 잰다", 'MIN_CG_UNIQUE' in _src and 'MIN_CG_ROWS' not in _src)
 
 finally:
     shutil.rmtree(TMP, ignore_errors=True)

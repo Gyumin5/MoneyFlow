@@ -64,9 +64,14 @@ MARKET_META_MAX_AGE_H = 36.0
 # 최소 개수 — 잘린 응답을 정상으로 믿지 않기 위한 바닥값. 바이낸스 USDT-M 무기한은
 # 수백 종이고 우리가 유니버스를 만드는 데 필요한 건 시총 상위 UNIVERSE_TARGET_SIZE 다.
 # 그 아래로 떨어지면 유니버스를 만들 수 없거나 응답이 잘린 것이다.
-MIN_EXCHANGE_INFO_SYMBOLS = 40      # = UNIVERSE_TARGET_SIZE (아래에서 정의, 값 고정)
-MIN_CG_ROWS = 20                    # 요청 40건의 절반 — 드라마틱한 truncation 만 잡는다
-META_SHRINK_RATIO = 0.5             # 직전 캐시 대비 이 비율 미만이면 덮어쓰지 않는다
+# 실측 2026-08-27: USDT 무기한 TRADING 심볼은 524종. 200 은 그 40% 도 안 되는 바닥이라
+# 정상 응답이 걸릴 일이 없고, 잘린 응답(수십~백여 종)은 확실히 잡는다.
+# 40(=요청 top N)으로 두면 콜드 스타트에서 잘린 응답을 정상으로 승인해버린다.
+MIN_EXCHANGE_INFO_SYMBOLS = 200
+MIN_CG_UNIQUE = 30                  # 요청 40건 중 고유 심볼 최소치. 중복으로 채운 응답을 거른다
+MIN_UNIVERSE_SIZE = 20              # 교집합 최종 크기 바닥. 정상은 35~40종
+META_SHRINK_RATIO = 0.8             # 직전 캐시 대비 이 비율 미만이면 덮어쓰지 않는다
+                                    # (하루 사이 상장 심볼이 20% 줄어드는 일은 없다)
 
 
 class MarketMetaUnavailable(Exception):
@@ -390,9 +395,15 @@ def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
             if r.status_code == 200:
                 data = r.json()
                 if _valid_cg_rows(data):
-                    if cache_path:
-                        _save_market_cache(cache_path, data)
-                    return data
+                    prev = _cg_unique_count(_read_cache_raw(cache_path)) if cache_path else 0
+                    n = _cg_unique_count(data)
+                    if prev > 0 and n < prev * META_SHRINK_RATIO:
+                        # 잘린 응답이 멀쩡한 캐시를 덮지 못하게 한다. 거부하고 재시도로 넘긴다.
+                        log.warning(f"coingecko 급감 ({prev} → {n}) — 캐시를 보존하고 거부")
+                    else:
+                        if cache_path:
+                            _save_market_cache(cache_path, data)
+                        return data
                 log.warning(f"coingecko 응답 검증 실패 attempt {attempt} "
                             f"(len={len(data) if isinstance(data, list) else 'n/a'})")
             log.warning(f"coingecko status {r.status_code} attempt {attempt}")
@@ -456,8 +467,10 @@ def refresh_universe(client: Client) -> List[str]:
                 out.append(full)
     except Exception as e:
         raise MarketMetaUnavailable(f'유니버스 교집합 생성 실패: {e}')
-    if not out:
-        raise MarketMetaUnavailable('시총 목록과 상장 심볼의 교집합이 비어있음')
+    # 입력 둘이 각각 문턱을 넘어도 교집합은 쪼그라들 수 있다. 결과 자체를 한 번 더 본다.
+    if len(out) < MIN_UNIVERSE_SIZE:
+        raise MarketMetaUnavailable(
+            f'유니버스가 너무 작다 ({len(out)} < {MIN_UNIVERSE_SIZE}, cg={len(cg)} listed={len(listed)})')
     UNIVERSE = out
     log.info(f"universe 갱신: {len(out)}개 (cg={len(cg)} listed={len(listed)}) head={out[:5]}")
     _flush_degraded()
@@ -1257,19 +1270,36 @@ def _valid_exchange_info(info) -> bool:
 
 
 def _valid_cg_rows(rows) -> bool:
-    """시총 목록이 쓸 만한지. 항목 형태와 최소 개수를 본다."""
+    """시총 목록이 쓸 만한지. 항목 형태와 고유 심볼 개수를 본다.
+
+    개수만 세면 같은 심볼 30건짜리 응답도 통과한다 — 그러면 교집합이 한 종목으로
+    쪼그라든 채 매매로 간다. 그래서 문턱은 행 수가 아니라 고유 심볼 수로 잡는다.
+    """
     try:
-        if not isinstance(rows, list) or len(rows) < MIN_CG_ROWS:
+        if not isinstance(rows, list):
             return False
+        syms = set()
         for it in rows:
             if not isinstance(it, dict):
                 return False
             s = it.get('symbol')
             if not isinstance(s, str) or not s:
                 return False
-        return True
+            syms.add(s.upper())
+        return len(syms) >= MIN_CG_UNIQUE
     except Exception:
         return False
+
+
+def _cg_unique_count(rows) -> int:
+    """시총 목록의 고유 심볼 수. 형태가 깨졌으면 0."""
+    try:
+        if not isinstance(rows, list):
+            return 0
+        return len({(it.get('symbol') or '').upper() for it in rows
+                    if isinstance(it, dict) and isinstance(it.get('symbol'), str)} - {''})
+    except Exception:
+        return 0
 
 
 def _read_cache_raw(path: str):
