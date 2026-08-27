@@ -55,6 +55,16 @@ from common.notify import send_telegram as _send_tg_common
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.py')
 STATE_PATH = os.path.join(SCRIPT_DIR, 'binance_state.json')
+# 시장 메타 캐시 — 전략 상태가 아니라 재생성 가능한 운영 캐시다. 지워지면 다시 받고,
+# 못 받으면 안전하게 멈춘다. 하루 한 번 도는 cron 기준 36h = 일시 장애 한 번은 견디고
+# 이틀 연속이면 중단하는 선 (ai-debate run-20260827T084242Z).
+EXCHANGE_INFO_CACHE_PATH = os.path.join(SCRIPT_DIR, 'binance_exchange_info_cache.json')
+UNIVERSE_CACHE_PATH = os.path.join(SCRIPT_DIR, 'binance_universe_cache.json')
+MARKET_META_MAX_AGE_H = 36.0
+
+
+class MarketMetaUnavailable(Exception):
+    """거래소 심볼정보·시총 목록을 믿을 수 있게 못 얻었다. 주문 생성 전에 멈춘다."""
 ALLOC_TRANSIT_STATE_PATH = os.path.join(SCRIPT_DIR, 'trade_state.json')  # 코인 state (alloc_transit flag)
 LOG_PATH = os.path.join(SCRIPT_DIR, 'binance_trade.log')
 
@@ -167,14 +177,10 @@ STRATEGIES = {
 }
 
 # 유니버스 (시총순). 매 매매 사이클마다 CoinGecko top40 + 바이낸스 USDT-M 선물 listing intersect로 동적 갱신.
-# API 실패 시 fallback.
-HARDCODED_UNIVERSE_FALLBACK = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
-    'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'TRXUSDT', 'LINKUSDT',
-    'DOTUSDT', 'UNIUSDT', 'NEARUSDT', 'LTCUSDT', 'BCHUSDT',
-    'APTUSDT', 'ICPUSDT', 'FILUSDT', 'ATOMUSDT', 'ARBUSDT',
-]
-UNIVERSE: List[str] = list(HARDCODED_UNIVERSE_FALLBACK)
+# 2026-08-27: 조회 실패 시 쓰던 고정 목록(HARDCODED_UNIVERSE_FALLBACK)은 제거했다.
+# 손으로 적어둔 목록이라 상장폐지 심볼이 남아도 걸러지지 않는 fail-open 이었다.
+# 이제 직전 성공 응답을 MARKET_META_MAX_AGE_H 까지 쓰고, 그것도 없으면 매매를 멈춘다.
+UNIVERSE: List[str] = []
 UNIVERSE_TARGET_SIZE = 40  # CoinGecko top N
 COINGECKO_URL = 'https://api.coingecko.com/api/v3/coins/markets'
 STABLECOINS = {'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD', 'USDD', 'PYUSD', 'USDe'}
@@ -364,7 +370,10 @@ def fetch_spot_klines(client: Client, symbol: str, interval: str, limit: int = 5
 
 def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
                                  cache_path: Optional[str] = None) -> List[Dict]:
-    """CoinGecko top N 시총순 fetch. 실패 시 cache fallback."""
+    """CoinGecko top N 시총순 fetch. 실패 시 MARKET_META_MAX_AGE_H 이내 캐시만 사용.
+
+    2026-08-27: 예전에는 캐시 나이를 안 봐서 몇 달 전 시총 순위로도 돌 수 있었다.
+    """
     headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 BinanceFut/1.0'}
     for attempt in range(1, 4):
         try:
@@ -374,53 +383,52 @@ def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
             }, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json()
-                if cache_path:
-                    try:
-                        tmp = cache_path + '.tmp'
-                        with open(tmp, 'w') as f:
-                            json.dump({'ts': datetime.now(timezone.utc).isoformat(), 'data': data}, f)
-                        os.replace(tmp, cache_path)
-                    except Exception:
-                        pass
-                return data
+                if isinstance(data, list) and data:
+                    if cache_path:
+                        _save_market_cache(cache_path, data)
+                    return data
+                log.warning(f"coingecko 빈 응답 attempt {attempt}")
             log.warning(f"coingecko status {r.status_code} attempt {attempt}")
         except Exception as e:
             log.warning(f"coingecko fail attempt {attempt}: {e}")
         time.sleep(5 * attempt)
-    if cache_path and os.path.isfile(cache_path):
-        try:
-            with open(cache_path) as f:
-                return json.load(f).get('data', [])
-        except Exception:
-            pass
+    if cache_path:
+        cached = _load_market_cache(cache_path, MARKET_META_MAX_AGE_H)
+        if cached is not None:
+            data, age_h = cached
+            if isinstance(data, list) and data:
+                _notify_degraded(f"시총 목록 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
+                return data
     return []
 
 
 def fetch_binance_futures_listed(client: Client) -> set:
-    """바이낸스 USDT-M 선물 TRADING 중인 심볼 set."""
-    try:
-        info = client.futures_exchange_info()
-        return {s['symbol'] for s in info.get('symbols', [])
-                if s.get('contractType') == 'PERPETUAL'
-                and s.get('status') == 'TRADING'
-                and s.get('quoteAsset') == 'USDT'}
-    except Exception as e:
-        log.warning(f"binance futures exchangeInfo fail: {e}")
-        return set()
+    """바이낸스 USDT-M 선물 TRADING 중인 심볼 set.
+
+    조회 실패는 여기서 삼키지 않는다 — get_exchange_info 가 캐시로 견디거나
+    MarketMetaUnavailable 로 멈춘다. 빈 set 을 돌려주면 호출부가 그걸
+    "상장된 게 없다" 로 읽어 고정 목록으로 새는 게 옛 구조의 결함이었다.
+    """
+    info = get_exchange_info(client)
+    return {s['symbol'] for s in info.get('symbols', [])
+            if s.get('contractType') == 'PERPETUAL'
+            and s.get('status') == 'TRADING'
+            and s.get('quoteAsset') == 'USDT'}
 
 
-def refresh_universe(client: Client, cache_dir: str = '/tmp') -> List[str]:
+def refresh_universe(client: Client) -> List[str]:
     """CoinGecko top40 + 바이낸스 USDT-M 선물 listing intersect, 시총순 정렬.
 
-    실패 시 HARDCODED_UNIVERSE_FALLBACK 리턴. 글로벌 UNIVERSE도 갱신.
+    믿을 수 있는 목록을 못 만들면 MarketMetaUnavailable 을 던진다. 글로벌 UNIVERSE도 갱신.
     """
     global UNIVERSE
-    cg = fetch_coingecko_top_futures(cache_path=os.path.join(cache_dir, 'binfut_cg_cache.json'))
+    cg = fetch_coingecko_top_futures(cache_path=UNIVERSE_CACHE_PATH)
     listed = fetch_binance_futures_listed(client)
-    if not cg or not listed:
-        log.warning(f"universe API 실패 (cg={len(cg)} listed={len(listed)}) → fallback")
-        UNIVERSE = list(HARDCODED_UNIVERSE_FALLBACK)
-        return UNIVERSE
+    if not cg:
+        raise MarketMetaUnavailable(
+            f'시총 목록 조회 실패 + {MARKET_META_MAX_AGE_H}h 이내 캐시 없음')
+    if not listed:
+        raise MarketMetaUnavailable('거래소 심볼정보에 USDT 무기한 TRADING 심볼이 없음')
     out: List[str] = []
     for item in cg:
         sym = (item.get('symbol') or '').upper()
@@ -430,9 +438,7 @@ def refresh_universe(client: Client, cache_dir: str = '/tmp') -> List[str]:
         if full in listed:
             out.append(full)
     if not out:
-        log.warning("universe intersect 비어있음 → fallback")
-        UNIVERSE = list(HARDCODED_UNIVERSE_FALLBACK)
-        return UNIVERSE
+        raise MarketMetaUnavailable('시총 목록과 상장 심볼의 교집합이 비어있음')
     UNIVERSE = out
     log.info(f"universe 갱신: {len(out)}개 (cg={len(cg)} listed={len(listed)}) head={out[:5]}")
     return UNIVERSE
@@ -1178,12 +1184,102 @@ def get_current_positions(client: Client):
 
 _exchange_info_cache = None
 
+def _valid_exchange_info(info) -> bool:
+    """exchangeInfo 응답이 주문 판단에 쓸 만한지 검사.
+
+    빈 응답·잘린 응답을 캐시에 저장하면 그 다음 실패 때 그걸 정상으로 믿는다.
+    저장 전에 한 번만 본다 — USDT 무기한 TRADING 심볼이 하나라도 있고
+    그 심볼이 수량 단위(LOT_SIZE stepSize)를 갖고 있어야 한다.
+    """
+    if not isinstance(info, dict):
+        return False
+    syms = info.get('symbols')
+    if not isinstance(syms, list) or not syms:
+        return False
+    for s in syms:
+        if not isinstance(s, dict):
+            return False
+        if (s.get('contractType') == 'PERPETUAL' and s.get('status') == 'TRADING'
+                and s.get('quoteAsset') == 'USDT'):
+            for f in s.get('filters', []):
+                if f.get('filterType') == 'LOT_SIZE' and float(f.get('stepSize', 0) or 0) > 0:
+                    return True
+    return False
+
+
+def _save_market_cache(path: str, data) -> None:
+    """조회시각과 함께 원자적으로 저장. 실패해도 매매를 막지 않는다(다음 조회로 복구)."""
+    try:
+        save_json_atomic(path, {'fetched_at': datetime.now(timezone.utc).isoformat(), 'data': data})
+    except Exception as e:
+        log.warning(f"market cache 저장 실패 {os.path.basename(path)}: {e}")
+
+
+def _load_market_cache(path: str, max_age_h: float):
+    """max_age_h 이내 캐시만 돌려준다. 없거나 깨졌거나 오래되면 None.
+
+    반환 (data, age_hours). 나이를 못 재면(fetched_at 없음/파손) 쓸 수 없는 것으로 본다 —
+    나이를 모르는 캐시는 오래된 캐시와 구분이 안 된다.
+    """
+    try:
+        with open(path) as f:
+            blob = json.load(f)
+        ts = datetime.fromisoformat(blob['fetched_at'])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+        if age_h < 0 or age_h > max_age_h:
+            log.warning(f"market cache 만료 {os.path.basename(path)}: {age_h:.1f}h > {max_age_h}h")
+            return None
+        return blob['data'], age_h
+    except FileNotFoundError:
+        log.warning(f"market cache 없음 {os.path.basename(path)}")
+    except Exception as e:
+        log.warning(f"market cache 손상 {os.path.basename(path)}: {e}")
+    return None
+
+
+_degraded_notified = False
+
+def _notify_degraded(msg: str) -> None:
+    """낡은 캐시로 도는 중임을 실행당 한 번만 알린다."""
+    global _degraded_notified
+    log.warning(msg)
+    if not _degraded_notified:
+        _degraded_notified = True
+        send_telegram(f"⚠️ {msg}")
+
+
 def get_exchange_info(client: Client):
-    """exchange_info 캐싱 (API 호출 최소화)."""
+    """거래소 심볼·규격 정보. 실패 시 MARKET_META_MAX_AGE_H 이내 캐시만 허용.
+
+    2026-08-27: 예전에는 조회가 실패하면 손으로 적어둔 고정 목록으로 넘어갔다.
+    그 목록은 갱신되지 않아 상장폐지된 심볼이 남아 있어도 걸러지지 않았고,
+    V25 경로에서 유일하게 fail-open 인 자리였다(ai-debate run-20260827T084242Z).
+    이제는 직전 성공분을 쓰고, 그것도 없으면 주문을 만들기 전에 예외로 멈춘다.
+    """
     global _exchange_info_cache
-    if _exchange_info_cache is None:
-        _exchange_info_cache = client.futures_exchange_info()
-    return _exchange_info_cache
+    if _exchange_info_cache is not None:
+        return _exchange_info_cache
+    try:
+        info = client.futures_exchange_info()
+        if not _valid_exchange_info(info):
+            raise ValueError('exchangeInfo 응답 검증 실패 (USDT 무기한 TRADING 심볼 없음)')
+        _save_market_cache(EXCHANGE_INFO_CACHE_PATH, info)
+        _exchange_info_cache = info
+        return info
+    except Exception as e:
+        log.warning(f"exchangeInfo 조회 실패: {e}")
+    cached = _load_market_cache(EXCHANGE_INFO_CACHE_PATH, MARKET_META_MAX_AGE_H)
+    if cached is None:
+        raise MarketMetaUnavailable(
+            f'거래소 심볼정보 조회 실패 + {MARKET_META_MAX_AGE_H}h 이내 캐시 없음')
+    info, age_h = cached
+    if not _valid_exchange_info(info):
+        raise MarketMetaUnavailable('거래소 심볼정보 캐시가 검증에 실패')
+    _notify_degraded(f"거래소 심볼정보 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
+    _exchange_info_cache = info
+    return info
 
 
 def get_symbol_constraints(client: Client, symbol: str) -> Dict[str, float]:
@@ -2407,7 +2503,11 @@ def main():
         if not ok:
             log.error("리포트 생성 중 포지션 조회 실패")
             return
-        refresh_universe(client)
+        try:
+            refresh_universe(client)
+        except MarketMetaUnavailable as e:
+            log.error(f"리포트 생성 중 유니버스 갱신 실패: {e}")
+            return
         data = fetch_all_data(client)
         initial = state.get('initial_capital', pv)
         if 'initial_capital' not in state:
@@ -2506,7 +2606,16 @@ def main():
             return
 
         # 0. 유니버스 갱신 (CoinGecko top40 ∩ 바이낸스 USDT-M 선물 listing)
-        refresh_universe(client)
+        # 시장 메타를 믿을 수 있게 못 얻으면 주문을 만들기 전에 멈춘다. 낡은 목록으로
+        # 매매하느니 하루 쉬는 쪽이다 (2026-08-27, ai-debate run-20260827T084242Z).
+        try:
+            refresh_universe(client)
+        except MarketMetaUnavailable as e:
+            err = f"V25 ABORT: {e} — 매매 차단"
+            log.error(err)
+            send_telegram(f"🛑 {err}")
+            _v25_persist_abort_log(err)
+            return
 
         # 1. 데이터 수집
         log.info("데이터 수집...")

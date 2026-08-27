@@ -61,8 +61,13 @@ class FakeOrderClient:
         self.orders = []
 
     def futures_exchange_info(self):
+        # 2026-08-27: contractType/status/quoteAsset 은 실제 응답에 항상 있다.
+        # get_exchange_info 가 저장 전에 응답을 검증하므로 픽스처도 실제 형태를 갖춘다.
         return {'symbols': [{
             'symbol': 'SOLUSDT',
+            'contractType': 'PERPETUAL',
+            'status': 'TRADING',
+            'quoteAsset': 'USDT',
             'filters': [
                 {'filterType': 'LOT_SIZE', 'stepSize': '0.01', 'minQty': '0.01'},
                 {'filterType': 'NOTIONAL', 'notional': '5'},
