@@ -395,7 +395,7 @@ def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
             if r.status_code == 200:
                 data = r.json()
                 if _valid_cg_rows(data):
-                    prev = _cg_unique_count(_read_cache_raw(cache_path)) if cache_path else 0
+                    prev = _cg_unique_count(_shrink_baseline(cache_path)) if cache_path else 0
                     n = _cg_unique_count(data)
                     if prev > 0 and n < prev * META_SHRINK_RATIO:
                         # 잘린 응답이 멀쩡한 캐시를 덮지 못하게 한다. 거부하고 재시도로 넘긴다.
@@ -1302,13 +1302,17 @@ def _cg_unique_count(rows) -> int:
         return 0
 
 
-def _read_cache_raw(path: str):
-    """나이를 안 보고 캐시 본문만 읽는다. 급감 판정 기준용."""
-    try:
-        with open(path) as f:
-            return json.load(f).get('data')
-    except Exception:
-        return None
+def _shrink_baseline(path: str):
+    """급감 판정의 비교 기준. TTL 안쪽 캐시만 기준으로 삼는다.
+
+    나이를 안 보면 기준이 영구히 남는다 — 시장 구조가 실제로 20% 이상 바뀐 뒤에는
+    정상 응답이 매번 거부되고, 만료된 캐시는 대체재로도 못 쓰니 사람이 파일을 지울
+    때까지 매일 ABORT 가 난다(만료 캐시가 poison pill 이 된다).
+    기준이 낡았으면 급감 판정을 포기하고 절대 문턱(200 / 30 / 20)에만 맡긴다.
+    (2026-08-27, ai-debate run-20260827T094524Z)
+    """
+    cached = _load_market_cache(path, MARKET_META_MAX_AGE_H)
+    return cached[0] if cached else None
 
 
 def _save_market_cache(path: str, data) -> None:
@@ -1385,7 +1389,7 @@ def get_exchange_info(client: Client):
         if n < MIN_EXCHANGE_INFO_SYMBOLS:
             raise ValueError(
                 f'exchangeInfo 검증 실패 (거래가능 심볼 {n} < {MIN_EXCHANGE_INFO_SYMBOLS})')
-        prev = _count_tradable_symbols(_read_cache_raw(EXCHANGE_INFO_CACHE_PATH))
+        prev = _count_tradable_symbols(_shrink_baseline(EXCHANGE_INFO_CACHE_PATH))
         if prev > 0 and n < prev * META_SHRINK_RATIO:
             # 잘린 응답이 정상 캐시를 덮으면 유니버스가 조용히 쪼그라든 채 매매가 돈다.
             raise ValueError(f'exchangeInfo 급감 ({prev} → {n}) — 캐시를 보존하고 거부')

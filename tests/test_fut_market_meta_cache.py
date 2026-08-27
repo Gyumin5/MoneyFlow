@@ -316,6 +316,29 @@ try:
     blob = json.load(open(a.EXCHANGE_INFO_CACHE_PATH))
     check("급감 응답이 정상 캐시를 덮지 않았다", len(_names(blob['data'])) == 503)
 
+    # 만료된 기준이 영구 거부를 만들면 안 된다(poison pill).
+    # 시장이 실제로 줄어든 뒤에도 정상 응답이 매번 거부되면 사람이 파일을 지울 때까지 매일 ABORT 다.
+    reset(TMP)
+    a._save_market_cache(a.EXCHANGE_INFO_CACHE_PATH, good_exchange_info(pad=500))   # 503종
+    blob = json.load(open(a.EXCHANGE_INFO_CACHE_PATH))
+    blob['fetched_at'] = (datetime.now(timezone.utc) - timedelta(hours=40)).isoformat()
+    json.dump(blob, open(a.EXCHANGE_INFO_CACHE_PATH, 'w'))
+    reset(TMP, wipe=False)
+    info = a.get_exchange_info(FakeClient(info=good_exchange_info(pad=377)))        # 380종
+    check("만료된 기준은 정상 응답을 막지 않는다", len(_names(info)) == 380, str(len(_names(info))))
+    blob = json.load(open(a.EXCHANGE_INFO_CACHE_PATH))
+    check("그 정상 응답이 캐시를 갱신한다", len(_names(blob['data'])) == 380)
+
+    reset(TMP)
+    a._save_market_cache(a.UNIVERSE_CACHE_PATH, cg_rows())                          # 고유 40
+    blob = json.load(open(a.UNIVERSE_CACHE_PATH))
+    blob['fetched_at'] = (datetime.now(timezone.utc) - timedelta(hours=40)).isoformat()
+    json.dump(blob, open(a.UNIVERSE_CACHE_PATH, 'w'))
+    shrunk = cg_rows(('btc',), pad=30)                                              # 고유 31
+    check("만료된 시총 기준도 정상 응답(고유 31)을 막지 않는다",
+          a._cg_unique_count(a._shrink_baseline(a.UNIVERSE_CACHE_PATH)) == 0
+          and a._valid_cg_rows(shrunk))
+
     # ── 8. 상장폐지 심볼이 유니버스에 남지 않는다 ────────────────────────
     print("\n[8] 상장폐지 재현")
     delisted = good_exchange_info(('BTCUSDT', 'ETHUSDT'))
@@ -344,6 +367,8 @@ try:
     check("거래소 최소 심볼 문턱이 요청 top N 보다 훨씬 크다",
           a.MIN_EXCHANGE_INFO_SYMBOLS >= 200, str(a.MIN_EXCHANGE_INFO_SYMBOLS))
     check("시총 목록 문턱은 고유 심볼 수로 잰다", 'MIN_CG_UNIQUE' in _src and 'MIN_CG_ROWS' not in _src)
+    check("급감 기준은 TTL 안쪽 캐시만 쓴다(만료 기준 영구 래치 방지)",
+          '_read_cache_raw' not in _src and '_shrink_baseline(' in _src)
 
 finally:
     shutil.rmtree(TMP, ignore_errors=True)
