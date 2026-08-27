@@ -39,17 +39,30 @@ def check(name, cond, detail=''):
         FAILS.append(name)
 
 
-def good_exchange_info(symbols=('BTCUSDT', 'ETHUSDT', 'SOLUSDT')):
-    return {'symbols': [
-        {'symbol': s, 'contractType': 'PERPETUAL', 'status': 'TRADING',
-         'quoteAsset': 'USDT',
-         'filters': [{'filterType': 'LOT_SIZE', 'stepSize': '0.001', 'minQty': '0.001'},
-                     {'filterType': 'NOTIONAL', 'notional': '5.0'}]}
-        for s in symbols]}
+def _names(info):
+    return {s['symbol'] for s in info.get('symbols', [])}
 
 
-def cg_rows(symbols=('btc', 'eth', 'sol')):
-    return [{'symbol': s, 'market_cap': 10 ** 12} for s in symbols]
+def sym_row(name, status='TRADING'):
+    return {'symbol': name, 'contractType': 'PERPETUAL', 'status': status,
+            'quoteAsset': 'USDT',
+            'filters': [{'filterType': 'LOT_SIZE', 'stepSize': '0.001', 'minQty': '0.001'},
+                        {'filterType': 'NOTIONAL', 'notional': '5.0'}]}
+
+
+def filler(n):
+    """최소 개수 문턱을 넘기기 위한 채움. 실제 바이낸스는 수백 종이다."""
+    return [sym_row(f'FILL{i}USDT') for i in range(n)]
+
+
+def good_exchange_info(symbols=('BTCUSDT', 'ETHUSDT', 'SOLUSDT'), pad=60):
+    return {'symbols': [sym_row(s) for s in symbols] + filler(pad)}
+
+
+def cg_rows(symbols=('btc', 'eth', 'sol'), pad=30):
+    # 채움 이름은 거래소 채움(FILL{i}USDT)과 겹치지 않게 둔다 — 겹치면 교집합 검사가 무의미해진다.
+    return ([{'symbol': s, 'market_cap': 10 ** 12} for s in symbols]
+            + [{'symbol': f'cgpad{i}', 'market_cap': 10 ** 9} for i in range(pad)])
 
 
 class FakeClient:
@@ -70,7 +83,7 @@ class FakeClient:
 def reset(tmp, cg=None, cg_fail=False, wipe=True):
     """모듈 전역을 이 테스트용으로 갈아끼운다. wipe=False 면 디스크 캐시를 남긴다."""
     a._exchange_info_cache = None
-    a._degraded_notified = False
+    a._degraded_causes.clear()
     a.UNIVERSE = []
     a.EXCHANGE_INFO_CACHE_PATH = os.path.join(tmp, 'exinfo.json')
     a.UNIVERSE_CACHE_PATH = os.path.join(tmp, 'cg.json')
@@ -83,7 +96,29 @@ def reset(tmp, cg=None, cg_fail=False, wipe=True):
         lambda limit=40, cache_path=None: [] if cg_fail else (cg or cg_rows()))
 
 
+class _FailRequests:
+    class exceptions:
+        RequestException = Exception
+
+    @staticmethod
+    def get(*args, **kwargs):
+        raise RuntimeError('network down')
+
+
+class _NoSleep:
+    @staticmethod
+    def sleep(_):
+        return None
+
+    @staticmethod
+    def time():
+        return 0.0
+
+
 SENT = []
+_real_cg = a.fetch_coingecko_top_futures
+_real_requests = a.requests
+_real_time = a.time
 TMP = tempfile.mkdtemp(prefix='mktmeta-')
 
 try:
@@ -92,7 +127,7 @@ try:
     reset(TMP)
     c = FakeClient()
     info = a.get_exchange_info(c)
-    check("정상 응답을 그대로 돌려준다", len(info['symbols']) == 3)
+    check("정상 응답을 그대로 돌려준다", _names(info) >= {'BTCUSDT', 'ETHUSDT', 'SOLUSDT'})
     check("캐시 파일이 생겼다", os.path.isfile(a.EXCHANGE_INFO_CACHE_PATH))
     blob = json.load(open(a.EXCHANGE_INFO_CACHE_PATH))
     check("캐시에 조회시각이 있다", 'fetched_at' in blob and 'data' in blob)
@@ -114,11 +149,27 @@ try:
     json.dump(blob, open(a.EXCHANGE_INFO_CACHE_PATH, 'w'))
     SENT.clear()
     info = a.get_exchange_info(FakeClient(fail=True))
-    check("12시간 캐시로 진행한다", len(info['symbols']) == 3)
+    check("12시간 캐시로 진행한다", 'BTCUSDT' in _names(info))
+    a._flush_degraded()
     check("degraded 알림을 한 번 보낸다", len(SENT) == 1, str(SENT))
-    a._exchange_info_cache = None
-    a.get_exchange_info(FakeClient(fail=True))
-    check("같은 실행에서 알림이 두 번 가지 않는다", len(SENT) == 1, str(SENT))
+
+    # 두 소스가 동시에 degraded 면 한 건 안에 두 사유가 다 들어가야 한다.
+    # 단일 불리언이면 두 번째 원인이 사람 화면에서 사라진다.
+    reset(TMP, cg_fail=True)
+    a._save_market_cache(a.EXCHANGE_INFO_CACHE_PATH, good_exchange_info())
+    a._save_market_cache(a.UNIVERSE_CACHE_PATH, cg_rows())
+    # 진짜 fetch_coingecko_top_futures 의 캐시 폴백 경로를 태운다.
+    # 네트워크는 막고(requests.get 이 터지게) 재시도 대기는 없앤다.
+    a.fetch_coingecko_top_futures = _real_cg
+    a.requests = _FailRequests()
+    a.time = _NoSleep()
+    SENT.clear()
+    uni = a.refresh_universe(FakeClient(fail=True))
+    check("양쪽 degraded 여도 유니버스는 만들어진다", uni == ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'], str(uni))
+    check("알림은 한 건이다", len(SENT) == 1, str(SENT))
+    check("그 한 건에 두 사유가 다 들어간다",
+          len(SENT) == 1 and '심볼정보' in SENT[0] and '시총 목록' in SENT[0], str(SENT))
+    a.requests, a.time = _real_requests, _real_time
 
     # ── 3. 40시간 캐시 → 중단 ────────────────────────────────────────────
     print("\n[3] 40시간 캐시 (36시간 초과)")
@@ -187,9 +238,9 @@ try:
     a.get_exchange_info(FakeClient())                     # 정상 1회 → 캐시 생성
     reset(TMP, wipe=False)                                # 메모리 캐시만 비움
     info = a.get_exchange_info(FakeClient(info={'symbols': []}))
-    check("빈 응답이 와도 직전 정상 캐시로 진행한다", len(info['symbols']) == 3)
+    check("빈 응답이 와도 직전 정상 캐시로 진행한다", 'BTCUSDT' in _names(info))
     blob = json.load(open(a.EXCHANGE_INFO_CACHE_PATH))
-    check("빈 응답이 캐시를 덮어쓰지 않았다", len(blob['data']['symbols']) == 3)
+    check("빈 응답이 캐시를 덮어쓰지 않았다", 'BTCUSDT' in _names(blob['data']))
 
     # ── 7. CoinGecko 쪽도 같은 규칙 ──────────────────────────────────────
     print("\n[7] 시총 목록")

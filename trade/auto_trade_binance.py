@@ -61,6 +61,12 @@ STATE_PATH = os.path.join(SCRIPT_DIR, 'binance_state.json')
 EXCHANGE_INFO_CACHE_PATH = os.path.join(SCRIPT_DIR, 'binance_exchange_info_cache.json')
 UNIVERSE_CACHE_PATH = os.path.join(SCRIPT_DIR, 'binance_universe_cache.json')
 MARKET_META_MAX_AGE_H = 36.0
+# 최소 개수 — 잘린 응답을 정상으로 믿지 않기 위한 바닥값. 바이낸스 USDT-M 무기한은
+# 수백 종이고 우리가 유니버스를 만드는 데 필요한 건 시총 상위 UNIVERSE_TARGET_SIZE 다.
+# 그 아래로 떨어지면 유니버스를 만들 수 없거나 응답이 잘린 것이다.
+MIN_EXCHANGE_INFO_SYMBOLS = 40      # = UNIVERSE_TARGET_SIZE (아래에서 정의, 값 고정)
+MIN_CG_ROWS = 20                    # 요청 40건의 절반 — 드라마틱한 truncation 만 잡는다
+META_SHRINK_RATIO = 0.5             # 직전 캐시 대비 이 비율 미만이면 덮어쓰지 않는다
 
 
 class MarketMetaUnavailable(Exception):
@@ -383,11 +389,12 @@ def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
             }, headers=headers, timeout=15)
             if r.status_code == 200:
                 data = r.json()
-                if isinstance(data, list) and data:
+                if _valid_cg_rows(data):
                     if cache_path:
                         _save_market_cache(cache_path, data)
                     return data
-                log.warning(f"coingecko 빈 응답 attempt {attempt}")
+                log.warning(f"coingecko 응답 검증 실패 attempt {attempt} "
+                            f"(len={len(data) if isinstance(data, list) else 'n/a'})")
             log.warning(f"coingecko status {r.status_code} attempt {attempt}")
         except Exception as e:
             log.warning(f"coingecko fail attempt {attempt}: {e}")
@@ -396,9 +403,10 @@ def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
         cached = _load_market_cache(cache_path, MARKET_META_MAX_AGE_H)
         if cached is not None:
             data, age_h = cached
-            if isinstance(data, list) and data:
-                _notify_degraded(f"시총 목록 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
+            if _valid_cg_rows(data):
+                _note_degraded(f"시총 목록 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
                 return data
+            log.warning("시총 목록 캐시가 검증에 실패")
     return []
 
 
@@ -410,10 +418,15 @@ def fetch_binance_futures_listed(client: Client) -> set:
     "상장된 게 없다" 로 읽어 고정 목록으로 새는 게 옛 구조의 결함이었다.
     """
     info = get_exchange_info(client)
-    return {s['symbol'] for s in info.get('symbols', [])
-            if s.get('contractType') == 'PERPETUAL'
-            and s.get('status') == 'TRADING'
-            and s.get('quoteAsset') == 'USDT'}
+    try:
+        return {s['symbol'] for s in info.get('symbols', [])
+                if s.get('contractType') == 'PERPETUAL'
+                and s.get('status') == 'TRADING'
+                and s.get('quoteAsset') == 'USDT'}
+    except Exception as e:
+        # _count_tradable_symbols 가 형태를 이미 걸렀지만, 여기서 새는 예외는
+        # ABORT 경로를 우회하므로 마지막 그물을 하나 더 둔다.
+        raise MarketMetaUnavailable(f'거래소 심볼정보 파싱 실패: {e}')
 
 
 def refresh_universe(client: Client) -> List[str]:
@@ -424,23 +437,30 @@ def refresh_universe(client: Client) -> List[str]:
     global UNIVERSE
     cg = fetch_coingecko_top_futures(cache_path=UNIVERSE_CACHE_PATH)
     listed = fetch_binance_futures_listed(client)
-    if not cg:
+    if not _valid_cg_rows(cg):
         raise MarketMetaUnavailable(
-            f'시총 목록 조회 실패 + {MARKET_META_MAX_AGE_H}h 이내 캐시 없음')
+            f'시총 목록 조회 실패 + {MARKET_META_MAX_AGE_H}h 이내 쓸 만한 캐시 없음')
     if not listed:
         raise MarketMetaUnavailable('거래소 심볼정보에 USDT 무기한 TRADING 심볼이 없음')
-    out: List[str] = []
-    for item in cg:
-        sym = (item.get('symbol') or '').upper()
-        if not sym or sym in STABLECOINS:
-            continue
-        full = sym + 'USDT'
-        if full in listed:
-            out.append(full)
+    # 파싱 오류가 여기서 새면 ABORT 경로를 우회한다. 전부 MarketMetaUnavailable 로 바꾼다.
+    try:
+        out: List[str] = []
+        seen = set()
+        for item in cg:
+            sym = (item.get('symbol') or '').upper()
+            if not sym or sym in STABLECOINS:
+                continue
+            full = sym + 'USDT'
+            if full in listed and full not in seen:
+                seen.add(full)
+                out.append(full)
+    except Exception as e:
+        raise MarketMetaUnavailable(f'유니버스 교집합 생성 실패: {e}')
     if not out:
         raise MarketMetaUnavailable('시총 목록과 상장 심볼의 교집합이 비어있음')
     UNIVERSE = out
     log.info(f"universe 갱신: {len(out)}개 (cg={len(cg)} listed={len(listed)}) head={out[:5]}")
+    _flush_degraded()
     return UNIVERSE
 
 
@@ -1184,27 +1204,81 @@ def get_current_positions(client: Client):
 
 _exchange_info_cache = None
 
-def _valid_exchange_info(info) -> bool:
-    """exchangeInfo 응답이 주문 판단에 쓸 만한지 검사.
+def _count_tradable_symbols(info) -> int:
+    """USDT 무기한 TRADING 심볼 수. 응답 구조가 한 군데라도 깨졌으면 -1.
 
-    빈 응답·잘린 응답을 캐시에 저장하면 그 다음 실패 때 그걸 정상으로 믿는다.
-    저장 전에 한 번만 본다 — USDT 무기한 TRADING 심볼이 하나라도 있고
-    그 심볼이 수량 단위(LOT_SIZE stepSize)를 갖고 있어야 한다.
+    절대 예외를 던지지 않는다 — 여기서 새는 예외는 MarketMetaUnavailable 을 우회해
+    프로세스를 기록 없이 죽인다.
+
+    항목 하나가 멀쩡하다고 통과시키지 않는다. 앞쪽 하나만 정상이고 뒤가 잘린 응답이
+    검증을 통과해 정상 캐시를 덮고, 그 뒤 fetch_binance_futures_listed 가 그 항목의
+    s['symbol'] 을 읽다가 죽는 게 실제 결함이었다(ai-debate run-20260827T091013Z).
+    전 항목을 훑고, 하나라도 형태가 깨졌으면 응답 전체를 버린다.
     """
-    if not isinstance(info, dict):
-        return False
-    syms = info.get('symbols')
-    if not isinstance(syms, list) or not syms:
-        return False
-    for s in syms:
-        if not isinstance(s, dict):
+    try:
+        if not isinstance(info, dict):
+            return -1
+        syms = info.get('symbols')
+        if not isinstance(syms, list) or not syms:
+            return -1
+        n = 0
+        for s in syms:
+            if not isinstance(s, dict):
+                return -1
+            name = s.get('symbol')
+            if not isinstance(name, str) or not name:
+                return -1
+            if not (s.get('contractType') == 'PERPETUAL'
+                    and s.get('status') == 'TRADING'
+                    and s.get('quoteAsset') == 'USDT'):
+                continue
+            filters = s.get('filters')
+            if not isinstance(filters, list):
+                return -1
+            step = 0.0
+            for f in filters:
+                if not isinstance(f, dict):
+                    return -1
+                if f.get('filterType') == 'LOT_SIZE':
+                    try:
+                        step = float(f.get('stepSize') or 0)
+                    except (TypeError, ValueError):
+                        return -1
+            if step > 0:
+                n += 1
+        return n
+    except Exception:
+        return -1
+
+
+def _valid_exchange_info(info) -> bool:
+    """주문 판단에 쓸 만한 응답인지. 형태 + 최소 개수 둘 다 본다."""
+    return _count_tradable_symbols(info) >= MIN_EXCHANGE_INFO_SYMBOLS
+
+
+def _valid_cg_rows(rows) -> bool:
+    """시총 목록이 쓸 만한지. 항목 형태와 최소 개수를 본다."""
+    try:
+        if not isinstance(rows, list) or len(rows) < MIN_CG_ROWS:
             return False
-        if (s.get('contractType') == 'PERPETUAL' and s.get('status') == 'TRADING'
-                and s.get('quoteAsset') == 'USDT'):
-            for f in s.get('filters', []):
-                if f.get('filterType') == 'LOT_SIZE' and float(f.get('stepSize', 0) or 0) > 0:
-                    return True
-    return False
+        for it in rows:
+            if not isinstance(it, dict):
+                return False
+            s = it.get('symbol')
+            if not isinstance(s, str) or not s:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _read_cache_raw(path: str):
+    """나이를 안 보고 캐시 본문만 읽는다. 급감 판정 기준용."""
+    try:
+        with open(path) as f:
+            return json.load(f).get('data')
+    except Exception:
+        return None
 
 
 def _save_market_cache(path: str, data) -> None:
@@ -1239,15 +1313,29 @@ def _load_market_cache(path: str, max_age_h: float):
     return None
 
 
-_degraded_notified = False
+_degraded_causes: List[str] = []
 
-def _notify_degraded(msg: str) -> None:
-    """낡은 캐시로 도는 중임을 실행당 한 번만 알린다."""
-    global _degraded_notified
+def _note_degraded(msg: str) -> None:
+    """낡은 캐시로 도는 사유를 모은다. 보내는 건 refresh_universe 가 한 번에 한다.
+
+    단일 불리언으로 첫 사유만 보내면 두 소스가 동시에 degraded 일 때 두 번째가
+    사람 화면에서 사라진다(ai-debate run-20260827T091013Z).
+    """
     log.warning(msg)
-    if not _degraded_notified:
-        _degraded_notified = True
-        send_telegram(f"⚠️ {msg}")
+    if msg not in _degraded_causes:
+        _degraded_causes.append(msg)
+
+
+def _flush_degraded() -> None:
+    """모인 사유를 실행당 한 건으로 보낸다. 전송 실패가 매매 판단을 깨지 않는다."""
+    if not _degraded_causes:
+        return
+    body = "\n".join(f"- {c}" for c in _degraded_causes)
+    _degraded_causes.clear()
+    try:
+        send_telegram(f"⚠️ 시장 메타 저하 상태로 진행\n{body}")
+    except Exception as e:
+        log.error(f"degraded 알림 전송 실패(진행에는 영향 없음): {e}")
 
 
 def get_exchange_info(client: Client):
@@ -1263,8 +1351,14 @@ def get_exchange_info(client: Client):
         return _exchange_info_cache
     try:
         info = client.futures_exchange_info()
-        if not _valid_exchange_info(info):
-            raise ValueError('exchangeInfo 응답 검증 실패 (USDT 무기한 TRADING 심볼 없음)')
+        n = _count_tradable_symbols(info)
+        if n < MIN_EXCHANGE_INFO_SYMBOLS:
+            raise ValueError(
+                f'exchangeInfo 검증 실패 (거래가능 심볼 {n} < {MIN_EXCHANGE_INFO_SYMBOLS})')
+        prev = _count_tradable_symbols(_read_cache_raw(EXCHANGE_INFO_CACHE_PATH))
+        if prev > 0 and n < prev * META_SHRINK_RATIO:
+            # 잘린 응답이 정상 캐시를 덮으면 유니버스가 조용히 쪼그라든 채 매매가 돈다.
+            raise ValueError(f'exchangeInfo 급감 ({prev} → {n}) — 캐시를 보존하고 거부')
         _save_market_cache(EXCHANGE_INFO_CACHE_PATH, info)
         _exchange_info_cache = info
         return info
@@ -1277,7 +1371,7 @@ def get_exchange_info(client: Client):
     info, age_h = cached
     if not _valid_exchange_info(info):
         raise MarketMetaUnavailable('거래소 심볼정보 캐시가 검증에 실패')
-    _notify_degraded(f"거래소 심볼정보 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
+    _note_degraded(f"거래소 심볼정보 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
     _exchange_info_cache = info
     return info
 
@@ -2613,8 +2707,12 @@ def main():
         except MarketMetaUnavailable as e:
             err = f"V25 ABORT: {e} — 매매 차단"
             log.error(err)
-            send_telegram(f"🛑 {err}")
+            # 기록이 알림보다 먼저다. 텔레그램이 터져도 차단 사실은 남아야 한다.
             _v25_persist_abort_log(err)
+            try:
+                send_telegram(f"🛑 {err}")
+            except Exception as te:
+                log.error(f"ABORT 알림 전송 실패(차단은 그대로): {te}")
             return
 
         # 1. 데이터 수집
