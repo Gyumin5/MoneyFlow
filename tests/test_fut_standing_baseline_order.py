@@ -274,7 +274,7 @@ def main():
 
     print("\n[8] 08-21 수정 회귀 — 무거래일 오탐 차단은 그대로 유지")
     check("체결 검사는 매매 시도 실행에서만",
-          '_v25_exec_reconcile(intent_snapshot, actual_snapshot)' in src and
+          '_v25_exec_reconcile(intent_snapshot, actual_snapshot,' in src and
           'if (v25_success and _v25_traded_path) else []' in src)
     check("streak 은 무거래일에 움직이지 않는다",
           '_touch_streak = bool(_v25_traded_path or error_alerts or v25_abort or _standing_crit)' in src)

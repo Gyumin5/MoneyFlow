@@ -2145,18 +2145,36 @@ def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], Lis
     return crit, info
 
 
-def _v25_exec_reconcile(intent: dict, actual: dict) -> List[str]:
+def _v25_exec_reconcile(intent: dict, actual: dict, expected_leftover: Optional[dict] = None) -> List[str]:
     """주문 후 reconciliation — 의도 vs 실체결 차이 반환.
 
     매매를 시도한 실행에서만 호출한다. 무거래일에 부르면 "오늘 PV 기준 이론 명목" 과
     "어제 체결분의 현재 명목" 을 비교하게 되어 가격이 움직인 만큼 항상 어긋난다.
+
+    expected_leftover: {심볼: 실행 전 명목}. 이번 실행에서 거래소가 축소 주문을 거절해
+    남을 수밖에 없었던 포지션이다. 이걸 빼지 않으면 주문 루프에서 억제한 실패가 여기서
+    되살아난다 — 목표에 없는 포지션이 남아 있으니 매일 불일치로 잡히고, 실행 실패 →
+    abort_streak 증가 → 사흘째 자동 lock 이다. 거래가 재개될 때까지 매매 전체가 멈추는데,
+    그건 이 변경이 막으려던 바로 그 결과다. (2026-08-28 7차 검토 지적.)
+    빼주는 조건은 좁다 — 줄이려던 것이고(의도 명목 0), 실행 전보다 노출이 안 늘었을 때만.
     """
     diffs = []
     intent_pos = intent.get('positions', {})
     actual_pos = actual.get('positions', {})
+    leftover = expected_leftover or {}
     for sym in set(intent_pos) | set(actual_pos):
         i = intent_pos.get(sym, {})
         a = actual_pos.get(sym, {})
+        if sym in leftover:
+            _before = abs(float(leftover[sym]))
+            _now = abs(float(a.get('notional', 0) or 0))
+            _intent = abs(float(i.get('notional', 0) or 0))
+            if _intent <= 1e-9 and _now <= _before + max(50.0, 0.05 * max(_before, 1.0)):
+                # 줄이려 했는데 거래소가 거절했고 노출도 안 늘었다. 이건 우리가 아는
+                # 상태지 새로 발견한 이상이 아니다. 늘었으면 아래로 떨어져 실패로 잡힌다.
+                log.warning(f"reconcile 제외 {sym}: 거래불가로 축소 거절, "
+                            f"명목 ${_before:,.2f} → ${_now:,.2f}")
+                continue
         if abs(i.get('notional', 0) - a.get('notional', 0)) > max(50.0, 0.05 * max(abs(i.get('notional', 0)), abs(a.get('notional', 0)), 1.0)):
             diffs.append(f"{sym} notional: intent=${i.get('notional', 0):.2f} actual=${a.get('notional', 0):.2f}")
         if i.get('leverage') and a.get('leverage') and abs(float(i['leverage']) - float(a['leverage'])) > 0.01:
@@ -3460,7 +3478,14 @@ def main():
                 'pv': pv_after,
             }
             # (a) 체결 검사 — 매매를 시도한 실행에서만. 무거래일엔 비교 대상이 없다.
-            recon_diffs = (_v25_exec_reconcile(intent_snapshot, actual_snapshot)
+            # 거래소가 축소를 거절해 남을 수밖에 없던 포지션은 실행 전 명목과 함께 넘긴다.
+            _expected_leftover = {}
+            for _sym in _untradable_orders:
+                _p = next((p for p in positions_before.values() if p.get('symbol') == _sym), None)
+                if _p is not None:
+                    _expected_leftover[_sym] = abs(float(_p.get('notional', 0.0) or 0.0))
+            recon_diffs = (_v25_exec_reconcile(intent_snapshot, actual_snapshot,
+                                               _expected_leftover)
                            if (v25_success and _v25_traded_path) else [])
             if recon_diffs:
                 recon_msg = "⚠ V25 reconciliation 차이:\n  - " + "\n  - ".join(recon_diffs[:5])

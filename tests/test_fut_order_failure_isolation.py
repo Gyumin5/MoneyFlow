@@ -400,6 +400,51 @@ finally:
 check("판정불가(캐시본)면 보수적으로 중단시킨다", ok is False)
 
 
+print("\n[7차 검토] 억제한 축소 실패가 종단 체결검사에서 되살아나지 않는다")
+# 목표에서 빠진 심볼(intent 명목 0)이 거래불가로 남았다. 매일 불일치로 잡히면
+# abort_streak 가 올라가 사흘째 자동 lock 이다 — 이 변경이 막으려던 결과 그대로다.
+_intent = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3}}, 'margin_type': 'CROSSED'}
+_actual = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
+                         'AAAUSDT': {'notional': 500.0, 'leverage': 3}}}
+check("빼주지 않으면 불일치로 잡힌다(전제)",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _actual)))
+check("거래불가 잔존은 불일치가 아니다",
+      a._v25_exec_reconcile(_intent, _actual, {'AAAUSDT': 500.0}) == [])
+
+# 노출이 늘었으면 빼주지 않는다.
+_grown = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
+                        'AAAUSDT': {'notional': 900.0, 'leverage': 3}}}
+check("잔존이 커졌으면 그대로 실패로 잡는다",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _grown, {'AAAUSDT': 500.0})))
+
+# 가격이 조금 움직인 정도는 통과한다(같은 실행 안 두 시점 비교).
+_moved = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
+                        'AAAUSDT': {'notional': 512.0, 'leverage': 3}}}
+check("가격 이동 정도는 통과", a._v25_exec_reconcile(_intent, _moved, {'AAAUSDT': 500.0}) == [])
+
+# 다른 심볼의 불일치는 그대로 잡는다.
+_other = {'positions': {'BBBUSDT': {'notional': 100.0, 'leverage': 3},
+                        'AAAUSDT': {'notional': 500.0, 'leverage': 3}}}
+_d = a._v25_exec_reconcile(_intent, _other, {'AAAUSDT': 500.0})
+check("다른 심볼 불일치는 그대로 잡는다",
+      len(_d) == 1 and 'BBBUSDT' in _d[0], str(_d))
+
+# 목표가 살아있는 심볼(intent 명목 > 0)은 빼주지 않는다.
+_held_intent = {'positions': {'AAAUSDT': {'notional': 300.0, 'leverage': 3}}}
+check("목표가 있는 심볼은 빼주지 않는다",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(
+          _held_intent, {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3}}},
+          {'AAAUSDT': 500.0})))
+
+# 사흘 연속으로 같은 상태가 와도 불일치가 0 이어야 자동 lock 이 안 걸린다.
+_three = [a._v25_exec_reconcile(_intent, _actual, {'AAAUSDT': 500.0}) for _ in range(3)]
+check("사흘 연속 실행에서도 불일치 0", all(d == [] for d in _three), str(_three))
+
+check("체결검사 호출부가 잔존 목록을 넘긴다",
+      '_v25_exec_reconcile(intent_snapshot, actual_snapshot,' in _src
+      and 'for _sym in _untradable_orders:' in _src)
+
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAIL: {FAILED}")
