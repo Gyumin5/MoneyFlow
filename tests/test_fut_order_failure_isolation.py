@@ -53,14 +53,14 @@ def run_rebalance(positions, fail_on, listed, target=None, liquidation_only=True
                   format_quantity=None):
     """execute_rebalance 를 한 번 돌린다. 기본은 목표 전액 CASH(=전량청산)."""
     saved = {k: getattr(a, k) for k in
-             ('get_current_positions', 'cancel_stop_orders', 'fetch_binance_futures_listed',
+             ('get_current_positions', 'cancel_stop_orders', '_trading_symbols',
               'get_symbol_constraints', 'format_quantity', 'UNIVERSE')}
     errors, orders = [], []
     c = Client(fail_on)
     try:
         a.get_current_positions = lambda _c: (positions, 1000.0, True)
         a.cancel_stop_orders = lambda _c, _s=None: None
-        a.fetch_binance_futures_listed = lambda _c: set(listed)
+        a._trading_symbols = lambda _c: set(listed)
         a.get_symbol_constraints = lambda _c, s: {
             'step_size': 0.001, 'min_qty': 0.0, 'min_notional': 5.0,
             'tick_size': 0.01, 'qty_precision': 3}
@@ -142,14 +142,14 @@ check("오류로 올라간다", any(m.startswith('ORDER FAILED') for m in errors
 check("거래불가로는 기록되지 않는다", a._untradable_orders == [], str(a._untradable_orders))
 
 print("\n[4] 거래가능 여부를 못 물어보면 평범한 실패로 본다")
-saved = a.fetch_binance_futures_listed
+saved = a._trading_symbols
 try:
     def _boom(_c):
         raise a.MarketMetaUnavailable('메타 없음')
-    a.fetch_binance_futures_listed = _boom
+    a._trading_symbols = _boom
     check("판단 불가는 False(=평범한 실패)", a._is_untradable_now(None, 'AAAUSDT') is False)
 finally:
-    a.fetch_binance_futures_listed = saved
+    a._trading_symbols = saved
 
 print("\n[4b] 거래소가 거절한 게 아니면(네트워크 등) 억제하지 않는다")
 c, errors, orders = run_rebalance(
@@ -157,6 +157,32 @@ c, errors, orders = run_rebalance(
 check("거래불가 심볼이어도 오류로 올라간다",
       any(m.startswith('ORDER FAILED') for m in errors), str(errors))
 check("거래불가로 기록되지 않는다", a._untradable_orders == [], str(a._untradable_orders))
+
+print("\n[4c] 전략 대상이 아닌 계약도 거래 중이면 거래불가가 아니다")
+_saved_info = a.get_exchange_info
+_saved_cache = a._exchange_info_cache
+try:
+    a._exchange_info_cache = None
+    a.get_exchange_info = lambda _c: {'symbols': [
+        # 전략 유니버스(USDT 무기한)엔 안 들어가지만 거래소에선 정상 거래 중이다.
+        {'symbol': 'BTCUSDC', 'status': 'TRADING', 'contractType': 'PERPETUAL',
+         'quoteAsset': 'USDC'},
+        {'symbol': 'BTCUSDT_260925', 'status': 'TRADING', 'contractType': 'CURRENT_QUARTER',
+         'quoteAsset': 'USDT'},
+        {'symbol': 'AAAUSDT', 'status': 'SETTLING', 'contractType': 'PERPETUAL',
+         'quoteAsset': 'USDT'},
+    ]}
+    check("정상 거래 중인 USDC 무기한은 거래불가가 아니다",
+          a._is_untradable_now(None, 'BTCUSDC') is False)
+    check("정상 거래 중인 만기물도 거래불가가 아니다",
+          a._is_untradable_now(None, 'BTCUSDT_260925') is False)
+    check("거래정지된 USDT 무기한은 거래불가다",
+          a._is_untradable_now(None, 'AAAUSDT') is True)
+    check("심볼정보에 아예 없으면 거래불가다(상장폐지)",
+          a._is_untradable_now(None, 'ZZZUSDT') is True)
+finally:
+    a.get_exchange_info = _saved_info
+    a._exchange_info_cache = _saved_cache
 
 print("\n[5] 해소는 적극적 증거가 있을 때만 한다")
 
@@ -167,7 +193,7 @@ class _ListedClient:
 
 
 def _resolve(prev, now, listed, positions=None, positions_ok=True, boom=False):
-    saved = a.fetch_binance_futures_listed
+    saved = a._trading_symbols
     try:
         if boom:
             def _f(_c):
@@ -175,10 +201,10 @@ def _resolve(prev, now, listed, positions=None, positions_ok=True, boom=False):
         else:
             def _f(_c):
                 return set(listed)
-        a.fetch_binance_futures_listed = _f
+        a._trading_symbols = _f
         return a._resolve_untradable(None, set(prev), set(now), positions, positions_ok)
     finally:
-        a.fetch_binance_futures_listed = saved
+        a._trading_symbols = saved
 
 
 keep, resumed, dropped = _resolve(
@@ -214,6 +240,9 @@ check("억제는 축소 주문 + 거래소 거절에만 적용된다",
       'if reduce_only and isinstance(e, BinanceAPIException) '
       'and _is_untradable_now(client, symbol):' in _src)
 check("주문 생성 단계는 별도 try 다", 'ORDER PREP FAILED' in _src)
+check("거래가능 판정에 전략 유니버스 목록을 쓰지 않는다",
+      'symbol not in _trading_symbols(client)' in _src
+      and 'symbol not in fetch_binance_futures_listed' not in _src)
 check("접수 뒤 기록 실패를 주문 실패로 되돌리지 않는다",
       '주문은 접수됐고 기록만 실패' in _src)
 check("상태파일의 거래불가 목록 형태를 검증한다",

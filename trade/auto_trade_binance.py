@@ -1401,7 +1401,7 @@ def _resolve_untradable(client: Client, prev: set, now: set, positions, position
     if not stale:
         return keep, set(), set()
     try:
-        listed = fetch_binance_futures_listed(client)
+        listed = _trading_symbols(client)
     except Exception as e:
         log.warning(f"거래가능 목록 조회 실패 — 거래불가 목록을 그대로 둔다: {e}")
         return set(prev) | set(now), set(), set()
@@ -1419,6 +1419,19 @@ def _resolve_untradable(client: Client, prev: set, now: set, positions, position
     return keep, resumed, dropped
 
 
+def _trading_symbols(client: Client) -> set:
+    """거래소가 지금 주문을 받는 심볼 전체. 계약 유형을 가리지 않는다.
+
+    전략 유니버스(fetch_binance_futures_listed)는 USDT 무기한만 남긴다. 거기 없다는 건
+    주문 불가의 증거가 못 된다 — 전략 대상이 아닌 계약(USDC 무기한, 만기물)을 어쩌다
+    들고 있으면 정상 거래 중인데도 거래불가로 몰려서, 고칠 수 있는 주문 오류가 영원히
+    묻히고 못 닫는 포지션이 조용히 남는다. (ai-debate run-20260828T012500Z)
+    """
+    info = get_exchange_info(client)
+    return {s.get('symbol') for s in info.get('symbols', [])
+            if s.get('status') == 'TRADING'}
+
+
 def _is_untradable_now(client: Client, symbol: str) -> bool:
     """지금 거래소에서 이 심볼로 주문을 받는가.
 
@@ -1426,7 +1439,7 @@ def _is_untradable_now(client: Client, symbol: str) -> bool:
     거래 가능한 심볼의 실패를 조용히 넘기는 것보다 그 반대가 낫다.
     """
     try:
-        return symbol not in fetch_binance_futures_listed(client)
+        return symbol not in _trading_symbols(client)
     except Exception as e:
         log.warning(f"거래가능 여부 확인 실패 {symbol}: {e} — 평범한 주문 실패로 취급")
         return False
@@ -1767,7 +1780,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
         # 되돌려 적지 않는다 — 접수된 주문을 실패로 적으면 사실과 반대가 된다.
         _v25_mark_touch(f"order {side} {symbol} {qty_str}")
         try:
-            log.info(f"ORDER {side} {symbol} qty={qty_str}: {order.get('status', 'OK')}")
+            log.info(f"ORDER {side} {symbol} qty={qty_str}: {(order or {}).get('status', 'OK')}")
             if order_alerts is not None:
                 order_alerts.append(f"{side} {symbol} {qty_str}")
         except Exception as e:
