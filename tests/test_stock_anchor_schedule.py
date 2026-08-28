@@ -287,7 +287,8 @@ src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 check("고정 시간표 전진 규칙이 있다", 'while next_date <= today:' in src)
 check("next_rebal_date 를 상태로 들고 다닌다", "snap['next_rebal_date'] = next_date.isoformat()" in src)
 check("위상 불변식 검사가 있다", 'def _schedule_phase_ok(' in src)
-check("신호 비중 검증 가드가 있다", src.count('if not _weights_ok(weights):') >= 2)
+check("신호 종목·비중 정합 가드가 세 곳에 있다",
+      src.count('_picks_weights_ok(') >= 4)
 check("스냅샷 결함 판정이 있다", 'def snapshot_payload_defect(' in src)
 check("생존 예정일 복원 규칙이 있다", 'def _resolve_from_dates(' in src)
 check("결함 검사가 앵커 체크보다 먼저다",

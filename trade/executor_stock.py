@@ -620,11 +620,11 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
     if prev is not None and risk_on != prev:
         log(f'  🔄 카나리 플립: {prev} → {risk_on}')
         _migrate_tranches_to_snaps(state)
-        if not _weights_ok(_signal_weights(signal)):
+        if not _picks_weights_ok(*_signal_payload(signal)):
             # 비중이 온전치 않으면 교체를 못 한다. 이때 prev_risk_on 을 넘겨버리면 내일은
             # 플립이 아니게 되어 방어 전환이 영영 사라진다 — 플립을 소비하지 않고 남긴다.
-            log('  ⚠️ 카나리 플립인데 신호 비중이 온전치 않다 — 플립을 소비하지 않고 다음 실행에서 재시도')
-            send_telegram('⚠️ 주식 카나리 전환 보류: 신호 비중이 온전하지 않다. '
+            log('  ⚠️ 카나리 플립인데 신호가 온전치 않다 — 플립을 소비하지 않고 다음 실행에서 재시도')
+            send_telegram('⚠️ 주식 카나리 전환 보류: 신호의 종목·비중이 온전하지 않다. '
                           '다음 실행에서 다시 시도한다.')
             return False
         swapped = refill_snaps_fresh(signal, state)
@@ -684,11 +684,11 @@ def _parse_date(raw):
         return None
 
 
-def _signal_weights(signal: dict) -> dict:
-    """지금 레짐에 해당하는 비중. 공격이면 공격 비중, 방어면 방어 비중."""
+def _signal_payload(signal: dict):
+    """지금 레짐에 해당하는 (종목, 비중). 공격이면 공격 쪽, 방어면 방어 쪽."""
     stock_sig = signal.get('stock', {}) or {}
     key = 'offense' if stock_sig.get('risk_on', True) else 'defense'
-    return stock_sig.get(f'{key}_weights', {}) or {}
+    return stock_sig.get(f'{key}_picks'), stock_sig.get(f'{key}_weights') or {}
 
 
 def _weights_ok(w) -> bool:
@@ -745,6 +745,22 @@ def state_structure_defect(state: dict):
     if bad_type:
         return f'스냅샷 {", ".join(bad_type)} 가 dict 가 아니다'
     return None
+
+
+def _picks_weights_ok(picks, weights) -> bool:
+    """신호 한 쌍이 서로 맞는가. 상태에 쓰기 전 세 곳(앵커·전환·리필)에서 같이 쓴다.
+
+    비중 합만 보면 종목과 비중이 서로 다른 신호가 그대로 통과한다 —
+    picks=['QQQ'] / weights={'SPY': 1.0} 이면 SPY 를 사면서 QQQ 를 들고 있다고 적는다.
+    그 어긋난 picks 는 다음 실행의 교체 판정 기준이 되므로 오염이 남는다.
+    (2026-08-28 5차 검토 지적.) 전량 현금(weights={'Cash': 1.0}, picks=[])은 통과한다.
+    """
+    if not _weights_ok(weights):
+        return False
+    if not isinstance(picks, list):
+        return False
+    held = {t for t, w in weights.items() if t != 'Cash' and _as_float(w) > 0}
+    return not (held - set(picks))
 
 
 def _schedule_phase_ok(dates) -> bool:
@@ -914,11 +930,11 @@ def check_anchors(signal: dict, state: dict):
         picks = stock_sig.get('defense_picks', [])
         weights = stock_sig.get('defense_weights', {})
 
-    if not _weights_ok(weights):
+    if not _picks_weights_ok(picks, weights):
         # 비중이 비었거나 합이 안 맞는 신호로 발화하면 그 모자란 만큼이 현금 목표가 되어
         # 멀쩡한 보유를 판다. 종목 목록만 있고 비중이 빈 경우도 여기서 걸린다.
         # 모멘텀 전멸(전량 현금)은 weights={'Cash': 1.0} 이라 정상 통과한다.
-        log(f'  ⚠️ 신호 비중이 온전하지 않다({weights}) — 앵커 발화 보류(보유 유지)')
+        log(f'  ⚠️ 신호가 온전하지 않다(종목 {picks} / 비중 {weights}) — 앵커 발화 보류(보유 유지)')
         return
 
     snapshots = state.setdefault('snapshots', {})
@@ -1052,11 +1068,11 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
     else:
         picks = stock_sig.get('defense_picks', [])
         weights = stock_sig.get('defense_weights', {})
-    if not _weights_ok(weights):
+    if not _picks_weights_ok(picks, weights):
         # 앵커와 같은 검증. 여기가 뚫리면 드리프트 발화일에 온전치 않은 비중이 세 snap 에
         # 통째로 들어가고, 그 실행에서 바로 전량 매도가 된다.
-        log(f'  ⚠️ 신호 비중이 온전하지 않다({weights}) — 드리프트 리필 보류(보유 유지)')
-        send_telegram(f'⚠️ 주식 신호 비중 이상으로 종목 교체 보류: {weights}')
+        log(f'  ⚠️ 신호가 온전하지 않다(종목 {picks} / 비중 {weights}) — 드리프트 리필 보류(보유 유지)')
+        send_telegram(f'⚠️ 주식 신호 이상으로 종목 교체 보류: 종목 {picks} / 비중 {weights}')
         return False
     snapshots = state.setdefault('snapshots', {})
     changed = False

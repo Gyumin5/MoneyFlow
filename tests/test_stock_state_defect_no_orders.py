@@ -291,6 +291,49 @@ check("전환을 확정한다", (saved or {}).get('prev_risk_on') is True,
 check("전환 뒤엔 결함이 남지 않는다", ex.snapshot_payload_defect(saved or {}) is None,
       str(ex.snapshot_payload_defect(saved or {})))
 
+print("\n[19] 신호의 종목과 비중이 어긋남 — 주문 0건, 스냅샷 보존")
+KEEP = {'VNQ': 1 / 3, 'EEM': 1 / 3, 'SPY': 1 / 3}
+for label, sig in (
+        ('앵커일 공격신호',
+         make_signal(picks=('QQQ',), weights={'SPY': 1.0})),
+        ('전량현금인데 종목이 남음',
+         make_signal(picks=(), weights={'SPY': 0.5, 'Cash': 0.5})),
+        ('picks 가 list 가 아님',
+         make_signal(picks=(), weights={'QQQ': 1.0}))):
+    sig['stock']['offense_picks'] = (list(sig['stock']['offense_picks'])
+                                     if label != 'picks 가 list 가 아님' else 'QQQ')
+    orders, alerts, saved = run(healthy(), sig, today=BASE)
+    check(f"주문 0건 ({label})", orders == [], str(orders))
+    check(f"스냅샷 보존 ({label})",
+          all((saved or {}).get('snapshots', {}).get(str(i), {}).get('weights') == KEEP
+              for i in range(ex.N_SNAPS)), str((saved or {}).get('snapshots')))
+
+print("\n[20] 방어 신호가 어긋나면 카나리 전환도 하지 않는다")
+st = healthy()
+st['prev_risk_on'] = True
+sig = make_signal(risk_on=False)
+sig['stock']['defense_picks'] = ['IEF']
+sig['stock']['defense_weights'] = {'BIL': 1.0}     # 종목과 비중이 다르다
+orders, alerts, saved = run(st, sig, today=_dt.date(2026, 8, 28))
+check("주문 0건", orders == [], str(orders))
+check("prev_risk_on 을 소비하지 않는다", (saved or st).get('prev_risk_on') is True,
+      str((saved or st).get('prev_risk_on')))
+check("전환 보류를 알린다", any('보류' in a for a in alerts), str(alerts))
+
+print("\n[21] 드리프트 리필도 어긋난 신호를 받지 않는다")
+st = healthy()
+bad = make_signal(picks=('QQQ',), weights={'SPY': 1.0})
+check("리필 거부", ex.refill_snaps_fresh(bad, st) is False)
+check("스냅샷 보존", st['snapshots']['0']['weights'] == KEEP, str(st['snapshots']['0']))
+
+print("\n[22] 양성 대조 — 전량 현금 신호와 정상 신호는 통과한다")
+check("전량 현금 통과", ex._picks_weights_ok([], {'Cash': 1.0}))
+check("현금 섞인 정상 통과", ex._picks_weights_ok(['QQQ'], {'QQQ': 2 / 3, 'Cash': 1 / 3}))
+check("정상 3종 통과", ex._picks_weights_ok(['A', 'B', 'C'],
+                                        {'A': 1 / 3, 'B': 1 / 3, 'C': 1 / 3}))
+orders, _, _ = run(healthy(), make_signal(), today=BASE)
+check("앵커일 정상 신호는 주문이 나간다", len(orders) > 0, str(orders))
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAIL: {FAILED}")
