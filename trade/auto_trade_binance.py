@@ -1378,6 +1378,28 @@ def _flush_degraded() -> None:
         log.error(f"degraded 알림 전송 실패(진행에는 영향 없음): {e}")
 
 
+_untradable_orders: List[str] = []
+
+
+def _note_untradable(symbol: str) -> None:
+    """이번 실행에서 거래 불가로 확인된 심볼을 모은다. 알림 중복 제거는 main 이 한다."""
+    if symbol not in _untradable_orders:
+        _untradable_orders.append(symbol)
+
+
+def _is_untradable_now(client: Client, symbol: str) -> bool:
+    """지금 거래소에서 이 심볼로 주문을 받는가.
+
+    주문 실패의 원인 분류에만 쓴다. 판단이 안 서면 False(=평범한 실패)를 돌려준다 —
+    거래 가능한 심볼의 실패를 조용히 넘기는 것보다 그 반대가 낫다.
+    """
+    try:
+        return symbol not in fetch_binance_futures_listed(client)
+    except Exception as e:
+        log.warning(f"거래가능 여부 확인 실패 {symbol}: {e} — 평범한 주문 실패로 취급")
+        return False
+
+
 def get_exchange_info(client: Client):
     """거래소 심볼·규격 정보. 실패 시 MARKET_META_MAX_AGE_H 이내 캐시만 허용.
 
@@ -1664,6 +1686,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
 
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
+        qty_str = ''
         try:
             qty_str = str(qty) if is_full_close else format_quantity(client, symbol, qty)
             if float(qty_str) <= 0:
@@ -1684,12 +1707,23 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             if order_alerts is not None:
                 order_alerts.append(f"{side} {symbol} {qty_str}")
             time.sleep(0.1)
-        except BinanceAPIException as e:
+        except Exception as e:
+            # BinanceAPIException 만 잡으면 그 밖의 오류(네트워크 등)에서 루프가 통째로 끊겨
+            # 뒤 종목의 주문이 시도조차 안 된다. create_order_with_retry 는 non-Binance
+            # 예외도 그대로 올린다. 한 주문의 실패는 그 주문에서 끝나야 한다. (2026-08-28)
             # 예외라도 거래소가 접수했을 수 있다(타임아웃). 계좌를 건드렸다고 본다.
             _v25_mark_touch(f"order {side} {symbol} 시도 실패(체결 불명)")
-            log.error(f"ORDER FAILED {side} {symbol} qty={qty_str}: {e}")
-            if error_alerts is not None:
-                error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
+            if _is_untradable_now(client, symbol):
+                # 거래정지·상장폐지 심볼은 우리가 고칠 수 있는 게 아니다. 주문 시도는
+                # 계속하되(거래 재개되면 그날 바로 나간다) 매일 같은 실패를 오류로 올리지
+                # 않는다. 오류로 올리면 rebalancing_needed 가 영구히 박히고 성공 판정도
+                # 매일 실패가 되며 알림이 매일 온다 — 자가해소가 안 된다.
+                _note_untradable(symbol)
+                log.warning(f"ORDER UNTRADABLE {side} {symbol} qty={qty_str}: {e}")
+            else:
+                log.error(f"ORDER FAILED {side} {symbol} qty={qty_str}: {e}")
+                if error_alerts is not None:
+                    error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
 
 
 def needs_rebalance(client: Client, target: Dict[str, float], current_positions: Dict[str, dict],
@@ -1787,6 +1821,7 @@ def _v25_mark_touch(what: str):
 def _v25_touch_reset():
     """실행 시작 시 초기화 (한 프로세스에서 두 번 도는 경우 대비)."""
     del _V25_ACCOUNT_TOUCH[:]
+    del _untradable_orders[:]
 
 
 def _v25_account_changed() -> bool:
@@ -3191,6 +3226,27 @@ def main():
                 client, positions_after, data['1h'], combined,
                 order_alerts=order_alerts, error_alerts=error_alerts,
             )
+
+        # 거래불가 심볼 알림은 상태가 바뀔 때만 보낸다. 매일 같은 알림을 보내면
+        # 사람이 알림을 안 보게 되고, 그게 진짜 사고를 놓치는 경로다. 주문 시도 자체는
+        # 계속하므로 거래가 재개되면 그날 바로 정리된다. (2026-08-28)
+        if args.trade:
+            _prev_untradable = set(state.get('untradable_symbols', []) or [])
+            _now_untradable = set(_untradable_orders)
+            _new_untradable = sorted(_now_untradable - _prev_untradable)
+            _resolved_untradable = sorted(_prev_untradable - _now_untradable)
+            if _new_untradable or _resolved_untradable:
+                _lines = []
+                if _new_untradable:
+                    _lines.append("거래 불가로 주문이 거절됨: " + ", ".join(_new_untradable))
+                    _lines.append("주문 시도는 매일 계속하고, 거래가 재개되면 그날 정리된다.")
+                if _resolved_untradable:
+                    _lines.append("거래 재개됨: " + ", ".join(_resolved_untradable))
+                try:
+                    send_telegram("선물 거래가능 상태 변경\n" + "\n".join(_lines))
+                except Exception as _e:
+                    log.error(f"거래불가 알림 전송 실패(매매에는 영향 없음): {_e}")
+            state['untradable_symbols'] = sorted(_now_untradable)
 
         # 6. 상태 저장
         if args.trade:

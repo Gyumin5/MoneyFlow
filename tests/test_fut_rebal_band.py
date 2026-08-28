@@ -93,6 +93,9 @@ def with_fakes(positions):
     a.get_symbol_constraints = lambda client, symbol: dict(CONSTRAINTS)
     a.get_current_positions = lambda client: (positions, PV, True)
     a.cancel_stop_orders = lambda client, symbols: None
+    # 2026-08-28: 주문 실패는 거래불가 여부로 갈린다. 여기 심볼들은 정상 상장 상태로 둔다
+    # (거래불가면 오류가 아니라 상태변경 알림 경로로 빠진다 — test_fut_order_failure_isolation).
+    a.fetch_binance_futures_listed = lambda client: {c + 'USDT' for c in positions} | {'AAAUSDT'}
     a._v25_touch_reset()
     return cli
 
