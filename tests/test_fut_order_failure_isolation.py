@@ -151,6 +151,13 @@ try:
 finally:
     a.fetch_binance_futures_listed = saved
 
+print("\n[4b] 거래소가 거절한 게 아니면(네트워크 등) 억제하지 않는다")
+c, errors, orders = run_rebalance(
+    HELD, {'AAAUSDT': RuntimeError('timeout')}, {'BBBUSDT'})   # AAA 는 상장 목록에 없다
+check("거래불가 심볼이어도 오류로 올라간다",
+      any(m.startswith('ORDER FAILED') for m in errors), str(errors))
+check("거래불가로 기록되지 않는다", a._untradable_orders == [], str(a._untradable_orders))
+
 print("\n[5] 해소는 적극적 증거가 있을 때만 한다")
 
 
@@ -203,9 +210,14 @@ check("거래불가 알림은 상태 변경 시에만",
       "state['untradable_symbols'] = sorted(_keep_untradable)" in _src)
 check("알림 전송 실패면 상태를 갱신하지 않는다(첫 통보 유실 방지)",
       'if _notify_ok:' in _src)
-check("억제는 축소 주문에만 적용된다",
-      'if reduce_only and _is_untradable_now(client, symbol):' in _src)
+check("억제는 축소 주문 + 거래소 거절에만 적용된다",
+      'if reduce_only and isinstance(e, BinanceAPIException) '
+      'and _is_untradable_now(client, symbol):' in _src)
 check("주문 생성 단계는 별도 try 다", 'ORDER PREP FAILED' in _src)
+check("접수 뒤 기록 실패를 주문 실패로 되돌리지 않는다",
+      '주문은 접수됐고 기록만 실패' in _src)
+check("상태파일의 거래불가 목록 형태를 검증한다",
+      'untradable_symbols 형태가 이상하다' in _src)
 
 print()
 if FAILED:

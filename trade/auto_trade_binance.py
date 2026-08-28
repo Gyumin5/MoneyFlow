@@ -1741,11 +1741,6 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
 
         try:
             order = create_order_with_retry(client, order_params)
-            _v25_mark_touch(f"order {side} {symbol} {qty_str}")
-            log.info(f"ORDER {side} {symbol} qty={qty_str}: {order.get('status', 'OK')}")
-            if order_alerts is not None:
-                order_alerts.append(f"{side} {symbol} {qty_str}")
-            time.sleep(0.1)
         except Exception as e:
             # BinanceAPIException 만 잡으면 그 밖의 오류(네트워크 등)에서 루프가 통째로 끊겨
             # 뒤 종목의 주문이 시도조차 안 된다. create_order_with_retry 는 non-Binance
@@ -1755,7 +1750,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             # 억제는 노출을 줄이는 주문(reduceOnly)에만 적용한다. 늘리는 주문이 실패한 건
             # 거래불가가 원인이어도 평범한 오류로 남긴다 — 살 수 없는 걸 사려 했다는
             # 사실 자체가 유니버스 쪽 문제를 가리키므로 조용해지면 안 된다.
-            if reduce_only and _is_untradable_now(client, symbol):
+            if reduce_only and isinstance(e, BinanceAPIException) and _is_untradable_now(client, symbol):
                 # 거래정지·상장폐지 심볼은 우리가 고칠 수 있는 게 아니다. 주문 시도는
                 # 계속하되(거래 재개되면 그날 바로 나간다) 매일 같은 실패를 오류로 올리지
                 # 않는다. 오류로 올리면 rebalancing_needed 가 영구히 박히고 성공 판정도
@@ -1766,6 +1761,18 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                 log.error(f"ORDER FAILED {side} {symbol} qty={qty_str}: {e}")
                 if error_alerts is not None:
                     error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
+            continue
+
+        # 여기부터는 거래소가 주문을 접수한 뒤다. 기록 중 예외가 나도 주문 실패로
+        # 되돌려 적지 않는다 — 접수된 주문을 실패로 적으면 사실과 반대가 된다.
+        _v25_mark_touch(f"order {side} {symbol} {qty_str}")
+        try:
+            log.info(f"ORDER {side} {symbol} qty={qty_str}: {order.get('status', 'OK')}")
+            if order_alerts is not None:
+                order_alerts.append(f"{side} {symbol} {qty_str}")
+        except Exception as e:
+            log.warning(f"주문은 접수됐고 기록만 실패 {side} {symbol}: {e}")
+        time.sleep(0.1)
 
 
 def needs_rebalance(client: Client, target: Dict[str, float], current_positions: Dict[str, dict],
@@ -3273,7 +3280,11 @@ def main():
         # 사람이 알림을 안 보게 되고, 그게 진짜 사고를 놓치는 경로다. 주문 시도 자체는
         # 계속하므로 거래가 재개되면 그날 바로 정리된다. (2026-08-28)
         if args.trade:
-            _prev_untradable = set(state.get('untradable_symbols', []) or [])
+            _raw_untradable = state.get('untradable_symbols') or []
+            if not isinstance(_raw_untradable, list):
+                log.warning(f"untradable_symbols 형태가 이상하다({type(_raw_untradable).__name__}) — 비우고 다시 센다")
+                _raw_untradable = []
+            _prev_untradable = {x for x in _raw_untradable if isinstance(x, str) and x}
             _now_untradable = set(_untradable_orders)
             _keep_untradable, _resumed, _dropped = _resolve_untradable(
                 client, _prev_untradable, _now_untradable, positions_after, pos_after_ok)
