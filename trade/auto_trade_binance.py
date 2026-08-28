@@ -2158,8 +2158,8 @@ def _v25_exec_reconcile(intent: dict, actual: dict, unsent_before: Optional[dict
     매매를 시도한 실행에서만 호출한다. 무거래일에 부르면 "오늘 PV 기준 이론 명목" 과
     "어제 체결분의 현재 명목" 을 비교하게 되어 가격이 움직인 만큼 항상 어긋난다.
 
-    unsent_before: {심볼: 실행 전 명목}. 이번 실행에서 거래소에 주문이 나가지 않은
-    심볼이다. 두 갈래가 있다.
+    unsent_before: {심볼: {'notional','qty','leverage'}}. 이번 실행에서 거래소에 주문이
+    나가지 않은 심볼의 실행 전 상태다. 두 갈래가 있다.
       (a) 거래소가 축소 주문을 거절해 포지션이 남았다(거래정지·상장폐지).
       (b) 앞선 축소 실패 때문에 매수를 우리가 일부러 건너뛰었다.
     둘 다 "목표와 다른 상태" 지만 새로 발견한 이상이 아니라 이미 아는 결정·사실이다.
@@ -2170,31 +2170,46 @@ def _v25_exec_reconcile(intent: dict, actual: dict, unsent_before: Optional[dict
     그대로 잡힌다는 반례가 나와 규칙을 하나로 합쳤다.)
 
     빼주는 조건은 좁다 — 주문이 안 나갔으면 포지션은 실행 전 그대로여야 한다.
-    실행 전 명목과 지금 명목이 허용오차 안에서 같을 때만 뺀다. 늘었으면(노출 증가)
-    줄었으면(설명 안 되는 체결·외부 개입) 둘 다 아래로 떨어져 차이로 잡힌다.
+    명목·수량(부호 포함)·레버리지 셋 다 실행 전과 같을 때만 뺀다. 하나라도 움직였으면
+    차이로 올린다. 명목만 보면 안 되는 이유는 강제청산·ADL·같은 명목 방향반전이
+    "명목이 그대로" 로 통과하기 때문이다. (2026-08-29 9차 검토 지적.)
+    순회 집합에 unsent 를 넣는 것도 같은 지적이다 — 전량청산 목표(의도 없음)인 심볼이
+    거래소 정산으로 사라지면 intent 에도 actual 에도 없어 검사가 통째로 생략된다.
     """
     diffs = []
     intent_pos = intent.get('positions', {})
     actual_pos = actual.get('positions', {})
     unsent = unsent_before or {}
-    for sym in set(intent_pos) | set(actual_pos):
+    for sym in set(intent_pos) | set(actual_pos) | set(unsent):
         i = intent_pos.get(sym, {})
         a = actual_pos.get(sym, {})
         if sym in unsent:
-            _before = abs(float(unsent[sym]))
+            _b = unsent[sym] or {}
+            _before = abs(float(_b.get('notional', 0) or 0))
+            _bqty = float(_b.get('qty', 0) or 0)
+            _blev = float(_b.get('leverage', 0) or 0)
             _now = abs(float(a.get('notional', 0) or 0))
+            _nqty = float(a.get('qty', 0) or 0)
+            _nlev = float(a.get('leverage', 0) or 0)
             _intent = abs(float(i.get('notional', 0) or 0))
             _tol = max(50.0, 0.05 * max(_before, _now, 1.0))
-            if abs(_now - _before) <= _tol:
+            _moved = []
+            if abs(_now - _before) > _tol:
+                _moved.append(f"명목 ${_before:.2f}→${_now:.2f}")
+            if abs(_nqty - _bqty) > abs(_bqty) * STANDING_QTY_TOL:
+                _moved.append(f"수량 {_bqty}→{_nqty}")
+            if _blev and _nlev and abs(_nlev - _blev) > 0.01:
+                _moved.append(f"L {_blev:g}→{_nlev:g}")
+            if not _moved:
                 log.warning(f"reconcile 제외 {sym}: 주문 미전송(거래불가 거절 또는 매수 보류), "
                             f"실행 전 ${_before:,.2f} → 의도 ${_intent:,.2f} → 실제 ${_now:,.2f}")
                 continue
             # 주문을 안 냈는데 움직였다. 의도와 우연히 같아져도 설명되지 않는 변화다 —
             # 아래 의도 대비 비교에 맡기면 그 경우가 조용히 통과한다. 여기서 직접 올린다.
-            log.error(f"reconcile 제외 안 함 {sym}: 주문을 안 냈는데 포지션이 움직였다, "
-                      f"실행 전 ${_before:,.2f} → 의도 ${_intent:,.2f} → 실제 ${_now:,.2f}")
-            diffs.append(f"{sym} 미전송인데 포지션 변동: before=${_before:.2f} "
-                         f"intent=${_intent:.2f} actual=${_now:.2f}")
+            log.error(f"reconcile 제외 안 함 {sym}: 주문을 안 냈는데 포지션이 움직였다 "
+                      f"({', '.join(_moved)}), 의도 ${_intent:,.2f}")
+            diffs.append(f"{sym} 미전송인데 포지션 변동: " + ", ".join(_moved)
+                         + f" (의도 ${_intent:.2f})")
             continue
         if abs(i.get('notional', 0) - a.get('notional', 0)) > max(50.0, 0.05 * max(abs(i.get('notional', 0)), abs(a.get('notional', 0)), 1.0)):
             diffs.append(f"{sym} notional: intent=${i.get('notional', 0):.2f} actual=${a.get('notional', 0):.2f}")
@@ -3495,6 +3510,9 @@ def main():
                 'positions': {pos['symbol']: {
                     'notional': pos.get('notional', 0.0),
                     'leverage': pos.get('leverage', 0),
+                    # 수량은 부호를 들고 있다(positionAmt). 같은 명목의 방향반전을
+                    # 명목만으로는 구분할 수 없어 체결 검사에 필요하다. (9차 검토)
+                    'qty': pos.get('qty', 0.0),
                 } for pos in positions_after.values()},
                 'pv': pv_after,
             }
@@ -3505,11 +3523,16 @@ def main():
             for _sym in list(_untradable_orders) + list(_skipped_buys):
                 if _sym in _unsent_before:
                     continue
-                _p = next((p for p in positions_before.values() if p.get('symbol') == _sym), None)
-                _unsent_before[_sym] = abs(float((_p or {}).get('notional', 0.0) or 0.0))
+                _p = next((p for p in positions_before.values() if p.get('symbol') == _sym), None) or {}
+                _unsent_before[_sym] = {
+                    'notional': abs(float(_p.get('notional', 0.0) or 0.0)),
+                    'qty': float(_p.get('qty', 0.0) or 0.0),
+                    'leverage': float(_p.get('leverage', 0.0) or 0.0),
+                }
             if _unsent_before:
                 log.warning("체결 검사에서 뺄 후보(주문 미전송): "
-                            + ", ".join(f"{k} 실행 전 ${v:,.2f}" for k, v in sorted(_unsent_before.items())))
+                            + ", ".join(f"{k} 실행 전 ${v['notional']:,.2f} qty={v['qty']} L={v['leverage']:g}"
+                                        for k, v in sorted(_unsent_before.items())))
             recon_diffs = (_v25_exec_reconcile(intent_snapshot, actual_snapshot,
                                                _unsent_before)
                            if (v25_success and _v25_traded_path) else [])

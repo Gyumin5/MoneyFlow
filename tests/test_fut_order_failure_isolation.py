@@ -400,37 +400,42 @@ finally:
 check("판정불가(캐시본)면 보수적으로 중단시킨다", ok is False)
 
 
+def _rec(notional, qty, lev):
+    """주문이 안 나간 심볼의 실행 전 상태(명목·부호 있는 수량·레버리지)."""
+    return {'notional': notional, 'qty': qty, 'leverage': lev}
+
+
 print("\n[7차 검토] 억제한 축소 실패가 종단 체결검사에서 되살아나지 않는다")
 # 목표에서 빠진 심볼(intent 명목 0)이 거래불가로 남았다. 매일 불일치로 잡히면
 # abort_streak 가 올라가 사흘째 자동 lock 이다 — 이 변경이 막으려던 결과 그대로다.
 _intent = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3}}, 'margin_type': 'CROSSED'}
-_actual = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
-                         'AAAUSDT': {'notional': 500.0, 'leverage': 3}}}
+_actual = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3, 'qty': 20.0},
+                         'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0}}}
 check("빼주지 않으면 불일치로 잡힌다(전제)",
       any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _actual)))
 check("거래불가 잔존은 불일치가 아니다",
-      a._v25_exec_reconcile(_intent, _actual, {'AAAUSDT': 500.0}) == [])
+      a._v25_exec_reconcile(_intent, _actual, {'AAAUSDT': _rec(500.0, 10.0, 3)}) == [])
 
 # 노출이 늘었으면 빼주지 않는다.
 _grown = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
-                        'AAAUSDT': {'notional': 900.0, 'leverage': 3}}}
+                        'AAAUSDT': {'notional': 900.0, 'leverage': 3, 'qty': 18.0}}}
 check("잔존이 커졌으면 그대로 실패로 잡는다",
-      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _grown, {'AAAUSDT': 500.0})))
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _grown, {'AAAUSDT': _rec(500.0, 10.0, 3)})))
 
 # 가격이 조금 움직인 정도는 통과한다(같은 실행 안 두 시점 비교).
 _moved = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
-                        'AAAUSDT': {'notional': 512.0, 'leverage': 3}}}
-check("가격 이동 정도는 통과", a._v25_exec_reconcile(_intent, _moved, {'AAAUSDT': 500.0}) == [])
+                        'AAAUSDT': {'notional': 512.0, 'leverage': 3, 'qty': 10.0}}}
+check("가격 이동 정도는 통과", a._v25_exec_reconcile(_intent, _moved, {'AAAUSDT': _rec(500.0, 10.0, 3)}) == [])
 
 # 다른 심볼의 불일치는 그대로 잡는다.
 _other = {'positions': {'BBBUSDT': {'notional': 100.0, 'leverage': 3},
-                        'AAAUSDT': {'notional': 500.0, 'leverage': 3}}}
-_d = a._v25_exec_reconcile(_intent, _other, {'AAAUSDT': 500.0})
+                        'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0}}}
+_d = a._v25_exec_reconcile(_intent, _other, {'AAAUSDT': _rec(500.0, 10.0, 3)})
 check("다른 심볼 불일치는 그대로 잡는다",
       len(_d) == 1 and 'BBBUSDT' in _d[0], str(_d))
 
 # 사흘 연속으로 같은 상태가 와도 불일치가 0 이어야 자동 lock 이 안 걸린다.
-_three = [a._v25_exec_reconcile(_intent, _actual, {'AAAUSDT': 500.0}) for _ in range(3)]
+_three = [a._v25_exec_reconcile(_intent, _actual, {'AAAUSDT': _rec(500.0, 10.0, 3)}) for _ in range(3)]
 check("사흘 연속 실행에서도 불일치 0", all(d == [] for d in _three), str(_three))
 
 check("체결검사 호출부가 미전송 목록을 넘긴다",
@@ -452,31 +457,31 @@ _skip_actual = {'positions': {}}
 check("빼주지 않으면 건너뛴 매수가 불일치로 잡힌다(전제)",
       any('BBBUSDT' in d for d in a._v25_exec_reconcile(_skip_intent, _skip_actual)))
 check("건너뛴 매수는 불일치가 아니다",
-      a._v25_exec_reconcile(_skip_intent, _skip_actual, {'BBBUSDT': 0.0}) == [])
+      a._v25_exec_reconcile(_skip_intent, _skip_actual, {'BBBUSDT': _rec(0.0, 0.0, 0)}) == [])
 
 # 건너뛴 매수인데 이미 보유가 있던 경우(비중을 늘리려던 것).
-_add_actual = {'positions': {'BBBUSDT': {'notional': 100.0, 'leverage': 3}}}
+_add_actual = {'positions': {'BBBUSDT': {'notional': 100.0, 'leverage': 3, 'qty': 2.0}}}
 check("보유를 늘리려다 건너뛴 것도 실행 전 그대로면 통과",
-      a._v25_exec_reconcile(_skip_intent, _add_actual, {'BBBUSDT': 100.0}) == [])
-_add_grown = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3}}}
+      a._v25_exec_reconcile(_skip_intent, _add_actual, {'BBBUSDT': _rec(100.0, 2.0, 3)}) == [])
+_add_grown = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3, 'qty': 8.0}}}
 check("안 보냈다는데 포지션이 늘었으면 잡는다",
-      any('BBBUSDT' in d for d in a._v25_exec_reconcile(_skip_intent, _add_grown, {'BBBUSDT': 100.0})))
+      any('BBBUSDT' in d for d in a._v25_exec_reconcile(_skip_intent, _add_grown, {'BBBUSDT': _rec(100.0, 2.0, 3)})))
 
 # (나) 부분축소 거절: 의도 명목이 0 이 아니다.
 _part_intent = {'positions': {'AAAUSDT': {'notional': 300.0, 'leverage': 3}}}
-_part_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3}}}
+_part_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0}}}
 check("빼주지 않으면 부분축소 거절이 불일치로 잡힌다(전제)",
       any('AAAUSDT' in d for d in a._v25_exec_reconcile(_part_intent, _part_actual)))
 check("부분축소 거절도 실행 전 그대로면 통과",
-      a._v25_exec_reconcile(_part_intent, _part_actual, {'AAAUSDT': 500.0}) == [])
-_part_grown = {'positions': {'AAAUSDT': {'notional': 900.0, 'leverage': 3}}}
+      a._v25_exec_reconcile(_part_intent, _part_actual, {'AAAUSDT': _rec(500.0, 10.0, 3)}) == [])
+_part_grown = {'positions': {'AAAUSDT': {'notional': 900.0, 'leverage': 3, 'qty': 18.0}}}
 check("부분축소인데 노출이 늘었으면 잡는다",
-      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_part_intent, _part_grown, {'AAAUSDT': 500.0})))
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_part_intent, _part_grown, {'AAAUSDT': _rec(500.0, 10.0, 3)})))
 
 # 안 보냈다는데 줄어든 것도 설명이 안 된다(외부 개입·부분체결). 조용히 넘기지 않는다.
-_shrunk = {'positions': {'AAAUSDT': {'notional': 100.0, 'leverage': 3}}}
+_shrunk = {'positions': {'AAAUSDT': {'notional': 100.0, 'leverage': 3, 'qty': 2.0}}}
 check("안 보냈다는데 포지션이 줄었으면 잡는다",
-      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _shrunk, {'AAAUSDT': 500.0})))
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(_intent, _shrunk, {'AAAUSDT': _rec(500.0, 10.0, 3)})))
 
 # 종단: 거래불가 축소 거절 → 매수 보류 → 체결검사까지 한 줄로 이었을 때 불일치 0.
 _rej8 = a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
@@ -493,19 +498,21 @@ check("거래불가도 따로 기록된다", a._untradable_orders == ['AAAUSDT']
 _before8 = {'AAA': pos('AAA', 500.0, 10.0)}
 _unsent8 = {}
 for _s in list(a._untradable_orders) + list(a._skipped_buys):
-    _p = next((p for p in _before8.values() if p.get('symbol') == _s), None)
-    _unsent8[_s] = abs(float((_p or {}).get('notional', 0.0) or 0.0))
+    _p = next((p for p in _before8.values() if p.get('symbol') == _s), None) or {}
+    _unsent8[_s] = {'notional': abs(float(_p.get('notional', 0.0) or 0.0)),
+                    'qty': float(_p.get('qty', 0.0) or 0.0),
+                    'leverage': float(_p.get('leverage', 0.0) or 0.0)}
 _intent8 = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3}}, 'margin_type': 'CROSSED'}
-_actual8 = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3}}}
+_actual8 = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0}}}
 check("실행 전 명목을 두 갈래 다 모은다",
-      _unsent8 == {'AAAUSDT': 500.0, 'BBBUSDT': 0.0}, str(_unsent8))
+      _unsent8 == {'AAAUSDT': _rec(500.0, 10.0, 0.0), 'BBBUSDT': _rec(0.0, 0.0, 0.0)}, str(_unsent8))
 check("종단 체결검사에서 불일치 0",
       a._v25_exec_reconcile(_intent8, _actual8, _unsent8) == [], str(_unsent8))
 check("같은 실행이 사흘 연속이어도 불일치 0",
       all(a._v25_exec_reconcile(_intent8, _actual8, _unsent8) == [] for _ in range(3)))
 
 # 안전장치: 예외 범위가 다른 심볼까지 덮지 않는다.
-_actual8_other = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3},
+_actual8_other = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0},
                                 'CCCUSDT': {'notional': 700.0, 'leverage': 3}}}
 _intent8_other = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3},
                                 'CCCUSDT': {'notional': 100.0, 'leverage': 3}}}
@@ -514,6 +521,58 @@ check("목록 밖 심볼의 불일치는 그대로 잡는다", len(_d8) == 1 and
 
 a._v25_touch_reset()
 check("실행 초기화가 건너뛴 매수 목록도 비운다", a._skipped_buys == [], str(a._skipped_buys))
+
+
+print("\n[9차 검토] 미전송 심볼은 명목만으로 판정하지 않는다")
+# 9차 반례.
+#   (다) 순회 집합이 intent | actual 뿐이라, 전량청산 목표(intent 없음)인 심볼이
+#        거래소 정산·ADL 로 사라지면(actual 없음) 검사가 통째로 생략된다. 강제청산은
+#        상장폐지 대응의 핵심 실환경이라 "희박한 외부 개입" 으로 넘길 수 없다.
+#   (라) 절대 명목만 저장·비교하면 같은 명목의 방향 반전과 레버리지 변경이 통과한다.
+# 조치: 순회 집합에 unsent 를 넣고, 실행 전 기록에 부호 있는 수량과 레버리지를 담는다.
+
+_gone_intent = {'positions': {}}
+_gone_actual = {'positions': {}}
+check("전량청산 목표인 심볼이 사라지면 검사한다(순회 집합)",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(
+          _gone_intent, _gone_actual, {'AAAUSDT': _rec(500.0, 10.0, 3)})),
+      "(intent·actual 어디에도 없어 옛 코드는 통째로 건너뛰었다)")
+
+# 같은 명목 방향 반전 — 롱 10개에서 숏 10개로. 명목만 보면 500 그대로다.
+_flip_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': -10.0}}}
+check("같은 명목이어도 방향이 뒤집혔으면 잡는다",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(
+          _part_intent, _flip_actual, {'AAAUSDT': _rec(500.0, 10.0, 3)})))
+
+# 같은 명목인데 수량만 바뀐 경우(가격 급변 + 부분체결이 상쇄돼도 수량은 못 속인다).
+_qty_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 6.0}}}
+check("명목이 같아도 수량이 달라졌으면 잡는다",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(
+          _part_intent, _qty_actual, {'AAAUSDT': _rec(500.0, 10.0, 3)})))
+
+# 레버리지만 외부에서 바뀐 경우.
+_lev_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 5, 'qty': 10.0}}}
+check("명목·수량이 같아도 레버리지가 바뀌었으면 잡는다",
+      any('AAAUSDT' in d for d in a._v25_exec_reconcile(
+          _part_intent, _lev_actual, {'AAAUSDT': _rec(500.0, 10.0, 3)})))
+
+# 반대로 먼지 수준 수량 오차(반올림)는 통과해야 한다.
+_dust_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.02}}}
+check("0.2% 수량 오차는 통과", 
+      a._v25_exec_reconcile(_part_intent, _dust_actual, {'AAAUSDT': _rec(500.0, 10.0, 3)}) == [])
+
+# 레버리지를 모르는 기록(신규 매수 보류 등)은 레버리지로 잡지 않는다.
+check("실행 전 레버리지가 0(미보유)이면 L 비교를 안 한다",
+      a._v25_exec_reconcile(_skip_intent, {'positions': {}}, {'BBBUSDT': _rec(0.0, 0.0, 0)}) == [])
+
+# 체결검사가 차이를 내면 그 실행은 실패로 판정된다(자동 lock 연쇄의 입구).
+check("차이가 나면 성공 판정이 뒤집힌다(호출부)",
+      'if recon_diffs:' in _src and 'v25_success = False' in _src)
+check("체결검사가 실행 전 수량·레버리지를 함께 넘긴다",
+      "'qty': float(_p.get('qty', 0.0) or 0.0)," in _src
+      and "'leverage': float(_p.get('leverage', 0.0) or 0.0)," in _src)
+check("실체결 스냅샷에 수량이 들어간다",
+      "'qty': pos.get('qty', 0.0)," in _src)
 
 
 print()
