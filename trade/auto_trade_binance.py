@@ -1388,6 +1388,12 @@ _untradable_orders: List[str] = []
 # 거래소에 아무것도 안 보냈으므로 체결 검사에서 "의도대로 안 됐다" 로 잡히면 안 된다 —
 # 그건 우리가 내린 결정이지 새로 발견한 이상이 아니다. (2026-08-29 8차 검토 지적.)
 _skipped_buys: List[str] = []
+# 주문이 안 나간 심볼의 "주문 직전" 상태 {심볼: {notional, qty, leverage}}.
+# 반드시 주문 루프가 실제로 본 포지션에서 만든다. main 의 positions_before 는 이 시점보다
+# 앞서 있어서, 그 사이에 우리가 한 레버리지 변경·L 낮춤 사전매도가 안 반영돼 있다 —
+# 그걸 기준으로 삼으면 우리가 낸 변경을 "설명 안 되는 변동" 으로 잡는다.
+# (2026-08-29 10차 검토 지적.)
+_unsent_before: Dict[str, dict] = {}
 
 
 def _note_untradable(symbol: str) -> None:
@@ -1751,6 +1757,22 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
     _reduce_failed_hard = False        # 평범한 실패 — 오류로 올린다
     _reduce_failed_untradable = False  # 거래불가 — 매일 오류로 올리지 않는다
 
+    def _record_unsent(symbol: str) -> None:
+        """주문이 안 나간 심볼의 기준 상태를 이 루프가 본 포지션에서 남긴다.
+
+        기준을 여기서 만드는 게 핵심이다. 이 함수 위쪽에서 이미 레버리지 변경과
+        L 낮춤 사전매도가 끝나 있고, 주문 결정도 이 포지션으로 했다. 더 앞선 스냅샷을
+        쓰면 우리가 낸 변경분이 나중에 "설명 안 되는 변동" 으로 잡힌다.
+        """
+        if symbol in _unsent_before:
+            return
+        p = next((q for q in current_positions.values() if q.get('symbol') == symbol), None) or {}
+        _unsent_before[symbol] = {
+            'notional': abs(float(p.get('notional', 0.0) or 0.0)),
+            'qty': float(p.get('qty', 0.0) or 0.0),
+            'leverage': float(p.get('leverage', 0.0) or 0.0),
+        }
+
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
         if not reduce_only and (_reduce_failed_hard or _reduce_failed_untradable):
@@ -1759,6 +1781,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             log.error(_skip_msg)
             if symbol not in _skipped_buys:
                 _skipped_buys.append(symbol)
+            _record_unsent(symbol)
             if _reduce_failed_hard and error_alerts is not None:
                 error_alerts.append(_skip_msg)
             continue
@@ -1808,6 +1831,7 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                 # 않는다. 오류로 올리면 rebalancing_needed 가 영구히 박히고 성공 판정도
                 # 매일 실패가 되며 알림이 매일 온다 — 자가해소가 안 된다.
                 _note_untradable(symbol)
+                _record_unsent(symbol)
                 _reduce_failed_untradable = True
                 log.warning(f"ORDER UNTRADABLE {side} {symbol} qty={qty_str}: {e}")
             else:
@@ -1927,6 +1951,7 @@ def _v25_touch_reset():
     del _V25_ACCOUNT_TOUCH[:]
     del _untradable_orders[:]
     del _skipped_buys[:]
+    _unsent_before.clear()
 
 
 def _v25_account_changed() -> bool:
@@ -3519,23 +3544,21 @@ def main():
             # (a) 체결 검사 — 매매를 시도한 실행에서만. 무거래일엔 비교 대상이 없다.
             # 이번 실행에 주문이 안 나간 심볼(거래소가 축소를 거절했거나, 앞선 축소 실패로
             # 우리가 매수를 보류했거나)은 실행 전 명목과 함께 넘긴다. 판단은 검사 쪽에서.
-            _unsent_before = {}
-            for _sym in list(_untradable_orders) + list(_skipped_buys):
-                if _sym in _unsent_before:
-                    continue
-                _p = next((p for p in positions_before.values() if p.get('symbol') == _sym), None) or {}
-                _unsent_before[_sym] = {
-                    'notional': abs(float(_p.get('notional', 0.0) or 0.0)),
-                    'qty': float(_p.get('qty', 0.0) or 0.0),
-                    'leverage': float(_p.get('leverage', 0.0) or 0.0),
-                }
+            # 기준은 주문 루프가 남긴 것을 그대로 쓴다. 여기서 positions_before 로 다시
+            # 만들면 그 사이의 레버리지 변경·L 낮춤 사전매도가 빠져 우리가 낸 변경을
+            # 이상으로 잡는다. (10차 검토 지적.)
             if _unsent_before:
                 log.warning("체결 검사에서 뺄 후보(주문 미전송): "
-                            + ", ".join(f"{k} 실행 전 ${v['notional']:,.2f} qty={v['qty']} L={v['leverage']:g}"
+                            + ", ".join(f"{k} 주문 직전 ${v['notional']:,.2f} qty={v['qty']} L={v['leverage']:g}"
                                         for k, v in sorted(_unsent_before.items())))
             recon_diffs = (_v25_exec_reconcile(intent_snapshot, actual_snapshot,
                                                _unsent_before)
                            if (v25_success and _v25_traded_path) else [])
+            # 기준을 못 남긴 심볼은 빼주지 않는다 — 근거 없이 조용해지는 쪽이 더 위험하다.
+            _no_basis = [s for s in list(_untradable_orders) + list(_skipped_buys)
+                         if s not in _unsent_before]
+            if _no_basis and v25_success and _v25_traded_path:
+                recon_diffs.append("주문 미전송 심볼의 기준 상태 없음: " + ", ".join(sorted(set(_no_basis))))
             if recon_diffs:
                 recon_msg = "⚠ V25 reconciliation 차이:\n  - " + "\n  - ".join(recon_diffs[:5])
                 log.warning(recon_msg)

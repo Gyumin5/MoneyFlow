@@ -440,7 +440,7 @@ check("사흘 연속 실행에서도 불일치 0", all(d == [] for d in _three),
 
 check("체결검사 호출부가 미전송 목록을 넘긴다",
       '_v25_exec_reconcile(intent_snapshot, actual_snapshot,' in _src
-      and 'for _sym in list(_untradable_orders) + list(_skipped_buys):' in _src)
+      and '_unsent_before)' in _src)
 
 
 print("\n[8차 검토] 주문이 안 나간 심볼은 그 사실대로 판정한다")
@@ -495,16 +495,11 @@ check("거래불가 축소 거절은 오류로 안 올린다", errors == [], str
 check("건너뛴 매수가 따로 기록된다", a._skipped_buys == ['BBBUSDT'], str(a._skipped_buys))
 check("거래불가도 따로 기록된다", a._untradable_orders == ['AAAUSDT'], str(a._untradable_orders))
 
-_before8 = {'AAA': pos('AAA', 500.0, 10.0)}
-_unsent8 = {}
-for _s in list(a._untradable_orders) + list(a._skipped_buys):
-    _p = next((p for p in _before8.values() if p.get('symbol') == _s), None) or {}
-    _unsent8[_s] = {'notional': abs(float(_p.get('notional', 0.0) or 0.0)),
-                    'qty': float(_p.get('qty', 0.0) or 0.0),
-                    'leverage': float(_p.get('leverage', 0.0) or 0.0)}
+# 기준 상태는 주문 루프가 직접 남긴다(main 이 다시 만들지 않는다 — 10차 지적).
+_unsent8 = dict(a._unsent_before)
 _intent8 = {'positions': {'BBBUSDT': {'notional': 400.0, 'leverage': 3}}, 'margin_type': 'CROSSED'}
 _actual8 = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0}}}
-check("실행 전 명목을 두 갈래 다 모은다",
+check("주문 직전 상태를 두 갈래 다 모은다",
       _unsent8 == {'AAAUSDT': _rec(500.0, 10.0, 0.0), 'BBBUSDT': _rec(0.0, 0.0, 0.0)}, str(_unsent8))
 check("종단 체결검사에서 불일치 0",
       a._v25_exec_reconcile(_intent8, _actual8, _unsent8) == [], str(_unsent8))
@@ -568,11 +563,77 @@ check("실행 전 레버리지가 0(미보유)이면 L 비교를 안 한다",
 # 체결검사가 차이를 내면 그 실행은 실패로 판정된다(자동 lock 연쇄의 입구).
 check("차이가 나면 성공 판정이 뒤집힌다(호출부)",
       'if recon_diffs:' in _src and 'v25_success = False' in _src)
-check("체결검사가 실행 전 수량·레버리지를 함께 넘긴다",
-      "'qty': float(_p.get('qty', 0.0) or 0.0)," in _src
-      and "'leverage': float(_p.get('leverage', 0.0) or 0.0)," in _src)
+check("체결검사가 주문 직전 수량·레버리지를 함께 넘긴다",
+      "'qty': float(p.get('qty', 0.0) or 0.0)," in _src
+      and "'leverage': float(p.get('leverage', 0.0) or 0.0)," in _src)
 check("실체결 스냅샷에 수량이 들어간다",
       "'qty': pos.get('qty', 0.0)," in _src)
+
+
+print("\n[10차 검토] 기준 상태는 주문 루프가 본 것이어야 한다")
+# 10차 반례: main 의 positions_before 는 실행 첫머리에서 찍는다. 그 뒤에 우리가 하는
+# 레버리지 변경과 L 낮춤 사전매도가 반영돼 있지 않다. 그걸 기준으로 삼으면 우리가 낸
+# 변경분이 나중에 "주문을 안 냈는데 포지션이 움직였다" 로 잡혀 실행이 실패로 뒤집힌다.
+# 조치: 기준을 execute_rebalance 안에서(레버리지·사전매도가 끝난 뒤 읽은 포지션으로)
+# 남긴다. main 은 그걸 그대로 쓴다.
+
+_rej10 = a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
+                               400, '{"code":-1121,"msg":"Invalid symbol"}')
+
+
+def _pos_lev(coin, notional, qty, lev):
+    d = pos(coin, notional, qty)
+    d['leverage'] = lev
+    return d
+
+
+# (가) L 3배→4배로 올린 뒤 매수를 보류한 경우. 주문 루프가 보는 BBB 의 L 은 이미 4다.
+_after_lev = {'AAA': _pos_lev('AAA', 500.0, 10.0, 3),
+              'BBB': _pos_lev('BBB', 300.0, 6.0, 4)}
+c, errors, orders = run_rebalance(
+    _after_lev, {'AAAUSDT': _rej10}, {'BBBUSDT'},
+    target={'BBB': 0.6, 'CASH': 0.4}, liquidation_only=False)
+check("L 변경 뒤 매수가 보류됐다", a._skipped_buys == ['BBBUSDT'], str(a._skipped_buys))
+check("기준 레버리지는 변경 후 값(4)이다",
+      a._unsent_before.get('BBBUSDT', {}).get('leverage') == 4.0, str(a._unsent_before))
+_lev_actual10 = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0},
+                               'BBBUSDT': {'notional': 300.0, 'leverage': 4, 'qty': 6.0}}}
+_lev_intent10 = {'positions': {'BBBUSDT': {'notional': 600.0, 'leverage': 4}}}
+check("우리가 낸 L 변경은 불일치가 아니다",
+      a._v25_exec_reconcile(_lev_intent10, _lev_actual10, dict(a._unsent_before)) == [],
+      str(a._unsent_before))
+# 옛 방식(실행 첫머리 스냅샷, L=3)을 기준으로 삼으면 잡힌다 — 반례가 실재했다는 확인.
+_stale = dict(a._unsent_before)
+_stale['BBBUSDT'] = _rec(300.0, 6.0, 3)
+check("옛 기준(변경 전 L)이면 오탐이 난다(전제)",
+      any('BBBUSDT' in d for d in a._v25_exec_reconcile(_lev_intent10, _lev_actual10, _stale)))
+
+# (나) L 낮춤 사전매도로 명목이 줄어든 뒤 매수를 보류한 경우.
+_after_presell = {'AAA': _pos_lev('AAA', 500.0, 10.0, 3),
+                  'BBB': _pos_lev('BBB', 200.0, 4.0, 2)}
+c, errors, orders = run_rebalance(
+    _after_presell, {'AAAUSDT': _rej10}, {'BBBUSDT'},
+    target={'BBB': 0.6, 'CASH': 0.4}, liquidation_only=False)
+check("사전매도 뒤 매수가 보류됐다", a._skipped_buys == ['BBBUSDT'], str(a._skipped_buys))
+check("기준 명목은 사전매도 후 값(200)이다",
+      a._unsent_before.get('BBBUSDT', {}).get('notional') == 200.0, str(a._unsent_before))
+_ps_actual = {'positions': {'AAAUSDT': {'notional': 500.0, 'leverage': 3, 'qty': 10.0},
+                            'BBBUSDT': {'notional': 200.0, 'leverage': 2, 'qty': 4.0}}}
+_ps_intent = {'positions': {'BBBUSDT': {'notional': 600.0, 'leverage': 2}}}
+check("우리가 낸 사전매도는 불일치가 아니다",
+      a._v25_exec_reconcile(_ps_intent, _ps_actual, dict(a._unsent_before)) == [])
+_stale2 = dict(a._unsent_before)
+_stale2['BBBUSDT'] = _rec(900.0, 18.0, 2)     # 사전매도 전 스냅샷
+check("옛 기준(사전매도 전 명목)이면 오탐이 난다(전제)",
+      any('BBBUSDT' in d for d in a._v25_exec_reconcile(_ps_intent, _ps_actual, _stale2)))
+
+check("main 이 기준을 다시 만들지 않는다",
+      'for _sym in list(_untradable_orders) + list(_skipped_buys):' not in _src
+      and 'def _record_unsent(' in _src)
+check("기준을 못 남긴 심볼은 빼주지 않는다(보수적 실패)",
+      '_no_basis' in _src and '기준 상태 없음' in _src)
+a._v25_touch_reset()
+check("실행 초기화가 기준 기록도 비운다", a._unsent_before == {}, str(a._unsent_before))
 
 
 print()
