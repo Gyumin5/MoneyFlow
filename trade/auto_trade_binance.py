@@ -1384,6 +1384,10 @@ def _flush_degraded() -> None:
 
 
 _untradable_orders: List[str] = []
+# 앞선 축소 실패 때문에 이번 실행에서 일부러 안 낸 매수 주문의 심볼.
+# 거래소에 아무것도 안 보냈으므로 체결 검사에서 "의도대로 안 됐다" 로 잡히면 안 된다 —
+# 그건 우리가 내린 결정이지 새로 발견한 이상이 아니다. (2026-08-29 8차 검토 지적.)
+_skipped_buys: List[str] = []
 
 
 def _note_untradable(symbol: str) -> None:
@@ -1753,6 +1757,8 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             _skip_msg = (f"BUY SKIPPED {symbol}: 앞선 축소 주문이 실패해 "
                          "이번 실행에서는 노출을 늘리지 않는다")
             log.error(_skip_msg)
+            if symbol not in _skipped_buys:
+                _skipped_buys.append(symbol)
             if _reduce_failed_hard and error_alerts is not None:
                 error_alerts.append(_skip_msg)
             continue
@@ -1920,6 +1926,7 @@ def _v25_touch_reset():
     """실행 시작 시 초기화 (한 프로세스에서 두 번 도는 경우 대비)."""
     del _V25_ACCOUNT_TOUCH[:]
     del _untradable_orders[:]
+    del _skipped_buys[:]
 
 
 def _v25_account_changed() -> bool:
@@ -2145,36 +2152,50 @@ def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], Lis
     return crit, info
 
 
-def _v25_exec_reconcile(intent: dict, actual: dict, expected_leftover: Optional[dict] = None) -> List[str]:
+def _v25_exec_reconcile(intent: dict, actual: dict, unsent_before: Optional[dict] = None) -> List[str]:
     """주문 후 reconciliation — 의도 vs 실체결 차이 반환.
 
     매매를 시도한 실행에서만 호출한다. 무거래일에 부르면 "오늘 PV 기준 이론 명목" 과
     "어제 체결분의 현재 명목" 을 비교하게 되어 가격이 움직인 만큼 항상 어긋난다.
 
-    expected_leftover: {심볼: 실행 전 명목}. 이번 실행에서 거래소가 축소 주문을 거절해
-    남을 수밖에 없었던 포지션이다. 이걸 빼지 않으면 주문 루프에서 억제한 실패가 여기서
-    되살아난다 — 목표에 없는 포지션이 남아 있으니 매일 불일치로 잡히고, 실행 실패 →
-    abort_streak 증가 → 사흘째 자동 lock 이다. 거래가 재개될 때까지 매매 전체가 멈추는데,
-    그건 이 변경이 막으려던 바로 그 결과다. (2026-08-28 7차 검토 지적.)
-    빼주는 조건은 좁다 — 줄이려던 것이고(의도 명목 0), 실행 전보다 노출이 안 늘었을 때만.
+    unsent_before: {심볼: 실행 전 명목}. 이번 실행에서 거래소에 주문이 나가지 않은
+    심볼이다. 두 갈래가 있다.
+      (a) 거래소가 축소 주문을 거절해 포지션이 남았다(거래정지·상장폐지).
+      (b) 앞선 축소 실패 때문에 매수를 우리가 일부러 건너뛰었다.
+    둘 다 "목표와 다른 상태" 지만 새로 발견한 이상이 아니라 이미 아는 결정·사실이다.
+    빼지 않으면 주문 루프에서 억제한 실패가 여기서 되살아난다 — 매일 불일치로 잡히고,
+    실행 실패 → abort_streak 증가 → 사흘째 자동 lock. 거래가 재개될 때까지 매매 전체가
+    멈추는데, 그건 이 변경이 막으려던 바로 그 결과다.
+    (7차 = (a) 만 봤고 의도 명목 0 만 뺐다. 8차에서 (b) 와 부분축소[의도 명목>0] 가
+    그대로 잡힌다는 반례가 나와 규칙을 하나로 합쳤다.)
+
+    빼주는 조건은 좁다 — 주문이 안 나갔으면 포지션은 실행 전 그대로여야 한다.
+    실행 전 명목과 지금 명목이 허용오차 안에서 같을 때만 뺀다. 늘었으면(노출 증가)
+    줄었으면(설명 안 되는 체결·외부 개입) 둘 다 아래로 떨어져 차이로 잡힌다.
     """
     diffs = []
     intent_pos = intent.get('positions', {})
     actual_pos = actual.get('positions', {})
-    leftover = expected_leftover or {}
+    unsent = unsent_before or {}
     for sym in set(intent_pos) | set(actual_pos):
         i = intent_pos.get(sym, {})
         a = actual_pos.get(sym, {})
-        if sym in leftover:
-            _before = abs(float(leftover[sym]))
+        if sym in unsent:
+            _before = abs(float(unsent[sym]))
             _now = abs(float(a.get('notional', 0) or 0))
             _intent = abs(float(i.get('notional', 0) or 0))
-            if _intent <= 1e-9 and _now <= _before + max(50.0, 0.05 * max(_before, 1.0)):
-                # 줄이려 했는데 거래소가 거절했고 노출도 안 늘었다. 이건 우리가 아는
-                # 상태지 새로 발견한 이상이 아니다. 늘었으면 아래로 떨어져 실패로 잡힌다.
-                log.warning(f"reconcile 제외 {sym}: 거래불가로 축소 거절, "
-                            f"명목 ${_before:,.2f} → ${_now:,.2f}")
+            _tol = max(50.0, 0.05 * max(_before, _now, 1.0))
+            if abs(_now - _before) <= _tol:
+                log.warning(f"reconcile 제외 {sym}: 주문 미전송(거래불가 거절 또는 매수 보류), "
+                            f"실행 전 ${_before:,.2f} → 의도 ${_intent:,.2f} → 실제 ${_now:,.2f}")
                 continue
+            # 주문을 안 냈는데 움직였다. 의도와 우연히 같아져도 설명되지 않는 변화다 —
+            # 아래 의도 대비 비교에 맡기면 그 경우가 조용히 통과한다. 여기서 직접 올린다.
+            log.error(f"reconcile 제외 안 함 {sym}: 주문을 안 냈는데 포지션이 움직였다, "
+                      f"실행 전 ${_before:,.2f} → 의도 ${_intent:,.2f} → 실제 ${_now:,.2f}")
+            diffs.append(f"{sym} 미전송인데 포지션 변동: before=${_before:.2f} "
+                         f"intent=${_intent:.2f} actual=${_now:.2f}")
+            continue
         if abs(i.get('notional', 0) - a.get('notional', 0)) > max(50.0, 0.05 * max(abs(i.get('notional', 0)), abs(a.get('notional', 0)), 1.0)):
             diffs.append(f"{sym} notional: intent=${i.get('notional', 0):.2f} actual=${a.get('notional', 0):.2f}")
         if i.get('leverage') and a.get('leverage') and abs(float(i['leverage']) - float(a['leverage'])) > 0.01:
@@ -3478,14 +3499,19 @@ def main():
                 'pv': pv_after,
             }
             # (a) 체결 검사 — 매매를 시도한 실행에서만. 무거래일엔 비교 대상이 없다.
-            # 거래소가 축소를 거절해 남을 수밖에 없던 포지션은 실행 전 명목과 함께 넘긴다.
-            _expected_leftover = {}
-            for _sym in _untradable_orders:
+            # 이번 실행에 주문이 안 나간 심볼(거래소가 축소를 거절했거나, 앞선 축소 실패로
+            # 우리가 매수를 보류했거나)은 실행 전 명목과 함께 넘긴다. 판단은 검사 쪽에서.
+            _unsent_before = {}
+            for _sym in list(_untradable_orders) + list(_skipped_buys):
+                if _sym in _unsent_before:
+                    continue
                 _p = next((p for p in positions_before.values() if p.get('symbol') == _sym), None)
-                if _p is not None:
-                    _expected_leftover[_sym] = abs(float(_p.get('notional', 0.0) or 0.0))
+                _unsent_before[_sym] = abs(float((_p or {}).get('notional', 0.0) or 0.0))
+            if _unsent_before:
+                log.warning("체결 검사에서 뺄 후보(주문 미전송): "
+                            + ", ".join(f"{k} 실행 전 ${v:,.2f}" for k, v in sorted(_unsent_before.items())))
             recon_diffs = (_v25_exec_reconcile(intent_snapshot, actual_snapshot,
-                                               _expected_leftover)
+                                               _unsent_before)
                            if (v25_success and _v25_traded_path) else [])
             if recon_diffs:
                 recon_msg = "⚠ V25 reconciliation 차이:\n  - " + "\n  - ".join(recon_diffs[:5])

@@ -78,7 +78,7 @@ print("[2] 호출부 게이팅")
 
 _src = open(os.path.join(_HERE, '..', 'trade', 'auto_trade_binance.py')).read()
 check("exec reconcile 은 _v25_traded_path 로 게이팅된다",
-      re.search(r'_v25_exec_reconcile\(intent_snapshot, actual_snapshot\)\s*\n\s*if \(v25_success and _v25_traded_path\)', _src) is not None,
+      re.search(r'_v25_exec_reconcile\(intent_snapshot, actual_snapshot,\s*\n\s*_unsent_before\)\s*\n\s*if \(v25_success and _v25_traded_path\)', _src) is not None,
       "(게이팅을 풀면 2026-08-21 오탐이 재발한다)")
 check("옛 이름 _v25_reconcile( 은 남아 있지 않다",
       re.search(r'(?<!exec)_v25_reconcile\(', _src) is None)
