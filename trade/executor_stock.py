@@ -677,16 +677,37 @@ def _parse_date(raw):
         return None
 
 
-def _schedule_phase_ok(dates) -> bool:
-    """세 예정일이 23일씩 벌어져 있는가. 69일 주기 안에서만 본다.
+def _weights_ok(w) -> bool:
+    """스냅샷·신호의 비중이 쓸 수 있는 값인가.
 
-    같은 날이 둘 있으면(사람이 state 를 손댔거나 옛 코드가 겹쳐놨거나) 여기서 걸린다.
-    날짜가 성해도 위상이 무너진 상태는 조용히 지나가면 안 된다 — 그게 2026-07-08 이었다.
+    비중은 항상 위험자산 + Cash 로 합이 1 이다(compute_offense 의 cash_slot).
+    합이 모자란 비중으로 발화하면 그 모자란 만큼이 현금 목표가 되어 멀쩡한 보유를 판다.
+    종목 목록만 있고 비중이 비어 있는 신호도 여기서 걸린다.
     """
-    offs = sorted(d.toordinal() % SNAP_PERIOD_DAYS for d in dates)
-    if len(set(offs)) != len(offs):
+    if not isinstance(w, dict) or not w:
         return False
-    return all(offs[i + 1] - offs[i] == SNAP_STAGGER_DAYS for i in range(len(offs) - 1))
+    total = 0.0
+    for v in w.values():
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return False
+        if f != f or f in (float('inf'), float('-inf')) or f < 0:
+            return False
+        total += f
+    return 0.99 <= total <= 1.01
+
+
+def _schedule_phase_ok(dates) -> bool:
+    """세 예정일이 23일씩 벌어져 있는가.
+
+    건강한 시간표는 어느 시점에나 {p, p+23, p+46} 형태다 — 방금 발화해 69일 건너뛴
+    snap 이 섞여 있어도 날짜순으로 세우면 간격이 23일씩이다. 그래서 정렬 후 인접 간격만
+    보면 된다. 같은 날이 둘이면(사람이 손댔거나 옛 코드가 겹쳐놨거나) 간격 0 으로 걸리고,
+    한 snap 만 69일 배수만큼 어긋난 경우도 간격 46 으로 걸린다.
+    """
+    srt = sorted(dates)
+    return all((srt[i + 1] - srt[i]).days == SNAP_STAGGER_DAYS for i in range(len(srt) - 1))
 
 
 def _resolve_anchor_schedule(snapshots: dict, today):
@@ -695,7 +716,8 @@ def _resolve_anchor_schedule(snapshots: dict, today):
     우선순위:
       1. 셋 다 성하고 위상(23일 간격)이 맞으면 그대로 쓴다. 평상시 경로다.
       2. 하나라도 성한 예정일이 있으면 그걸 기준점으로 삼아 나머지를 23일 간격으로 다시 만든다.
-         돌고 있는 위상을 살리는 게 새로 심는 것보다 낫다.
+         돌고 있는 위상을 살리는 게 새로 심는 것보다 낫다. 기준점은 다수결로 고른다 —
+         하나만 어긋난 경우 그 하나를 기준 삼으면 멀쩡한 둘을 끌고 간다.
       3. 예정일이 하나도 없으면 마지막 발화일 + 69일을 기준으로 심는다.
          이미 들고 있는 종목의 보유기간을 존중한다 — 배포한 날을 전략 위상으로 삼지 않는다.
       4. 그것도 없으면 오늘 기준. (진짜 콜드스타트는 호출부가 따로 처리한다.)
@@ -710,9 +732,15 @@ def _resolve_anchor_schedule(snapshots: dict, today):
         return [parsed[i] for i in range(N_SNAPS)], None
 
     if parsed:
-        j = min(parsed)
-        base = parsed[j] - timedelta(days=j * SNAP_STAGGER_DAYS)
-        note = f'앵커 시간표 재구성 — snap{j}({parsed[j].isoformat()}) 기준으로 23일 간격 복원'
+        # 각 예정일이 주장하는 기준점(= 예정일 - 번호*23)을 모아 다수결. 동수면 낮은 번호.
+        votes = {}
+        for i, dt_i in parsed.items():
+            cand = dt_i - timedelta(days=i * SNAP_STAGGER_DAYS)
+            votes.setdefault(cand, []).append(i)
+        base = max(votes, key=lambda c: (len(votes[c]), -min(votes[c])))
+        agree = sorted(votes[base])
+        note = (f'앵커 시간표 재구성 — snap{",".join(str(i) for i in agree)} 기준으로 '
+                f'23일 간격 복원')
     else:
         lasts = [d for d in (_parse_date((snapshots.get(str(i)) or {}).get('last_rebal_date'))
                              for i in range(N_SNAPS)) if d is not None]
@@ -756,10 +784,11 @@ def check_anchors(signal: dict, state: dict):
         picks = stock_sig.get('defense_picks', [])
         weights = stock_sig.get('defense_weights', {})
 
-    if not picks and not weights:
-        # 종목도 비중도 없는 신호로 발화하면 세 snap 이 통째로 비어 전량 매도가 된다.
-        # 신호 이상은 보유를 건드릴 이유가 아니다.
-        log('  ⚠️ 신호에 종목·비중이 둘 다 없다 — 앵커 발화 보류(보유 유지)')
+    if not _weights_ok(weights):
+        # 비중이 비었거나 합이 안 맞는 신호로 발화하면 그 모자란 만큼이 현금 목표가 되어
+        # 멀쩡한 보유를 판다. 종목 목록만 있고 비중이 빈 경우도 여기서 걸린다.
+        # 모멘텀 전멸(전량 현금)은 weights={'Cash': 1.0} 이라 정상 통과한다.
+        log(f'  ⚠️ 신호 비중이 온전하지 않다({weights}) — 앵커 발화 보류(보유 유지)')
         return
 
     snapshots = state.setdefault('snapshots', {})
@@ -793,11 +822,15 @@ def check_anchors(signal: dict, state: dict):
             log(f'  ⚠️ 앵커 시간표 알림 전송 실패: {e}')
 
     for snap_id in range(N_SNAPS):
-        snap = snapshots.setdefault(str(snap_id), {})
+        snap = snapshots.get(str(snap_id))
         next_date = schedule[snap_id]
         if today < next_date:
-            snap['next_rebal_date'] = next_date.isoformat()
+            # 없는 snap 을 여기서 만들지 않는다. 빈 껍데기를 만들어두면 merge 분모에는
+            # 들어가고 비중은 0 이라 합산 목표가 쪼그라든다.
+            if snap is not None:
+                snap['next_rebal_date'] = next_date.isoformat()
             continue
+        snap = snapshots.setdefault(str(snap_id), {})
         snap['picks'] = list(picks)
         snap['weights'] = dict(weights)
         snap['last_rebal_date'] = today.isoformat()
@@ -808,6 +841,26 @@ def check_anchors(signal: dict, state: dict):
         snap['next_rebal_date'] = next_date.isoformat()
         state['rebalancing_needed'] = True
         log(f'  📅 snap{snap_id} 앵커 발화 → {picks} (다음 앵커 {next_date.isoformat()})')
+
+
+def snapshot_payload_defect(state: dict):
+    """일부 snap 만 비중을 잃은 상태를 찾는다. 결함이면 사유 문자열, 아니면 None.
+
+    merge_tranches 는 snapshots 개수로 나눈다. 셋 중 하나가 비중을 잃으면 합산 목표가
+    3분의 2로 줄고, 그 차이가 그대로 대량 매도 주문이 된다. 반면 키 자체가 적은 건
+    결함이 아니다 — 분모도 같이 줄어 합은 1 이다.
+
+    복구는 사람이 한다. 잃은 snap 의 종목은 다른 snap 이 알지 못하는 별개 시점의 선정이라
+    코드가 지어낼 수 없다. 그래서 정규 리밸런싱만 멈추고 알린다.
+    """
+    snapshots = state.get('snapshots') or {}
+    if not snapshots:
+        return None
+    bad = sorted(k for k, v in snapshots.items() if not _weights_ok((v or {}).get('weights')))
+    if not bad:
+        return None
+    return (f'스냅샷 {", ".join(bad)} 의 비중이 온전하지 않다 '
+            f'(전체 {len(snapshots)}개 중 {len(bad)}개)')
 
 
 def merge_tranches(state: dict) -> Dict[str, float]:
@@ -848,7 +901,10 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
     else:
         picks = stock_sig.get('defense_picks', [])
         weights = stock_sig.get('defense_weights', {})
-    if not picks and not weights:
+    if not _weights_ok(weights):
+        # 앵커와 같은 검증. 여기가 뚫리면 드리프트 발화일에 온전치 않은 비중이 세 snap 에
+        # 통째로 들어가고, 그 실행에서 바로 전량 매도가 된다.
+        log(f'  ⚠️ 신호 비중이 온전하지 않다({weights}) — 드리프트 리필 보류(보유 유지)')
         return False
     snapshots = state.setdefault('snapshots', {})
     changed = False
@@ -1257,7 +1313,22 @@ def run_once(dry_run=False):
     log('=' * 50)
     log('주식 executor 시작')
 
-    state = load_json(TRADE_STATE_FILE)
+    # 파일이 있는데 못 읽는 것과 아예 없는 것은 다르다. 공용 load_json 은 둘 다 {} 로
+    # 돌려주는데, 그러면 손상된 상태파일이 콜드스타트로 둔갑해 실재하는 보유·앵커 이력을
+    # 무시한 채 매매한다. (ai-debate run-20260828T051722Z)
+    if os.path.exists(TRADE_STATE_FILE):
+        try:
+            with open(TRADE_STATE_FILE) as _f:
+                state = json.load(_f)
+            if not isinstance(state, dict):
+                raise ValueError(f'최상위가 dict 가 아니다({type(state).__name__})')
+        except Exception as _e:
+            log(f'  ⛔ 상태파일을 읽을 수 없다: {_e}')
+            send_telegram(f'⛔ 주식 상태파일 손상: {_e}\n'
+                          f'{TRADE_STATE_FILE}\n매매를 멈췄다. 백업 복구가 필요하다.')
+            return
+    else:
+        state = {}
     api = KISAPI(dry_run=dry_run)
 
     # V25: strategy 직접 계산 우선 — 실패 시 signal_state.json fallback (freshness 검증)
@@ -1342,6 +1413,18 @@ def run_once(dry_run=False):
 
     # 4. 앵커 체크
     check_anchors(signal, state)
+
+    # 4.3 스냅샷 온전성 — 일부만 비중을 잃으면 합산 목표가 축소돼 멀쩡한 보유를 대량 매도한다.
+    # 카나리 방어 전환(3번)은 앞에서 이미 끝났으므로 여기서 멈춰도 방어는 막지 않는다.
+    _defect = snapshot_payload_defect(state)
+    if _defect:
+        log(f'  ⛔ {_defect} — 정규 리밸런싱 중단(보유 유지)')
+        send_telegram(f'⛔ 주식 상태 이상: {_defect}\n'
+                      f'정규 리밸런싱을 멈췄다. 백업에서 복구가 필요하다.')
+        if not dry_run:
+            save_json(TRADE_STATE_FILE, state)
+        log('주식 executor 완료 (스냅샷 결함)')
+        return
 
     # 4.5. Drift trigger (2026-05-23): cur_w vs combined target half_turnover ≥ 0.10
     # alloc_transit cap (옵션 D): effective_pv = total_usd × cap_ratio (cap_ratio < 1.0 일 때만)
