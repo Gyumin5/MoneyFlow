@@ -757,7 +757,7 @@ def _picks_weights_ok(picks, weights) -> bool:
     """
     if not _weights_ok(weights):
         return False
-    if not isinstance(picks, list):
+    if not isinstance(picks, list) or not all(isinstance(t, str) for t in picks):
         return False
     held = {t for t, w in weights.items() if t != 'Cash' and _as_float(w) > 0}
     return not (held - set(picks))
@@ -935,6 +935,12 @@ def check_anchors(signal: dict, state: dict):
         # 멀쩡한 보유를 판다. 종목 목록만 있고 비중이 빈 경우도 여기서 걸린다.
         # 모멘텀 전멸(전량 현금)은 weights={'Cash': 1.0} 이라 정상 통과한다.
         log(f'  ⚠️ 신호가 온전하지 않다(종목 {picks} / 비중 {weights}) — 앵커 발화 보류(보유 유지)')
+        try:
+            # 로그만 남기면 발화가 무기한 밀리는 걸 늦게 안다. 보류는 소리를 내야 한다.
+            send_telegram(f'⚠️ 주식 앵커 발화 보류: 신호의 종목·비중이 온전하지 않다\n'
+                          f'종목 {picks} / 비중 {weights}')
+        except Exception as e:
+            log(f'  ⚠️ 앵커 보류 알림 전송 실패: {e}')
         return
 
     snapshots = state.setdefault('snapshots', {})
@@ -1594,6 +1600,9 @@ def run_once(dry_run=False):
     # 비중으로 덮으므로 합산 목표가 어중간하게 섞이지 않는다 — 유일한 방어를 막지 않는다.
     # 공격으로 넘어가는 플립(risk-on)은 통과시키지 않는다. 방어를 막지 않는다는 명분이
     # 노출을 늘리는 데까지 가면 안 된다. 손상 상태에서 위험을 키우는 쪽은 멈춘다.
+    # 다만 실제로는 소비된 플립이 세 snap 을 통째로 다시 쓰므로(refill_snaps_fresh 의
+    # setdefault) 그 시점에 결함이 이미 사라져 여기서 걸릴 게 남지 않는 경우가 대부분이다.
+    # 이 분기는 리필이 일부만 덮도록 바뀔 때를 위한 것이다(시험 [18] 이 현행을 고정한다).
     # (2026-08-28 4차 검토 지적.)
     _defense_flip = _flipped and not signal.get('stock', {}).get('risk_on', True)
     _defect = snapshot_payload_defect(state)

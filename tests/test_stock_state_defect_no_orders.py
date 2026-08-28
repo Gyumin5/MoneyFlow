@@ -326,6 +326,12 @@ bad = make_signal(picks=('QQQ',), weights={'SPY': 1.0})
 check("리필 거부", ex.refill_snaps_fresh(bad, st) is False)
 check("스냅샷 보존", st['snapshots']['0']['weights'] == KEEP, str(st['snapshots']['0']))
 
+print("\n[21.5] picks 원소가 해시 불가능해도 죽지 않는다")
+check("중첩 리스트 거부", ex._picks_weights_ok([['QQQ']], {'QQQ': 1.0}) is False)
+check("숫자 티커 거부", ex._picks_weights_ok([1, 2], {'QQQ': 1.0}) is False)
+orders, alerts, _ = run(healthy(), make_signal(picks=(), weights={'QQQ': 1.0}), today=BASE)
+check("어긋난 신호는 앵커 보류를 알린다", any('보류' in a for a in alerts), str(alerts))
+
 print("\n[22] 양성 대조 — 전량 현금 신호와 정상 신호는 통과한다")
 check("전량 현금 통과", ex._picks_weights_ok([], {'Cash': 1.0}))
 check("현금 섞인 정상 통과", ex._picks_weights_ok(['QQQ'], {'QQQ': 2 / 3, 'Cash': 1 / 3}))
