@@ -611,7 +611,7 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
     카나리 OFF 시 앵커(69일) 안 기다리고 그날 즉시 방어자산으로 교체 (전량 매도→방어).
     버그 수정(2026-06-06): 기존엔 구 state['tranches'](V24 마이그레이션 후 비어 있음)에
     써서 snapshot picks 가 안 바뀌어 방어 전환이 앵커까지 최대 69일 지연됐음.
-    refill_snaps_fresh 로 모든 snapshot picks 를 새 레짐으로 교체. last_rebal_date 보존
+    refill_snaps_fresh 로 모든 snapshot picks 를 새 레짐으로 교체. 앵커 시간표 보존
     (앵커 cadence 유지 = 채택 BT 정합).
     """
     risk_on = signal.get('stock', {}).get('risk_on', True)
@@ -650,24 +650,49 @@ def _migrate_tranches_to_snaps(state: dict) -> None:
             merged[tk] = merged.get(tk, 0.0) + w / n_old
     picks = sorted(merged.keys()) if merged else []
     weights = merged
-    # snap_id 0/1/2 staggered last_rebal_date: today, today-42d, today-84d
-    # → next rebal at today+126/+84/+42 (snap0 가 가장 늦게 rebal)
+    # 다음 앵커일을 23일씩 벌려 둔다. snap0 은 오늘, 나머지는 +23/+46 이다.
     snapshots = {}
     for snap_id in range(N_SNAPS):
-        last_rebal = today - timedelta(days=snap_id * SNAP_STAGGER_DAYS)
         snapshots[str(snap_id)] = {
             'picks': list(picks),
             'weights': dict(weights),
-            'last_rebal_date': last_rebal.isoformat(),
+            'last_rebal_date': today.isoformat(),
+            'next_rebal_date': (today + timedelta(days=snap_id * SNAP_STAGGER_DAYS)).isoformat(),
         }
     state['snapshots'] = snapshots
     state['_v22_migrated_from_tranches'] = today.isoformat()
-    log(f'  🔁 V24 migration: monthly tranches → 3 snaps (last_rebal staggered today/-42d/-84d)')
+    log(f'  🔁 V24 migration: monthly tranches → 3 snaps (next_rebal today/+23/+46)')
+
+
+def _snap_next_date(snap: dict, snap_id: int, today):
+    """이 snap 의 다음 앵커일. 없거나 깨졌으면 23일 간격으로 새로 심는다.
+
+    새로 심을 때 snap0 은 오늘, snap1 은 +23일, snap2 는 +46일이다. 겹쳐 있던 상태를
+    푸는 것도 이 경로다 — 셋 다 next_rebal_date 가 없으므로 한 번에 벌어진다.
+    """
+    raw = snap.get('next_rebal_date')
+    if raw:
+        try:
+            return datetime.fromisoformat(raw).date()
+        except Exception:
+            log(f'  ⚠️ snap{snap_id} next_rebal_date 파손({raw!r}) — 23일 간격으로 재설정')
+    seeded = today + timedelta(days=snap_id * SNAP_STAGGER_DAYS)
+    snap['next_rebal_date'] = seeded.isoformat()
+    log(f'  🧭 snap{snap_id} 앵커 시간표 심음: {seeded.isoformat()}')
+    return seeded
 
 
 def check_anchors(signal: dict, state: dict):
-    """V24 snap-based 앵커 체크.
-    각 snap 의 (today - last_rebal_date) >= SNAP_PERIOD_DAYS 면 신규 picks 으로 rebal.
+    """snap 별 고정 시간표 앵커 체크.
+
+    각 snap 은 자기 다음 앵커일(next_rebal_date)을 들고 있다. 그날이 되면 갈아타고,
+    다음 앵커일은 그 예정일에 69일을 더해서 정한다 — 실제 발화일이 아니다.
+    채택 BT(stock_engine_snap.py 의 snap_next_sched += snap_days)와 같은 규칙이고,
+    이래야 세 snap 의 23일 간격이 영구히 유지된다.
+
+    발화일을 앵커일로 덮어쓰던 옛 방식은 셋이 한 번 같은 날 발화하면(V24 마이그레이션이
+    전부 "즉시 발화" 로 맞춰놨다) 그 뒤로 영원히 같이 움직였다. 실제로 2026-07-08 에
+    셋이 겹친 채 굳어 스냅샷 1개짜리 전략으로 돌았다. (2026-08-28)
     """
     _migrate_tranches_to_snaps(state)
     today = datetime.now().date()
@@ -685,22 +710,19 @@ def check_anchors(signal: dict, state: dict):
     for snap_id in range(N_SNAPS):
         key = str(snap_id)
         snap = snapshots.setdefault(key, {})
-        last_str = snap.get('last_rebal_date')
-        if not last_str:
-            # 첫 진입: snap_id 만큼 staggered last_rebal_date 부여 (즉시 rebal 트리거)
-            snap['last_rebal_date'] = (today - timedelta(days=SNAP_PERIOD_DAYS + snap_id * SNAP_STAGGER_DAYS)).isoformat()
-            last_str = snap['last_rebal_date']
-        try:
-            last_date = datetime.fromisoformat(last_str).date()
-        except Exception:
-            last_date = today - timedelta(days=SNAP_PERIOD_DAYS + 1)
-        elapsed = (today - last_date).days
-        if elapsed >= SNAP_PERIOD_DAYS:
-            snap['picks'] = list(picks)
-            snap['weights'] = dict(weights)
-            snap['last_rebal_date'] = today.isoformat()
-            state['rebalancing_needed'] = True
-            log(f'  📅 V24 snap{snap_id} rebal (elapsed={elapsed}d ≥ {SNAP_PERIOD_DAYS}d): {picks}')
+        next_date = _snap_next_date(snap, snap_id, today)
+        if today < next_date:
+            continue
+        snap['picks'] = list(picks)
+        snap['weights'] = dict(weights)
+        snap['last_rebal_date'] = today.isoformat()
+        # 다음 예정일은 오늘이 아니라 이번 예정일에서 센다. 주말·휴일·실행 누락으로
+        # 하루 밀려도 위상이 안 밀린다.
+        while next_date <= today:
+            next_date += timedelta(days=SNAP_PERIOD_DAYS)
+        snap['next_rebal_date'] = next_date.isoformat()
+        state['rebalancing_needed'] = True
+        log(f'  📅 snap{snap_id} 앵커 발화 → {picks} (다음 앵커 {next_date.isoformat()})')
 
 
 def merge_tranches(state: dict) -> Dict[str, float]:
@@ -729,7 +751,7 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
     """V25 drift-refill: 드리프트 발화일에 모든 snap picks 를 그날 fresh 신호로 교체.
 
     채택 BT(bt_stock_mom3) 정합 — 발화일에 3-mom selection 으로 종목 교체.
-    last_rebal_date 는 건드리지 않음 → 정규 앵커 cadence(69일) 유지 (BT 의 고정 phase 와 동일).
+    앵커 시간표(next_rebal_date)는 건드리지 않음 → 정규 cadence(69일) 유지 (BT 의 고정 phase 와 동일).
     같은 거래일 signal 은 _compute_signal_v25 로 1회만 계산되므로 picks 고정.
     반환: 종목집합이 실제로 바뀌었으면 True.
     """

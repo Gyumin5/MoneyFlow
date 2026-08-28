@@ -116,8 +116,6 @@ except ImportError:
     CONFIG_HTML_NAME = "portfolio_result_gmoh.html"
 PORTFOLIO_HTML_NAME = os.environ.get("PORTFOLIO_HTML_NAME") or CONFIG_HTML_NAME
 PORTFOLIO_PUBLIC_URL = os.environ.get("PORTFOLIO_PUBLIC_URL", "") or CONFIG_PORTFOLIO_PUBLIC_URL
-STOCK_ANCHOR_DAYS = (1, 24, 47)  # V24: snap-based 3 staggered (offset days, period 69, stagger 23)
-COIN_ANCHOR_DAYS = (1, 11, 21)   # legacy 표시용
 FUTURES_TRANCHE_META = {
     "D_SMA42":   {"interval_hours": 24, "snap_interval_bars": 95,  "n_snapshots": 5},  # V24 갱신 05-04
 }
@@ -1357,25 +1355,6 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             return _merge_tranches(snapshots)
         return _merge_tranches(state.get('tranches', {}) or {})
 
-    def _next_anchor_str(anchor_days) -> str:
-        now = datetime.now()
-        year, month = now.year, now.month
-        candidates = []
-        for day in anchor_days:
-            try:
-                candidates.append(datetime(year, month, day))
-            except ValueError:
-                continue
-        future = [dt for dt in candidates if dt.date() >= now.date()]
-        if future:
-            nxt = min(future)
-        else:
-            if month == 12:
-                nxt = datetime(year + 1, 1, anchor_days[0])
-            else:
-                nxt = datetime(year, month + 1, anchor_days[0])
-        return nxt.strftime('%Y-%m-%d')
-
     _this_month = datetime.now().strftime('%Y-%m')
 
     def _tranche_status(anchor_month: str, weights: dict, picks: list) -> Tuple[str, str, str]:
@@ -1443,15 +1422,22 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
         ])
         _stk = _stock_signal.get("stock", {}) or {}
         _stock_exec_target = _merge_stock_state(_stock_state)
+        _v22_snaps = _stock_state.get("snapshots", {}) or {}
+        # 다음 앵커는 달력 날짜가 아니라 각 스냅이 들고 있는 예정일이다.
+        # 셋 중 가장 이른 날이 다음에 종목이 갈아탈 날이다.
+        _next_dates = sorted(
+            str((_v22_snaps.get(_k) or {}).get("next_rebal_date") or "")
+            for _k in _v22_snaps
+        )
+        _next_dates = [d for d in _next_dates if d]
         _stock_summary = [
             f"<b>리밸런싱 대기:</b> {_fmt_bool(_stock_state.get('rebalancing_needed'))}",
             f"<b>마지막 실행:</b> {_stock_state.get('last_trade_date', '-')}",
             f"<b>합산 목표:</b><br>{_fmt_alloc_lines(_stock_exec_target)}",
-            f"<b>전략 KIS_V24:</b> Canary {'ON' if _stk.get('risk_on', True) else 'OFF'}, "
-            f"다음 트랜치 {_next_anchor_str(STOCK_ANCHOR_DAYS)}",
+            f"<b>전략 KIS_V25:</b> Canary {'ON' if _stk.get('risk_on', True) else 'OFF'}, "
+            f"다음 앵커 {_next_dates[0] if _next_dates else '-'}",
         ]
         _stock_tr_rows = []
-        _v22_snaps = _stock_state.get("snapshots", {}) or {}
         if _v22_snaps:
             for _sid in sorted(_v22_snaps.keys(), key=lambda x: int(x)):
                 _sn = _v22_snaps.get(_sid, {}) or {}
@@ -1463,6 +1449,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 _stock_tr_rows.append({
                     "스냅": f"S{_sid}",
                     "상태": _status,
+                    "다음앵커": _sn.get("next_rebal_date", "-"),
                     "종목": _picks_text,
                     "비중": _weights_text,
                 })

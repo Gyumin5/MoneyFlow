@@ -22,6 +22,8 @@ def main():
     import executor_stock as ex
 
     N = ex.N_SNAPS
+    # 2026-07-08 + 69 + i*23 — 겹치지 않은 정상 시간표
+    ANCHOR_SCHED = ['2026-09-15', '2026-10-08', '2026-10-31']
     BUF = ex.CASH_BUFFER_DEFAULT
     cap = 1.0 / 3.0
 
@@ -32,13 +34,15 @@ def main():
             w['Cash'] = cs
         snaps = {}
         for i in range(N):
+            # 앵커 시간표는 23일씩 벌어져 있다. refill·카나리 flip 은 이걸 못 건드린다.
             snaps[str(i)] = {'picks': list(picks), 'weights': dict(w),
-                             'last_rebal_date': '2026-04-30'}
+                             'last_rebal_date': '2026-04-30',
+                             'next_rebal_date': ANCHOR_SCHED[i]}
         return snaps
 
     fails = []
 
-    # --- T1: refill 이 snap picks 를 fresh 로 교체, last_rebal_date 보존 ---
+    # --- T1: refill 이 snap picks 를 fresh 로 교체, 앵커 시간표 보존 ---
     state = {'snapshots': fresh_snaps(['EEM', 'PDBC', 'QQQ'])}
     signal = {'stock': {'risk_on': True,
                         'offense_picks': ['EEM', 'VEA', 'QQQ'],
@@ -49,8 +53,8 @@ def main():
         fails.append('T1: changed=False (교체 감지 실패)')
     if set(k for k in merged if k != 'Cash') != {'EEM', 'VEA', 'QQQ'}:
         fails.append(f'T1: merged picks 불일치 {merged}')
-    if any(state['snapshots'][str(i)]['last_rebal_date'] != '2026-04-30' for i in range(N)):
-        fails.append('T1: last_rebal_date 변경됨 (앵커 cadence 훼손)')
+    if any(state['snapshots'][str(i)]['next_rebal_date'] != ANCHOR_SCHED[i] for i in range(N)):
+        fails.append('T1: next_rebal_date 변경됨 (앵커 cadence 훼손)')
 
     # --- T2: picks 동일 시 no-op (changed=False) ---
     state2 = {'snapshots': fresh_snaps(['EEM', 'PDBC', 'QQQ'])}
@@ -114,8 +118,8 @@ def main():
         fails.append(f'T7: 카나리 OFF 인데 방어 전환 안 됨 {m7}')
     if not state7.get('rebalancing_needed'):
         fails.append('T7: rebalancing_needed 미설정')
-    if any(state7['snapshots'][str(i)]['last_rebal_date'] != '2026-04-30' for i in range(N)):
-        fails.append('T7: 카나리 flip 이 last_rebal_date 변경 (앵커 cadence 훼손)')
+    if any(state7['snapshots'][str(i)]['next_rebal_date'] != ANCHOR_SCHED[i] for i in range(N)):
+        fails.append('T7: 카나리 flip 이 next_rebal_date 변경 (앵커 cadence 훼손)')
 
     # --- T8: 카나리 변화 없으면 flip=False, snapshot 보존 ---
     state8 = {'prev_risk_on': True, 'snapshots': fresh_snaps(['EEM', 'PDBC', 'QQQ'])}
