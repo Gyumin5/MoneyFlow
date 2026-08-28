@@ -1773,6 +1773,13 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             if reduce_only:
                 order_params['reduceOnly'] = 'true'
         except Exception as e:
+            # 축소 주문을 만들다 실패한 것도 축소 실패다. 거래소에 안 보냈다는 게
+            # "줄이려던 포지션이 그대로 남았다" 는 사실을 바꾸지 않는다. 여기서 표시를
+            # 안 하면 뒤의 매수가 그대로 나가 총노출이 목표를 넘는다. 상장폐지 심볼은
+            # format_quantity 가 규격을 못 찾아 여기로 떨어지므로 실제로 겹치는 경로다.
+            # (2026-08-28 6차 검토 지적.)
+            if reduce_only:
+                _reduce_failed_hard = True
             log.error(f"ORDER PREP FAILED {side} {symbol} qty={qty}: {e}")
             if error_alerts is not None:
                 error_alerts.append(f"ORDER PREP FAILED {side} {symbol}: {e}")
@@ -2628,19 +2635,30 @@ def force_cancel_all_orders(client: Client, symbols: Optional[List[str]] = None)
     """
     symbol_set = set(symbols or UNIVERSE)
     failures = []
+    untradable = []
     for symbol in symbol_set:
-        try:
-            client.futures_cancel_all_open_orders(symbol=symbol)
-            log.info(f"CANCEL ALL OPEN ORDERS {symbol}")
-        except Exception as e:
-            log.warning(f"cancel all open orders {symbol}: {e}")
-            failures.append((symbol, 'open', str(e)))
-        try:
-            client.futures_cancel_all_algo_open_orders(symbol=symbol)
-            log.info(f"CANCEL ALL ALGO OPEN ORDERS {symbol}")
-        except Exception as e:
-            log.warning(f"cancel all algo open orders {symbol}: {e}")
-            failures.append((symbol, 'algo', str(e)))
+        for kind, cancel in (('open', client.futures_cancel_all_open_orders),
+                             ('algo', client.futures_cancel_all_algo_open_orders)):
+            try:
+                cancel(symbol=symbol)
+                log.info(f"CANCEL ALL {kind.upper()} ORDERS {symbol}")
+            except Exception as e:
+                log.warning(f"cancel all {kind} orders {symbol}: {e}")
+                # 거래소가 지금 주문을 안 받는 심볼(상장폐지·거래정지)의 취소 거절은
+                # 이 가드가 막으려는 위험이 아니다. 이 가드는 남은 주문이 새 주문과
+                # 부딪히는 걸 막으려고 있는데, 주문을 못 내는 심볼에는 부딪힐 새 주문이
+                # 없다. 그런데도 전체를 중단시키면 거래불가 심볼 하나 때문에 다른 심볼의
+                # 청산까지 막힌다 — 08-15 청산차단과 같은 형태다. 판정은 fresh
+                # exchangeInfo 로만 하고(캐시본이면 _is_untradable_now 가 False),
+                # 거래 가능한 심볼의 거절·네트워크 오류·판정불가는 그대로 실패로 센다.
+                # (2026-08-28 6차 검토 지적.)
+                if isinstance(e, BinanceAPIException) and _is_untradable_now(client, symbol):
+                    untradable.append((symbol, kind, str(e)))
+                else:
+                    failures.append((symbol, kind, str(e)))
+    if untradable:
+        log.warning(f"force_cancel_all_orders: 거래불가 심볼 취소 거절 {len(untradable)} 건 "
+                    f"— 전체 중단하지 않는다 {untradable[:5]}")
     if failures:
         log.error(f"force_cancel_all_orders: {len(failures)} 건 실패 — {failures[:5]}")
         return False

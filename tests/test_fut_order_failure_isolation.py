@@ -300,8 +300,105 @@ check("거래가능 판정에 전략 유니버스 목록을 쓰지 않는다",
       and 'symbol not in fetch_binance_futures_listed' not in _src)
 check("접수 뒤 기록 실패를 주문 실패로 되돌리지 않는다",
       '주문은 접수됐고 기록만 실패' in _src)
+check("축소 준비 실패도 확대 차단 표시를 세운다",
+      'if reduce_only:\n                _reduce_failed_hard = True' in _src)
+check("취소 거절도 거래불가만 실패에서 뺀다",
+      'isinstance(e, BinanceAPIException) and _is_untradable_now(client, symbol)' in _src
+      and 'untradable.append((symbol, kind, str(e)))' in _src)
 check("상태파일의 거래불가 목록 형태를 검증한다",
       'untradable_symbols 형태가 이상하다' in _src)
+
+print("\n[6차 검토] 축소 주문을 만들다 실패해도 확대 주문을 막는다")
+
+
+def _prep_fail_on(bad):
+    def _fmt(_c, sym, q):
+        if sym == bad:
+            raise ValueError('LOT_SIZE 규격을 찾을 수 없다')
+        return f"{q:.3f}"
+    return _fmt
+
+
+c, errors, orders = run_rebalance(
+    HELD, {}, LISTED | {'CCCUSDT'},
+    target={'AAA': 0.1, 'CCC': 0.4, 'CASH': 0.5}, liquidation_only=False,
+    format_quantity=_prep_fail_on('AAAUSDT'))
+check("축소 준비 실패를 오류로 올린다",
+      any('ORDER PREP FAILED' in m and 'AAAUSDT' in m for m in errors), str(errors))
+check("뒤따르는 확대 주문을 보내지 않는다",
+      'CCCUSDT' not in c.symbols(), str(c.attempted))
+check("확대 차단을 오류로 알린다",
+      any('BUY SKIPPED' in m and 'CCCUSDT' in m for m in errors), str(errors))
+
+# 대조: 확대 주문 쪽 준비가 실패한 것은 축소 실패가 아니다 — 다른 주문을 막지 않는다.
+c, errors, orders = run_rebalance(
+    HELD, {}, LISTED | {'CCCUSDT'},
+    target={'AAA': 0.1, 'BBB': 0.1, 'CCC': 0.4, 'CASH': 0.4}, liquidation_only=False,
+    format_quantity=_prep_fail_on('CCCUSDT'))
+check("확대 준비 실패는 다른 주문을 막지 않는다",
+      any('BUY SKIPPED' in m for m in errors) is False, str(errors))
+
+
+print("\n[6차 검토] 거래불가 심볼의 취소 거절이 전체 매매를 막지 않는다")
+
+
+class CancelClient:
+    """cancel 을 받아 적고, reject 에 든 심볼은 지정한 예외를 던진다."""
+
+    def __init__(self, reject):
+        self.reject = reject
+        self.done = []
+
+    def futures_cancel_all_open_orders(self, symbol=None):
+        if symbol in self.reject:
+            raise self.reject[symbol]
+        self.done.append(('open', symbol))
+
+    def futures_cancel_all_algo_open_orders(self, symbol=None):
+        if symbol in self.reject:
+            raise self.reject[symbol]
+        self.done.append(('algo', symbol))
+
+
+def run_cancel(reject, listed):
+    saved = {k: getattr(a, k) for k in ('_trading_symbols', 'UNIVERSE')}
+    c = CancelClient(reject)
+    try:
+        a._trading_symbols = lambda _c: set(listed)
+        a.UNIVERSE = ['AAA', 'BBB']
+        ok = a.force_cancel_all_orders(c, ['AAAUSDT', 'BBBUSDT'])
+    finally:
+        for k, v in saved.items():
+            setattr(a, k, v)
+    return ok, c
+
+
+_invalid = a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
+                                 400, '{"code":-1121,"msg":"Invalid symbol."}')
+ok, c = run_cancel({'AAAUSDT': _invalid}, {'BBBUSDT'})
+check("거래불가 심볼의 취소 거절은 전체 중단이 아니다", ok is True)
+check("나머지 심볼의 취소는 계속한다", ('open', 'BBBUSDT') in c.done, str(c.done))
+
+ok, _ = run_cancel({'AAAUSDT': _invalid}, {'AAAUSDT', 'BBBUSDT'})
+check("거래 가능한 심볼의 거절은 그대로 중단시킨다", ok is False)
+
+ok, _ = run_cancel({'AAAUSDT': RuntimeError('네트워크 끊김')}, {'BBBUSDT'})
+check("거래소 예외가 아니면(네트워크 등) 그대로 중단시킨다", ok is False)
+
+
+def _raise_stale(_c):
+    raise a.MarketMetaUnavailable('캐시본')
+
+
+saved_ts = a._trading_symbols
+try:
+    a._trading_symbols = _raise_stale
+    c = CancelClient({'AAAUSDT': _invalid})
+    ok = a.force_cancel_all_orders(c, ['AAAUSDT'])
+finally:
+    a._trading_symbols = saved_ts
+check("판정불가(캐시본)면 보수적으로 중단시킨다", ok is False)
+
 
 print()
 if FAILED:
