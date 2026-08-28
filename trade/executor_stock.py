@@ -650,36 +650,80 @@ def _migrate_tranches_to_snaps(state: dict) -> None:
             merged[tk] = merged.get(tk, 0.0) + w / n_old
     picks = sorted(merged.keys()) if merged else []
     weights = merged
-    # 다음 앵커일을 23일씩 벌려 둔다. snap0 은 오늘, 나머지는 +23/+46 이다.
+    # 종목은 오늘 인계받은 것이니 보유기간 69일을 오늘부터 센다. 23일씩 벌려 둔다.
     snapshots = {}
     for snap_id in range(N_SNAPS):
         snapshots[str(snap_id)] = {
             'picks': list(picks),
             'weights': dict(weights),
             'last_rebal_date': today.isoformat(),
-            'next_rebal_date': (today + timedelta(days=snap_id * SNAP_STAGGER_DAYS)).isoformat(),
+            'next_rebal_date': (today + timedelta(
+                days=SNAP_PERIOD_DAYS + snap_id * SNAP_STAGGER_DAYS)).isoformat(),
         }
     state['snapshots'] = snapshots
     state['_v22_migrated_from_tranches'] = today.isoformat()
-    log(f'  🔁 V24 migration: monthly tranches → 3 snaps (next_rebal today/+23/+46)')
+    log(f'  🔁 V24 migration: monthly tranches → 3 snaps '
+        f'(next_rebal +{SNAP_PERIOD_DAYS}/+{SNAP_PERIOD_DAYS + SNAP_STAGGER_DAYS}/'
+        f'+{SNAP_PERIOD_DAYS + 2 * SNAP_STAGGER_DAYS}d)')
 
 
-def _snap_next_date(snap: dict, snap_id: int, today):
-    """이 snap 의 다음 앵커일. 없거나 깨졌으면 23일 간격으로 새로 심는다.
+def _parse_date(raw):
+    """isoformat 날짜 문자열 → date. 못 읽으면 None."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw)).date()
+    except Exception:
+        return None
 
-    새로 심을 때 snap0 은 오늘, snap1 은 +23일, snap2 는 +46일이다. 겹쳐 있던 상태를
-    푸는 것도 이 경로다 — 셋 다 next_rebal_date 가 없으므로 한 번에 벌어진다.
+
+def _schedule_phase_ok(dates) -> bool:
+    """세 예정일이 23일씩 벌어져 있는가. 69일 주기 안에서만 본다.
+
+    같은 날이 둘 있으면(사람이 state 를 손댔거나 옛 코드가 겹쳐놨거나) 여기서 걸린다.
+    날짜가 성해도 위상이 무너진 상태는 조용히 지나가면 안 된다 — 그게 2026-07-08 이었다.
     """
-    raw = snap.get('next_rebal_date')
-    if raw:
-        try:
-            return datetime.fromisoformat(raw).date()
-        except Exception:
-            log(f'  ⚠️ snap{snap_id} next_rebal_date 파손({raw!r}) — 23일 간격으로 재설정')
-    seeded = today + timedelta(days=snap_id * SNAP_STAGGER_DAYS)
-    snap['next_rebal_date'] = seeded.isoformat()
-    log(f'  🧭 snap{snap_id} 앵커 시간표 심음: {seeded.isoformat()}')
-    return seeded
+    offs = sorted(d.toordinal() % SNAP_PERIOD_DAYS for d in dates)
+    if len(set(offs)) != len(offs):
+        return False
+    return all(offs[i + 1] - offs[i] == SNAP_STAGGER_DAYS for i in range(len(offs) - 1))
+
+
+def _resolve_anchor_schedule(snapshots: dict, today):
+    """세 snap 의 다음 앵커일을 확정한다. (날짜 리스트, 복구사유 or None) 반환.
+
+    우선순위:
+      1. 셋 다 성하고 위상(23일 간격)이 맞으면 그대로 쓴다. 평상시 경로다.
+      2. 하나라도 성한 예정일이 있으면 그걸 기준점으로 삼아 나머지를 23일 간격으로 다시 만든다.
+         돌고 있는 위상을 살리는 게 새로 심는 것보다 낫다.
+      3. 예정일이 하나도 없으면 마지막 발화일 + 69일을 기준으로 심는다.
+         이미 들고 있는 종목의 보유기간을 존중한다 — 배포한 날을 전략 위상으로 삼지 않는다.
+      4. 그것도 없으면 오늘 기준. (진짜 콜드스타트는 호출부가 따로 처리한다.)
+    """
+    parsed = {}
+    for i in range(N_SNAPS):
+        d = _parse_date((snapshots.get(str(i)) or {}).get('next_rebal_date'))
+        if d is not None:
+            parsed[i] = d
+
+    if len(parsed) == N_SNAPS and _schedule_phase_ok(list(parsed.values())):
+        return [parsed[i] for i in range(N_SNAPS)], None
+
+    if parsed:
+        j = min(parsed)
+        base = parsed[j] - timedelta(days=j * SNAP_STAGGER_DAYS)
+        note = f'앵커 시간표 재구성 — snap{j}({parsed[j].isoformat()}) 기준으로 23일 간격 복원'
+    else:
+        lasts = [d for d in (_parse_date((snapshots.get(str(i)) or {}).get('last_rebal_date'))
+                             for i in range(N_SNAPS)) if d is not None]
+        if lasts:
+            base = max(lasts) + timedelta(days=SNAP_PERIOD_DAYS)
+            note = (f'앵커 시간표 최초 부여 — 마지막 발화 {max(lasts).isoformat()} '
+                    f'+ {SNAP_PERIOD_DAYS}일 기준')
+        else:
+            base = today
+            note = '앵커 시간표 최초 부여 — 기준 삼을 날짜가 없어 오늘 기준'
+    return [base + timedelta(days=i * SNAP_STAGGER_DAYS) for i in range(N_SNAPS)], note
 
 
 def check_anchors(signal: dict, state: dict):
@@ -693,6 +737,12 @@ def check_anchors(signal: dict, state: dict):
     발화일을 앵커일로 덮어쓰던 옛 방식은 셋이 한 번 같은 날 발화하면(V24 마이그레이션이
     전부 "즉시 발화" 로 맞춰놨다) 그 뒤로 영원히 같이 움직였다. 실제로 2026-07-08 에
     셋이 겹친 채 굳어 스냅샷 1개짜리 전략으로 돌았다. (2026-08-28)
+
+    상태가 온전하지 않을 때의 세 갈래(ai-debate run-20260828T050415Z 지적):
+      · 신호에 종목·비중이 둘 다 없다 → 발화 안 한다. 보유를 지운다는 뜻이 되기 때문이다.
+      · 스냅샷이 통째로 비었다 → 셋을 오늘 신호로 채운다. 하나만 채우면 목표가
+        3분의 1로 쪼그라들어 멀쩡한 보유를 대량 매도한다.
+      · 시간표가 깨졌거나 위상이 무너졌다 → _resolve_anchor_schedule 이 복원하고 알린다.
     """
     _migrate_tranches_to_snaps(state)
     today = datetime.now().date()
@@ -706,12 +756,47 @@ def check_anchors(signal: dict, state: dict):
         picks = stock_sig.get('defense_picks', [])
         weights = stock_sig.get('defense_weights', {})
 
+    if not picks and not weights:
+        # 종목도 비중도 없는 신호로 발화하면 세 snap 이 통째로 비어 전량 매도가 된다.
+        # 신호 이상은 보유를 건드릴 이유가 아니다.
+        log('  ⚠️ 신호에 종목·비중이 둘 다 없다 — 앵커 발화 보류(보유 유지)')
+        return
+
     snapshots = state.setdefault('snapshots', {})
+    if all(not (snapshots.get(str(i)) or {}) for i in range(N_SNAPS)):
+        # 상태를 통째로 잃은 경우. 한 snap 만 채우면 목표가 3분의 1로 쪼그라들어
+        # 멀쩡한 보유를 대량 매도한다. 셋을 오늘 신호로 채우고 시간표만 벌려 둔다.
+        for snap_id in range(N_SNAPS):
+            snapshots[str(snap_id)] = {
+                'picks': list(picks),
+                'weights': dict(weights),
+                'last_rebal_date': today.isoformat(),
+                'next_rebal_date': (today + timedelta(
+                    days=SNAP_PERIOD_DAYS + snap_id * SNAP_STAGGER_DAYS)).isoformat(),
+            }
+        state['rebalancing_needed'] = True
+        msg = f'주식 스냅샷이 비어 있어 오늘 신호로 셋 다 초기화: {picks}'
+        log(f'  🆕 {msg}')
+        try:
+            send_telegram(f'⚠️ {msg}')
+        except Exception as e:
+            log(f'  ⚠️ 초기화 알림 전송 실패: {e}')
+        return
+
+    schedule, repair = _resolve_anchor_schedule(snapshots, today)
+    if repair:
+        log(f'  🧭 {repair} → ' + ', '.join(d.isoformat() for d in schedule))
+        try:
+            send_telegram('주식 앵커 시간표 정비\n' + repair + '\n다음 앵커: '
+                          + ', '.join(d.isoformat() for d in schedule))
+        except Exception as e:
+            log(f'  ⚠️ 앵커 시간표 알림 전송 실패: {e}')
+
     for snap_id in range(N_SNAPS):
-        key = str(snap_id)
-        snap = snapshots.setdefault(key, {})
-        next_date = _snap_next_date(snap, snap_id, today)
+        snap = snapshots.setdefault(str(snap_id), {})
+        next_date = schedule[snap_id]
         if today < next_date:
+            snap['next_rebal_date'] = next_date.isoformat()
             continue
         snap['picks'] = list(picks)
         snap['weights'] = dict(weights)
