@@ -134,7 +134,8 @@ after = sched(st)
 check("살아있는 snap1 을 그대로 둔다",
       after[1] == (base + _dt.timedelta(days=G)).isoformat(), str(after))
 check("나머지를 23일 간격으로 되살린다", gaps(after) == [G] * (ex.N_SNAPS - 1), str(after))
-check("복원을 알린다", len(SENT) == 1 and 'snap1' in SENT[0], str(SENT))
+check("복원을 알린다(고친 snap 을 지목)",
+      len(SENT) == 1 and '재구성' in SENT[0] and '0, 2' in SENT[0], str(SENT))
 
 print("\n[5] 날짜는 성한데 위상이 무너짐 — 같은 날 둘")
 st = {'snapshots': staggered(base)}
@@ -204,6 +205,39 @@ run_anchor(st, base)
 check("두 번째 실행은 무발화", not st.get('rebalancing_needed'), str(sched(st)))
 check("시간표 동일", sched(st) == first, f"{sched(st)} != {first}")
 
+print("\n[13] 회전한 정상 시간표에서 하나만 잃어도 나머지를 안 끌고 간다")
+# 돌아가는 중인 시간표: snap2 가 가장 이르고 snap0·snap1 은 이미 발화해 69일 건너뛴 상태.
+rot = {0: _dt.date(2026, 10, 8), 1: _dt.date(2026, 10, 31), 2: _dt.date(2026, 9, 15)}
+check("전제: 회전 상태도 23일 간격이다",
+      ex._schedule_phase_ok(list(rot.values())))
+for lost in range(ex.N_SNAPS):
+    st = {'snapshots': {str(i): {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                                 'next_rebal_date': rot[i].isoformat()}
+                        for i in range(ex.N_SNAPS)}}
+    del st['snapshots'][str(lost)]['next_rebal_date']
+    run_anchor(st, TODAY)
+    after = sched(st)
+    want = [rot[i].isoformat() for i in range(ex.N_SNAPS)]
+    check(f"snap{lost} 만 되살리고 나머지는 그대로", after == want, f"{after} != {want}")
+
+print("\n[14] 마지막 발화일이 스태거돼 있으면 각자 자기 발화일 + 69일")
+lasts = {0: _dt.date(2026, 8, 1), 1: _dt.date(2026, 8, 24), 2: _dt.date(2026, 9, 16)}
+st = {'snapshots': {str(i): {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                             'last_rebal_date': lasts[i].isoformat()}
+                    for i in range(ex.N_SNAPS)}}
+run_anchor(st, TODAY)
+after = sched(st)
+want = [(lasts[i] + _dt.timedelta(days=P)).isoformat() for i in range(ex.N_SNAPS)]
+check("각 snap 이 자기 보유기간을 지킨다", after == want, f"{after} != {want}")
+
+print("\n[15] 스냅샷 키가 통째로 없는 것도 결함이다")
+st = {'snapshots': {'0': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0}},
+                    '1': {'picks': ['EEM'], 'weights': {'EEM': 1.0}}}}
+check("결함으로 잡는다", ex.snapshot_payload_defect(st) is not None,
+      str(ex.snapshot_payload_defect(st)))
+check("온전하면 결함 아님",
+      ex.snapshot_payload_defect({'snapshots': staggered(base)}) is None)
+
 print("\n[12] 회귀 — 발화일 기준으로 다음 앵커를 잡지 않는다")
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         '..', 'trade', 'executor_stock.py')).read()
@@ -212,6 +246,9 @@ check("next_rebal_date 를 상태로 들고 다닌다", "snap['next_rebal_date']
 check("위상 불변식 검사가 있다", 'def _schedule_phase_ok(' in src)
 check("신호 비중 검증 가드가 있다", src.count('if not _weights_ok(weights):') >= 2)
 check("스냅샷 결함 판정이 있다", 'def snapshot_payload_defect(' in src)
+check("생존 예정일 복원 규칙이 있다", 'def _resolve_from_dates(' in src)
+check("결함 검사가 앵커 체크보다 먼저다",
+      src.index('_defect = snapshot_payload_defect(state)') < src.index('    check_anchors(signal, state)'))
 
 print()
 if FAILED:

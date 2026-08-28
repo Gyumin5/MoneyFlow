@@ -620,6 +620,13 @@ def check_canary_flip(signal: dict, state: dict) -> bool:
     if prev is not None and risk_on != prev:
         log(f'  🔄 카나리 플립: {prev} → {risk_on}')
         _migrate_tranches_to_snaps(state)
+        if not _weights_ok(_signal_weights(signal)):
+            # 비중이 온전치 않으면 교체를 못 한다. 이때 prev_risk_on 을 넘겨버리면 내일은
+            # 플립이 아니게 되어 방어 전환이 영영 사라진다 — 플립을 소비하지 않고 남긴다.
+            log('  ⚠️ 카나리 플립인데 신호 비중이 온전치 않다 — 플립을 소비하지 않고 다음 실행에서 재시도')
+            send_telegram('⚠️ 주식 카나리 전환 보류: 신호 비중이 온전하지 않다. '
+                          '다음 실행에서 다시 시도한다.')
+            return False
         swapped = refill_snaps_fresh(signal, state)
         state['prev_risk_on'] = risk_on
         state['rebalancing_needed'] = True
@@ -677,6 +684,13 @@ def _parse_date(raw):
         return None
 
 
+def _signal_weights(signal: dict) -> dict:
+    """지금 레짐에 해당하는 비중. 공격이면 공격 비중, 방어면 방어 비중."""
+    stock_sig = signal.get('stock', {}) or {}
+    key = 'offense' if stock_sig.get('risk_on', True) else 'defense'
+    return stock_sig.get(f'{key}_weights', {}) or {}
+
+
 def _weights_ok(w) -> bool:
     """스냅샷·신호의 비중이 쓸 수 있는 값인가.
 
@@ -710,16 +724,74 @@ def _schedule_phase_ok(dates) -> bool:
     return all((srt[i + 1] - srt[i]).days == SNAP_STAGGER_DAYS for i in range(len(srt) - 1))
 
 
+def _resolve_from_dates(parsed: dict, today):
+    """남아 있는 예정일에서 온전한 시간표를 되찾는다. (날짜 dict, 손댄 snap 목록).
+
+    시간표는 돌아간다. 발화한 snap 은 69일을 건너뛰므로 dt_i = 기준 + i*23 + (회차)*69 다.
+    그래서 "예정일 - 번호*23" 을 그냥 모아 다수결하면 회차가 다른 표가 갈라진다.
+    (2026-08-28 3차 검토 반례: s0=11-23, s1=12-16, s2=10-31 은 멀쩡한 시간표인데
+    s2 의 기준점만 69일 어긋나 보인다.)
+
+    그래서 두 단계로 나눈다.
+      1) 위상은 69일 나머지로 본다 — 회차가 달라도 나머지는 같다. 다수결로 위상을 정하면
+         회전 때문에 표가 갈리는 일이 없다.
+      2) 회차는 따로 고른다. snap 마다 오늘 이후 첫 해당 위상일을 잡고 ±69일 안에서
+         조합을 훑어, 셋의 폭이 46일(=23×2)이 되는 배치를 고른다. 그 중에서
+         (a) 저장된 날짜를 그대로 쓰는 게 많은 것, (b) 새로 채운 날이 오늘 이후인 것,
+         (c) 가장 이른 예정일이 오늘+23일을 안 넘는 것(돌아가는 시간표의 성질),
+         (d) 더 이른 것 순으로 고른다.
+
+    저장된 날짜가 이미 온전하면 (a) 때문에 하나도 안 바뀐다. 실행이 며칠 밀려 예정일이
+    과거로 내려간 경우도 (a) 가 지켜줘서 그대로 발화한다.
+    """
+    votes = {}
+    for i, d in parsed.items():
+        r = (d.toordinal() - i * SNAP_STAGGER_DAYS) % SNAP_PERIOD_DAYS
+        votes.setdefault(r, []).append(i)
+    r = max(votes, key=lambda k: (len(votes[k]), -min(votes[k])))
+
+    base = {}
+    for i in range(N_SNAPS):
+        want = (r + i * SNAP_STAGGER_DAYS) % SNAP_PERIOD_DAYS
+        first = today.toordinal() + 1
+        base[i] = today + timedelta(days=1 + (want - first) % SNAP_PERIOD_DAYS)
+
+    span = SNAP_STAGGER_DAYS * (N_SNAPS - 1)
+    limit = today + timedelta(days=SNAP_STAGGER_DAYS)
+    best = None
+    cycles = [(-1,), (0,), (1,)]
+    for _ in range(N_SNAPS - 1):
+        cycles = [c + (k,) for c in cycles for k in (-1, 0, 1)]
+    for ks in cycles:
+        cand = {i: base[i] + timedelta(days=k * SNAP_PERIOD_DAYS) for i, k in enumerate(ks)}
+        vals = sorted(cand.values())
+        if (vals[-1] - vals[0]).days != span:
+            continue
+        kept = [i for i in cand if parsed.get(i) == cand[i]]
+        filled = [i for i in range(N_SNAPS) if i not in kept]
+        key = (-len(kept),
+               0 if all(cand[i] > today for i in filled) else 1,
+               0 if vals[0] <= limit else 1,
+               vals[0])
+        if best is None or key < best[0]:
+            best = (key, cand, filled)
+    if best is None:
+        # k=(0,..,0) 은 항상 폭 46일이라 여기 올 수 없다. 그래도 남겨둔다.
+        return dict(base), [i for i in range(N_SNAPS) if parsed.get(i) != base[i]]
+    return best[1], best[2]
+
+
 def _resolve_anchor_schedule(snapshots: dict, today):
     """세 snap 의 다음 앵커일을 확정한다. (날짜 리스트, 복구사유 or None) 반환.
 
     우선순위:
       1. 셋 다 성하고 위상(23일 간격)이 맞으면 그대로 쓴다. 평상시 경로다.
-      2. 하나라도 성한 예정일이 있으면 그걸 기준점으로 삼아 나머지를 23일 간격으로 다시 만든다.
-         돌고 있는 위상을 살리는 게 새로 심는 것보다 낫다. 기준점은 다수결로 고른다 —
-         하나만 어긋난 경우 그 하나를 기준 삼으면 멀쩡한 둘을 끌고 간다.
-      3. 예정일이 하나도 없으면 마지막 발화일 + 69일을 기준으로 심는다.
-         이미 들고 있는 종목의 보유기간을 존중한다 — 배포한 날을 전략 위상으로 삼지 않는다.
+      2. 하나라도 성한 예정일이 있으면 그걸로 위상을 되찾는다(_resolve_from_dates).
+         돌고 있는 위상을 살리는 게 새로 심는 것보다 낫다. 멀쩡한 날짜는 안 건드린다.
+      3. 예정일이 하나도 없으면 각 snap 의 마지막 발화일 + 69일로 심는다. 이미 들고 있는
+         종목의 보유기간을 존중한다 — 배포한 날을 전략 위상으로 삼지 않는다.
+         발화일들이 겹쳐 있어(2026-07-08 사고 상태) 간격이 안 나오면 가장 늦은 발화일
+         + 69일을 기준으로 23일씩 벌린다.
       4. 그것도 없으면 오늘 기준. (진짜 콜드스타트는 호출부가 따로 처리한다.)
     """
     parsed = {}
@@ -732,25 +804,32 @@ def _resolve_anchor_schedule(snapshots: dict, today):
         return [parsed[i] for i in range(N_SNAPS)], None
 
     if parsed:
-        # 각 예정일이 주장하는 기준점(= 예정일 - 번호*23)을 모아 다수결. 동수면 낮은 번호.
-        votes = {}
-        for i, dt_i in parsed.items():
-            cand = dt_i - timedelta(days=i * SNAP_STAGGER_DAYS)
-            votes.setdefault(cand, []).append(i)
-        base = max(votes, key=lambda c: (len(votes[c]), -min(votes[c])))
-        agree = sorted(votes[base])
-        note = (f'앵커 시간표 재구성 — snap{",".join(str(i) for i in agree)} 기준으로 '
-                f'23일 간격 복원')
+        dates, filled = _resolve_from_dates(parsed, today)
+        if not filled:
+            return [dates[i] for i in range(N_SNAPS)], None
+        note = ('앵커 시간표 재구성 — snap '
+                + ', '.join(str(i) for i in filled)
+                + ' 의 예정일만 다시 잡음(나머지는 그대로)')
+        return [dates[i] for i in range(N_SNAPS)], note
+
+    lasts = {}
+    for i in range(N_SNAPS):
+        d = _parse_date((snapshots.get(str(i)) or {}).get('last_rebal_date'))
+        if d is not None:
+            lasts[i] = d
+
+    if len(lasts) == N_SNAPS:
+        # 각자 자기 발화일 + 69일. 스태거가 살아 있으면 이게 정확하다.
+        cand = [lasts[i] + timedelta(days=SNAP_PERIOD_DAYS) for i in range(N_SNAPS)]
+        if _schedule_phase_ok(cand):
+            return cand, '앵커 시간표 최초 부여 — 각 snap 의 마지막 발화일 + 69일'
+    if lasts:
+        base = max(lasts.values()) + timedelta(days=SNAP_PERIOD_DAYS)
+        note = (f'앵커 시간표 최초 부여 — 마지막 발화 {max(lasts.values()).isoformat()} '
+                f'+ {SNAP_PERIOD_DAYS}일 기준으로 23일씩 벌림')
     else:
-        lasts = [d for d in (_parse_date((snapshots.get(str(i)) or {}).get('last_rebal_date'))
-                             for i in range(N_SNAPS)) if d is not None]
-        if lasts:
-            base = max(lasts) + timedelta(days=SNAP_PERIOD_DAYS)
-            note = (f'앵커 시간표 최초 부여 — 마지막 발화 {max(lasts).isoformat()} '
-                    f'+ {SNAP_PERIOD_DAYS}일 기준')
-        else:
-            base = today
-            note = '앵커 시간표 최초 부여 — 기준 삼을 날짜가 없어 오늘 기준'
+        base = today
+        note = '앵커 시간표 최초 부여 — 기준 삼을 날짜가 없어 오늘 기준'
     return [base + timedelta(days=i * SNAP_STAGGER_DAYS) for i in range(N_SNAPS)], note
 
 
@@ -847,8 +926,12 @@ def snapshot_payload_defect(state: dict):
     """일부 snap 만 비중을 잃은 상태를 찾는다. 결함이면 사유 문자열, 아니면 None.
 
     merge_tranches 는 snapshots 개수로 나눈다. 셋 중 하나가 비중을 잃으면 합산 목표가
-    3분의 2로 줄고, 그 차이가 그대로 대량 매도 주문이 된다. 반면 키 자체가 적은 건
-    결함이 아니다 — 분모도 같이 줄어 합은 1 이다.
+    3분의 2로 줄고, 그 차이가 그대로 대량 매도 주문이 된다.
+
+    키가 통째로 없는 것도 같은 결함이다. 분모도 같이 줄어 합은 1 이지만, 그 snap 이 들고
+    있던 종목이 합산 목표에서 사라지므로 그 종목 전량 매도 + 남은 종목 매수가 된다.
+    합이 맞는다는 건 산술적 축소를 피한다는 뜻이지 목표가 맞다는 뜻이 아니다.
+    (2026-08-28 3차 검토 지적.)
 
     복구는 사람이 한다. 잃은 snap 의 종목은 다른 snap 이 알지 못하는 별개 시점의 선정이라
     코드가 지어낼 수 없다. 그래서 정규 리밸런싱만 멈추고 알린다.
@@ -856,11 +939,16 @@ def snapshot_payload_defect(state: dict):
     snapshots = state.get('snapshots') or {}
     if not snapshots:
         return None
+    missing = sorted(str(i) for i in range(N_SNAPS) if str(i) not in snapshots)
     bad = sorted(k for k, v in snapshots.items() if not _weights_ok((v or {}).get('weights')))
-    if not bad:
+    if not bad and not missing:
         return None
-    return (f'스냅샷 {", ".join(bad)} 의 비중이 온전하지 않다 '
-            f'(전체 {len(snapshots)}개 중 {len(bad)}개)')
+    parts = []
+    if bad:
+        parts.append(f'스냅샷 {", ".join(bad)} 의 비중이 온전하지 않다')
+    if missing:
+        parts.append(f'스냅샷 {", ".join(missing)} 이(가) 통째로 없다')
+    return ' / '.join(parts) + f' (전체 {N_SNAPS}개 기준)'
 
 
 def merge_tranches(state: dict) -> Dict[str, float]:
@@ -905,6 +993,7 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
         # 앵커와 같은 검증. 여기가 뚫리면 드리프트 발화일에 온전치 않은 비중이 세 snap 에
         # 통째로 들어가고, 그 실행에서 바로 전량 매도가 된다.
         log(f'  ⚠️ 신호 비중이 온전하지 않다({weights}) — 드리프트 리필 보류(보유 유지)')
+        send_telegram(f'⚠️ 주식 신호 비중 이상으로 종목 교체 보류: {weights}')
         return False
     snapshots = state.setdefault('snapshots', {})
     changed = False
@@ -1409,22 +1498,23 @@ def run_once(dry_run=False):
         return
 
     # 3. 카나리 플립
-    check_canary_flip(signal, state)
+    _flipped = check_canary_flip(signal, state)
 
-    # 4. 앵커 체크
-    check_anchors(signal, state)
-
-    # 4.3 스냅샷 온전성 — 일부만 비중을 잃으면 합산 목표가 축소돼 멀쩡한 보유를 대량 매도한다.
-    # 카나리 방어 전환(3번)은 앞에서 이미 끝났으므로 여기서 멈춰도 방어는 막지 않는다.
+    # 3.5 스냅샷 온전성 — 일부가 비중을 잃거나 통째로 없으면 합산 목표의 구성이 바뀌어
+    # 그 snap 이 들고 있던 종목을 전량 매도한다. 앵커 체크보다 먼저 본다 — 뒤에 두면
+    # 앵커가 시간표를 전진시켜 저장한 뒤 매매만 멈춘다.
+    # 카나리 플립이 있었던 실행은 통과시킨다. 플립은 모든 snap 을 같은 방어 비중으로
+    # 덮으므로 합산 목표가 어중간하게 섞이지 않는다 — 유일한 방어를 막지 않는다.
     _defect = snapshot_payload_defect(state)
-    if _defect:
+    if _defect and not _flipped:
         log(f'  ⛔ {_defect} — 정규 리밸런싱 중단(보유 유지)')
         send_telegram(f'⛔ 주식 상태 이상: {_defect}\n'
                       f'정규 리밸런싱을 멈췄다. 백업에서 복구가 필요하다.')
-        if not dry_run:
-            save_json(TRADE_STATE_FILE, state)
         log('주식 executor 완료 (스냅샷 결함)')
         return
+
+    # 4. 앵커 체크
+    check_anchors(signal, state)
 
     # 4.5. Drift trigger (2026-05-23): cur_w vs combined target half_turnover ≥ 0.10
     # alloc_transit cap (옵션 D): effective_pv = total_usd × cap_ratio (cap_ratio < 1.0 일 때만)

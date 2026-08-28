@@ -207,6 +207,37 @@ check("한 스냅만 채워 대량매도하지 않는다",
       all(saved['snapshots'][str(i)].get('weights') for i in range(ex.N_SNAPS)),
       str(saved['snapshots']))
 
+print("\n[11] 스냅샷 키가 통째로 없음 — 주문 0건, 빈 껍데기를 만들지 않는다")
+st = healthy()
+del st['snapshots']['2']
+orders, alerts, saved = run(st, make_signal(), today=BASE)
+check("주문 0건", orders == [], str(orders))
+check("상태 이상을 알린다", any('상태 이상' in a for a in alerts), str(alerts))
+check("없는 snap 을 빈 껍데기로 만들지 않는다",
+      '2' not in (saved or st)['snapshots'] or (saved or st)['snapshots']['2'].get('weights'),
+      str((saved or st)['snapshots'].get('2')))
+
+print("\n[12] 카나리 전환일에 신호 비중이 이상하면 전환을 소비하지 않는다")
+st = healthy()
+st['prev_risk_on'] = True
+sig = make_signal(risk_on=False)
+sig['stock']['defense_weights'] = {'IEF': 0.3}          # 합 0.3 — 온전치 않다
+orders, alerts, saved = run(st, sig, today=_dt.date(2026, 8, 28))
+check("주문 0건", orders == [], str(orders))
+check("prev_risk_on 을 소비하지 않는다", (saved or st).get('prev_risk_on') is True,
+      str((saved or st).get('prev_risk_on')))
+check("보유(공격)를 그대로 둔다",
+      (saved or st)['snapshots']['0']['picks'] == ['VNQ', 'EEM', 'SPY'],
+      str((saved or st)['snapshots']['0']))
+check("전환 보류를 알린다", any('보류' in a for a in alerts), str(alerts))
+
+print("\n[13] 다음 날 신호가 정상이면 그때 방어로 전환한다")
+orders, alerts, saved = run(st, make_signal(risk_on=False), today=_dt.date(2026, 8, 29))
+check("prev_risk_on 이 넘어간다", (saved or {}).get('prev_risk_on') is False,
+      str((saved or {}).get('prev_risk_on')))
+check("방어 종목으로 교체", (saved or {})['snapshots']['0']['picks'] == ['IEF', 'BIL'],
+      str((saved or {})['snapshots']['0']))
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAIL: {FAILED}")
