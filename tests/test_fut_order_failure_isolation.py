@@ -133,6 +133,24 @@ check("계좌 변경 표시가 안 남는다(보낸 게 없다)",
       not any('AAAUSDT' in t for t in a._V25_ACCOUNT_TOUCH), str(a._V25_ACCOUNT_TOUCH))
 check("뒤 종목은 정상 체결된다", any('BBBUSDT' in o for o in orders), str(orders))
 
+print("\n[2d] 축소 주문이 실패하면 그 실행에서 노출을 늘리지 않는다")
+# AAA 는 줄여야 하고(축소) CCC 는 새로 사야 한다(확대). 축소가 터지면 매수는 막혀야 한다.
+c, errors, orders = run_rebalance(
+    {'AAA': pos('AAA', 900.0, 10.0)}, {'AAAUSDT': RuntimeError('network down')},
+    {'AAAUSDT', 'CCCUSDT'},
+    target={'AAA': 0.1, 'CCC': 0.4, 'CASH': 0.5}, liquidation_only=False)
+check("축소는 시도했다", 'AAAUSDT' in c.symbols(), str(c.attempted))
+check("뒤따르는 매수를 안 보낸다", 'CCCUSDT' not in c.symbols(), str(c.attempted))
+check("건너뛴 사실이 오류로 남는다",
+      any('BUY SKIPPED' in m for m in errors), str(errors))
+
+print("\n[2e] 축소가 정상이면 매수는 그대로 나간다")
+c, errors, orders = run_rebalance(
+    {'AAA': pos('AAA', 900.0, 10.0)}, {}, {'AAAUSDT', 'CCCUSDT'},
+    target={'AAA': 0.1, 'CCC': 0.4, 'CASH': 0.5}, liquidation_only=False)
+check("축소·확대 둘 다 나간다", {'AAAUSDT', 'CCCUSDT'} <= set(c.symbols()), str(c.attempted))
+check("오류 없음", errors == [], str(errors))
+
 print("\n[3] 거래 가능한 심볼의 거절은 그대로 오류다")
 c, errors, orders = run_rebalance(
     HELD, {'AAAUSDT': a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
@@ -274,6 +292,7 @@ check("억제는 축소 주문 + 거래소 거절에만 적용된다",
       'if reduce_only and isinstance(e, BinanceAPIException) '
       'and _is_untradable_now(client, symbol):' in _src)
 check("주문 생성 단계는 별도 try 다", 'ORDER PREP FAILED' in _src)
+check("축소 실패 뒤 확대 주문을 막는다", 'BUY SKIPPED' in _src)
 check("캐시본으로 거래상태를 판정하지 않는다",
       'if not _exchange_info_fresh:' in _src)
 check("거래가능 판정에 전략 유니버스 목록을 쓰지 않는다",

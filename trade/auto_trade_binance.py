@@ -1739,8 +1739,24 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             return
         log.info(f"REBALANCE liquidation_only: reduceOnly 매도 {len(trades)}건만 실행")
 
+    # 축소 주문이 실패한 실행에서는 노출을 늘리지 않는다. 예외 범위를 넓히기 전에는
+    # 네트워크 오류가 execute_rebalance 전체를 끊어서 뒤의 매수가 자동으로 막혔다.
+    # 종목별 격리만 넣고 이걸 안 두면, 줄이려던 포지션이 남은 채 다른 종목을 더 사서
+    # 총노출이 목표를 넘고 다음 실행(하루 뒤)까지 유지된다.
+    # (ai-debate run-20260828T044454Z)
+    _reduce_failed_hard = False        # 평범한 실패 — 오류로 올린다
+    _reduce_failed_untradable = False  # 거래불가 — 매일 오류로 올리지 않는다
+
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
+        if not reduce_only and (_reduce_failed_hard or _reduce_failed_untradable):
+            _skip_msg = (f"BUY SKIPPED {symbol}: 앞선 축소 주문이 실패해 "
+                         "이번 실행에서는 노출을 늘리지 않는다")
+            log.error(_skip_msg)
+            if _reduce_failed_hard and error_alerts is not None:
+                error_alerts.append(_skip_msg)
+            continue
+
         # 주문을 만들기까지는 전부 우리 쪽 계산이다. 여기서 터지면 거래소에 아무것도
         # 안 보낸 것이므로 체결불명 표시를 남기지 않고 거래불가로도 분류하지 않는다.
         # (한 try 로 묶으면 로컬 결함이 "체결 불명" 과 "거래정지" 로 둔갑한다.)
@@ -1779,8 +1795,11 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                 # 않는다. 오류로 올리면 rebalancing_needed 가 영구히 박히고 성공 판정도
                 # 매일 실패가 되며 알림이 매일 온다 — 자가해소가 안 된다.
                 _note_untradable(symbol)
+                _reduce_failed_untradable = True
                 log.warning(f"ORDER UNTRADABLE {side} {symbol} qty={qty_str}: {e}")
             else:
+                if reduce_only:
+                    _reduce_failed_hard = True
                 log.error(f"ORDER FAILED {side} {symbol} qty={qty_str}: {e}")
                 if error_alerts is not None:
                     error_alerts.append(f"ORDER FAILED {side} {symbol} {qty_str}: {e}")
