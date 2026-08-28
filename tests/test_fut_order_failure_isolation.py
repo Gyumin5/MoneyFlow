@@ -161,8 +161,10 @@ check("거래불가로 기록되지 않는다", a._untradable_orders == [], str(
 print("\n[4c] 전략 대상이 아닌 계약도 거래 중이면 거래불가가 아니다")
 _saved_info = a.get_exchange_info
 _saved_cache = a._exchange_info_cache
+_saved_fresh0 = a._exchange_info_fresh
 try:
     a._exchange_info_cache = None
+    a._exchange_info_fresh = True
     a.get_exchange_info = lambda _c: {'symbols': [
         # 전략 유니버스(USDT 무기한)엔 안 들어가지만 거래소에선 정상 거래 중이다.
         {'symbol': 'BTCUSDC', 'status': 'TRADING', 'contractType': 'PERPETUAL',
@@ -183,6 +185,38 @@ try:
 finally:
     a.get_exchange_info = _saved_info
     a._exchange_info_cache = _saved_cache
+    a._exchange_info_fresh = _saved_fresh0
+
+print("\n[4d] 심볼정보가 캐시본이면 거래상태를 판정하지 않는다")
+_saved_info = a.get_exchange_info
+_saved_cache = a._exchange_info_cache
+_saved_fresh = a._exchange_info_fresh
+try:
+    a._exchange_info_cache = None
+    a.get_exchange_info = lambda _c: {'symbols': [
+        {'symbol': 'BBBUSDT', 'status': 'TRADING', 'contractType': 'PERPETUAL',
+         'quoteAsset': 'USDT'}]}
+    a._exchange_info_fresh = False
+    check("캐시본이면 미등재 심볼도 거래불가로 단정하지 않는다",
+          a._is_untradable_now(None, 'AAAUSDT') is False)
+    _saved_ts = a._trading_symbols
+    try:
+        a._trading_symbols = lambda _c: (_ for _ in ()).throw(
+            a.MarketMetaUnavailable('캐시본'))
+        keep, resumed, dropped = a._resolve_untradable(
+            None, {'AAAUSDT'}, set(), {}, True)
+        check("캐시본이면 해소하지 않고 목록을 보존한다",
+              keep == {'AAAUSDT'} and not resumed and not dropped,
+              f"keep={keep} resumed={resumed} dropped={dropped}")
+    finally:
+        a._trading_symbols = _saved_ts
+    a._exchange_info_fresh = True
+    check("방금 받은 응답이면 평소대로 판정한다",
+          a._is_untradable_now(None, 'AAAUSDT') is True)
+finally:
+    a.get_exchange_info = _saved_info
+    a._exchange_info_cache = _saved_cache
+    a._exchange_info_fresh = _saved_fresh
 
 print("\n[5] 해소는 적극적 증거가 있을 때만 한다")
 
@@ -240,6 +274,8 @@ check("억제는 축소 주문 + 거래소 거절에만 적용된다",
       'if reduce_only and isinstance(e, BinanceAPIException) '
       'and _is_untradable_now(client, symbol):' in _src)
 check("주문 생성 단계는 별도 try 다", 'ORDER PREP FAILED' in _src)
+check("캐시본으로 거래상태를 판정하지 않는다",
+      'if not _exchange_info_fresh:' in _src)
 check("거래가능 판정에 전략 유니버스 목록을 쓰지 않는다",
       'symbol not in _trading_symbols(client)' in _src
       and 'symbol not in fetch_binance_futures_listed' not in _src)

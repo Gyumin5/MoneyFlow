@@ -1220,6 +1220,11 @@ def get_current_positions(client: Client):
 
 
 _exchange_info_cache = None
+# 이번 실행의 심볼정보가 방금 받은 것인가(True), 36시간 이내 캐시인가(False).
+# 캐시는 예외가 아니라 정상 반환이라 "조회 실패면 보수적으로" 라는 판정이 그냥 지나간다.
+# 거래정지·재개 판정은 낡은 값으로 하면 안 되므로 출처를 들고 다닌다.
+# (ai-debate run-20260828T043914Z)
+_exchange_info_fresh = False
 
 def _count_tradable_symbols(info) -> int:
     """USDT 무기한 TRADING 심볼 수. 응답 구조가 한 군데라도 깨졌으면 -1.
@@ -1428,6 +1433,9 @@ def _trading_symbols(client: Client) -> set:
     묻히고 못 닫는 포지션이 조용히 남는다. (ai-debate run-20260828T012500Z)
     """
     info = get_exchange_info(client)
+    if not _exchange_info_fresh:
+        # 낡은 값으로 거래정지·재개를 판정하지 않는다. 호출부가 보수적으로 처리한다.
+        raise MarketMetaUnavailable('심볼정보가 캐시본이라 거래상태 판정에 쓰지 않는다')
     return {s.get('symbol') for s in info.get('symbols', [])
             if s.get('status') == 'TRADING'}
 
@@ -1453,7 +1461,7 @@ def get_exchange_info(client: Client):
     V25 경로에서 유일하게 fail-open 인 자리였다(ai-debate run-20260827T084242Z).
     이제는 직전 성공분을 쓰고, 그것도 없으면 주문을 만들기 전에 예외로 멈춘다.
     """
-    global _exchange_info_cache
+    global _exchange_info_cache, _exchange_info_fresh
     if _exchange_info_cache is not None:
         return _exchange_info_cache
     try:
@@ -1468,6 +1476,7 @@ def get_exchange_info(client: Client):
             raise ValueError(f'exchangeInfo 급감 ({prev} → {n}) — 캐시를 보존하고 거부')
         _save_market_cache(EXCHANGE_INFO_CACHE_PATH, info)
         _exchange_info_cache = info
+        _exchange_info_fresh = True
         return info
     except Exception as e:
         log.warning(f"exchangeInfo 조회 실패: {e}")
@@ -1480,6 +1489,7 @@ def get_exchange_info(client: Client):
         raise MarketMetaUnavailable('거래소 심볼정보 캐시가 검증에 실패')
     _note_degraded(f"거래소 심볼정보 조회 실패 — {age_h:.1f}시간 전 캐시로 진행")
     _exchange_info_cache = info
+    _exchange_info_fresh = False
     return info
 
 
