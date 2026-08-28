@@ -238,6 +238,49 @@ check("결함으로 잡는다", ex.snapshot_payload_defect(st) is not None,
 check("온전하면 결함 아님",
       ex.snapshot_payload_defect({'snapshots': staggered(base)}) is None)
 
+print("\n[16] 예정일끼리 위상이 갈리면 예정일을 믿지 않는다")
+# snap0=09-15, snap1=09-20 — 23일 간격도 아니고 69일 배수도 아니다(위상 1:1).
+lasts = {0: _dt.date(2026, 8, 1), 1: _dt.date(2026, 8, 24), 2: _dt.date(2026, 9, 16)}
+st = {'snapshots': {'0': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                          'next_rebal_date': '2026-09-15',
+                          'last_rebal_date': lasts[0].isoformat()},
+                    '1': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                          'next_rebal_date': '2026-09-20',
+                          'last_rebal_date': lasts[1].isoformat()},
+                    '2': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                          'last_rebal_date': lasts[2].isoformat()}}}
+run_anchor(st, TODAY)
+after = sched(st)
+want = [(lasts[i] + _dt.timedelta(days=P)).isoformat() for i in range(ex.N_SNAPS)]
+check("마지막 발화일 쪽을 쓴다", after == want, f"{after} != {want}")
+check("정비를 알린다", len(SENT) == 1 and '발화일' in SENT[0], str(SENT))
+
+# 마지막 발화일도 없으면 예정일로 세우되 근거가 약하다고 알린다.
+st = {'snapshots': {'0': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                          'next_rebal_date': '2026-09-15'},
+                    '1': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0},
+                          'next_rebal_date': '2026-09-20'},
+                    '2': {'picks': ['VNQ'], 'weights': {'VNQ': 1.0}}}}
+run_anchor(st, TODAY)
+after = sched(st)
+check("그래도 23일 간격은 만든다", gaps(after) == [G] * (ex.N_SNAPS - 1), str(after))
+check("근거가 약하다고 알린다", len(SENT) == 1 and '위상이 갈려' in SENT[0], str(SENT))
+
+print("\n[17] 구조 검사 — 모양이 틀린 것만 잡고 정상은 통과")
+check("정상 통과", ex.state_structure_defect({'snapshots': staggered(base)}) is None)
+check("상태에 snapshots 가 없으면 통과", ex.state_structure_defect({}) is None)
+check("빈 snapshots 는 통과(콜드스타트)", ex.state_structure_defect({'snapshots': {}}) is None)
+for _bad in ([], [1], 'x', 3):
+    check(f"snapshots 가 {type(_bad).__name__} 이면 결함",
+          'dict 가 아니다' in (ex.state_structure_defect({'snapshots': _bad}) or ''),
+          str(ex.state_structure_defect({'snapshots': _bad})))
+check("잉여 키는 결함",
+      '남아돈다' in (ex.state_structure_defect(
+          {'snapshots': dict(staggered(base), **{'3': {}})}) or ''))
+check("snap 이 dict 가 아니면 결함",
+      'dict 가 아니다' in (ex.state_structure_defect(
+          {'snapshots': dict(staggered(base), **{'0': []})}) or ''))
+
 print("\n[12] 회귀 — 발화일 기준으로 다음 앵커를 잡지 않는다")
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         '..', 'trade', 'executor_stock.py')).read()

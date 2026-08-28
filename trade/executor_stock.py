@@ -712,6 +712,41 @@ def _weights_ok(w) -> bool:
     return 0.99 <= total <= 1.01
 
 
+def _as_float(v) -> float:
+    """숫자로 못 읽으면 0. 결함 판정 안에서 예외로 죽지 않으려고 쓴다."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if f == f else 0.0
+
+
+def state_structure_defect(state: dict):
+    """상태의 모양 자체가 틀린 경우를 찾는다. 결함이면 사유 문자열, 아니면 None.
+
+    비중 내용이 아니라 자료형과 키 집합만 본다. 이건 매매 판단보다 먼저 봐야 한다 —
+    snapshots 가 dict 가 아니거나 snap 이 dict 가 아니면 카나리 검사부터 예외로 죽어서
+    알림도 못 내보낸다. 키가 남아도는 것도 결함이다. merge_tranches 는 snapshots 개수로
+    나누므로 쓰레기 키 하나가 합산 목표를 4분의 3으로 줄이고 그 차이가 매도 주문이 된다.
+    (2026-08-28 4차 검토 지적.)
+    """
+    if 'snapshots' not in state:
+        return None
+    snapshots = state.get('snapshots')
+    if snapshots is None or snapshots == {}:
+        return None
+    if not isinstance(snapshots, dict):
+        return f'snapshots 가 dict 가 아니다({type(snapshots).__name__})'
+    want = {str(i) for i in range(N_SNAPS)}
+    extra = sorted(set(snapshots) - want)
+    if extra:
+        return f'스냅샷 키가 남아돈다: {", ".join(extra)} (있어야 할 키는 0~{N_SNAPS - 1})'
+    bad_type = sorted(k for k, v in snapshots.items() if not isinstance(v, dict))
+    if bad_type:
+        return f'스냅샷 {", ".join(bad_type)} 가 dict 가 아니다'
+    return None
+
+
 def _schedule_phase_ok(dates) -> bool:
     """세 예정일이 23일씩 벌어져 있는가.
 
@@ -803,7 +838,18 @@ def _resolve_anchor_schedule(snapshots: dict, today):
     if len(parsed) == N_SNAPS and _schedule_phase_ok(list(parsed.values())):
         return [parsed[i] for i in range(N_SNAPS)], None
 
-    if parsed:
+    # 예정일이 둘 이상 남았는데 위상이 전부 제각각이면 다수결이 성립하지 않는다. 그때
+    # 낮은 번호를 임의로 채택하면 근거 없는 시간표를 확정하는 것이다 — 마지막 발화일
+    # 쪽을 먼저 본다. (2026-08-28 4차 검토 지적.)
+    trusted = True
+    if len(parsed) >= 2:
+        seen = {}
+        for i, d in parsed.items():
+            r = (d.toordinal() - i * SNAP_STAGGER_DAYS) % SNAP_PERIOD_DAYS
+            seen[r] = seen.get(r, 0) + 1
+        trusted = max(seen.values()) >= 2
+
+    if parsed and trusted:
         dates, filled = _resolve_from_dates(parsed, today)
         if not filled:
             return [dates[i] for i in range(N_SNAPS)], None
@@ -823,6 +869,11 @@ def _resolve_anchor_schedule(snapshots: dict, today):
         cand = [lasts[i] + timedelta(days=SNAP_PERIOD_DAYS) for i in range(N_SNAPS)]
         if _schedule_phase_ok(cand):
             return cand, '앵커 시간표 최초 부여 — 각 snap 의 마지막 발화일 + 69일'
+    if parsed and not lasts:
+        # 위상은 못 믿지만 달리 기준이 없다. 예정일로 세우고 그 사실을 알린다.
+        dates, _filled = _resolve_from_dates(parsed, today)
+        return ([dates[i] for i in range(N_SNAPS)],
+                '앵커 시간표 재구성 — 예정일끼리 위상이 갈려 근거가 약하다(확인 필요)')
     if lasts:
         base = max(lasts.values()) + timedelta(days=SNAP_PERIOD_DAYS)
         note = (f'앵커 시간표 최초 부여 — 마지막 발화 {max(lasts.values()).isoformat()} '
@@ -941,11 +992,23 @@ def snapshot_payload_defect(state: dict):
         return None
     missing = sorted(str(i) for i in range(N_SNAPS) if str(i) not in snapshots)
     bad = sorted(k for k, v in snapshots.items() if not _weights_ok((v or {}).get('weights')))
-    if not bad and not missing:
+    mismatch = []
+    for k in sorted(snapshots):
+        snap = snapshots.get(k) or {}
+        picks = snap.get('picks')
+        if not isinstance(picks, list):
+            continue
+        held = {t for t, w in (snap.get('weights') or {}).items()
+                if t != 'Cash' and _as_float(w) > 0}
+        if held - set(picks):
+            mismatch.append(k)
+    if not bad and not missing and not mismatch:
         return None
     parts = []
     if bad:
         parts.append(f'스냅샷 {", ".join(bad)} 의 비중이 온전하지 않다')
+    if mismatch:
+        parts.append(f'스냅샷 {", ".join(mismatch)} 의 종목과 비중이 어긋난다')
     if missing:
         parts.append(f'스냅샷 {", ".join(missing)} 이(가) 통째로 없다')
     return ' / '.join(parts) + f' (전체 {N_SNAPS}개 기준)'
@@ -1418,6 +1481,14 @@ def run_once(dry_run=False):
             return
     else:
         state = {}
+
+    _shape = state_structure_defect(state)
+    if _shape:
+        # 모양이 틀린 상태로는 방어도 못 한다 — 카나리 검사부터 예외로 죽는다. 멈추고 알린다.
+        log(f'  ⛔ 상태 구조 이상: {_shape}')
+        send_telegram(f'⛔ 주식 상태 구조 이상: {_shape}\n'
+                      f'{TRADE_STATE_FILE}\n매매를 멈췄다. 백업 복구가 필요하다.')
+        return
     api = KISAPI(dry_run=dry_run)
 
     # V25: strategy 직접 계산 우선 — 실패 시 signal_state.json fallback (freshness 검증)
@@ -1503,10 +1574,14 @@ def run_once(dry_run=False):
     # 3.5 스냅샷 온전성 — 일부가 비중을 잃거나 통째로 없으면 합산 목표의 구성이 바뀌어
     # 그 snap 이 들고 있던 종목을 전량 매도한다. 앵커 체크보다 먼저 본다 — 뒤에 두면
     # 앵커가 시간표를 전진시켜 저장한 뒤 매매만 멈춘다.
-    # 카나리 플립이 있었던 실행은 통과시킨다. 플립은 모든 snap 을 같은 방어 비중으로
-    # 덮으므로 합산 목표가 어중간하게 섞이지 않는다 — 유일한 방어를 막지 않는다.
+    # 방어로 넘어가는 플립(risk-off)이 있었던 실행만 통과시킨다. 플립은 모든 snap 을 같은
+    # 비중으로 덮으므로 합산 목표가 어중간하게 섞이지 않는다 — 유일한 방어를 막지 않는다.
+    # 공격으로 넘어가는 플립(risk-on)은 통과시키지 않는다. 방어를 막지 않는다는 명분이
+    # 노출을 늘리는 데까지 가면 안 된다. 손상 상태에서 위험을 키우는 쪽은 멈춘다.
+    # (2026-08-28 4차 검토 지적.)
+    _defense_flip = _flipped and not signal.get('stock', {}).get('risk_on', True)
     _defect = snapshot_payload_defect(state)
-    if _defect and not _flipped:
+    if _defect and not _defense_flip:
         log(f'  ⛔ {_defect} — 정규 리밸런싱 중단(보유 유지)')
         send_telegram(f'⛔ 주식 상태 이상: {_defect}\n'
                       f'정규 리밸런싱을 멈췄다. 백업에서 복구가 필요하다.')

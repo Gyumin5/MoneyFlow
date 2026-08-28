@@ -238,6 +238,59 @@ check("prev_risk_on 이 넘어간다", (saved or {}).get('prev_risk_on') is Fals
 check("방어 종목으로 교체", (saved or {})['snapshots']['0']['picks'] == ['IEF', 'BIL'],
       str((saved or {})['snapshots']['0']))
 
+print("\n[14] 상태 모양이 틀림 — 예외 없이 주문 0건")
+for label, raw in (('snapshots 가 list', '{"snapshots": [1, 2, 3]}'),
+                   ('snapshots 가 문자열', '{"snapshots": "x"}'),
+                   ('snap 이 list', '{"snapshots": {"0": [], "1": {}, "2": {}}}'),
+                   ('snap 이 null', '{"snapshots": {"0": null, "1": {}, "2": {}}}')):
+    orders, alerts, saved = run(None, make_signal(), today=BASE, raw_state=raw)
+    check(f"주문 0건 ({label})", orders == [], str(orders))
+    check(f"구조 이상을 알린다 ({label})",
+          any('구조 이상' in a or '상태 이상' in a for a in alerts), str(alerts))
+
+print("\n[15] 스냅샷 키가 남아돎 — merge 분모가 늘어 대량매도할 자리, 주문 0건")
+st = healthy()
+st['snapshots']['3'] = dict(st['snapshots']['0'])
+orders, alerts, saved = run(st, make_signal(), today=BASE)
+check("주문 0건", orders == [], str(orders))
+check("구조 이상을 알린다", any('구조 이상' in a for a in alerts), str(alerts))
+check("상태를 덮어쓰지 않는다", saved is None, str(saved))
+
+print("\n[16] 종목과 비중이 어긋남 — 주문 0건")
+st = healthy()
+st['snapshots']['1']['picks'] = ['VNQ']          # 비중엔 EEM·SPY 도 있다
+orders, alerts, _ = run(st, make_signal(), today=BASE)
+check("주문 0건", orders == [], str(orders))
+check("상태 이상을 알린다", any('어긋난다' in a for a in alerts), str(alerts))
+
+print("\n[17] 결함 상태여도 카나리 방어 전환은 막지 않는다 — 방어 주문이 나간다")
+st = healthy()
+del st['snapshots']['2']                          # 결함: snap2 통째로 없음
+st['prev_risk_on'] = True
+orders, alerts, saved = run(st, make_signal(risk_on=False), today=_dt.date(2026, 8, 28))
+check("방어 주문이 나간다", len(orders) > 0, str(orders))
+check("위험자산을 판다", any(o[0] == 'sell' for o in orders), str(orders))
+check("방어자산을 산다", any(o[0] == 'buy' and o[1] in ('IEF', 'BIL') for o in orders),
+      str(orders))
+check("전환을 확정한다", (saved or {}).get('prev_risk_on') is False,
+      str((saved or {}).get('prev_risk_on')))
+
+print("\n[18] 공격 전환은 세 스냅을 통째로 다시 쓴다 — 쪼그라든 목표가 남지 않는다")
+st = healthy()
+del st['snapshots']['2']
+st['prev_risk_on'] = False
+orders, alerts, saved = run(st, make_signal(risk_on=True), today=_dt.date(2026, 8, 28))
+check("셋 다 채워진다", all((saved or {})['snapshots'][str(i)].get('weights')
+                        for i in range(ex.N_SNAPS)), str((saved or {}).get('snapshots')))
+merged = ex.merge_tranches(saved or {})
+check("합산 목표 합이 1", abs(sum(merged.values()) - 1.0) < 1e-9, str(merged))
+check("현금으로 새는 목표가 없다", 'Cash' not in merged or merged['Cash'] < 1e-9, str(merged))
+check("전환을 확정한다", (saved or {}).get('prev_risk_on') is True,
+      str((saved or {}).get('prev_risk_on')))
+# 전환이 상태를 온전하게 되돌려 놓으므로, 결함 가드는 전환 뒤에는 걸릴 게 없다.
+check("전환 뒤엔 결함이 남지 않는다", ex.snapshot_payload_defect(saved or {}) is None,
+      str(ex.snapshot_payload_defect(saved or {})))
+
 print()
 if FAILED:
     print(f"{len(FAILED)} FAIL: {FAILED}")
