@@ -1387,6 +1387,38 @@ def _note_untradable(symbol: str) -> None:
         _untradable_orders.append(symbol)
 
 
+def _resolve_untradable(client: Client, prev: set, now: set, positions, positions_ok: bool):
+    """다음 실행에 남길 거래불가 목록과 이번에 해소된 목록을 돌려준다.
+
+    해소는 적극적 증거가 있을 때만 한다. 이번 실행에 거절이 없었다는 건 증거가 아니다 —
+    rebalancing_needed=false 라 주문을 아예 안 낸 날이 매일 있고, 그걸 해소로 읽으면
+    매일 "거래 재개됨" 을 보내고 다음 날 다시 "거래 불가" 를 보낸다.
+    증거는 둘뿐이다. 거래소 상장 목록에 다시 있거나(재개), 그 심볼을 더는 안 들고
+    있거나(줄일 게 없으니 거절될 일도 없다). 조회가 안 되면 목록을 그대로 둔다.
+    """
+    keep = set(now)
+    stale = set(prev) - set(now)
+    if not stale:
+        return keep, set(), set()
+    try:
+        listed = fetch_binance_futures_listed(client)
+    except Exception as e:
+        log.warning(f"거래가능 목록 조회 실패 — 거래불가 목록을 그대로 둔다: {e}")
+        return set(prev) | set(now), set(), set()
+    held = None
+    if positions_ok:
+        held = {p.get('symbol') for p in (positions or {}).values()}
+    resumed, dropped = set(), set()
+    for sym in stale:
+        if sym in listed:
+            resumed.add(sym)
+        elif held is not None and sym not in held:
+            dropped.add(sym)
+        else:
+            keep.add(sym)
+    return keep, resumed, dropped
+
+
 def _is_untradable_now(client: Client, symbol: str) -> bool:
     """지금 거래소에서 이 심볼로 주문을 받는가.
 
@@ -1686,12 +1718,13 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
 
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
-        qty_str = ''
+        # 주문을 만들기까지는 전부 우리 쪽 계산이다. 여기서 터지면 거래소에 아무것도
+        # 안 보낸 것이므로 체결불명 표시를 남기지 않고 거래불가로도 분류하지 않는다.
+        # (한 try 로 묶으면 로컬 결함이 "체결 불명" 과 "거래정지" 로 둔갑한다.)
         try:
             qty_str = str(qty) if is_full_close else format_quantity(client, symbol, qty)
             if float(qty_str) <= 0:
                 continue
-
             order_params = dict(
                 symbol=symbol,
                 side=side,
@@ -1700,7 +1733,13 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             )
             if reduce_only:
                 order_params['reduceOnly'] = 'true'
+        except Exception as e:
+            log.error(f"ORDER PREP FAILED {side} {symbol} qty={qty}: {e}")
+            if error_alerts is not None:
+                error_alerts.append(f"ORDER PREP FAILED {side} {symbol}: {e}")
+            continue
 
+        try:
             order = create_order_with_retry(client, order_params)
             _v25_mark_touch(f"order {side} {symbol} {qty_str}")
             log.info(f"ORDER {side} {symbol} qty={qty_str}: {order.get('status', 'OK')}")
@@ -1713,7 +1752,10 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             # 예외도 그대로 올린다. 한 주문의 실패는 그 주문에서 끝나야 한다. (2026-08-28)
             # 예외라도 거래소가 접수했을 수 있다(타임아웃). 계좌를 건드렸다고 본다.
             _v25_mark_touch(f"order {side} {symbol} 시도 실패(체결 불명)")
-            if _is_untradable_now(client, symbol):
+            # 억제는 노출을 줄이는 주문(reduceOnly)에만 적용한다. 늘리는 주문이 실패한 건
+            # 거래불가가 원인이어도 평범한 오류로 남긴다 — 살 수 없는 걸 사려 했다는
+            # 사실 자체가 유니버스 쪽 문제를 가리키므로 조용해지면 안 된다.
+            if reduce_only and _is_untradable_now(client, symbol):
                 # 거래정지·상장폐지 심볼은 우리가 고칠 수 있는 게 아니다. 주문 시도는
                 # 계속하되(거래 재개되면 그날 바로 나간다) 매일 같은 실패를 오류로 올리지
                 # 않는다. 오류로 올리면 rebalancing_needed 가 영구히 박히고 성공 판정도
@@ -3233,20 +3275,28 @@ def main():
         if args.trade:
             _prev_untradable = set(state.get('untradable_symbols', []) or [])
             _now_untradable = set(_untradable_orders)
+            _keep_untradable, _resumed, _dropped = _resolve_untradable(
+                client, _prev_untradable, _now_untradable, positions_after, pos_after_ok)
             _new_untradable = sorted(_now_untradable - _prev_untradable)
-            _resolved_untradable = sorted(_prev_untradable - _now_untradable)
-            if _new_untradable or _resolved_untradable:
+            _notify_ok = True
+            if _new_untradable or _resumed or _dropped:
                 _lines = []
                 if _new_untradable:
-                    _lines.append("거래 불가로 주문이 거절됨: " + ", ".join(_new_untradable))
+                    _lines.append("거래 불가로 축소 주문이 거절됨: " + ", ".join(_new_untradable))
                     _lines.append("주문 시도는 매일 계속하고, 거래가 재개되면 그날 정리된다.")
-                if _resolved_untradable:
-                    _lines.append("거래 재개됨: " + ", ".join(_resolved_untradable))
+                if _resumed:
+                    _lines.append("거래 재개됨: " + ", ".join(sorted(_resumed)))
+                if _dropped:
+                    _lines.append("보유가 없어져 추적 종료: " + ", ".join(sorted(_dropped)))
                 try:
                     send_telegram("선물 거래가능 상태 변경\n" + "\n".join(_lines))
                 except Exception as _e:
-                    log.error(f"거래불가 알림 전송 실패(매매에는 영향 없음): {_e}")
-            state['untradable_symbols'] = sorted(_now_untradable)
+                    _notify_ok = False
+                    log.error(f"거래불가 알림 전송 실패 — 상태를 그대로 두고 다음 실행에서 재시도: {_e}")
+            # 알림이 못 나갔으면 상태를 갱신하지 않는다. 갱신해버리면 그 변화가 상태에
+            # 흡수돼 다시는 알림이 안 나간다(첫 통보를 통째로 잃는다).
+            if _notify_ok:
+                state['untradable_symbols'] = sorted(_keep_untradable)
 
         # 6. 상태 저장
         if args.trade:
