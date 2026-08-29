@@ -699,6 +699,36 @@ check("한 심볼이 매도·매수로 두 번 실리지 않는다", _dup == [],
 
 check("보류한 매수를 일일 보고에 남긴다", "'매수 보류'" in _src)
 
+print("\n[12차 검토] 계정·인증·권한·한도 계열 전부가 억제에서 빠진다")
+# 12차 반례: 11차에서 넣은 목록에 -1002(인증 안 됨)가 없어, 거래불가 심볼의 축소 주문이
+# -1002 로 거절되면 그대로 "상장폐지 거절" 로 흡수됐다. 청산 대상이 그 심볼뿐이면
+# 오류 알림도 실패 판정도 없이 성공으로 통과한다.
+for _code, _name in ((-1002, '인증 안 됨'), (-1099, '권한 없음'), (-1015, '주문수 한도')):
+    c, errors, orders = run_rebalance(
+        HELD, {'AAAUSDT': _api_err(_code)}, {'BBBUSDT'})
+    check(f"{_name}({_code})는 거래불가여도 오류로 남는다",
+          any(m.startswith('ORDER FAILED') for m in errors), str(errors))
+    check(f"{_name}({_code})는 거래불가로 기록하지 않는다",
+          a._untradable_orders == [], str(a._untradable_orders))
+    check(f"{_name}({_code})는 취소 경로도 중단시킨다",
+          run_cancel11({'AAAUSDT': _api_err(_code)}, {'BBBUSDT'}) is False)
+
+# 수량·정밀도 계열은 일부러 억제 대상으로 남긴다. 상장폐지 심볼은 거래소 심볼정보에서
+# 사라져 format_quantity 가 소수점 8자리로 떨어지므로, 정밀도·필터 거절이 상장폐지
+# 경로의 정상적인 결과다. 이걸 하드 오류로 올리면 3일 자동잠김이 되돌아온다.
+for _code in (-1013, -1111):
+    c, errors, orders = run_rebalance(
+        HELD, {'AAAUSDT': _api_err(_code)}, {'BBBUSDT'})
+    check(f"정밀도·필터 거절({_code})은 거래불가 심볼에서 억제된다",
+          errors == [] and a._untradable_orders == ['AAAUSDT'],
+          f"{errors} {a._untradable_orders}")
+
+check("정밀도·수량 코드는 비시장 목록에 없다",
+      not ({-1013, -1111, -4164} & a._NON_MARKET_ERROR_CODES),
+      str(a._NON_MARKET_ERROR_CODES))
+check("거래불가 신호(-1121)도 비시장 목록에 없다",
+      -1121 not in a._NON_MARKET_ERROR_CODES)
+
 
 print()
 if FAILED:
