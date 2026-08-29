@@ -2265,7 +2265,11 @@ _BINANCE_PRECONDITION_CODES = {-4061, -4068, -4111, -2014, -2015}  # position ex
 # 정밀도·필터 거절이 상장폐지 경로 자체의 정상적인 결과다. 그걸 하드 오류로 올리면
 # 억제가 무력해지고 3일 자동잠김이 되돌아온다.
 # (2026-08-29 12차 검토 지적 반영 — -1002 누락으로 인증 오류가 조용해질 수 있었다.)
-_NON_MARKET_ERROR_CODES = {-1002, -1003, -1015, -1022, -1099, -2014, -2015}
+# 전제조건 계열(-4061 포지션 방향 불일치, -4068 포지션 모드 변경, -4111 등)도 같이 넣는다.
+# 우리 요청 구성이나 계정 설정이 틀렸다는 뜻이라 심볼 상태와 무관하다.
+# (2026-08-29 13차 검토 지적.)
+_NON_MARKET_ERROR_CODES = ({-1002, -1003, -1015, -1022, -1099}
+                           | _BINANCE_PRECONDITION_CODES)
 
 
 def _is_market_state_rejection(e) -> bool:
@@ -2274,7 +2278,13 @@ def _is_market_state_rejection(e) -> bool:
     인증·권한·요청한도·서버 장애는 심볼 상태와 무관하다. 거래불가 심볼에서 났더라도
     평범한 실패로 남겨야 사람이 본다.
     """
-    if getattr(e, 'code', None) in _NON_MARKET_ERROR_CODES:
+    code = getattr(e, 'code', None)
+    if not code:
+        # python-binance 는 응답이 JSON 이 아니면 code 를 0 으로 둔다(파싱 실패).
+        # 프록시·차단장비가 돌려준 HTML 오류 페이지가 대표적이다 — 거래소가 이 심볼을
+        # 거절했다는 근거가 아예 없으므로 억제하지 않는다. (2026-08-29 13차 검토 지적.)
+        return False
+    if code in _NON_MARKET_ERROR_CODES:
         return False
     return not _is_transient_error(e)
 

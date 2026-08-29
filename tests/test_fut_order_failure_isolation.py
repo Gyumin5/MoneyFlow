@@ -729,6 +729,41 @@ check("정밀도·수량 코드는 비시장 목록에 없다",
 check("거래불가 신호(-1121)도 비시장 목록에 없다",
       -1121 not in a._NON_MARKET_ERROR_CODES)
 
+print("\n[13차 검토] 전제조건 오류와 비정형 응답도 억제하지 않는다")
+# 13차 반례 (a): 전제조건 계열(-4061 포지션 방향 불일치, -4068 포지션 모드, -4111)은
+# 우리 요청 구성·계정 설정이 틀렸다는 뜻인데 거래불가 심볼에서 나면 흡수됐다.
+for _code in sorted(a._BINANCE_PRECONDITION_CODES):
+    c, errors, orders = run_rebalance(
+        HELD, {'AAAUSDT': _api_err(_code)}, {'BBBUSDT'})
+    check(f"전제조건 오류({_code})는 거래불가여도 오류로 남는다",
+          any(m.startswith('ORDER FAILED') for m in errors) and a._untradable_orders == [],
+          f"{errors} {a._untradable_orders}")
+    check(f"전제조건 오류({_code})는 취소 경로도 중단시킨다",
+          run_cancel11({'AAAUSDT': _api_err(_code)}, {'BBBUSDT'}) is False)
+
+check("전제조건 계열 전부가 비시장 목록에 들어 있다",
+      a._BINANCE_PRECONDITION_CODES <= a._NON_MARKET_ERROR_CODES,
+      str(a._NON_MARKET_ERROR_CODES))
+
+# 13차 반례 (b): 응답이 JSON 이 아니면 python-binance 가 code=0 으로 둔다(프록시·차단장비의
+# HTML 오류 페이지). 거래소가 이 심볼을 거절했다는 근거가 없으므로 억제하면 안 된다.
+_html_err = a.BinanceAPIException(
+    type('R', (), {'text': '<html>403 Forbidden</html>', 'status_code': 403})(),
+    403, '<html>403 Forbidden</html>')
+check("비정형 응답은 code 0 으로 온다", _html_err.code == 0)
+c, errors, orders = run_rebalance(HELD, {'AAAUSDT': _html_err}, {'BBBUSDT'})
+check("비정형 응답(code 0)은 거래불가여도 오류로 남는다",
+      any(m.startswith('ORDER FAILED') for m in errors) and a._untradable_orders == [],
+      f"{errors} {a._untradable_orders}")
+check("비정형 응답(code 0)은 취소 경로도 중단시킨다",
+      run_cancel11({'AAAUSDT': _html_err}, {'BBBUSDT'}) is False)
+
+_nocode = a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
+                                400, '{"msg":"x"}')
+check("code 필드가 없는 응답은 code None", _nocode.code is None)
+check("code None 도 시장 상태 거절로 읽지 않는다",
+      a._is_market_state_rejection(_nocode) is False)
+
 
 print()
 if FAILED:
