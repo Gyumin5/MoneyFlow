@@ -1825,7 +1825,9 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             # 억제는 노출을 줄이는 주문(reduceOnly)에만 적용한다. 늘리는 주문이 실패한 건
             # 거래불가가 원인이어도 평범한 오류로 남긴다 — 살 수 없는 걸 사려 했다는
             # 사실 자체가 유니버스 쪽 문제를 가리키므로 조용해지면 안 된다.
-            if reduce_only and isinstance(e, BinanceAPIException) and _is_untradable_now(client, symbol):
+            if (reduce_only and isinstance(e, BinanceAPIException)
+                    and _is_market_state_rejection(e)
+                    and _is_untradable_now(client, symbol)):
                 # 거래정지·상장폐지 심볼은 우리가 고칠 수 있는 게 아니다. 주문 시도는
                 # 계속하되(거래 재개되면 그날 바로 나간다) 매일 같은 실패를 오류로 올리지
                 # 않는다. 오류로 올리면 rebalancing_needed 가 영구히 박히고 성공 판정도
@@ -2252,6 +2254,21 @@ _BINANCE_IDEMPOTENT_CODES = {-4046, -4059}  # 'No need to change margin type' / 
 # V25 cycle 4 P1: -1000/-1006/-1008 추가 (UNKNOWN/UNEXPECTED_RESP/SERVER_BUSY)
 _BINANCE_TRANSIENT_CODES = {-1000, -1001, -1006, -1007, -1008, -1021}
 _BINANCE_PRECONDITION_CODES = {-4061, -4068, -4111, -2014, -2015}  # position exist, isolate margin needed, mode dependency, api key invalid
+# 시장 상태와 무관한 오류 코드. 심볼이 거래불가여도 이 거절은 억제하지 않는다 —
+# 인증·권한·요청한도 장애가 "상장폐지 거절" 로 위장되면 오류가 무기한 조용해진다.
+# (2026-08-29 11차 검토 지적. 억제 조건에 오류 코드 제한이 아예 없었다.)
+_NON_MARKET_ERROR_CODES = {-1003, -1022, -2014, -2015}
+
+
+def _is_market_state_rejection(e) -> bool:
+    """이 거절을 '거래소가 이 심볼로 주문을 안 받는다' 로 읽어도 되는가.
+
+    인증·권한·요청한도·서버 장애는 심볼 상태와 무관하다. 거래불가 심볼에서 났더라도
+    평범한 실패로 남겨야 사람이 본다.
+    """
+    if getattr(e, 'code', None) in _NON_MARKET_ERROR_CODES:
+        return False
+    return not _is_transient_error(e)
 
 
 def _is_idempotent_error(e):
@@ -2731,7 +2748,9 @@ def force_cancel_all_orders(client: Client, symbols: Optional[List[str]] = None)
                 # exchangeInfo 로만 하고(캐시본이면 _is_untradable_now 가 False),
                 # 거래 가능한 심볼의 거절·네트워크 오류·판정불가는 그대로 실패로 센다.
                 # (2026-08-28 6차 검토 지적.)
-                if isinstance(e, BinanceAPIException) and _is_untradable_now(client, symbol):
+                if (isinstance(e, BinanceAPIException)
+                        and _is_market_state_rejection(e)
+                        and _is_untradable_now(client, symbol)):
                     untradable.append((symbol, kind, str(e)))
                 else:
                     failures.append((symbol, kind, str(e)))
@@ -3517,6 +3536,12 @@ def main():
                 '포지션 수': str(visible_positions),
                 '활성 스탑 수': str(stop_count),
             }
+            # 거래불가로 축소가 막혀 매수를 보류한 날은 목표보다 노출이 적다. 알림은
+            # 상태가 바뀔 때만 나가므로, 그 사이의 저노출이 아무 데도 안 보이면 안 된다.
+            # (11차 검토 지적 — 무통보 누적.)
+            if _skipped_buys:
+                status['매수 보류'] = (f"{len(_skipped_buys)}건 (앞선 축소 실패로 노출 유지): "
+                                   + ", ".join(_skipped_buys[:5]))
             extra = None
             if error_alerts:
                 extra = "⚠ 오류\n" + "\n".join(f"  - {msg}" for msg in error_alerts[:10])

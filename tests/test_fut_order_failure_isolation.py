@@ -288,9 +288,10 @@ check("거래불가 알림은 상태 변경 시에만",
       "state['untradable_symbols'] = sorted(_keep_untradable)" in _src)
 check("알림 전송 실패면 상태를 갱신하지 않는다(첫 통보 유실 방지)",
       'if _notify_ok:' in _src)
-check("억제는 축소 주문 + 거래소 거절에만 적용된다",
-      'if reduce_only and isinstance(e, BinanceAPIException) '
-      'and _is_untradable_now(client, symbol):' in _src)
+check("억제는 축소 주문 + 시장상태 거절에만 적용된다",
+      'if (reduce_only and isinstance(e, BinanceAPIException)' in _src
+      and 'and _is_market_state_rejection(e)' in _src
+      and 'and _is_untradable_now(client, symbol)):' in _src)
 check("주문 생성 단계는 별도 try 다", 'ORDER PREP FAILED' in _src)
 check("축소 실패 뒤 확대 주문을 막는다", 'BUY SKIPPED' in _src)
 check("캐시본으로 거래상태를 판정하지 않는다",
@@ -302,8 +303,8 @@ check("접수 뒤 기록 실패를 주문 실패로 되돌리지 않는다",
       '주문은 접수됐고 기록만 실패' in _src)
 check("축소 준비 실패도 확대 차단 표시를 세운다",
       'if reduce_only:\n                _reduce_failed_hard = True' in _src)
-check("취소 거절도 거래불가만 실패에서 뺀다",
-      'isinstance(e, BinanceAPIException) and _is_untradable_now(client, symbol)' in _src
+check("취소 거절도 시장상태 거절만 실패에서 뺀다",
+      _src.count('and _is_market_state_rejection(e)') >= 2
       and 'untradable.append((symbol, kind, str(e)))' in _src)
 check("상태파일의 거래불가 목록 형태를 검증한다",
       'untradable_symbols 형태가 이상하다' in _src)
@@ -634,6 +635,69 @@ check("기준을 못 남긴 심볼은 빼주지 않는다(보수적 실패)",
       '_no_basis' in _src and '기준 상태 없음' in _src)
 a._v25_touch_reset()
 check("실행 초기화가 기준 기록도 비운다", a._unsent_before == {}, str(a._unsent_before))
+
+
+print("\n[11차 검토] 거래불가는 시장 상태 거절에만 적용한다")
+# 11차 반례: 억제 조건이 "심볼이 지금 거래불가인가" 뿐이라 오류 원인을 안 봤다.
+# 거래불가 심볼에서 인증(-1022)·권한(-2015)·요청한도(-1003)·서버(5xx) 오류가 나면
+# 그것까지 "상장폐지 거절" 로 흡수돼 error_alerts 에 안 남고 무기한 조용해진다.
+
+
+def _api_err(code, status=400):
+    return a.BinanceAPIException(type('R', (), {'text': '', 'status_code': status})(),
+                                 status, '{"code":%d,"msg":"x"}' % code)
+
+
+for _code, _name in ((-1022, '서명 오류'), (-2015, 'API 키 거부'), (-1003, '요청한도')):
+    c, errors, orders = run_rebalance(
+        HELD, {'AAAUSDT': _api_err(_code)}, {'BBBUSDT'})   # AAA 는 거래불가 상태
+    check(f"{_name}({_code})는 거래불가여도 오류로 남는다",
+          any(m.startswith('ORDER FAILED') for m in errors), str(errors))
+    check(f"{_name}({_code})는 거래불가로 기록하지 않는다",
+          a._untradable_orders == [], str(a._untradable_orders))
+
+c, errors, orders = run_rebalance(
+    HELD, {'AAAUSDT': _api_err(-1001, status=502)}, {'BBBUSDT'})
+check("서버 장애(5xx)도 거래불가로 흡수하지 않는다",
+      any(m.startswith('ORDER FAILED') for m in errors) and a._untradable_orders == [],
+      f"{errors} {a._untradable_orders}")
+
+# 대조: 진짜 시장 상태 거절은 그대로 억제된다.
+c, errors, orders = run_rebalance(
+    HELD, {'AAAUSDT': _api_err(-1121)}, {'BBBUSDT'})
+check("Invalid symbol(-1121)은 그대로 억제된다",
+      errors == [] and a._untradable_orders == ['AAAUSDT'],
+      f"{errors} {a._untradable_orders}")
+
+
+def run_cancel11(fail_on, listed):
+    saved = (a._trading_symbols, a.UNIVERSE)
+    try:
+        a._trading_symbols = lambda _c: set(listed)
+        a.UNIVERSE = ['AAAUSDT']
+        return a.force_cancel_all_orders(CancelClient(fail_on), ['AAAUSDT'])
+    finally:
+        a._trading_symbols, a.UNIVERSE = saved
+
+
+check("취소 거절도 인증 오류면 전체 중단시킨다",
+      run_cancel11({'AAAUSDT': _api_err(-1022)}, {'BBBUSDT'}) is False)
+check("취소 거절이 시장 상태면 중단시키지 않는다",
+      run_cancel11({'AAAUSDT': _api_err(-1121)}, {'BBBUSDT'}) is True)
+
+# 같은 심볼이 한 실행에서 매도와 매수로 동시에 실리지 않는다(11차 비판의 전제 반박).
+# 이게 성립해야 _record_unsent 의 기준이 "루프 자신의 앞선 체결" 과 어긋나지 않는다.
+_dup = []
+for _w in (0.0, 0.1, 0.25, 0.5, 0.75, 1.0):
+    c, errors, orders = run_rebalance(
+        {'AAA': pos('AAA', 500.0, 10.0)}, {}, {'AAAUSDT'},
+        target={'AAA': _w, 'CASH': 1.0 - _w}, liquidation_only=False)
+    _syms = c.symbols()
+    if len(_syms) != len(set(_syms)):
+        _dup.append((_w, _syms))
+check("한 심볼이 매도·매수로 두 번 실리지 않는다", _dup == [], str(_dup))
+
+check("보류한 매수를 일일 보고에 남긴다", "'매수 보류'" in _src)
 
 
 print()
