@@ -325,6 +325,22 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - cash buffer 변경은 `trade_state['buffer_changed']`로 기록하고, 다음 `--trade` 실행에서 처리한다.
 - monitor는 buffer 변경만으로 매매하지 않는다.
 
+## 기본 테스트 명령 (2026-08-31)
+
+```
+cd /home/gmoh/mon/251229 && bash run_tests.sh
+```
+
+- 코드 변경의 완료·통과·정상 선언은 실제 결과물 확인 + 이 명령 한 번의 전체 출력으로 한다.
+  한 번의 실행이 파일 여러 개를 돌려도 테스트 결과 한 개로 본다.
+- 대상은 `tests/test_*.py` 와 `trade/test_*.py`. 새 테스트는 같은 이름 규칙으로 두면 자동 포함된다.
+- `tests/smoke_v25_leverage_down.py` 는 실계좌에 주문을 낸다. 이름 규칙(`test_` 접두)에서 빠져 있어
+  이 명령으로는 실행되지 않는다. 손으로도 실행 금지.
+- 이 명령 밖에서 별도 명령·목록·실행기로 도는 비교·기준선·특성·변이 검사는 새로 만들지도, 기존 것을
+  판정 근거로 꺼내지도 않는다(운영자 지시 2026-08-31, dotfiles CLAUDE.md c7c0b9b).
+- 백테스트 연구 스크립트(`strategies/cap_defend/research/*.py`)는 테스트가 아니라 실험이다.
+  이 명령에 넣지 않는다.
+
 ## 코드 수정 시 규칙
 
 ### recommend는 항상 두 개 수정
