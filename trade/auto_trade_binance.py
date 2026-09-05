@@ -202,7 +202,10 @@ STABLECOINS = {'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'FDUSD', 'USDD', 'PYUSD', 
 
 UNIVERSE_SIZE = 3  # 헬스 통과한 상위 N개 (전략별)
 CAP = 1/3  # EW + 33% cap
-CASH_BUFFER_DEFAULT = 0.02  # 현금 버퍼 기본값 (state에서 동적 읽기)
+# V24 자산배분(2026-05-26) 이 정한 선물 계좌 현금버퍼는 1%. 이 값은 binance_state.json 의
+# fut_cash_buffer 로 읽는다 — 슬리브마다 상태파일이 달라서(주식 kis_trade_state / 현물 trade_state /
+# 선물 binance_state) 다른 파일에 적힌 값은 여기까지 오지 않는다. 기본값도 결정값과 같게 둔다.
+CASH_BUFFER_DEFAULT = 0.01  # 현금 버퍼 기본값 (state에서 동적 읽기)
 CASH_BUFFER = CASH_BUFFER_DEFAULT  # 런타임에 state에서 갱신
 MIN_NOTIONAL = 5.0  # 최소 주문 금액 (USDT)
 # V25 cycle 9: 코인별 margin 변경 preflight 에서 "무관 심볼 먼지"로 간주하는 상한.

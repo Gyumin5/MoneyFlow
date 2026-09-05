@@ -151,7 +151,8 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - 체결 밴드: DELTA_THRESHOLD=0.05 (명목 편차 ±5%). 채택 BT `_execute_rebalance` 수량 ±5% 와 정합(2026-08-25).
   매도·매수 게이트와 needs_rebalance(완료 판정) 세 곳을 함께 지배한다. 목표비중 0 전량청산·미보유 신규진입·
   카나리 OFF 청산·레버리지/마진 변경은 밴드를 타지 않는다. 주문 실패 시엔 밴드와 무관하게 rebalancing_needed 유지.
-- cash buffer: 1% (CASH_BUFFER)
+- cash buffer: 1% (CASH_BUFFER). 값은 `binance_state.json` 의 `fut_cash_buffer` 로 읽고,
+  코드 기본값(`CASH_BUFFER_DEFAULT`)도 같은 1% 다.
 
 ### V24 → V25 마이그레이션 (2026-05-28)
 
@@ -186,6 +187,11 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   - spot 계좌 (Upbit): 1% KRW
   - fut 계좌 (Binance): 1% USDT
   - 총 cash ≈ 5% of total
+  - 버퍼 값은 슬리브마다 자기 상태파일에서만 읽는다. stock=`kis_trade_state.json` 의
+    `stock_cash_buffer`, spot=`trade_state.json` 의 `spot_cash_buffer`,
+    fut=`binance_state.json` 의 `fut_cash_buffer`. 세 키를 한 파일에 모아두면 자기 파일이 아닌
+    슬리브는 그 값을 못 보고 코드 기본값으로 돈다 — 2026-05-26 마이그레이션이 셋을
+    `trade_state.json` 에만 써서 선물이 2026-09-06 까지 2% 로 돌았다(2026-09-06 1% 로 교정).
 - 리밸 트리거 (OR 조합):
   - T1: half_turnover (sum|cur_w - tgt_w|/2) ≥ 20pp
   - T3U_can: max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
