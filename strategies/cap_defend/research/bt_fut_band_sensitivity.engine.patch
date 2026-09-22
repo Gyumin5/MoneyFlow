@@ -1,0 +1,31 @@
+--- strategies/cap_defend/backtest_futures_v25.py	2026-09-23 01:24:00.873093809 +0900
++++ /tmp/claude-1000/-home-gmoh-mon-251229/c6db17ba-b0ce-4a19-b558-0a5dba480d91/scratchpad/fut_with_band.py	2026-09-22 21:40:41.879664504 +0900
+@@ -268,6 +268,10 @@
+         _trace=None):  # list를 넘기면 매 봉 {'date':..., 'target':..., 'rebal':bool} 기록
+     """시간봉 완전 선물 백테스트. 봉 단위 파라미터 지원."""
+ 
++    # 체결 밴드 민감도 실험용 토글(2026-09-22). 기본값 0.05 = 라이브 DELTA_THRESHOLD 와 동일.
++    # 실험이 끝나면 이 세 줄과 아래 두 사용처를 되돌린다.
++    _band = float(os.environ.get('FUT_REBAL_BAND', '0.05'))
++
+     bpd = {'D': 1, '4h': 6, '2h': 12, '1h': 24, '30m': 48, '15m': 96}[interval]
+     bars_per_year = bpd * 365
+ 
+@@ -542,7 +546,7 @@
+                 trade_count += 1
+             else:
+                 delta = target_qty[coin] - holdings[coin]
+-                if delta < -holdings[coin] * 0.05:
++                if delta < -holdings[coin] * _band:
+                     sell_qty = -delta
+                     sell_frac = sell_qty / holdings[coin]
+                     sell_margin = margins[coin] * sell_frac
+@@ -577,7 +581,7 @@
+                     trade_count += 1
+             else:
+                 delta = tqty - holdings[coin]
+-                if delta > holdings[coin] * 0.05:
++                if delta > holdings[coin] * _band:
+                     entry_p = cur * (1 + slip)
+                     add_notional = delta * entry_p
+                     add_margin = add_notional / entry_levs.get(coin, _cur_lev(date, coin))
