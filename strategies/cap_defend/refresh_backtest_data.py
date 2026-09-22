@@ -88,10 +88,15 @@ def refresh_coin() -> None:
 
 
 def refresh_futures() -> None:
-    import download_futures_data as fut_dl
+    import subprocess
+    import sys
+    from pathlib import Path
 
+    script = Path(__file__).resolve().parent / "download_futures_data.py"
     print("[futures] incremental refresh")
-    fut_dl.main(full_refresh=False)
+    rc = subprocess.call([sys.executable, str(script)])
+    if rc != 0:
+        raise SystemExit(f"[futures] download_futures_data.py failed rc={rc}")
     print("[futures] done")
 
 
