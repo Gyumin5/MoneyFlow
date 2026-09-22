@@ -41,22 +41,33 @@ DATA_DIR = '/home/gmoh/mon/251229/data/futures'
 BASE_DIR = '/home/gmoh/mon/251229/strategies/cap_defend'
 
 # ─── 심볼/슬리피지 ───
-TICKER_MAP = {
-    'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'SOL': 'SOLUSDT',
-    'BNB': 'BNBUSDT', 'XRP': 'XRPUSDT', 'DOGE': 'DOGEUSDT',
-    'ADA': 'ADAUSDT', 'AVAX': 'AVAXUSDT', 'TRX': 'TRXUSDT',
-    'LINK': 'LINKUSDT', 'DOT': 'DOTUSDT', 'MATIC': 'MATICUSDT',
-    'UNI': 'UNIUSDT', 'NEAR': 'NEARUSDT', 'LTC': 'LTCUSDT',
-    'BCH': 'BCHUSDT', 'APT': 'APTUSDT', 'ICP': 'ICPUSDT',
-    'FIL': 'FILUSDT', 'ATOM': 'ATOMUSDT', 'ARB': 'ARBUSDT',
-    'OP': 'OPUSDT', 'SUI': 'SUIUSDT', 'SHIB': 'SHIBUSDT',
-    'PEPE': 'PEPEUSDT', 'XLM': 'XLMUSDT', 'VET': 'VETUSDT',
-    'ALGO': 'ALGOUSDT', 'FTM': 'FTMUSDT', 'GRT': 'GRTUSDT',
-    'AAVE': 'AAVEUSDT', 'SAND': 'SANDUSDT', 'MANA': 'MANAUSDT',
-    'AXS': 'AXSUSDT', 'THETA': 'THETAUSDT', 'EOS': 'EOSUSDT',
-    'FLOW': 'FLOWUSDT', 'CHZ': 'CHZUSDT', 'APE': 'APEUSDT',
-    'GALA': 'GALAUSDT',
-}
+def _discover_tickers():
+    """가지고 있는 선물 데이터에서 심볼표를 만든다.
+
+    고정 목록으로 두면 조용히 낡는다 — 2026-09-22 실측에서 시점별 상위 40 중
+    스물한 종이 이 표에 없어서, 라이브는 살 수 있는 코인을 백테스트는 후보로
+    보지도 못했다. 데이터 폴더는 download_futures_data.py 가 시점별 유니버스로
+    채우므로, 여기서 폴더를 읽으면 유니버스 갱신이 그대로 따라온다.
+    """
+    if not os.path.isdir(DATA_DIR):
+        return {}
+    out = {}
+    for f in sorted(os.listdir(DATA_DIR)):
+        if not f.endswith('_1h.csv'):
+            continue
+        sym = f[:-7]
+        if not sym.endswith('USDT'):
+            continue
+        coin = sym[:-4]
+        # 1000SHIBUSDT 처럼 1000배 단위 계약은 같은 자산이다. 유니버스는 SHIB 로
+        # 부르므로 접두를 떼어 키를 맞춘다.
+        if coin.startswith('1000') and len(coin) > 4:
+            coin = coin[4:]
+        out[coin] = sym
+    return out
+
+
+TICKER_MAP = _discover_tickers()
 # 슬리피지: 시총 기반 tier (자동 할당)
 def _default_slippage(coin):
     tier1 = {'BTC', 'ETH'}  # 최소
@@ -70,20 +81,18 @@ SLIPPAGE_MAP = {coin: _default_slippage(coin) for coin in TICKER_MAP}
 
 # ─── 월별 시총 순위 ───
 def _load_mcap():
-    paths = [
-        os.path.join(BASE_DIR, '..', '..', 'backup_20260125', 'historical_universe.json'),
-        os.path.join(BASE_DIR, '..', '..', 'data', 'historical_universe.json'),
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            with open(p) as f:
-                raw = json.load(f)
-            result = {}
-            for ds, tickers in raw.items():
-                # 'BTC-USD' → 'BTC'
-                result[ds] = [t.replace('-USD', '') for t in tickers if t.replace('-USD', '') in TICKER_MAP]
-            return result
-    return {}
+    # 갱신되는 파일은 data/ 하나다. backup_20260125/ 사본을 먼저 보던 경로는
+    # 2025-12-01 에서 멈춰 있어서, 그 뒤 구간이 통째로 2025년 12월 순위로 돌았다.
+    p = os.path.join(BASE_DIR, '..', '..', 'data', 'historical_universe.json')
+    if not os.path.exists(p):
+        return {}
+    with open(p) as f:
+        raw = json.load(f)
+    result = {}
+    for ds, tickers in raw.items():
+        # 'BTC-USD' → 'BTC'
+        result[ds] = [t.replace('-USD', '') for t in tickers if t.replace('-USD', '') in TICKER_MAP]
+    return result
 
 _MCAP = None
 def get_mcap(date):

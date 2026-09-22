@@ -10,19 +10,65 @@ import requests, pandas as pd, time, os, sys
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'futures')
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Top 40 by market cap that have Binance USDT-M futures
-SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
-    'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'TRXUSDT', 'LINKUSDT',
-    'DOTUSDT', 'MATICUSDT', 'UNIUSDT', 'NEARUSDT', 'LTCUSDT',
-    'BCHUSDT', 'APTUSDT', 'ICPUSDT', 'FILUSDT', 'ATOMUSDT',
-    'ARBUSDT', 'OPUSDT', 'SUIUSDT', 'SHIBUSDT', 'PEPEUSDT',
-    'XLMUSDT', 'VETUSDT', 'ALGOUSDT', 'FTMUSDT', 'GRTUSDT',
-    'AAVEUSDT', 'SANDUSDT', 'MANAUSDT', 'AXSUSDT', 'THETAUSDT',
-    'EOSUSDT', 'FLOWUSDT', 'CHZUSDT', 'APEUSDT', 'GALAUSDT',
-]
-
 BASE_URL = 'https://fapi.binance.com'
+
+STABLE = {'USDT', 'USDC', 'DAI', 'TUSD', 'BUSD', 'FDUSD', 'PYUSD', 'USDD',
+          'RLUSD', 'USDG', 'EURC', 'XAUT', 'PAXG', 'USDE', 'USD1'}
+UNIVERSE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             '..', '..', 'data', 'historical_universe.json')
+UNIVERSE_TOP = 40          # 전략이 실제로 보는 후보 깊이
+UNIVERSE_FROM = '2020-09-01'   # 백테스트 시작(2020-10-01) 직전부터
+
+
+def target_symbols():
+    """받아야 할 심볼 = 시점별 상위 40 에 한 번이라도 든 코인 중 무기한선물이 있는 것.
+
+    고정 목록으로 두면 조용히 낡는다 — 2026-09 시점에 상위 40 중 스물한 종의
+    가격이 없어서 백테스트가 그 코인들을 후보로 보지도 못하는 상태였다.
+    목록을 시점별 유니버스에서 만들면 유니버스를 갱신할 때 같이 따라온다.
+    """
+    import json
+    try:
+        r = requests.get(f'{BASE_URL}/fapi/v1/exchangeInfo', timeout=30).json()
+        perp = {s['symbol'] for s in r['symbols']
+                if s.get('contractType') == 'PERPETUAL'
+                and s['quoteAsset'] == 'USDT' and s['status'] == 'TRADING'}
+    except Exception as exc:
+        raise SystemExit(f'exchangeInfo 조회 실패: {exc}')
+
+    with open(UNIVERSE_FILE) as f:
+        months = json.load(f)
+
+    want = set()
+    for month, tickers in months.items():
+        if month < UNIVERSE_FROM:
+            continue
+        n = 0
+        for t in tickers:
+            sym = t.replace('-USD', '')
+            if sym in STABLE:
+                continue
+            n += 1
+            want.add(sym)
+            if n >= UNIVERSE_TOP:
+                break
+
+    # 값이 작은 코인은 계약이 1000배 단위다(1000SHIBUSDT 등). 같은 자산이고
+    # 수익률·모멘텀은 배수와 무관하므로 그 이름으로 받는다. 이걸 빼면 시바이누가
+    # 64개월, 페페가 28개월 동안 후보에서 통째로 빠진다.
+    picked = set()
+    for s in want:
+        for cand in (s + 'USDT', '1000' + s + 'USDT'):
+            if cand in perp:
+                picked.add(cand)
+                break
+
+    # 이미 받아둔 심볼은 유니버스에서 빠졌어도 계속 갱신한다 — 과거 구간에서 쓰인다.
+    existing = {f.split('_')[0] for f in os.listdir(DATA_DIR) if f.endswith('_1h.csv')}
+    return sorted(picked | existing)
+
+
+SYMBOLS = target_symbols()
 
 
 def download_klines(symbol, interval='1h', start='2019-01-01', limit=1500, start_ts_override=None):

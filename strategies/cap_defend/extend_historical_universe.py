@@ -5,17 +5,17 @@ The file holds, per month start, the coin tickers ranked by market cap at that
 moment. The backtests read it so that a coin is only ever a candidate on dates
 when it actually was in the top ranks — that is what keeps survivorship bias out.
 
-There is no free endpoint that returns a historical top-N list, so this
-reconstructs one: take a candidate pool (today's top-N by market cap, plus every
-coin already listed in the most recent stored month), pull each coin's daily
-market-cap series, and rank the pool at each month start.
+Source: CoinMarketCap's historical snapshot pages (coinmarketcap.com/historical/
+YYYYMMDD/). Those are weekly point-in-time top-N rankings, which is exactly the
+thing needed here — no reconstruction, no candidate pool, no survivorship hole.
+The ranking table is not in __NEXT_DATA__; it sits in an escaped `initialState`
+blob under listingHistorical.data, so it is pulled out by string slicing.
 
-Known limitation, stated rather than hidden: a coin that was highly ranked in the
-new months but has since fallen out of the candidate pool cannot appear. The run
-prints how many of the last stored month's leaders are still in the pool so the
-size of that blind spot is measurable.
+Snapshots land on Sundays, so for each missing month start the nearest snapshot
+on or before that date (within a week) is used, and the snapshot date actually
+taken is printed.
 
-Usage:  python3 extend_historical_universe.py [--pool 250] [--depth 180] [--dry-run]
+Usage:  python3 extend_historical_universe.py [--depth 180] [--dry-run]
 """
 
 from __future__ import annotations
@@ -24,28 +24,45 @@ import argparse
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 import requests
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 UNIVERSE_FILE = os.path.join(ROOT, "data", "historical_universe.json")
-API = "https://api.coingecko.com/api/v3"
+SNAPSHOT_URL = "https://coinmarketcap.com/historical/{}/"
+UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
 
 
-def _get(sess: requests.Session, path: str, params: dict, tries: int = 8):
-    delay = 6.0
-    for attempt in range(tries):
-        r = sess.get(f"{API}{path}", params=params, timeout=45)
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code in (429, 502, 503, 504):
-            time.sleep(delay)
-            delay = min(delay * 1.6, 90.0)
-            continue
+def _extract_listing(html: str) -> list[dict]:
+    """listingHistorical.data 를 꺼낸다.
+
+    표는 __NEXT_DATA__ 본문이 아니라 그 안의 initialState 에 들어 있는데, 그 값이
+    JSON 문자열로 한 번 더 감싸져 있다. 손으로 역이스케이프하면 반드시 틀리므로
+    문자열 리터럴 자체를 JSON 디코더에 맡겨 푼다.
+    """
+    key = '"initialState":'
+    i = html.find(key)
+    if i < 0:
+        return []
+    try:
+        inner, _ = json.JSONDecoder().raw_decode(html, i + len(key))
+        state = json.loads(inner) if isinstance(inner, str) else inner
+        data = (state.get("cryptocurrency", {})
+                     .get("listingHistorical", {})
+                     .get("data", []))
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, ValueError, AttributeError):
+        return []
+
+
+def fetch_snapshot(sess: requests.Session, day) -> list[dict] | None:
+    r = sess.get(SNAPSHOT_URL.format(day.strftime("%Y%m%d")), timeout=45)
+    if r.status_code != 200:
         return None
-    return None
+    rows = _extract_listing(r.text)
+    return rows or None
 
 
 def month_starts(after: str, upto: datetime) -> list[str]:
@@ -59,7 +76,6 @@ def month_starts(after: str, upto: datetime) -> list[str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pool", type=int, default=250, help="candidate pool size")
     ap.add_argument("--depth", type=int, default=180, help="tickers stored per month")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -74,63 +90,40 @@ def main() -> None:
         return
 
     sess = requests.Session()
-    sess.headers.update({"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+    sess.headers.update({"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"})
 
-    pool: dict[str, str] = {}  # coingecko id -> ticker
-    for page in range(1, args.pool // 250 + 2):
-        rows = _get(sess, "/coins/markets", {
-            "vs_currency": "usd", "order": "market_cap_desc",
-            "per_page": 250, "page": page, "sparkline": "false"})
-        if not rows:
-            break
-        for row in rows:
-            pool[row["id"]] = f"{row['symbol'].upper()}-USD"
-        if len(pool) >= args.pool:
-            break
-        time.sleep(3)
-    pool = dict(list(pool.items())[: args.pool])
-    print(f"candidate pool: {len(pool)} coins")
-
-    prev_leaders = universe[last_month][: args.depth]
-    covered = sum(1 for t in prev_leaders if t in set(pool.values()))
-    print(f"coverage of {last_month} top-{len(prev_leaders)}: {covered}/{len(prev_leaders)}")
-
-    caps: dict[str, pd.Series] = {}
-    failed: list[str] = []
-    for i, (cid, ticker) in enumerate(pool.items(), 1):
-        data = _get(sess, f"/coins/{cid}/market_chart",
-                    {"vs_currency": "usd", "days": "365", "interval": "daily"})
-        mc = (data or {}).get("market_caps") or []
-        if not mc:
-            failed.append(ticker)
-        else:
-            s = pd.Series({pd.to_datetime(ms, unit="ms").normalize(): cap
-                           for ms, cap in mc if cap})
-            caps[ticker] = s[~s.index.duplicated(keep="last")]
-        if i % 25 == 0:
-            print(f"  {i}/{len(pool)} fetched, {len(failed)} without data")
-        time.sleep(2.5)
-
-    print(f"market-cap series: {len(caps)} ok, {len(failed)} missing")
-    if not caps:
-        raise SystemExit("no market cap data fetched")
-
-    frame = pd.DataFrame(caps).sort_index()
+    prev_leaders = set(universe[last_month][:40])
     added = 0
     for ms in missing:
-        ts = pd.Timestamp(ms)
-        window = frame[(frame.index >= ts - pd.Timedelta(days=3)) & (frame.index <= ts)]
-        if window.empty:
-            print(f"  {ms}: no data in window — skipped")
+        target = datetime.strptime(ms, "%Y-%m-%d").date()
+        rows = used = None
+        for back in range(0, 8):
+            day = target - timedelta(days=back)
+            rows = fetch_snapshot(sess, day)
+            if rows:
+                used = day
+                break
+            time.sleep(1.5)
+        if not rows:
+            print(f"  {ms}: 스냅샷 없음 — 건너뜀")
             continue
-        row = window.ffill().iloc[-1].dropna().sort_values(ascending=False)
-        ranked = list(row.index[: args.depth])
-        if len(ranked) < 40:
-            print(f"  {ms}: only {len(ranked)} ranked — skipped")
-            continue
-        universe[ms] = ranked
+        rows = sorted(rows, key=lambda r: r.get("cmcRank", 10 ** 9))
+        tickers, seen = [], set()
+        for r in rows:
+            sym = str(r.get("symbol", "")).upper()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            tickers.append(f"{sym}-USD")
+            if len(tickers) >= args.depth:
+                break
+        keep = len(prev_leaders & set(tickers[:40]))
+        print(f"  {ms}: 스냅샷 {used} · {len(tickers)}종 · 직전월 상위40 중 {keep}종 유지 · "
+              f"top5={tickers[:5]}")
+        universe[ms] = tickers
+        prev_leaders = set(tickers[:40])
         added += 1
-        print(f"  {ms}: {len(ranked)} tickers, top5={ranked[:5]}")
+        time.sleep(1.5)
 
     if args.dry_run:
         print(f"\ndry-run: would add {added} months")
