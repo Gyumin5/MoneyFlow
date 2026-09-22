@@ -36,6 +36,15 @@ import numpy as np, pandas as pd, os, sys, json, time
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'futures')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 현금 버퍼 — 라이브 정본과 같은 값이어야 한다.
+# 현물 라이브는 trade_state.json 의 spot_cash_buffer 를, 선물 라이브는 binance_state.json 의
+# fut_cash_buffer 를 읽고 둘 다 1% 다. 목표 규모를 총자산×(1-버퍼)×비중으로 잡는 식도 같다.
+# 여기 값이 라이브와 다르면 백테스트가 라이브와 다른 규모로 돌아서 절대 수치를 그대로 읽을 수 없다.
+# 2026-09-22 까지는 버퍼 대신 1/(1+leverage×tx_cost)=0.99602 를 썼다 — 마지막 매수 leg 가
+# 자본 부족으로 빠지지 않게 거래비용분만 예약한 값이라 라이브 버퍼와 목적이 다르다.
+# 1% 는 그 예약분보다 크므로 그 미체결 방지 성질은 그대로 유지된다.
+CASH_BUFFER = 0.01
+
 # ─── 심볼/슬리피지 ───
 def _discover_tickers():
     """가지고 있는 선물 데이터에서 심볼표를 만든다.
@@ -279,10 +288,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
     def _slip(coin):
         return 0.0 if slippage_mode == 'none' else SLIPPAGE_MAP.get(coin, 0.0005)
 
-    # cash buffer 제거 — 100% 배분. 단 tx 비용분은 margin_factor로 예약
-    # sum(margin_i + tx_i) ≤ pv, tx_i = margin_i * leverage * tx_cost
-    # ⇒ margin_factor = 1/(1 + leverage * tx_cost). 마지막 leg가 자본 부족으로 미체결 방지.
-    margin_factor = 1.0 / (1.0 + leverage * tx_cost)
+    # 배분 규모는 라이브와 같은 현금 버퍼로 잡는다(모듈 상단 CASH_BUFFER).
+    # 예약 성질 확인: sum(margin_i + tx_i) = pv*(1-buffer)*(1 + leverage*tx_cost) < pv 이므로
+    # 마지막 leg 가 자본 부족으로 미체결되는 일은 여전히 없다.
+    margin_factor = 1.0 - CASH_BUFFER
 
     bpd = {'D': 1, '4h': 6, '2h': 12, '1h': 24, '30m': 48, '15m': 96}[interval]
     bars_per_year = bpd * 365

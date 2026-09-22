@@ -40,6 +40,13 @@ import numpy as np, pandas as pd, os, sys, json, time
 DATA_DIR = '/home/gmoh/mon/251229/data/futures'
 BASE_DIR = '/home/gmoh/mon/251229/strategies/cap_defend'
 
+# 현금 버퍼 — 라이브 정본과 같은 값이어야 한다.
+# 라이브는 binance_state.json 의 fut_cash_buffer 를 읽고 코드 기본값도 1% 다
+# (auto_trade_binance.py CASH_BUFFER_DEFAULT). 목표 명목을 총자산×(1-버퍼)×비중×배수로
+# 잡는 식도 같다. 여기 값이 라이브와 다르면 백테스트가 라이브와 다른 규모로 돌아서
+# 절대 수치를 그대로 읽을 수 없다 — 2026-09-22 까지 0.05 로 박혀 있었다.
+CASH_BUFFER = 0.01
+
 # ─── 심볼/슬리피지 ───
 def _discover_tickers():
     """가지고 있는 선물 데이터에서 심볼표를 만든다.
@@ -511,7 +518,7 @@ def run(bars, funding, interval='D', leverage=3.0,
             cur = _get_fill_price(coin, date)
             if cur <= 0:
                 continue
-            tmgn = pv * w * 0.95
+            tmgn = pv * w * (1.0 - CASH_BUFFER)
             cur_L = _cur_lev(date, coin)
             tnotional = tmgn * cur_L
             tqty = tnotional / cur
