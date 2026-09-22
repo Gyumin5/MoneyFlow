@@ -6,7 +6,7 @@ tags: 선물, 드리프트, 종목집중도, 채택기준
 - 방법: 제외는 일봉 딕셔너리에서 키를 지워서만 했다 — 두 엔진의 후보 루프가 bars.get(coin) is None 에서 거른다. 선물 엔진엔 제외 인자가 없어 인자를 새로 다는 대신 이 방법을 썼고 SSoT 엔진 0줄. 사후 기여도 분해는 쓰지 않았다(선정이 연쇄로 바뀌어 틀린 답이 나온다).
 - 실험/실패: "BNB·SOL 을 빼면 문턱 우위가 사라진다" 는 1차 결론은 단일 조합의 한 칸에 기댄 것이었다. 같은 형태의 제외 실험을 다시 돌릴 필요는 없다 — 네 세계 결과가 state/20260922-exclude/ 에 다 있다. 다시 시도하면 시간낭비.
 - 안 한 것: 세 종목 이상 동시 제외(후보군이 전략을 못 돌릴 만큼 줄어든다), BTC 제외(카나리 기준 자산이라 다른 전략이 된다), ai-debate 검토(다음 단계).
-- 보고서 reports/2026-09-22-코인-종목-집중도와-문턱-의존.html, 원시출력 state/20260922-exclude/ (out.log 693초 · out_placebo_TRX_ETH.log 707초 · out_placebo_BNB_TRX.log 750초 · out_placebo_BNB.log 713초 · out_leave_one_out.log 383초).
+- 판정 커밋 3680f9f. 보고서 reports/2026-09-22-코인-종목-집중도와-문턱-의존.html, 원시출력 state/20260922-exclude/ (out.log 693초 · out_placebo_TRX_ETH.log 707초 · out_placebo_BNB_TRX.log 750초 · out_placebo_BNB.log 713초 · out_leave_one_out.log 383초).
 
 ## [2026-09-22] 결정: 현물 드리프트 문턱은 현행 0.10 유지 — 조인 쪽은 고원이 아니라 비용에 지는 경사면
 tags: 현물, 드리프트, 백테스트, 채택기준
