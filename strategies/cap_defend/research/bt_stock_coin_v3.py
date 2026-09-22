@@ -43,12 +43,16 @@ def precompute(prices_df, mom_periods, defense_mom_periods):
     import os as _os
     # STOCK_ZMOM: 'weighted'(기본, 채택BT) | 'pure252'(2026-06-06 이전 라이브 버그 재현)
     #             | 'avg4'(63·126·189·252 단순평균 — C3 플래토 점검용, 2026-09-22)
+    #             | 'avg3'(63·126·252 단순평균 — avg4 의 우위가 189일 항목 때문인지
+    #                      균등 가중 때문인지 가르는 축, 2026-09-22)
     _zmom = _os.environ.get('STOCK_ZMOM', 'weighted')
     if _zmom == 'pure252':
         wmom = m252
     elif _zmom == 'avg4':
         m189 = p_off / p_off.shift(189) - 1
         wmom = (m63 + m126 + m189 + m252) / 4
+    elif _zmom == 'avg3':
+        wmom = (m63 + m126 + m252) / 3
     else:
         wmom = 0.5*m63 + 0.3*m126 + 0.2*m252
     rets = p_off.pct_change()
