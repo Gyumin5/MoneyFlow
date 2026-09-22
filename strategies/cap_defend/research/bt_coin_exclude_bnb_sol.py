@@ -38,13 +38,19 @@ sys.path.insert(0, HERE)
 
 import bt_coin_param_resweep as R  # noqa: E402  (하니스·캐시·순위합 재사용)
 
-DROP = ("BNB", "SOL")
+# 뺄 종목은 인자로 준다. 기본은 운영자가 지목한 BNB·SOL.
+# 위약 대조(같은 크기의 노출을 다른 종목에서 빼면 같은 일이 벌어지나)는
+#   python3 bt_coin_exclude_bnb_sol.py TRX ETH
+# 처럼 부른다. 선물 보유 비중일 기준 BNB+SOL 21.4% 에 TRX+ETH 23.4% 가 맞붙는다.
+DROP = tuple(x.upper() for x in sys.argv[1:]) or ("BNB", "SOL")
 FUT_NEW = 0.0075
 
+# 기본 쌍은 이름을 바꾸지 않는다 — 이미 돈 캐시를 그대로 쓰기 위해서다.
+_tag = "" if DROP == ("BNB", "SOL") else "".join(DROP)
 INC_CUR = R.CUR              # 포함 · 현행 0.03 (캐시 있음)
 INC_NEW = "선물 0.0075"       # 포함 · 0.0075 (캐시 있음)
-EXC_CUR = "제외 현행"
-EXC_NEW = "제외 0.0075"
+EXC_CUR = f"제외{_tag} 현행"
+EXC_NEW = f"제외{_tag} 0.0075"
 
 
 def build_k2(bars: dict):
@@ -133,9 +139,10 @@ def main() -> None:
     # ── 2. 제외 세계 안에서 문턱 우위가 살아남나 (핵심) ──
     exc_arms = [(EXC_CUR, {}, {}), (EXC_NEW, {}, dict(drift_threshold=FUT_NEW))]
     inc_arms = [(INC_CUR, {}, {}), (INC_NEW, {}, dict(drift_threshold=FUT_NEW))]
+    label = " ".join(DROP)
     for stress in (False, True):
-        R.report("문턱 우위 · BNB SOL 포함", inc_arms, stress, stock_eq)
-        R.report("문턱 우위 · BNB SOL 제외", exc_arms, stress, stock_eq)
+        R.report(f"문턱 우위 · {label} 포함", inc_arms, stress, stock_eq)
+        R.report(f"문턱 우위 · {label} 제외", exc_arms, stress, stock_eq)
 
     print(f"\n총 {time.time()-t0:.0f}초")
 
