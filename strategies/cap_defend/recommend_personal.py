@@ -12,7 +12,7 @@ Coin V24: 1D 단일 멤버 D_SMA42 (live engine: trade/coin_live_engine.py)
   - 이전 H4_SMA240 멤버 제거 (4h 데이터 fetch 제거)
 
 Futures V25: D_SMA42 sleeve + 동적 per-coin L + CROSS (auto_trade_binance.py)
-  - Sleeve: D_SMA42 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.03 (V24 와 동일)
+  - Sleeve: D_SMA42 1D봉, SMA42, Mom18/127, snap 95봉×5, drift_threshold=0.015 (2026-09-23 조임)
   - 동적 L: 각 코인 L = min(BTC_cap, K2_per_coin). Lmin=2 / Lmid=3 / Lmax=4
     · BTC cap: BTC/SMA42 ratio → L4(>1.05) / L3(>1.015) / L2
     · K2 per-coin: close/SMA7 ratio → L4(>1.075) / L3(>1.025) / L2
@@ -246,7 +246,7 @@ VERSION_HISTORY = [
 • <b>실매매:</b> trade/coin_live_engine.py + trade/executor_coin.py
 
 <b>▶ 선물 (V25 — D_SMA42 + 동적 per-coin L + CROSS, 2026-05-28 도입)</b>
-• <b>Sleeve:</b> D_SMA42 sn=95 n=5 drift=0.03 (V24 와 동일)
+• <b>Sleeve:</b> D_SMA42 sn=95 n=5 drift=0.015
 • <b>동적 L:</b> 각 코인 L = min(BTC_cap, K2_per_coin), Lmin=2 / Lmid=3 / Lmax=4
   · BTC cap: BTC/SMA42 ratio &gt; 1.05 → L4, &gt; 1.015 → L3, else L2
   · K2 per-coin: close/SMA7 ratio &gt; 1.075 → L4, &gt; 1.025 → L3, else L2

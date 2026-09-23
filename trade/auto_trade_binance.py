@@ -3,11 +3,11 @@
 바이낸스 선물 자동매매 — V24 L3 단일 멤버 (2026-04-30 확정)
 ========================================
 V24 신호:
-- D_SMA42:    (interval=D, SMA=42, Mom=18/127, mom2vol, daily vol 5%, Snap=95 bars, n_snap=5, drift=0.03)
+- D_SMA42:    (interval=D, SMA=42, Mom=18/127, mom2vol, daily vol 5%, Snap=95 bars, n_snap=5, drift=0.015)
 
 V24 변경 (vs V22):
 - 1D + 4h 2멤버 → 1D 단일 멤버 (4h 제거, snap=90→57)
-- drift_threshold = 0.03 (V24 갱신 05-04, 0.05 → 0.03 반응성 ↑)
+- drift_threshold = 0.015 (2026-09-23, 0.03 → 0.015 반응성 ↑)
 - ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}
 - cron 4h x 6 → 1d x 1 (09:05)
 
@@ -171,7 +171,7 @@ DEBUG_MARGIN = True       # set_margin_type / set_leverage 결과
 
 SCHEMA_VERSION = 'V25'
 REFILL_ENABLED_FUT = True  # V24 refill v2 ON (drift fire 시 mom2 음수 슬롯 교체)
-DRIFT_THRESHOLD_FUT = 0.03  # V24 갱신 (05-04): 0.05 → 0.03
+DRIFT_THRESHOLD_FUT = 0.015  # 2026-09-23: 0.03 → 0.015 (BT 고원 0.005~0.02, 기본비용 1위·앵커 7/7)
 DRIFT_ENABLED_FUT = True  # False 로 토글 시 drift_fire 강제 False (snap-only fallback)
 
 ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0}  # V24: 단일 멤버
@@ -2915,7 +2915,7 @@ def main():
 
         lines = [f"📊 바이낸스 선물 일일 리포트 ({now})"]
         lines.append(f"총 자산: ${pv:.2f} ({pnl_pct:+.1f}%)")
-        lines.append(f"레버리지: 고정 3x (V24 1D 단일 D_SMA42 sn=95 n=5 drift=0.03)")
+        lines.append(f"레버리지: 동적 2~4x (V25 1D 단일 D_SMA42 sn=95 n=5 drift=0.015)")
 
         if positions:
             lines.append("\n포지션 (실질금액, notional/lev):")
@@ -3121,11 +3121,11 @@ def main():
             drift_fire_fut = False  # snap-only fallback
         if not _drift_data_ok:
             log.warning("drift: 포지션 데이터 이상으로 발화 차단(fail-closed) — 이번 cron 드리프트 리밸 skip")
-        log.info(f"V24 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.2f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT} data_ok={_drift_data_ok}")
+        log.info(f"V24 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.3f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT} data_ok={_drift_data_ok}")
         if drift_fire_fut and not state.get('rebalancing_needed', False):
             state['rebalancing_needed'] = True
             state['last_rebal_reason'] = 'drift'
-            log.info(f"  🔔 V24 drift 발화 (silent) → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.2f}")
+            log.info(f"  🔔 V24 drift 발화 (silent) → rebalancing_needed=True. ht={ht_fut:.4f} >= {DRIFT_THRESHOLD_FUT:.3f}")
 
         # V24 refill v2 — drift fire 시 mom2 음수 슬롯 교체 후 combined 재계산
         if drift_fire_fut and REFILL_ENABLED_FUT:
@@ -3551,7 +3551,7 @@ def main():
                 'schema': 'V24',
                 '평가액': f'${pv_after:.2f}',
                 'ht': f'{ht_fut:.4f}',
-                'drift_threshold': f'{DRIFT_THRESHOLD_FUT:.2f}',
+                'drift_threshold': f'{DRIFT_THRESHOLD_FUT:.3f}',
                 'drift_fire': '예 🔔' if drift_fire_fut else '아니오',
                 '리밸 대기': '예' if state.get('rebalancing_needed', False) else '아니오',
                 '포지션 수': str(visible_positions),

@@ -108,7 +108,7 @@ Cron:     매일 09:05 KST (일 1회)
 
 ```
 sleeve:   D_SMA42 단일 (주식/코인과 동일 sleeve 정의)
-스냅:     snap_interval_bars=95, n_snapshots=5, drift_threshold=0.03
+스냅:     snap_interval_bars=95, n_snapshots=5, drift_threshold=0.015
 카나리:   canary_hyst=0.015, universe_size=3, cap=1/3, health=mom2vol
 레버리지: 동적 per-coin L = min(BTC_cap, K2_percoin), Lmin=2 / Lmid=3 / Lmax=4
           · BTC_cap: BTC/SMA42 >1.05→L4, >1.015→L3, else L2

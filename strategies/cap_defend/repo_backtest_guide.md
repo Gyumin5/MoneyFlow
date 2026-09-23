@@ -103,4 +103,4 @@ python3 strategies/cap_defend/check_data_freshness.py
 
 - 현물: `V24` — D_SMA42 단일, n_snap=7 snap_int=217 drift=0.10, 카나리 SMA42±1.5%
 - 주식: `V25` — R7, EEM SMA200±0.5%, Z-score+3-mom(30/72/230) 필터 → Top3 cap+7%Cash, 3트랜치(snap=69)
-- 선물: `V25` — D_SMA42 sleeve snap=95 n=5 drift=0.03, 동적 per-coin L=min(BTC_cap,K2), CROSSED 마진
+- 선물: `V25` — D_SMA42 sleeve snap=95 n=5 drift=0.015, 동적 per-coin L=min(BTC_cap,K2), CROSSED 마진

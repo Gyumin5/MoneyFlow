@@ -37,7 +37,7 @@ updated: 2026-08-25
 
 | 항목 | 값 |
 |---|---|
-| sleeve | D_SMA42 단일, snap_interval=95, n_snapshots=5, drift=0.03 |
+| sleeve | D_SMA42 단일, snap_interval=95, n_snapshots=5, drift=0.015 |
 | 선정/헬스 | universe 3종 cap 1/3, mom2vol(mom 18/127, vol 90d ≤ 5%), 카나리 BTC SMA42 ±1.5% |
 | 레버리지 | 동적 per-coin `L = min(BTC_cap, K2_per_coin)`, Lmin/Lmid/Lmax = 2/3/4 |
 | 마진모드 | CROSSED (V24 ISOLATED 에서 전환) |

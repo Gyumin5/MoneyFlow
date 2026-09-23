@@ -128,7 +128,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 
 ### 구성
 
-- Sleeve: D_SMA42 단일 (V24 와 동일) — snap_interval_bars=95, n_snapshots=5, drift_threshold=0.03
+- Sleeve: D_SMA42 단일 (V24 와 동일) — snap_interval_bars=95, n_snapshots=5, drift_threshold=0.015
 - canary_hyst=0.015, universe_size=3, cap=1/3, health_mode=mom2vol
 - 동적 per-coin L (V25 신규): 각 코인 L = min(BTC_cap, K2_per_coin)
   · BTC cap: BTC/SMA42 ratio > 1.05 → L4, > 1.015 → L3, else L2

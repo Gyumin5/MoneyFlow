@@ -121,7 +121,7 @@ D_SMA42 단일 sleeve, 매일 09:05:
 D_SMA42 sleeve, 매일 09:05:
   1. BTC vs SMA42 ±1.5% 카나리
   2. mom2vol 헬스 → Top3 + 1/3 cap
-  3. snap_interval=95봉 × n=5 snapshot merge, drift ≥ 0.03
+  3. snap_interval=95봉 × n=5 snapshot merge, drift ≥ 0.015
   4. 동적 per-coin L = min(BTC_cap, K2_percoin), Lmin=2/mid=3/max=4
   5. 마진모드 CROSSED, 스탑 없음, 캐시가드 없음
 ```
