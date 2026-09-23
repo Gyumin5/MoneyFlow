@@ -1,0 +1,46 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 19ab716..e1273ac 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -46,6 +46,9 @@ BASE_DIR = '/home/gmoh/mon/251229/strategies/cap_defend'
+ # 잡는 식도 같다. 여기 값이 라이브와 다르면 백테스트가 라이브와 다른 규모로 돌아서
+ # 절대 수치를 그대로 읽을 수 없다 — 2026-09-22 까지 0.05 로 박혀 있었다.
+ CASH_BUFFER = 0.01
++# 측정용 토글 — 드리프트 비교 좌표계를 라이브와 맞춘다. 끝나면 되돌린다.
++_DRIFT_PARITY = __import__('os').environ.get('FUT_DRIFT_PARITY', 'off') == 'on'
++_HT_LOG = []   # 측정용 — (date, ht) 누적. 끝나면 되돌린다.
+ 
+ # ─── 심볼/슬리피지 ───
+ def _discover_tickers():
+@@ -673,6 +676,20 @@ def run(bars, funding, interval='D', leverage=3.0,
+             return {t: w / total for t, w in combined.items()}
+         return {'CASH': 1.0}
+ 
++    def _drift_target(tgt_w):
++        """드리프트 비교용 목표 — 라이브 좌표계(auto_trade_binance.py 3098~3118)."""
++        if not _DRIFT_PARITY or CASH_BUFFER <= 0:
++            return tgt_w
++        cash_in = sum(float(v) for k, v in tgt_w.items() if k.upper() == 'CASH')
++        if cash_in >= 0.99:
++            return tgt_w
++        out = {}
++        for k, v in tgt_w.items():
++            out[k] = float(v) if k.upper() == 'CASH' else float(v) * (1.0 - CASH_BUFFER)
++        if not any(k.upper() == 'CASH' for k in tgt_w):
++            out['CASH'] = CASH_BUFFER
++        return out
++
+     def _half_turnover(cur_w, tgt_w):
+         all_k = set(cur_w.keys()) | set(tgt_w.keys())
+         return sum(abs(tgt_w.get(k, 0) - cur_w.get(k, 0)) for k in all_k) / 2
+@@ -959,7 +976,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+         # ── Drift (daily_gate 시 일 1회만) ──
+         # 변종: DRIFT_HEALTH_MODE = 'off' | 'refill' | 'cash'
+         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
+-            if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
++            _ht_now = _half_turnover(_current_weights(prev_date), _drift_target(combined))
++            _HT_LOG.append((date, _ht_now))
++            if _ht_now >= drift_threshold:
+                 need_rebal = True
+                 # 변종: 헬스 fail 슬롯 처리 (mode != off 일 때만)
+                 import os as _os
