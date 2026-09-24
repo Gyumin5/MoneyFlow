@@ -1,0 +1,60 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 6a0d963..50e0d26 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -656,7 +656,24 @@ def run(bars, funding, interval='D', leverage=3.0,
+             return {'CASH': 1.0}
+ 
+         w = min(1.0 / len(picks), cap)
+-        weights = {coin: w for coin in picks}
++        # [실험 토글 2026-09-25 — 종목 간 변동성 가중. 결론 후 revert 할 것]
++        # 총 노출은 그대로 두고 고른 종목 사이 배분만 바꾼다. 축 하나.
++        if os.environ.get('CD_WEIGHT_MODE_FUT', 'ew') == 'invvol' and len(picks) > 1:
++            _ld = int(os.environ.get('CD_WEIGHT_VOL_DAYS', '90'))
++            _inv = {}
++            for _c in picks:
++                _df = bars.get(_c)
++                _ci = _df.index.get_indexer([sig_date], method='ffill')[0]
++                _v = calc_vol_daily(_df['Close'].values[:_ci + 1], bpd, lookback_days=_ld)
++                _inv[_c] = (1.0 / _v) if _v and _v > 0 else 0.0
++            _s = sum(_inv.values())
++            if _s > 0:
++                _tot = w * len(picks)
++                weights = {_c: min(_inv[_c] / _s * _tot, cap) for _c in picks}
++            else:
++                weights = {coin: w for coin in picks}
++        else:
++            weights = {coin: w for coin in picks}
+         total = sum(weights.values())
+         if total < 0.999:
+             weights['CASH'] = 1.0 - total
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 65dfe39..da44d56 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -666,7 +666,24 @@ def run(bars, funding, interval='1h', leverage=1.0,
+             return {'CASH': 1.0}
+ 
+         w = min(1.0 / len(picks), cap)
+-        weights = {coin: w for coin in picks}
++        # [실험 토글 2026-09-25 — 종목 간 변동성 가중. 결론 후 revert 할 것]
++        # 총 노출은 그대로 두고 고른 종목 사이 배분만 바꾼다. 축 하나.
++        if os.environ.get('CD_WEIGHT_MODE_SPOT', 'ew') == 'invvol' and len(picks) > 1:
++            _ld = int(os.environ.get('CD_WEIGHT_VOL_DAYS', '90'))
++            _inv = {}
++            for _c in picks:
++                _df = bars.get(_c)
++                _ci = _df.index.get_indexer([sig_date], method='ffill')[0]
++                _v = calc_vol_daily(_df['Close'].values[:_ci + 1], bpd, lookback_days=_ld)
++                _inv[_c] = (1.0 / _v) if _v and _v > 0 else 0.0
++            _s = sum(_inv.values())
++            if _s > 0:
++                _tot = w * len(picks)
++                weights = {_c: min(_inv[_c] / _s * _tot, cap) for _c in picks}
++            else:
++                weights = {coin: w for coin in picks}
++        else:
++            weights = {coin: w for coin in picks}
+         total = sum(weights.values())
+         if total < 0.999:
+             weights['CASH'] = 1.0 - total
