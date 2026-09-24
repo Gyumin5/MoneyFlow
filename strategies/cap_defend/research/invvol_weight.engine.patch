@@ -29,17 +29,20 @@ index 6a0d963..50e0d26 100644
          if total < 0.999:
              weights['CASH'] = 1.0 - total
 diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
-index 65dfe39..da44d56 100644
+index 65dfe39..c9ca862 100644
 --- a/strategies/cap_defend/unified_backtest.py
 +++ b/strategies/cap_defend/unified_backtest.py
-@@ -666,7 +666,24 @@ def run(bars, funding, interval='1h', leverage=1.0,
+@@ -666,7 +666,32 @@ def run(bars, funding, interval='1h', leverage=1.0,
              return {'CASH': 1.0}
  
          w = min(1.0 / len(picks), cap)
--        weights = {coin: w for coin in picks}
 +        # [실험 토글 2026-09-25 — 종목 간 변동성 가중. 결론 후 revert 할 것]
-+        # 총 노출은 그대로 두고 고른 종목 사이 배분만 바꾼다. 축 하나.
-+        if os.environ.get('CD_WEIGHT_MODE_SPOT', 'ew') == 'invvol' and len(picks) > 1:
++        # invvol  = 변동성 역수 배분 (상한에 잘린 몫은 현금)
++        # ewmatch = 같은 날 invvol 과 투자비율만 맞추고 종목 사이는 등분 (노출 효과 대조군)
++        # ewfixed = 등분에 고정 배율만 곱한다 (단순 현금 축소 대조군)
++        _mode = os.environ.get('CD_WEIGHT_MODE_SPOT', 'ew')
+         weights = {coin: w for coin in picks}
++        if _mode in ('invvol', 'ewmatch') and len(picks) > 1:
 +            _ld = int(os.environ.get('CD_WEIGHT_VOL_DAYS', '90'))
 +            _inv = {}
 +            for _c in picks:
@@ -50,11 +53,15 @@ index 65dfe39..da44d56 100644
 +            _s = sum(_inv.values())
 +            if _s > 0:
 +                _tot = w * len(picks)
-+                weights = {_c: min(_inv[_c] / _s * _tot, cap) for _c in picks}
-+            else:
-+                weights = {coin: w for coin in picks}
-+        else:
-+            weights = {coin: w for coin in picks}
++                _iw = {_c: min(_inv[_c] / _s * _tot, cap) for _c in picks}
++                if _mode == 'invvol':
++                    weights = _iw
++                else:
++                    _t2 = sum(_iw.values())
++                    weights = {_c: _t2 / len(picks) for _c in picks}
++        elif _mode == 'ewfixed':
++            _sc = float(os.environ.get('CD_WEIGHT_FIXED_SCALE', '1.0'))
++            weights = {coin: w * _sc for coin in picks}
          total = sum(weights.values())
          if total < 0.999:
              weights['CASH'] = 1.0 - total
