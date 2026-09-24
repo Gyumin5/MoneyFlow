@@ -90,7 +90,9 @@ check("매도 방향", cli.orders and cli.orders[0].get('side') == 'SELL')
 check("order_alerts 에 같은 수량", alerts and qty in alerts[0], f"({alerts})")
 
 raw = (73321.65 - 48881.10) / 768.2486
-check("과매도 아님(raw + 1 step 이내)", qty is not None and float(qty) <= raw + 0.01,
+check("바닥내림 — 필요량을 넘지 않는다", qty is not None and float(qty) <= raw,
+      f"(qty={qty} raw={raw:.6f})")
+check("과소매도 아님(1 step 이내)", qty is not None and float(qty) > raw - 0.01,
       f"(qty={qty} raw={raw:.6f})")
 
 
@@ -131,6 +133,14 @@ set_constraints(step=0.01, precision=2)
 cli = FakeClient()
 ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10, 0.0)
 check("mark_price 0 → False(ABORT)", ok is False and not cli.orders)
+
+# 규격 조회 실패(step=0)는 주문을 보내지 않고 실패로 올린다. 보내면 거래소가 다시
+# 정밀도로 거절해 원인이 규격 조회 실패라는 사실이 묻힌다.
+set_constraints(step=0.0, precision=8, min_qty=0.0)
+cli = FakeClient()
+ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10, 768.2486)
+check("step 조회 실패 → 주문 없이 False", ok is False and not cli.orders,
+      f"(ok={ok} orders={cli.orders})")
 
 
 # ── 4. 실패는 여전히 ABORT 로 올라간다 ─────────────────────────────────────

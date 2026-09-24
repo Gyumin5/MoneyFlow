@@ -2660,6 +2660,11 @@ def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notion
     constraints = get_symbol_constraints(client, sym)
     min_qty = constraints.get('min_qty', 0.0)
     min_notional = constraints.get('min_notional', MIN_NOTIONAL)
+    # 규격을 못 읽으면 주문을 보내지 않는다. step=0 은 심볼 조회 실패의 표식이고,
+    # 그 상태로 보내면 거래소가 다시 정밀도로 거절해 원인이 규격 조회 실패라는 사실이 묻힌다.
+    if constraints.get('step_size', 0.0) <= 0:
+        log.error(f"_v25_partial_sell {sym}: step_size 조회 실패 — 주문 보내지 않고 중단")
+        return False
     # 수량은 본 주문 경로와 같은 함수로 문자열까지 만든다. 부동소수 곱으로 얻은 값
     # (3181.0 * 0.01 = 31.810000000000002)을 그대로 보내면 거래소가 -1111 정밀도 초과로
     # 거절하고, 이 경로의 실패는 곧 매매 차단이다. (2026-09-24 실사고)
