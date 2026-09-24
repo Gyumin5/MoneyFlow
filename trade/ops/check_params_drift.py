@@ -31,7 +31,7 @@ CANONICAL = {
                        health_mode='mom2vol', vol_mode='daily', vol_threshold=0.05,
                        snap_interval_bars=95, canary_hyst=0.015, n_snapshots=5),
         'extra': dict(
-            DRIFT_THRESHOLD_FUT=0.03,
+            DRIFT_THRESHOLD_FUT=0.015,
             LEVERAGE_FLOOR=2, LEVERAGE_MID=3, LEVERAGE_CEILING=4,
             K2_SMA_PERIOD=7, K2_HYST=0.025,
             BTC_CAP_SMA_PERIOD=42, BTC_CAP_THR_MID=1.015, BTC_CAP_THR_MAX=1.05,

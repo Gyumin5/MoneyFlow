@@ -2658,26 +2658,29 @@ def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notion
     sell_notional = current_notional - target_notional
     sell_qty_raw = sell_notional / mark_price
     constraints = get_symbol_constraints(client, sym)
-    step = constraints.get('step_size', 0.0) or 0.000001
     min_qty = constraints.get('min_qty', 0.0)
     min_notional = constraints.get('min_notional', MIN_NOTIONAL)
-    sell_qty = (sell_qty_raw // step) * step
+    # 수량은 본 주문 경로와 같은 함수로 문자열까지 만든다. 부동소수 곱으로 얻은 값
+    # (3181.0 * 0.01 = 31.810000000000002)을 그대로 보내면 거래소가 -1111 정밀도 초과로
+    # 거절하고, 이 경로의 실패는 곧 매매 차단이다. (2026-09-24 실사고)
+    qty_str = format_quantity(client, sym, sell_qty_raw)
+    sell_qty = float(qty_str)
     if sell_qty < min_qty or sell_qty * mark_price < min_notional:
-        log.warning(f"  {sym} 사전매도 skip: qty {sell_qty} 가 min_qty/min_notional 미달")
+        log.warning(f"  {sym} 사전매도 skip: qty {qty_str} 가 min_qty/min_notional 미달")
         return True  # 어차피 차이 작음. ABORT 안 함.
     log.info(f"  {sym} L 낮춤 사전매도: notional ${current_notional:.2f} → ${target_notional:.2f} "
-             f"(qty={sell_qty}, mark=${mark_price:.4f})")
+             f"(qty={qty_str}, mark=${mark_price:.4f})")
     try:
         order = client.futures_create_order(
-            symbol=sym, side='SELL', type='MARKET', quantity=sell_qty, reduceOnly=True
+            symbol=sym, side='SELL', type='MARKET', quantity=qty_str, reduceOnly=True
         )
-        _v25_mark_touch(f"presell SELL {sym} {sell_qty}")
+        _v25_mark_touch(f"presell SELL {sym} {qty_str}")
         # 2026-08-22: 이 주문도 order_alerts 에 남긴다. 보고에 보이게 하는 목적이 하나,
         # "이 실행이 계좌를 건드렸는가"(_v25_did_order) 판정의 단일 근거가 되는 목적이 하나.
         # 여기서 빠지면 사전매도만 나가고 ABORT 한 실행이 '무거래' 로 오분류돼,
         # 다음 무거래일에 상시 무결성 검사가 우리 체결을 외부변경으로 신고한다.
         if order_alerts is not None:
-            order_alerts.append(f"SELL {sym} {sell_qty} (L↓ 사전매도)")
+            order_alerts.append(f"SELL {sym} {qty_str} (L↓ 사전매도)")
         if DEBUG_LEVERAGE:
             log.info(f"  사전매도 OK {sym} orderId={order.get('orderId')}")
         import time as _t

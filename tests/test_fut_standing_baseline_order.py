@@ -243,7 +243,8 @@ def main():
     for site, pat in (
         ("주문 성공", r'_v25_mark_touch\(f"order \{side\} \{symbol\} \{qty_str\}"\)'),
         ("주문 예외(체결 불명)", r'_v25_mark_touch\(f"order \{side\} \{symbol\} 시도 실패\(체결 불명\)"\)'),
-        ("사전매도 성공", r'_v25_mark_touch\(f"presell SELL \{sym\} \{sell_qty\}"\)'),
+        # 수량 변수는 2026-09-24 정밀도 수정으로 sell_qty(float) → qty_str(문자열).
+        ("사전매도 성공", r'_v25_mark_touch\(f"presell SELL \{sym\} \{qty_str\}"\)'),
         ("사전매도 예외", r'_v25_mark_touch\(f"presell SELL \{sym\} 시도 실패\(체결 불명\)"\)'),
         ("레버리지 변경", r'_v25_mark_touch\(f"leverage \{symbol\}=\{leverage\}x"\)'),
         ("레버리지 실패(적용 불명)", r'_v25_mark_touch\(f"leverage \{symbol\}=\{leverage\}x 시도 실패'),

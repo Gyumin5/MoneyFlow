@@ -23,6 +23,7 @@
   - `strategies/cap_defend/unified_backtest.py` (V24 spot/fut BT 엔진, asset_type='spot'; 호출 `trade/v24_shadow_today.py`)
   - `strategies/cap_defend/recommend.py`
   - `strategies/cap_defend/recommend_personal.py`
+  - `trade/ops/check_params_drift.py` (CANONICAL 표 — 안 고치면 매일 09:15 에 params drift 경고가 뜬다)
   - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
   - 상태파일: `trade_state.json`
@@ -31,6 +32,7 @@
   - `strategies/cap_defend/recommend.py`
   - `strategies/cap_defend/recommend_personal.py`
   - `signal_state.json` / `kis_trade_state.json` 사용 규칙
+  - `trade/ops/check_params_drift.py` (CANONICAL 표 — 안 고치면 매일 09:15 에 params drift 경고가 뜬다)
   - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
 - 선물 전략 변경 시 최소 동기화 대상 (V25):
@@ -39,6 +41,7 @@
   - `strategies/cap_defend/futures_ensemble_engine.py`
   - `strategies/cap_defend/backtest_futures_full.py`
   - `trade/auto_trade_binance.py`
+  - `trade/ops/check_params_drift.py` (CANONICAL 표 — 안 고치면 매일 09:15 에 params drift 경고가 뜬다)
   - `strategies/cap_defend/recommend_personal.py`
   - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
