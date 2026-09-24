@@ -98,7 +98,16 @@ def build_spike_lev(base_k2: dict, bars: dict, mode: str, thr: float) -> dict:
             out[coin] = lev
             continue
         close = pd.Series(df['Close'].values, index=df.index)
-        spike = (close.pct_change() >= thr).shift(1).fillna(False)
+        r = close.pct_change()
+        if mode == 'F':      # 2일 누적 상승
+            sig = (close / close.shift(2) - 1) >= thr
+        elif mode == 'G':    # N일 연속 양봉 (크기 안 봄)
+            sig = (r > 0).rolling(int(thr)).sum() >= int(thr)
+        elif mode == 'H':    # 2일 연속 양봉 AND 2일 누적 문턱 초과
+            sig = ((r > 0).rolling(2).sum() >= 2) & ((close / close.shift(2) - 1) >= thr)
+        else:                # D/E — 전일 하루 상승
+            sig = r >= thr
+        spike = sig.shift(1).fillna(False)
         idx = lev.index.intersection(spike.index)
         lv = lev.loc[idx].values.astype(float)
         sp = spike.loc[idx].values.astype(bool)
@@ -118,13 +127,69 @@ def build_spike_lev(base_k2: dict, bars: dict, mode: str, thr: float) -> dict:
     return out
 
 
+def build_line_lev(bars: dict, mode: str, base_k2: dict) -> dict:
+    """여러 이동평균선으로 배수 상한을 정한다 (2차 스윕에서 추가).
+
+    종가가 7·20·50일선 중 몇 개 위에 있는지로 칸을 나눈다. 셋 다 위면 4배,
+    둘이면 3배, 그 외 2배. 비트코인 캡은 그대로 곱한다.
+      M1 = 현행 K2(7일선 이격) 자리를 이 값으로 갈아끼운다.
+      M2 = 현행 배수 위에 이 값을 상한으로 하나 더 얹는다(내리는 방향만).
+    """
+    from bt_fut_lev_one import _btc_cap
+    cap = _btc_cap(bars)
+    out = {}
+    for coin, df in bars.items():
+        close = pd.Series(df['Close'].values, index=df.index)
+        above = ((close > close.rolling(7).mean()).astype(int)
+                 + (close > close.rolling(20).mean()).astype(int)
+                 + (close > close.rolling(50).mean()).astype(int))
+        lv = pd.Series(np.where(above >= 3, L_MAX, np.where(above >= 2, 3.0, L_MIN)),
+                       index=close.index).shift(1).fillna(L_MIN)
+        idx = cap.index.intersection(lv.index)
+        line = pd.Series(np.minimum(cap.loc[idx].values, lv.loc[idx].values), index=idx)
+        if mode == 'M1':
+            out[coin] = line
+        else:  # M2 — 현행 위에 상한으로만 얹는다
+            b = base_k2.get(coin)
+            if b is None:
+                out[coin] = line
+                continue
+            j = b.index.intersection(line.index)
+            out[coin] = pd.Series(np.minimum(b.loc[j].values, line.loc[j].values), index=j)
+    return out
+
+
 def arm_specs() -> list[tuple[str, str | None, float | None]]:
-    quick = os.environ.get('ARMS', 'full') == 'quick'
-    thrs = THRS[1:2] if quick else THRS
+    """(이름, 설계, 파라미터). 설계는 D/E/F/G/H/M1/M2, None 이면 현행."""
+    mode = os.environ.get('ARMS', 'full')
+    if mode == 'quick':
+        return [(CUR, None, None), ("D 보류 0.10", 'D', 0.10), ("E 감속 0.10", 'E', 0.10)]
+
     specs: list[tuple[str, str | None, float | None]] = [(CUR, None, None)]
-    for t in thrs:
+    for t in THRS:
         specs.append((f"D 보류 {t:.2f}", 'D', t))
-    for t in thrs:
+    for t in THRS:
+        specs.append((f"E 감속 {t:.2f}", 'E', t))
+    if mode == 'round1':
+        return specs
+
+    # 2차 — 운영자 물음(다른 문턱·연속 상승·여러 선)에 맞춰 넓힌다
+    for t in (0.25, 0.30):
+        specs.append((f"E 감속 {t:.2f}", 'E', t))
+    for t in (0.20, 0.30, 0.40):
+        specs.append((f"F 2일 {t:.2f}", 'F', t))
+    for n in (2, 3):
+        specs.append((f"G 연속 {n}일", 'G', float(n)))
+    specs.append(("H 연속2+0.30", 'H', 0.30))
+    specs.append(("M1 다중선", 'M1', None))
+    specs.append(("M2 다중선상한", 'M2', None))
+    if mode == 'round2':
+        return specs
+
+    # 3차 — 2차에서 감속안이 문턱 0.30(구간 끝값)에서 가장 좋았다. 끝값이 최고면
+    # 꺾이는 자리가 구간 밖이라는 뜻이라 플래토 기준을 통과한 것이 아니다.
+    # 문턱을 더 올리면 발화가 0 으로 수렴해 현행과 같아지므로 그 사이에 봉우리가 있어야 한다.
+    for t in (0.40, 0.50, 0.60):
         specs.append((f"E 감속 {t:.2f}", 'E', t))
     return specs
 
@@ -145,6 +210,7 @@ def lev_profile(base: dict, arm: dict) -> tuple[float, float, dict]:
     bv, av = bv[ok], av[ok]
     changed = float((av < bv).mean()) if len(bv) else 0.0
     dist = {L: float((av == L).mean()) for L in (1.0, 2.0, 3.0, 4.0)}
+    dist['up'] = float((av > bv).mean()) if len(bv) else 0.0
     return changed, float(np.mean(bv - av)) if len(bv) else 0.0, dist
 
 
@@ -369,13 +435,18 @@ def main() -> None:
 
     levs = {}
     print("\n[규칙이 실제로 배수를 바꾼 비율 — 코인-일]")
-    print(f"  {'팔':<14s}{'내려간 비율':>12s}{'평균 감소':>10s}"
+    print(f"  {'팔':<14s}{'내려간 비율':>12s}{'올라간 비율':>12s}{'평균 감소':>10s}"
           f"{'2배':>8s}{'3배':>8s}{'4배':>8s}")
     for name, mode, thr in specs:
-        lev = _k2 if mode is None else build_spike_lev(_k2, _bars, mode, thr)
+        if mode is None:
+            lev = _k2
+        elif mode.startswith('M'):
+            lev = build_line_lev(_bars, mode, _k2)
+        else:
+            lev = build_spike_lev(_k2, _bars, mode, float(thr))
         levs[name] = lev
         ch, avg, dist = lev_profile(_k2, lev)
-        print(f"  {name:<14s}{ch:>11.2%}{avg:>10.3f}"
+        print(f"  {name:<14s}{ch:>11.2%}{dist.get('up',0):>12.2%}{avg:>10.3f}"
               f"{dist.get(2.0,0):>8.1%}{dist.get(3.0,0):>8.1%}{dist.get(4.0,0):>8.1%}",
               flush=True)
 
