@@ -1813,6 +1813,11 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             'leverage': float(p.get('leverage', 0.0) or 0.0),
         }
 
+    # 원문 수량이 없어 주문을 못 만든 전량청산도 "안 보낸 심볼" 이다. 기준을 안 남기면
+    # 종단 체결검사가 그 포지션의 잔존을 설명 못 해 불일치로 잡는다.
+    for _sym_no_raw in _full_close_no_raw:
+        _record_unsent(_sym_no_raw)
+
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
         if not reduce_only and (_reduce_failed_hard or _reduce_failed_untradable):
@@ -2679,33 +2684,53 @@ def verify_leverage(client: Client, symbol: str, expected: int) -> bool:
     return ok
 
 
-PRESELL_MAX_ATTEMPTS = 3
+POSITION_AMT_READ_ATTEMPTS = 3
+POSITION_AMT_READ_DELAY = 1.0
 
 
 def _position_amt(client: Client, symbol: str) -> Optional[float]:
     """그 심볼의 현재 포지션 수량(절대값). 모르면 None — 0 으로 속이지 않는다.
 
-    사전매도의 재시도 판정에만 쓴다. "모른다" 와 "0 이다" 를 같게 다루면 응답만
-    유실된 매도를 미접수로 오인해 같은 수량을 한 번 더 판다.
+    사전매도의 접수 판정에만 쓴다. "모른다" 와 "0 이다" 를 같게 다루면 두 방향으로
+    다 틀린다 — 나가지도 않은 주문을 접수로 읽거나, 이미 체결된 주문을 미접수로 읽는다.
+    그래서 빈 응답·행 없음·빈 수량은 전부 불명(None)이다.
+
+    읽기 실패에는 짧은 재시도를 붙인다. 다만 여러 번 읽어 값이 그대로라는 것을
+    미접수의 증거로 쓰지 않는다 — 거래소 포지션 반영이 늦을 수 있다
+    (ai-debate run-20260925T151100Z).
     """
-    try:
-        rows = _with_retry(lambda: client.futures_position_information(symbol=symbol))
-    except Exception as e:
-        log.warning(f"  포지션 수량 조회 실패 {symbol}: {e}")
-        return None
+    rows = None
+    for attempt in range(1, POSITION_AMT_READ_ATTEMPTS + 1):
+        try:
+            rows = _with_retry(lambda: client.futures_position_information(symbol=symbol))
+            break
+        except Exception as e:
+            log.warning(f"  포지션 수량 조회 실패 {symbol} "
+                        f"({attempt}/{POSITION_AMT_READ_ATTEMPTS}): {e}")
+            if attempt >= POSITION_AMT_READ_ATTEMPTS:
+                return None
+            time.sleep(POSITION_AMT_READ_DELAY)
     if isinstance(rows, dict):
         rows = [rows]
-    for r in rows or []:
+    if not rows:
+        log.warning(f"  포지션 조회 응답이 비었다 {symbol} — 수량 불명")
+        return None
+    for r in rows:
         if r.get('symbol') != symbol:
             continue
         if (r.get('positionSide') or 'BOTH').upper() != 'BOTH':
             continue
-        try:
-            return abs(float(r.get('positionAmt') or 0.0))
-        except (TypeError, ValueError):
-            log.warning(f"  포지션 수량 파싱 실패 {symbol}: {r.get('positionAmt')!r}")
+        raw = r.get('positionAmt')
+        if raw is None or str(raw).strip() == '':
+            log.warning(f"  포지션 수량이 비어 있다 {symbol} — 수량 불명")
             return None
-    return 0.0
+        try:
+            return abs(float(raw))
+        except (TypeError, ValueError):
+            log.warning(f"  포지션 수량 파싱 실패 {symbol}: {raw!r}")
+            return None
+    log.warning(f"  포지션 조회에 {symbol} 행이 없다 — 수량 불명")
+    return None
 
 
 def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notional: float,
@@ -2774,44 +2799,42 @@ def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notion
         time.sleep(0.5)  # 체결 안정화
         return True, ''
 
+    # 주문 전 기준 수량을 못 읽으면 보내지 않는다. 기준이 없으면 실패했을 때 접수 여부를
+    # 판정할 근거가 아예 없고, 그 상태에서 보내는 건 "결과를 확인할 수 없는 주문" 이다.
     qty_before = _position_amt(client, sym)
-    for attempt in range(1, PRESELL_MAX_ATTEMPTS + 1):
-        try:
-            order = client.futures_create_order(
-                symbol=sym, side='SELL', type='MARKET', quantity=qty_str, reduceOnly=True
-            )
-        except Exception as e:
-            code = getattr(e, 'code', None)
-            _v25_mark_touch(f"presell SELL {sym} 시도 실패(체결 불명)")
-            log.error(f"  {sym} 사전매도 실패({attempt}/{PRESELL_MAX_ATTEMPTS}): "
-                      f"code={code} msg={e}")
-            # 거래정지·상장폐지는 우리가 고칠 수 있는 게 아니다. 그래도 그 심볼의 노출을
-            # 남긴 채 나머지를 매매하면 총노출이 목표를 넘으므로 그날 전체를 차단하고,
-            # 사유를 명시해 사람이 장애를 가릴 수 있게 한다.
-            if (isinstance(e, BinanceAPIException) and _is_market_state_rejection(e)
-                    and _is_untradable_now(client, sym)):
-                _note_untradable(sym)
-                return False, (f"{sym} 사전매도 불가: 거래정지·상장폐지로 보인다 "
-                               f"(code={code} msg={e})")
-            if attempt >= PRESELL_MAX_ATTEMPTS or not _is_retryable_order_error(e):
-                return False, f"{sym} 사전매도 실패 (code={code} msg={e})"
-            # 여기서만 재시도한다 — 거래소가 접수하지 않았음이 포지션으로 확인될 때.
-            qty_now = _position_amt(client, sym)
-            if qty_before is None or qty_now is None:
-                return False, (f"{sym} 사전매도 접수 여부 확인 불가(포지션 조회 실패) — "
-                               f"재주문 없이 중단 (code={code} msg={e})")
-            if qty_now <= qty_before - sell_qty * 0.5:
-                log.warning(f"  {sym} 응답은 유실됐지만 포지션이 줄었다 "
-                            f"({qty_before} → {qty_now}) — 접수된 것으로 본다")
-                return _sent_ok(None)
-            if abs(qty_now - qty_before) > max(sell_qty * 0.01, min_qty):
-                return False, (f"{sym} 사전매도 접수 여부 불명(포지션 {qty_before} → {qty_now}) — "
-                               f"재주문 없이 중단 (code={code} msg={e})")
-            log.warning(f"  {sym} 미접수 확인(포지션 {qty_before} 유지) — 재시도한다")
-            time.sleep(ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)])
-            continue
-        return _sent_ok(order)
-    return False, f"{sym} 사전매도 실패: 재시도 {PRESELL_MAX_ATTEMPTS}회 모두 미접수"
+    if qty_before is None:
+        log.error(f"_v25_partial_sell {sym}: 주문 전 포지션 수량 불명 — 주문 없이 중단")
+        return False, f"{sym} 사전매도 중단: 주문 전 포지션 수량을 확인하지 못했다"
+
+    try:
+        order = client.futures_create_order(
+            symbol=sym, side='SELL', type='MARKET', quantity=qty_str, reduceOnly=True
+        )
+    except Exception as e:
+        code = getattr(e, 'code', None)
+        _v25_mark_touch(f"presell SELL {sym} 시도 실패(체결 불명)")
+        log.error(f"  {sym} 사전매도 실패: code={code} msg={e}")
+        # 거래정지·상장폐지는 우리가 고칠 수 있는 게 아니다. 그래도 그 심볼의 노출을
+        # 남긴 채 나머지를 매매하면 총노출이 목표를 넘으므로 그날 전체를 차단하고,
+        # 사유를 명시해 사람이 장애를 가릴 수 있게 한다.
+        if (isinstance(e, BinanceAPIException) and _is_market_state_rejection(e)
+                and _is_untradable_now(client, sym)):
+            _note_untradable(sym)
+            return False, (f"{sym} 사전매도 불가: 거래정지·상장폐지로 보인다 "
+                           f"(code={code} msg={e})")
+        # 재주문은 하지 않는다. 포지션이 그대로 보인다고 미접수인 것이 아니다 —
+        # 거래소 포지션 반영이 늦으면 이미 체결된 주문을 한 번 더 내게 된다. reduceOnly 는
+        # 중복 체결을 막지 않으므로 그 한 번이 목표의 두 배를 판다.
+        # 다시 열려면 주문별 식별자와 주문 상태 조회를 먼저 구현해야 한다.
+        # (ai-debate run-20260925T151100Z 판정)
+        qty_now = _position_amt(client, sym)
+        if qty_now is not None and qty_now <= qty_before - sell_qty * 0.5:
+            log.warning(f"  {sym} 응답은 유실됐지만 포지션이 줄었다 "
+                        f"({qty_before} → {qty_now}) — 접수된 것으로 본다")
+            return _sent_ok(None)
+        return False, (f"{sym} 사전매도 실패 — 접수 여부를 확정할 수 없어 재주문 없이 중단 "
+                       f"(포지션 {qty_before} → {qty_now}, code={code} msg={e})")
+    return _sent_ok(order)
 
 
 def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):

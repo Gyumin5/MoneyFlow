@@ -163,12 +163,18 @@ class PresellClient:
 
     order_effects: 주문 시도마다 (예외 또는 None, 그 시도 뒤의 포지션 수량).
     pos_fail: futures_position_information 이 던질 예외.
+    pos_fail_after: 이 횟수만큼 정상 응답한 뒤부터 pos_fail 을 던진다(주문 전 읽기와
+        주문 실패 후 읽기를 갈라서 시험한다).
+    pos_rows: 응답을 통째로 대신할 값(빈 목록·행 없음 같은 비정상 응답 시험용).
     """
 
-    def __init__(self, order_effects, start_amt=100.0, pos_fail=None):
+    def __init__(self, order_effects, start_amt=100.0, pos_fail=None,
+                 pos_fail_after=0, pos_rows=None):
         self.effects = list(order_effects)
         self.amt = start_amt
         self.pos_fail = pos_fail
+        self.pos_fail_after = pos_fail_after
+        self.pos_rows = pos_rows
         self.orders = []
         self.pos_calls = 0
 
@@ -183,8 +189,10 @@ class PresellClient:
 
     def futures_position_information(self, symbol=None):
         self.pos_calls += 1
-        if self.pos_fail is not None:
+        if self.pos_fail is not None and self.pos_calls > self.pos_fail_after:
             raise self.pos_fail
+        if self.pos_rows is not None:
+            return self.pos_rows
         return [{'symbol': symbol, 'positionSide': 'BOTH', 'positionAmt': str(self.amt)}]
 
 
@@ -192,7 +200,7 @@ def run_presell(client, step_size=0.001, meta_boom=False):
     """current=$1000 → target=$500, mark=$10 → 매도 수량 50."""
     saved = {k: getattr(a, k) for k in
              ('get_symbol_constraints', 'format_quantity', '_trading_symbols',
-              'ORDER_RETRY_DELAYS')}
+              'ORDER_RETRY_DELAYS', 'POSITION_AMT_READ_DELAY')}
     alerts = []
     try:
         def _meta(_c, _s):
@@ -204,6 +212,7 @@ def run_presell(client, step_size=0.001, meta_boom=False):
         a.format_quantity = lambda _c, s, q: f"{q:.3f}"
         a._trading_symbols = lambda _c: {'AAAUSDT'}      # 기본은 거래 가능
         a.ORDER_RETRY_DELAYS = [0.0, 0.0, 0.0]
+        a.POSITION_AMT_READ_DELAY = 0.0
         a._v25_touch_reset()
         ok, why = a._v25_partial_sell_for_leverage_down(
             client, 'AAAUSDT', 1000.0, 500.0, 10.0, order_alerts=alerts)
@@ -236,33 +245,52 @@ check("주문은 1건뿐(중복 매도 없음)", len(cl.orders) == 1, str(cl.ord
 check("계좌 변경 표시가 남는다", any('AAAUSDT' in t for t in a._V25_ACCOUNT_TOUCH),
       str(a._V25_ACCOUNT_TOUCH))
 
-print("\n[5c] 미접수가 확인되면 재시도한다")
-cl = PresellClient([(_timeout(), 100.0), (None, 50.0)])
-ok, why, alerts = run_presell(cl)
-check("성공", ok is True and why == '', f"{ok} {why}")
-check("주문 2건(재시도 1회)", len(cl.orders) == 2, str(cl.orders))
-check("두 번 다 같은 수량", {o['quantity'] for o in cl.orders} == {'50.000'}, str(cl.orders))
-
-print("\n[5d] 접수 여부가 애매하면 재주문하지 않는다")
-cl = PresellClient([(_timeout(), 90.0), (None, 40.0)])   # 10 만 줄었다 — 설명이 안 된다
-ok, why, alerts = run_presell(cl)
-check("차단", ok is False, f"{ok} {why}")
-check("주문 1건", len(cl.orders) == 1, str(cl.orders))
-check("사유에 포지션 변화가 남는다", '접수 여부 불명' in why, why)
-
-print("\n[5e] 포지션을 못 읽으면 재주문하지 않는다")
-cl = PresellClient([(_timeout(), None)], pos_fail=RuntimeError('position api down'))
-ok, why, alerts = run_presell(cl)
-check("차단", ok is False, f"{ok} {why}")
-check("주문 1건", len(cl.orders) == 1, str(cl.orders))
-check("사유가 조회 실패임을 밝힌다", '확인 불가' in why and '포지션 조회 실패' in why, why)
-
-print("\n[5f] 재시도를 다 써도 안 나가면 차단한다")
+print("\n[5c] 포지션이 그대로 보여도 재주문하지 않는다 (반영 지연)")
+# 주문은 거래소에 닿아 체결됐는데 포지션 조회에 아직 안 잡힌 상태다. 옛 코드는 이걸
+# 미접수로 읽고 같은 수량을 한 번 더 팔았다 — reduceOnly 는 그 중복을 막지 않는다.
 cl = PresellClient([(_timeout(), 100.0)])
 ok, why, alerts = run_presell(cl)
 check("차단", ok is False, f"{ok} {why}")
-check(f"주문은 {a.PRESELL_MAX_ATTEMPTS}건까지만",
-      len(cl.orders) == a.PRESELL_MAX_ATTEMPTS, str(cl.orders))
+check("주문 1건(재주문 없음)", len(cl.orders) == 1, str(cl.orders))
+check("사유가 접수 불명임을 밝힌다", '접수 여부를 확정할 수 없어' in why, why)
+check("사유에 포지션 값이 남는다", '100.0' in why, why)
+
+print("\n[5d] 접수 여부가 애매해도 재주문하지 않는다")
+cl = PresellClient([(_timeout(), 90.0)])   # 10 만 줄었다 — 설명이 안 된다
+ok, why, alerts = run_presell(cl)
+check("차단", ok is False, f"{ok} {why}")
+check("주문 1건", len(cl.orders) == 1, str(cl.orders))
+check("사유가 접수 불명임을 밝힌다", '접수 여부를 확정할 수 없어' in why, why)
+
+print("\n[5e] 주문 뒤 포지션을 못 읽으면 재주문하지 않는다")
+cl = PresellClient([(_timeout(), None)], pos_fail=RuntimeError('position api down'),
+                   pos_fail_after=1)      # 주문 전 읽기는 성공, 그 뒤 실패
+ok, why, alerts = run_presell(cl)
+check("차단", ok is False, f"{ok} {why}")
+check("주문 1건", len(cl.orders) == 1, str(cl.orders))
+check("사유가 접수 불명임을 밝힌다", '접수 여부를 확정할 수 없어' in why, why)
+check("읽기에 재시도가 붙는다", cl.pos_calls >= 1 + a.POSITION_AMT_READ_ATTEMPTS,
+      f"pos_calls={cl.pos_calls}")
+
+print("\n[5f] 주문 전 포지션을 못 읽으면 주문 자체를 안 보낸다")
+cl = PresellClient([(None, 50.0)], pos_fail=RuntimeError('position api down'))
+ok, why, alerts = run_presell(cl)
+check("차단", ok is False, f"{ok} {why}")
+check("주문 0건", cl.orders == [], str(cl.orders))
+check("사유가 주문 전 조회 실패임을 밝힌다", '주문 전 포지션 수량' in why, why)
+check("계좌 변경 표시가 안 남는다(보낸 게 없다)",
+      not any('AAAUSDT' in t for t in a._V25_ACCOUNT_TOUCH), str(a._V25_ACCOUNT_TOUCH))
+
+print("\n[5f2] 포지션 조회가 빈 응답이어도 주문을 안 보낸다")
+for rows, label in (([], '빈 목록'),
+                    ([{'symbol': 'BBBUSDT', 'positionSide': 'BOTH', 'positionAmt': '1'}],
+                     '다른 심볼 행만'),
+                    ([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH', 'positionAmt': ''}],
+                     '수량 빈 문자열')):
+    cl = PresellClient([(None, 50.0)], pos_rows=rows)
+    ok, why, alerts = run_presell(cl)
+    check(f"{label} → 주문 0건", cl.orders == [], str(cl.orders))
+    check(f"{label} → 차단 + 사유", ok is False and '주문 전 포지션 수량' in why, f"{ok} {why}")
 
 print("\n[5g] 되돌릴 수 없는 거절은 재시도하지 않는다")
 _marg = a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
@@ -336,26 +364,45 @@ print("\n[6] 포지션 수량 조회는 모름과 0 을 구분한다")
 class _PosOnly:
     def __init__(self, rows, boom=None):
         self.rows, self.boom = rows, boom
+        self.calls = 0
 
     def futures_position_information(self, symbol=None):
+        self.calls += 1
         if self.boom:
             raise self.boom
         return self.rows
 
 
-check("정상이면 절대값",
-      a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH',
-                                 'positionAmt': '-7.5'}]), 'AAAUSDT') == 7.5)
-check("조회 실패는 None(0 으로 속이지 않는다)",
-      a._position_amt(_PosOnly([], boom=RuntimeError('down')), 'AAAUSDT') is None)
-check("파싱 실패도 None",
-      a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH',
-                                 'positionAmt': 'x'}]), 'AAAUSDT') is None)
-check("행이 없으면 0(실제로 무포지션)",
-      a._position_amt(_PosOnly([]), 'AAAUSDT') == 0.0)
-check("헤지 모드 행은 건너뛴다",
-      a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'LONG',
-                                 'positionAmt': '5'}]), 'AAAUSDT') == 0.0)
+_saved_delay = a.POSITION_AMT_READ_DELAY
+try:
+    a.POSITION_AMT_READ_DELAY = 0.0
+    check("정상이면 절대값",
+          a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH',
+                                     'positionAmt': '-7.5'}]), 'AAAUSDT') == 7.5)
+    check("포지션이 0 이면 0(그건 아는 값이다)",
+          a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH',
+                                     'positionAmt': '0'}]), 'AAAUSDT') == 0.0)
+    _c = _PosOnly([], boom=RuntimeError('down'))
+    check("조회 실패는 None(0 으로 속이지 않는다)",
+          a._position_amt(_c, 'AAAUSDT') is None)
+    check("조회 실패에 제한된 재시도가 붙는다",
+          _c.calls == a.POSITION_AMT_READ_ATTEMPTS, f"calls={_c.calls}")
+    check("파싱 실패도 None",
+          a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH',
+                                     'positionAmt': 'x'}]), 'AAAUSDT') is None)
+    check("빈 응답은 None(무포지션으로 읽지 않는다)",
+          a._position_amt(_PosOnly([]), 'AAAUSDT') is None)
+    check("해당 심볼 행이 없으면 None",
+          a._position_amt(_PosOnly([{'symbol': 'BBBUSDT', 'positionSide': 'BOTH',
+                                     'positionAmt': '3'}]), 'AAAUSDT') is None)
+    check("수량이 빈 문자열이면 None",
+          a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'BOTH',
+                                     'positionAmt': ''}]), 'AAAUSDT') is None)
+    check("헤지 모드 행만 있으면 None(BOTH 수량을 모른다)",
+          a._position_amt(_PosOnly([{'symbol': 'AAAUSDT', 'positionSide': 'LONG',
+                                     'positionAmt': '5'}]), 'AAAUSDT') is None)
+finally:
+    a.POSITION_AMT_READ_DELAY = _saved_delay
 
 print("\n[7] 수량 문자열 판정")
 for good in ('1', '0.001', '10.12345678', ' 2.5 '):
@@ -378,9 +425,17 @@ check("매수 계획 실패가 알림으로 올라간다", 'BUY PLAN FAILED' in 
 check("사전매도가 create_order_with_retry 를 쓰지 않는다",
       'create_order_with_retry(client, symbol=sym' not in _src
       and '_sent_ok(order)' in _src)
-check("사전매도 재시도가 포지션으로 접수 여부를 확인한다",
+check("사전매도가 접수 불명일 때 재주문하지 않는다",
       'qty_before = _position_amt(client, sym)' in _src
-      and 'qty_now = _position_amt(client, sym)' in _src)
+      and 'qty_now = _position_amt(client, sym)' in _src
+      and 'PRESELL_MAX_ATTEMPTS' not in _src
+      and '접수 여부를 확정할 수 없어 재주문 없이 중단' in _src)
+check("주문 전 기준 수량이 없으면 주문을 안 보낸다",
+      '주문 전 포지션 수량 불명 — 주문 없이 중단' in _src)
+check("포지션 조회의 불명과 0 을 구분한다",
+      '수량 불명' in _src and 'return 0.0' not in _src.split('def _position_amt')[1].split('\ndef ')[0])
+check("원문 없는 전량청산도 기준 상태를 남긴다",
+      'for _sym_no_raw in _full_close_no_raw:' in _src)
 check("규격 조회 예외를 사전매도 안에서 처리한다",
       'except MarketMetaUnavailable as e:\n        log.error(f"_v25_partial_sell' in _src)
 check("호출부가 사유를 받아 중단 기록·알림에 쓴다",

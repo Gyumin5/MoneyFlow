@@ -37,9 +37,17 @@ def check(name, cond, detail=''):
 class FakeClient:
     """주문을 받아 적기만 하는 클라이언트."""
 
-    def __init__(self, fail_code=None):
+    def __init__(self, fail_code=None, amt=1000.0):
         self.orders = []
         self.fail_code = fail_code
+        self.amt = amt
+
+    def futures_position_information(self, symbol=None):
+        # 사전매도는 주문 전에 기준 수량을 읽는다. 못 읽으면 주문을 아예 안 보내므로
+        # 정밀도 시험이 주문 단계까지 가려면 이 응답이 있어야 한다.
+        # 실패 경로에서도 값은 그대로 — 수량이 안 변했다는 것이 미접수의 증거는 아니므로
+        # 재주문 없이 차단되는 것이 맞는 동작이다.
+        return [{'symbol': symbol, 'positionSide': 'BOTH', 'positionAmt': str(self.amt)}]
 
     def futures_create_order(self, **kw):
         if self.fail_code is not None:

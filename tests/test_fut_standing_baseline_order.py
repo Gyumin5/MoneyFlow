@@ -56,9 +56,14 @@ POS_AFTER_0822 = {
 class FakeOrderClient:
     """사전매도 경로용 최소 fake."""
 
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, amt=450.0):
         self.fail = fail
         self.orders = []
+        self.amt = amt
+
+    def futures_position_information(self, symbol=None):
+        # 사전매도는 주문 직전에 기준 수량을 읽는다. 없으면 주문을 안 보낸다.
+        return [{'symbol': symbol, 'positionSide': 'BOTH', 'positionAmt': str(self.amt)}]
 
     def futures_exchange_info(self):
         # 2026-08-27: contractType/status/quoteAsset 은 실제 응답에 항상 있다.
