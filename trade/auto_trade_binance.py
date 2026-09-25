@@ -1614,6 +1614,16 @@ def _is_retryable_order_error(exc: Exception) -> bool:
     return False
 
 
+def _is_positive_number(s) -> bool:
+    """거래소에 그대로 보낼 수량 문자열인가 — 숫자로 읽히고 0보다 큰가."""
+    if not isinstance(s, str) or not s.strip():
+        return False
+    try:
+        return float(s) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def create_order_with_retry(client: Client, order_params: dict):
     """주문 실행. 일시 오류만 제한 횟수 재시도."""
     last_exc = None
@@ -1662,9 +1672,16 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
     # 현재 포지션
     current_positions, _, current_ok = get_current_positions(client)
     if not current_ok:
-        log.warning("REBALANCE skip: current positions fetch failed")
+        # 조회 실패를 경고 한 줄로 넘기면 그 실행은 주문 0건으로 조용히 끝나고 성공으로
+        # 남는다. 목표와 실제가 갈린 채 하루가 지나므로 중단으로 올려 사람이 보게 한다.
+        err = "V25 ABORT: 포지션 조회 실패 — 주문 없이 중단"
+        log.error(err)
+        if error_alerts is not None:
+            error_alerts.append(err)
+        _v25_persist_abort_log(err)
         return
     trades = []
+    _full_close_no_raw: List[str] = []  # 원문 수량이 없어 전량청산 주문을 못 만든 심볼
     log.info(f"REBALANCE target={target}")
     log.info(f"REBALANCE target_lev_map={target_lev_map}")
 
@@ -1686,11 +1703,19 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
         )
 
         if target_w <= 0:
-            # 전량 청산 (reduceOnly)
+            # 전량 청산 (reduceOnly). 거래소가 준 원문 수량을 그대로 돌려보내는 것이
+            # 유일하게 안전한 길이다 — float 로 바꾸면 정밀도 초과(-1111)로 거절되고,
+            # format_quantity 로 내리면 step 내림 잔량이 남아 "전량" 이 아니게 된다.
+            # 원문이 없으면 그 심볼은 주문을 만들지 않고 축소 실패로 표시한다.
             qty_raw = str(pos.get('qty_raw') or '').strip()
             if qty_raw.startswith('-'):
                 qty_raw = qty_raw[1:]
-            trades.append(('SELL', pos['symbol'], qty_raw if qty_raw else abs(pos['qty']), True, True))
+            if not _is_positive_number(qty_raw):
+                _full_close_no_raw.append(pos['symbol'])
+                log.error(f"FULL CLOSE BLOCKED {pos['symbol']}: 거래소 원문 수량 없음 "
+                          f"(qty_raw={pos.get('qty_raw')!r}) — 주문 만들지 않음")
+                continue
+            trades.append(('SELL', pos['symbol'], qty_raw, True, True))
         elif delta_pct < -DELTA_THRESHOLD:
             sell_qty = abs(pos['qty']) * abs(delta_pct)
             trades.append(('SELL', pos['symbol'], sell_qty, True, False))
@@ -1737,7 +1762,10 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
                     continue
                 trades.append(('BUY', sym, buy_qty, False, False))
             except Exception as e:
+                # 여기서 조용히 넘어가면 그 코인만 목표에 미달한 채 실행이 성공으로 끝난다.
                 log.error(f"price fetch {sym}: {e}")
+                if error_alerts is not None:
+                    error_alerts.append(f"BUY PLAN FAILED {sym}: 시세/규격 조회 실패 {e}")
 
     log.info(f"REBALANCE planned_trades={trades}")
 
@@ -1759,6 +1787,15 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
     # (ai-debate run-20260828T044454Z)
     _reduce_failed_hard = False        # 평범한 실패 — 오류로 올린다
     _reduce_failed_untradable = False  # 거래불가 — 매일 오류로 올리지 않는다
+
+    if _full_close_no_raw:
+        # 전량청산을 못 만든 것은 축소 실패다. 표시를 안 하면 뒤의 매수가 그대로 나가
+        # 총노출이 목표를 넘는다.
+        _reduce_failed_hard = True
+        _msg = (f"FULL CLOSE BLOCKED {_full_close_no_raw}: 거래소 원문 수량 없음 — "
+                "이번 실행에서는 노출을 늘리지 않는다")
+        if error_alerts is not None:
+            error_alerts.append(_msg)
 
     def _record_unsent(symbol: str) -> None:
         """주문이 안 나간 심볼의 기준 상태를 이 루프가 본 포지션에서 남긴다.
@@ -1793,7 +1830,14 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
         # 안 보낸 것이므로 체결불명 표시를 남기지 않고 거래불가로도 분류하지 않는다.
         # (한 try 로 묶으면 로컬 결함이 "체결 불명" 과 "거래정지" 로 둔갑한다.)
         try:
-            qty_str = str(qty) if is_full_close else format_quantity(client, symbol, qty)
+            if is_full_close:
+                # 거래소 원문 수량 그대로. 계획 단계에서 검증했지만 여기서 다시 본다 —
+                # 이 값이 문자열이 아니면 float 를 그대로 보내는 옛 결함으로 되돌아간다.
+                qty_str = qty
+                if not _is_positive_number(qty_str):
+                    raise ValueError(f'전량청산 수량이 거래소 원문 문자열이 아니다: {qty!r}')
+            else:
+                qty_str = format_quantity(client, symbol, qty)
             if float(qty_str) <= 0:
                 continue
             order_params = dict(
@@ -2635,36 +2679,77 @@ def verify_leverage(client: Client, symbol: str, expected: int) -> bool:
     return ok
 
 
+PRESELL_MAX_ATTEMPTS = 3
+
+
+def _position_amt(client: Client, symbol: str) -> Optional[float]:
+    """그 심볼의 현재 포지션 수량(절대값). 모르면 None — 0 으로 속이지 않는다.
+
+    사전매도의 재시도 판정에만 쓴다. "모른다" 와 "0 이다" 를 같게 다루면 응답만
+    유실된 매도를 미접수로 오인해 같은 수량을 한 번 더 판다.
+    """
+    try:
+        rows = _with_retry(lambda: client.futures_position_information(symbol=symbol))
+    except Exception as e:
+        log.warning(f"  포지션 수량 조회 실패 {symbol}: {e}")
+        return None
+    if isinstance(rows, dict):
+        rows = [rows]
+    for r in rows or []:
+        if r.get('symbol') != symbol:
+            continue
+        if (r.get('positionSide') or 'BOTH').upper() != 'BOTH':
+            continue
+        try:
+            return abs(float(r.get('positionAmt') or 0.0))
+        except (TypeError, ValueError):
+            log.warning(f"  포지션 수량 파싱 실패 {symbol}: {r.get('positionAmt')!r}")
+            return None
+    return 0.0
+
+
 def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notional: float,
                                         target_notional: float, mark_price: float,
-                                        order_alerts: Optional[List[str]] = None) -> bool:
+                                        order_alerts: Optional[List[str]] = None
+                                        ) -> Tuple[bool, str]:
     """V25 cycle 8 P1: L 낮춤 전 사전 부분 매도 (reduceOnly).
 
     new_L < current_L 인 코인은 used_margin 증가로 wallet 부족 (-4131) 위험.
     target_notional_new 까지 미리 줄임 → set_leverage 안전 통과.
     잔여 미세 조정은 execute_rebalance 가 처리.
 
-    Returns: True (성공 또는 매도 불필요), False (실패 → 호출자 ABORT).
+    Returns: (ok, reason). ok=False 면 호출자가 그날 선물 매매 전체를 차단하고
+    reason 을 중단 기록·알림에 남긴다. 성공·불필요는 reason 빈 문자열.
+
+    재시도는 "거래소가 접수하지 않았음" 이 확인될 때만 한다. 시간초과처럼 접수 여부가
+    불명확하면 포지션을 다시 읽어 판정하고, 확정할 수 없으면 재주문 없이 차단한다 —
+    reduceOnly 는 중복 체결을 막아주지 않는다(두 번 나가면 두 번 줄어든다).
     """
     # 안전 버퍼 1% (가격 변동/슬리피지 대비)
     buffered_target = target_notional * 1.01
     if current_notional <= buffered_target + 1e-6:
         if DEBUG_LEVERAGE:
             log.info(f"  {sym} 사전매도 불필요: current={current_notional:.2f} <= target+buf={buffered_target:.2f}")
-        return True
+        return True, ''
     if mark_price <= 0:
         log.error(f"_v25_partial_sell {sym}: mark_price={mark_price} 비정상")
-        return False
+        return False, f"{sym} 사전매도 중단: mark_price={mark_price} 비정상"
     sell_notional = current_notional - target_notional
     sell_qty_raw = sell_notional / mark_price
-    constraints = get_symbol_constraints(client, sym)
+    # 규격 조회 실패(MarketMetaUnavailable)는 이 함수 안에서 끝낸다. 밖으로 올리면
+    # 호출부의 중단 기록·알림을 건너뛴 채 프로세스가 죽어 로그에만 남는다.
+    try:
+        constraints = get_symbol_constraints(client, sym)
+    except MarketMetaUnavailable as e:
+        log.error(f"_v25_partial_sell {sym}: 심볼 규격 조회 실패 — 주문 없이 중단: {e}")
+        return False, f"{sym} 사전매도 중단: 심볼 규격 조회 실패 ({e})"
     min_qty = constraints.get('min_qty', 0.0)
     min_notional = constraints.get('min_notional', MIN_NOTIONAL)
     # 규격을 못 읽으면 주문을 보내지 않는다. step=0 은 심볼 조회 실패의 표식이고,
     # 그 상태로 보내면 거래소가 다시 정밀도로 거절해 원인이 규격 조회 실패라는 사실이 묻힌다.
     if constraints.get('step_size', 0.0) <= 0:
         log.error(f"_v25_partial_sell {sym}: step_size 조회 실패 — 주문 보내지 않고 중단")
-        return False
+        return False, f"{sym} 사전매도 중단: step_size 조회 실패"
     # 수량은 본 주문 경로와 같은 함수로 문자열까지 만든다. 부동소수 곱으로 얻은 값
     # (3181.0 * 0.01 = 31.810000000000002)을 그대로 보내면 거래소가 -1111 정밀도 초과로
     # 거절하고, 이 경로의 실패는 곧 매매 차단이다. (2026-09-24 실사고)
@@ -2672,13 +2757,11 @@ def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notion
     sell_qty = float(qty_str)
     if sell_qty < min_qty or sell_qty * mark_price < min_notional:
         log.warning(f"  {sym} 사전매도 skip: qty {qty_str} 가 min_qty/min_notional 미달")
-        return True  # 어차피 차이 작음. ABORT 안 함.
+        return True, ''  # 어차피 차이 작음. ABORT 안 함.
     log.info(f"  {sym} L 낮춤 사전매도: notional ${current_notional:.2f} → ${target_notional:.2f} "
              f"(qty={qty_str}, mark=${mark_price:.4f})")
-    try:
-        order = client.futures_create_order(
-            symbol=sym, side='SELL', type='MARKET', quantity=qty_str, reduceOnly=True
-        )
+
+    def _sent_ok(order) -> Tuple[bool, str]:
         _v25_mark_touch(f"presell SELL {sym} {qty_str}")
         # 2026-08-22: 이 주문도 order_alerts 에 남긴다. 보고에 보이게 하는 목적이 하나,
         # "이 실행이 계좌를 건드렸는가"(_v25_did_order) 판정의 단일 근거가 되는 목적이 하나.
@@ -2687,18 +2770,48 @@ def _v25_partial_sell_for_leverage_down(client: Client, sym: str, current_notion
         if order_alerts is not None:
             order_alerts.append(f"SELL {sym} {qty_str} (L↓ 사전매도)")
         if DEBUG_LEVERAGE:
-            log.info(f"  사전매도 OK {sym} orderId={order.get('orderId')}")
-        import time as _t
-        _t.sleep(0.5)  # 체결 안정화
-        return True
-    except BinanceAPIException as e:
-        _v25_mark_touch(f"presell SELL {sym} 시도 실패(체결 불명)")
-        log.error(f"  {sym} 사전매도 실패: code={getattr(e,'code',None)} msg={e}")
-        return False
-    except Exception as e:
-        _v25_mark_touch(f"presell SELL {sym} 예외(체결 불명)")
-        log.error(f"  {sym} 사전매도 예외: {e}")
-        return False
+            log.info(f"  사전매도 OK {sym} orderId={(order or {}).get('orderId')}")
+        time.sleep(0.5)  # 체결 안정화
+        return True, ''
+
+    qty_before = _position_amt(client, sym)
+    for attempt in range(1, PRESELL_MAX_ATTEMPTS + 1):
+        try:
+            order = client.futures_create_order(
+                symbol=sym, side='SELL', type='MARKET', quantity=qty_str, reduceOnly=True
+            )
+        except Exception as e:
+            code = getattr(e, 'code', None)
+            _v25_mark_touch(f"presell SELL {sym} 시도 실패(체결 불명)")
+            log.error(f"  {sym} 사전매도 실패({attempt}/{PRESELL_MAX_ATTEMPTS}): "
+                      f"code={code} msg={e}")
+            # 거래정지·상장폐지는 우리가 고칠 수 있는 게 아니다. 그래도 그 심볼의 노출을
+            # 남긴 채 나머지를 매매하면 총노출이 목표를 넘으므로 그날 전체를 차단하고,
+            # 사유를 명시해 사람이 장애를 가릴 수 있게 한다.
+            if (isinstance(e, BinanceAPIException) and _is_market_state_rejection(e)
+                    and _is_untradable_now(client, sym)):
+                _note_untradable(sym)
+                return False, (f"{sym} 사전매도 불가: 거래정지·상장폐지로 보인다 "
+                               f"(code={code} msg={e})")
+            if attempt >= PRESELL_MAX_ATTEMPTS or not _is_retryable_order_error(e):
+                return False, f"{sym} 사전매도 실패 (code={code} msg={e})"
+            # 여기서만 재시도한다 — 거래소가 접수하지 않았음이 포지션으로 확인될 때.
+            qty_now = _position_amt(client, sym)
+            if qty_before is None or qty_now is None:
+                return False, (f"{sym} 사전매도 접수 여부 확인 불가(포지션 조회 실패) — "
+                               f"재주문 없이 중단 (code={code} msg={e})")
+            if qty_now <= qty_before - sell_qty * 0.5:
+                log.warning(f"  {sym} 응답은 유실됐지만 포지션이 줄었다 "
+                            f"({qty_before} → {qty_now}) — 접수된 것으로 본다")
+                return _sent_ok(None)
+            if abs(qty_now - qty_before) > max(sell_qty * 0.01, min_qty):
+                return False, (f"{sym} 사전매도 접수 여부 불명(포지션 {qty_before} → {qty_now}) — "
+                               f"재주문 없이 중단 (code={code} msg={e})")
+            log.warning(f"  {sym} 미접수 확인(포지션 {qty_before} 유지) — 재시도한다")
+            time.sleep(ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)])
+            continue
+        return _sent_ok(order)
+    return False, f"{sym} 사전매도 실패: 재시도 {PRESELL_MAX_ATTEMPTS}회 모두 미접수"
 
 
 def cancel_stop_orders(client: Client, symbols: Optional[List[str]] = None):
@@ -3332,14 +3445,18 @@ def main():
                         try:
                             mark = float(_with_retry(lambda: client.futures_mark_price(symbol=sym))['markPrice'])
                         except Exception as e:
-                            log.error(f"V25 ABORT: {sym} mark_price 조회 실패: {e}")
-                            v25_abort = True; _v25_persist_abort_log(f"V25 ABORT: {sym} mark_price 조회 실패"); break
+                            err = f"V25 ABORT: {sym} mark_price 조회 실패: {e}"
+                            log.error(err); error_alerts.append(err)
+                            v25_abort = True; _v25_persist_abort_log(err); break
                     current_notional = pos_amt * mark
                     target_notional = current_notional * (new_lev / cur_lev)
                     log.info(f"V25 L↓ {sym}: {cur_lev}x → {new_lev}x, 사전매도 notional ${current_notional:.2f} → ${target_notional:.2f}")
-                    if not _v25_partial_sell_for_leverage_down(client, sym, current_notional, target_notional, mark,
-                                                              order_alerts=order_alerts):
-                        err = f"V25 ABORT: {sym} L 낮춤 사전매도 실패 — 매매 차단"
+                    _presell_ok, _presell_why = _v25_partial_sell_for_leverage_down(
+                        client, sym, current_notional, target_notional, mark,
+                        order_alerts=order_alerts)
+                    if not _presell_ok:
+                        err = (f"V25 ABORT: {_presell_why or f'{sym} L 낮춤 사전매도 실패'}"
+                               " — 매매 차단")
                         log.error(err); error_alerts.append(err); v25_abort = True; _v25_persist_abort_log(err); break
             if not v25_abort:
                 # 각 코인: 마진모드 자동 보장 → leverage 동적 변경

@@ -181,26 +181,28 @@ def main():
     print("\n[5] L↓ 사전매도도 주문 기록에 남는다 (did_order 판정의 근거)")
     alerts = []
     c = FakeOrderClient()
-    ok = a._v25_partial_sell_for_leverage_down(c, 'SOLUSDT', 90000.0, 60000.0, 200.0,
-                                               order_alerts=alerts)
-    check("사전매도 성공", ok is True)
+    ok, why = a._v25_partial_sell_for_leverage_down(c, 'SOLUSDT', 90000.0, 60000.0, 200.0,
+                                                    order_alerts=alerts)
+    check("사전매도 성공", ok is True and why == '', f"{ok} {why}")
     check("주문이 실제로 나갔다", len(c.orders) == 1 and c.orders[0]['reduceOnly'] is True)
     check("order_alerts 에 기록된다", len(alerts) == 1 and 'SOLUSDT' in alerts[0])
     check("사전매도임을 알 수 있다", '사전매도' in alerts[0])
 
     alerts_skip = []
     c_skip = FakeOrderClient()
-    ok_skip = a._v25_partial_sell_for_leverage_down(c_skip, 'SOLUSDT', 60000.0, 60000.0, 200.0,
-                                                    order_alerts=alerts_skip)
+    ok_skip, why_skip = a._v25_partial_sell_for_leverage_down(
+        c_skip, 'SOLUSDT', 60000.0, 60000.0, 200.0, order_alerts=alerts_skip)
     check("매도 불필요면 주문도 기록도 없다",
-          ok_skip is True and c_skip.orders == [] and alerts_skip == [])
+          ok_skip is True and why_skip == '' and c_skip.orders == [] and alerts_skip == [])
 
     alerts_fail = []
     c_fail = FakeOrderClient(fail=True)
-    ok_fail = a._v25_partial_sell_for_leverage_down(c_fail, 'SOLUSDT', 90000.0, 60000.0, 200.0,
-                                                    order_alerts=alerts_fail)
+    ok_fail, why_fail = a._v25_partial_sell_for_leverage_down(
+        c_fail, 'SOLUSDT', 90000.0, 60000.0, 200.0, order_alerts=alerts_fail)
     check("주문 실패는 False + 기록 없음",
-          ok_fail is False and alerts_fail == [])
+          ok_fail is False and alerts_fail == [], f"{ok_fail} {alerts_fail}")
+    check("실패는 사유를 같이 돌려준다(호출부가 중단 기록에 쓴다)",
+          'SOLUSDT' in why_fail and 'code=-4131' in why_fail, why_fail)
 
     print("\n[6] 소스 불변식 — 호출 시점과 갱신 조건")
     src = open(os.path.join(_HERE, '..', 'trade', 'auto_trade_binance.py')).read()

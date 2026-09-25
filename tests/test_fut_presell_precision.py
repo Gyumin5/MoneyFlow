@@ -73,11 +73,12 @@ set_constraints(step=0.01, precision=2)
 a._v25_reset_touch() if hasattr(a, '_v25_reset_touch') else None
 cli = FakeClient()
 alerts = []
-ok = a._v25_partial_sell_for_leverage_down(
+ok, why = a._v25_partial_sell_for_leverage_down(
     cli, 'BNBUSDT', current_notional=73321.65, target_notional=48881.10,
     mark_price=768.2486, order_alerts=alerts)
 
-check("사전매도 성공", ok is True)
+check("사전매도 성공", ok is True, f"({why})")
+check("성공은 사유 없음", why == '', f"({why})")
 check("주문 1건", len(cli.orders) == 1, f"({len(cli.orders)})")
 qty = cli.orders[0]['quantity'] if cli.orders else None
 check("수량이 문자열", isinstance(qty, str), f"({type(qty).__name__}: {qty!r})")
@@ -117,30 +118,32 @@ for sym, step, prec, cur, tgt, mark in cases:
 print("\n[3] 경계")
 set_constraints(step=0.01, precision=2)
 cli = FakeClient()
-ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 48881.10, 48881.10, 768.2486)
+ok, _ = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 48881.10, 48881.10, 768.2486)
 check("차이 없음 → 주문 없이 True", ok is True and not cli.orders)
 
 cli = FakeClient()
-ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 48885.0, 48881.10, 768.2486)
+ok, _ = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 48885.0, 48881.10, 768.2486)
 check("1% 버퍼 안 → 주문 없이 True", ok is True and not cli.orders)
 
 set_constraints(step=0.01, precision=2, min_qty=0.01, min_notional=5000.0)
 cli = FakeClient()
-ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 50000.0, 48881.10, 768.2486)
+ok, _ = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 50000.0, 48881.10, 768.2486)
 check("min_notional 미달 → 주문 없이 True(ABORT 아님)", ok is True and not cli.orders)
 
 set_constraints(step=0.01, precision=2)
 cli = FakeClient()
-ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10, 0.0)
+ok, why = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10, 0.0)
 check("mark_price 0 → False(ABORT)", ok is False and not cli.orders)
+check("mark_price 실패 사유가 남는다", 'mark_price' in why, f"({why})")
 
 # 규격 조회 실패(step=0)는 주문을 보내지 않고 실패로 올린다. 보내면 거래소가 다시
 # 정밀도로 거절해 원인이 규격 조회 실패라는 사실이 묻힌다.
 set_constraints(step=0.0, precision=8, min_qty=0.0)
 cli = FakeClient()
-ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10, 768.2486)
+ok, why = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10, 768.2486)
 check("step 조회 실패 → 주문 없이 False", ok is False and not cli.orders,
       f"(ok={ok} orders={cli.orders})")
+check("step 실패 사유가 남는다", 'step_size' in why, f"({why})")
 
 
 # ── 4. 실패는 여전히 ABORT 로 올라간다 ─────────────────────────────────────
@@ -148,9 +151,10 @@ print("\n[4] 실패 경로")
 set_constraints(step=0.01, precision=2)
 cli = FakeClient(fail_code=-1111)
 alerts = []
-ok = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10,
-                                           768.2486, order_alerts=alerts)
+ok, why = a._v25_partial_sell_for_leverage_down(cli, 'BNBUSDT', 73321.65, 48881.10,
+                                                768.2486, order_alerts=alerts)
 check("거절 → False(호출자 ABORT)", ok is False)
+check("거절 사유에 코드가 남는다", '-1111' in why, f"({why})")
 check("거절 시 order_alerts 비어 있음", alerts == [], f"({alerts})")
 check("거절도 계좌 변경으로 표시(체결 불명)", a._v25_account_changed() is True)
 
