@@ -222,6 +222,10 @@ DELTA_THRESHOLD = 0.05
 DISPLAY_DUST_NOTIONAL = 1.0  # 알림/대시보드에서 숨길 최소 포지션 금액
 ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
+# 재전송 직전에 "그 주문 받았나" 를 묻는 조회. 조회가 실패하면 재전송을 포기하므로
+# 여기서 몇 번 더 물어보는 것이 그대로 정상 재시도 능력이 된다.
+ORDER_LOOKUP_ATTEMPTS = 3
+ORDER_LOOKUP_DELAYS = [0.5, 1.0]
 POSITION_FETCH_MAX_RETRIES = 3
 POSITION_FETCH_RETRY_DELAYS = [1.0, 2.0]
 # 포지션 스냅샷 정합 검사 문턱(USDT). 계좌 합계가 이만큼 넘는 포지션 증거금을 들고 있다고
@@ -1662,12 +1666,77 @@ def _is_positive_number(s) -> bool:
         return False
 
 
+class OrderAcceptanceUnknown(Exception):
+    """재전송하려는데 앞 주문의 접수 여부를 확정하지 못했다 — 보내지 않는다."""
+
+
+def _new_client_order_id() -> str:
+    """주문에 미리 붙이는 이름표. 이게 있어야 나중에 거래소에 그 주문을 물어볼 수 있다.
+
+    바이낸스 선물 규격은 [.A-Za-z0-9_:/-] 36자다. 시각(밀리초)에 난수를 붙여
+    같은 실행 안에서 겹치지 않게 한다.
+    """
+    return f"v25-{int(time.time() * 1000)}-{random.getrandbits(24):06x}"
+
+
+def _find_order_by_client_id(client: Client, symbol: str, client_order_id: str):
+    """그 이름표의 주문이 거래소에 있나.
+
+    반환 셋을 구분한다 — 주문 dict(있다) · False(확실히 없다) · None(모른다).
+    None 을 "없다" 로 뭉개면 이미 접수된 주문을 다시 보내게 된다. 그래서 조회가
+    실패하면 모른다고 답하고, 부르는 쪽이 재전송을 포기한다.
+    """
+    last_exc = None
+    for attempt in range(1, ORDER_LOOKUP_ATTEMPTS + 1):
+        try:
+            return client.futures_get_order(symbol=symbol, origClientOrderId=client_order_id)
+        except BinanceAPIException as e:
+            # -2013 Order does not exist = 거래소가 못 받았다는 확정 답이다.
+            if getattr(e, 'code', None) == -2013 or 'does not exist' in str(e).lower():
+                return False
+            last_exc = e
+        except Exception as e:
+            last_exc = e
+        if attempt < ORDER_LOOKUP_ATTEMPTS:
+            time.sleep(ORDER_LOOKUP_DELAYS[min(attempt - 1, len(ORDER_LOOKUP_DELAYS) - 1)])
+    log.error(f"ORDER LOOKUP FAILED {symbol} {client_order_id}: {last_exc}")
+    return None
+
+
 def create_order_with_retry(client: Client, order_params: dict):
-    """주문 실행. 일시 오류만 제한 횟수 재시도."""
+    """주문 실행. 일시 오류만 제한 횟수 재시도.
+
+    재전송 전에 반드시 접수 여부를 확인한다. 타임아웃·연결 끊김은 "거래소가 못 받았다" 가
+    아니라 "응답을 못 받았다" 이고, 그 상태에서 다시 보내면 같은 수량이 두 번 나간다.
+    reduceOnly 도 중복 체결을 막지 않는다. 확인 수단은 주문에 미리 붙이는 이름표
+    (newClientOrderId)다 — 없으면 거래소에 "그 주문 받았나" 를 물어볼 방법이 자체가 없다.
+    확인 결과가 셋으로 갈린다. 있다 → 그 주문을 결과로 돌려주고 재전송 안 함.
+    확실히 없다 → 같은 이름표로 다시 보냄. 모른다 → 보내지 않고 실패로 올림.
+    (2026-09-27. 사전매도에서 2026-09-26 에 없앤 것과 같은 결함이 본 주문에 남아 있었다.)
+    """
+    params = dict(order_params)
+    client_order_id = params.get('newClientOrderId') or _new_client_order_id()
+    params['newClientOrderId'] = client_order_id
+    symbol = params.get('symbol')
     last_exc = None
     for attempt in range(1, ORDER_MAX_RETRIES + 1):
+        if attempt > 1:
+            if not symbol:
+                raise OrderAcceptanceUnknown(
+                    f"심볼을 몰라 접수 여부를 조회할 수 없다 — 재전송 안 함 ({client_order_id})")
+            found = _find_order_by_client_id(client, symbol, client_order_id)
+            if found is None:
+                raise OrderAcceptanceUnknown(
+                    f"{symbol} 앞 주문 접수 여부 불명 — 재전송 안 함 "
+                    f"({client_order_id}, 직전 오류: {last_exc})")
+            if found is not False:
+                log.warning(
+                    f"ORDER ALREADY ACCEPTED {params.get('side')} {symbol} "
+                    f"({client_order_id}) — 응답만 유실됐다. 재전송 안 함."
+                )
+                return found
         try:
-            return client.futures_create_order(**order_params)
+            return client.futures_create_order(**params)
         except BinanceAPIException as e:
             last_exc = e
             if not _is_retryable_order_error(e) or attempt >= ORDER_MAX_RETRIES:
