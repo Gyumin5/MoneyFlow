@@ -224,6 +224,9 @@ ORDER_MAX_RETRIES = 3
 ORDER_RETRY_DELAYS = [1.0, 2.0, 5.0]
 POSITION_FETCH_MAX_RETRIES = 3
 POSITION_FETCH_RETRY_DELAYS = [1.0, 2.0]
+# 포지션 스냅샷 정합 검사 문턱(USDT). 계좌 합계가 이만큼 넘는 포지션 증거금을 들고 있다고
+# 하는데 포지션 행이 하나도 없으면 그 응답은 서로 모순이다. 먼지·반올림은 이 밑으로 본다.
+POSITION_CONSISTENCY_MARGIN_FLOOR = 1.0
 CRON_START_JITTER_SECONDS = (3, 17)
 
 # 텔레그램
@@ -1137,8 +1140,21 @@ def _is_retryable_fetch_error(exc: Exception) -> bool:
     return any(marker in msg for marker in retry_markers) or isinstance(exc, requests.exceptions.RequestException)
 
 
+class PositionSnapshotInconsistent(Exception):
+    """계좌 합계와 포지션 행이 서로 안 맞는다 — 그 응답을 사실로 받지 않는다."""
+
+
 def get_current_positions(client: Client):
-    """현재 선물 포지션 + PV 조회. returns (positions_dict, total_pv, ok)."""
+    """현재 선물 포지션 + PV 조회. returns (positions_dict, total_pv, ok).
+
+    응답이 예외 없이 왔다고 해서 사실인 것은 아니다. 두 경우를 조회 실패로 돌린다.
+      (a) 포지션 행이 비었는데 계좌 합계는 포지션 증거금을 들고 있다.
+          비었다고 믿으면 드리프트가 현금 100% 로 보여서 이미 든 것을 또 산다.
+      (b) 총자산이 0 이하다. 목표 명목이 전부 0 이 되어 반대로 전량청산이 된다.
+    둘 다 조회 실패로 돌리면 그 실행은 거래 없이 건너뛴다(호출부 pos_ok 분기).
+    상시 무결성 검사가 (a) 를 잡아주긴 하지만 기준 스냅샷이 없는 구간(최초 실행,
+    주문 후 사후조회 실패로 무효화된 다음 실행)에는 검사가 생략돼 구멍이 남는다.
+    """
     last_exc = None
     for attempt in range(1, POSITION_FETCH_MAX_RETRIES + 1):
         positions = {}
@@ -1147,6 +1163,10 @@ def get_current_positions(client: Client):
             balance = _safe_float(info.get('totalWalletBalance'))
             unrealized = _safe_float(info.get('totalUnrealizedProfit'))
             total_pv = balance + unrealized
+            # 포지션만의 증거금. totalInitialMargin 은 미체결 주문 증거금까지 더해서 오므로
+            # 그걸 쓰면 포지션이 정말 없는데 주문만 걸린 계좌를 모순으로 오판한다.
+            pos_margin = max(_safe_float(info.get('totalPositionInitialMargin')),
+                             _safe_float(info.get('totalMaintMargin')))
 
             # futures_account()['positions']는 markPrice/unRealizedProfit이 null로 오는 경우가 있어
             # 포지션 상세는 futures_position_information() 기준으로 읽는다.
@@ -1206,7 +1226,25 @@ def get_current_positions(client: Client):
                         'real_weight': real_notional / total_pv if total_pv > 0 else 0,
                     }
 
+            if total_pv <= 0:
+                raise PositionSnapshotInconsistent(
+                    f"총자산 {total_pv} — 지갑 {balance} 미실현 {unrealized}")
+            if not positions and pos_margin > POSITION_CONSISTENCY_MARGIN_FLOOR:
+                raise PositionSnapshotInconsistent(
+                    f"포지션 행 {len(pos_rows)}개 중 보유 0 인데 계좌 포지션증거금 {pos_margin:.2f}")
+
             return positions, total_pv, True
+        except PositionSnapshotInconsistent as e:
+            last_exc = e
+            if attempt < POSITION_FETCH_MAX_RETRIES:
+                delay = POSITION_FETCH_RETRY_DELAYS[min(attempt - 1, len(POSITION_FETCH_RETRY_DELAYS) - 1)]
+                log.warning(
+                    f"get_positions 응답 불일치 retry {attempt}/{POSITION_FETCH_MAX_RETRIES}: {e}"
+                )
+                time.sleep(delay)
+                continue
+            log.error(f"get_positions 응답 불일치 — 조회 실패로 처리: {e}")
+            return {}, 0.0, False
         except Exception as e:
             last_exc = e
             if attempt < POSITION_FETCH_MAX_RETRIES and _is_retryable_fetch_error(e):
