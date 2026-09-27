@@ -170,10 +170,18 @@ finally:
     a._trading_symbols = saved
 
 print("\n[4b] 거래소가 거절한 게 아니면(네트워크 등) 억제하지 않는다")
-c, errors, orders = run_rebalance(
-    HELD, {'AAAUSDT': RuntimeError('timeout')}, {'BBBUSDT'})   # AAA 는 상장 목록에 없다
+# 2026-09-27 이후 타임아웃은 결과 불명으로 분류돼 ORDER ACCEPTANCE UNKNOWN 으로 올라간다.
+# 이 항목이 재는 것은 이름표가 아니라 억제 여부다 — 거래소가 거절한 게 아니므로
+# 거래불가로 묻어서는 안 되고, 사람에게 오류로 보여야 한다.
+_saved_delays = a.ORDER_LOOKUP_DELAYS
+a.ORDER_LOOKUP_DELAYS = [0.0, 0.0]
+try:
+    c, errors, orders = run_rebalance(
+        HELD, {'AAAUSDT': RuntimeError('timeout')}, {'BBBUSDT'})  # AAA 는 상장 목록에 없다
+finally:
+    a.ORDER_LOOKUP_DELAYS = _saved_delays
 check("거래불가 심볼이어도 오류로 올라간다",
-      any(m.startswith('ORDER FAILED') for m in errors), str(errors))
+      any('AAAUSDT' in m for m in errors), str(errors))
 check("거래불가로 기록되지 않는다", a._untradable_orders == [], str(a._untradable_orders))
 
 print("\n[4c] 전략 대상이 아닌 계약도 거래 중이면 거래불가가 아니다")
@@ -764,6 +772,54 @@ check("code 필드가 없는 응답은 code None", _nocode.code is None)
 check("code None 도 시장 상태 거절로 읽지 않는다",
       a._is_market_state_rejection(_nocode) is False)
 
+
+print("\n[14] 접수 여부가 불명인 주문이 나오면 그 실행의 남은 주문을 안 보낸다")
+# ai-debate run-20260927T014854Z: 결과 불명인 주문은 재전송도 안 하지만, 그 심볼에
+# 무슨 일이 났는지 모르는 채로 뒤 주문을 계속 내면 계좌가 어디까지 갔는지 모르게 된다.
+# Client 에 futures_get_order 가 없으므로 조회가 실패하고 판정이 '불명'으로 떨어진다.
+_saved_delays = a.ORDER_LOOKUP_DELAYS
+a.ORDER_LOOKUP_DELAYS = [0.0, 0.0]
+try:
+    _timeout = a.BinanceAPIException(type('R', (), {'text': '', 'status_code': 400})(),
+                                     400, '{"code":-1007,"msg":"Timeout waiting for response"}')
+    c, errors, orders = run_rebalance(HELD, {'AAAUSDT': _timeout}, LISTED)
+finally:
+    a.ORDER_LOOKUP_DELAYS = _saved_delays
+check("불명인 주문은 한 번만 나갔다(재전송 없음)",
+      [s for s, _ in c.attempted].count('AAAUSDT') == 1, str(c.attempted))
+check("뒤 주문은 아예 안 나갔다", 'BBBUSDT' not in c.symbols(), str(c.attempted))
+check("불명으로 기록된다",
+      any(m.startswith('ORDER ACCEPTANCE UNKNOWN') and 'AAAUSDT' in m for m in errors),
+      str(errors))
+check("중단도 기록된다",
+      any(m.startswith('ORDER HALTED') and 'BBBUSDT' in m for m in errors), str(errors))
+check("체결로 잡힌 주문은 없다", orders == [], str(orders))
+
+print("\n[14b] 체결로 안 끝난 주문은 뒤 주문을 멈추지 않는다 (그 주문만 실패)")
+# OrderNotCompleted 는 거래소가 그 주문을 거절·만료로 끝냈다고 답한 경우다. 계좌가
+# 어디까지 갔는지는 안다 — 그 주문만 실패로 적고 남은 축소는 계속한다.
+_saved_delays = a.ORDER_LOOKUP_DELAYS
+a.ORDER_LOOKUP_DELAYS = [0.0, 0.0]
+
+
+class _RejectedLookupClient(Client):
+    def futures_get_order(self, **kw):
+        return {'orderId': 1, 'status': 'EXPIRED', 'executedQty': '0'}
+
+
+_orig_client = None
+try:
+    _orig_client = globals()['Client']
+    globals()['Client'] = _RejectedLookupClient
+    c, errors, orders = run_rebalance(HELD, {'AAAUSDT': _timeout}, LISTED)
+finally:
+    a.ORDER_LOOKUP_DELAYS = _saved_delays
+    if _orig_client is not None:
+        globals()['Client'] = _orig_client
+check("그 주문은 한 번만 나갔다",
+      [s for s, _ in c.attempted].count('AAAUSDT') == 1, str(c.attempted))
+check("뒤 주문은 그대로 나간다", 'BBBUSDT' in c.symbols(), str(c.attempted))
+check("실패로 올라간다", any('AAAUSDT' in m for m in errors), str(errors))
 
 print()
 if FAILED:

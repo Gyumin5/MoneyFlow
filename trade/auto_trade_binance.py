@@ -1148,6 +1148,23 @@ class PositionSnapshotInconsistent(Exception):
     """계좌 합계와 포지션 행이 서로 안 맞는다 — 그 응답을 사실로 받지 않는다."""
 
 
+def _strict_float(v) -> Optional[float]:
+    """수치가 제대로 왔나. 없거나·빈 값이거나·숫자가 아니거나·유한하지 않으면 None.
+
+    _safe_float 는 이것들을 전부 0 으로 바꾼다. 편한 대신 "값이 0 이다" 와
+    "값이 안 왔다" 를 구분 못 해서, 필수 계좌 수치가 통째로 빠져도 0 으로 읽힌다.
+    """
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    return f
+
+
 def get_current_positions(client: Client):
     """현재 선물 포지션 + PV 조회. returns (positions_dict, total_pv, ok).
 
@@ -1164,13 +1181,38 @@ def get_current_positions(client: Client):
         positions = {}
         try:
             info = client.futures_account()
-            balance = _safe_float(info.get('totalWalletBalance'))
-            unrealized = _safe_float(info.get('totalUnrealizedProfit'))
+            # 필수 계좌 수치는 빠지거나 이상한 값이면 그 자리에서 실패로 돌린다.
+            # _safe_float 로 읽으면 누락이 0 이 되어 "총자산 0" 과 구분되지 않는다.
+            _req = {}
+            for _key in ('totalWalletBalance', 'totalUnrealizedProfit',
+                         'totalPositionInitialMargin', 'totalMaintMargin'):
+                _val = _strict_float(info.get(_key))
+                if _val is None:
+                    raise PositionSnapshotInconsistent(
+                        f"계좌 필수 수치 {_key} 누락·비정상값: {info.get(_key)!r}")
+                _req[_key] = _val
+            balance = _req['totalWalletBalance']
+            unrealized = _req['totalUnrealizedProfit']
             total_pv = balance + unrealized
             # 포지션만의 증거금. totalInitialMargin 은 미체결 주문 증거금까지 더해서 오므로
             # 그걸 쓰면 포지션이 정말 없는데 주문만 걸린 계좌를 모순으로 오판한다.
-            pos_margin = max(_safe_float(info.get('totalPositionInitialMargin')),
-                             _safe_float(info.get('totalMaintMargin')))
+            pos_margin = max(_req['totalPositionInitialMargin'], _req['totalMaintMargin'])
+
+            # 계좌 응답 안의 포지션 목록. 보유 심볼을 상세 조회와 대조하는 데 쓴다.
+            # 이게 있어야 "행이 일부만 빠진" 응답을 잡는다 — 합계만 보면 하나라도
+            # 남아 있으면 통과해버린다. 없으면(응답에 목록 자체가 없으면) None 으로 두고
+            # 아래 증거금 대조만 한다.
+            acct_symbols: Optional[set] = None
+            _acct_rows = info.get('positions')
+            if isinstance(_acct_rows, list) and _acct_rows:
+                acct_symbols = set()
+                for _r in _acct_rows:
+                    _amt = _strict_float(_r.get('positionAmt'))
+                    if _amt is None:
+                        raise PositionSnapshotInconsistent(
+                            f"계좌 포지션 행 수량 비정상: {_r.get('symbol')} {_r.get('positionAmt')!r}")
+                    if _amt != 0 and _r.get('symbol'):
+                        acct_symbols.add(_r['symbol'])
 
             # futures_account()['positions']는 markPrice/unRealizedProfit이 null로 오는 경우가 있어
             # 포지션 상세는 futures_position_information() 기준으로 읽는다.
@@ -1233,7 +1275,17 @@ def get_current_positions(client: Client):
             if total_pv <= 0:
                 raise PositionSnapshotInconsistent(
                     f"총자산 {total_pv} — 지갑 {balance} 미실현 {unrealized}")
+            detail_symbols = {p['symbol'] for p in positions.values() if p.get('symbol')}
+            if acct_symbols is not None and acct_symbols != detail_symbols:
+                # 두 조회의 시점이 어긋나서 다를 수 있다. 그래서 여기서 단정하지 않고
+                # 재조회로 넘긴다. 재조회로도 안 맞으면 거래 없이 중단한다.
+                raise PositionSnapshotInconsistent(
+                    f"계좌 목록과 상세 조회의 보유 심볼이 다르다 — "
+                    f"계좌에만 {sorted(acct_symbols - detail_symbols)} / "
+                    f"상세에만 {sorted(detail_symbols - acct_symbols)}")
             if not positions and pos_margin > POSITION_CONSISTENCY_MARGIN_FLOOR:
+                # 심볼 대조를 통과해도 남는 경우가 있다 — 계좌 목록과 상세가 둘 다 비었는데
+                # 합계만 증거금을 들고 있는 응답. 목록이 없는 응답의 유일한 방어이기도 하다.
                 raise PositionSnapshotInconsistent(
                     f"포지션 행 {len(pos_rows)}개 중 보유 0 인데 계좌 포지션증거금 {pos_margin:.2f}")
 
@@ -1667,7 +1719,36 @@ def _is_positive_number(s) -> bool:
 
 
 class OrderAcceptanceUnknown(Exception):
-    """재전송하려는데 앞 주문의 접수 여부를 확정하지 못했다 — 보내지 않는다."""
+    """결과 불명인 주문의 접수 여부를 확정하지 못했다 — 재전송도 하지 않고 뒤 매매도 멈춘다."""
+
+
+class OrderNotCompleted(Exception):
+    """거래소에 주문은 있는데 체결로 끝나지 않았다 — 거절·만료·취소·미체결.
+
+    이것도 재전송하지 않는다. 그 주문이 실제로 얼마를 체결했는지 모른 채 다시 보내면
+    중복이 된다. 이번 실행에서는 그 주문을 실패로 적는다.
+    """
+
+
+# 결과 불명이 아니라 거래소가 "안 만들었다" 고 답한 경우. 이때만 다시 보내도 안전하다.
+# 요청 한도 초과와 recvWindow 이탈은 주문이 만들어지기 전에 거절된 것이다.
+_REJECTED_BEFORE_EXECUTION_MARKERS = [
+    'too many requests',
+    'recvwindow',
+    'way too many requests',
+]
+# 체결로 끝난 주문에만 붙는 상태. 그 밖은 전부 미완료로 본다.
+ORDER_DONE_STATUSES = {'FILLED'}
+# 잠깐 이 상태일 수 있으니 조회를 한 번 더 한다.
+ORDER_TRANSIENT_STATUSES = {'NEW', 'PARTIALLY_FILLED'}
+
+
+def _is_rejected_before_execution(exc) -> bool:
+    """거래소가 주문을 만들기 전에 거절했다고 답했나 — 그래야만 재전송이 안전하다."""
+    msg = str(exc).lower()
+    if any(marker in msg for marker in _REJECTED_BEFORE_EXECUTION_MARKERS):
+        return True
+    return getattr(exc, 'code', None) in (-1003, -1021)
 
 
 def _new_client_order_id() -> str:
@@ -1679,84 +1760,136 @@ def _new_client_order_id() -> str:
     return f"v25-{int(time.time() * 1000)}-{random.getrandbits(24):06x}"
 
 
-def _find_order_by_client_id(client: Client, symbol: str, client_order_id: str):
-    """그 이름표의 주문이 거래소에 있나.
+def _lookup_order(client: Client, symbol: str, client_order_id: str):
+    """그 이름표의 주문을 거래소에 물어본다. 한 번만 묻는다.
 
-    반환 셋을 구분한다 — 주문 dict(있다) · False(확실히 없다) · None(모른다).
-    None 을 "없다" 로 뭉개면 이미 접수된 주문을 다시 보내게 된다. 그래서 조회가
-    실패하면 모른다고 답하고, 부르는 쪽이 재전송을 포기한다.
+    반환 셋 — 주문 dict(있다) · False(거래소가 없다고 답했다) · None(조회 자체가 실패).
+    False 를 "확실히 없다" 로 읽지 않는다. 거래소 반영이 늦으면 방금 받은 주문에도
+    없다고 답할 수 있다(ai-debate run-20260927T014854Z). 이 판정으로 재전송하지 않는다.
     """
-    last_exc = None
+    try:
+        return client.futures_get_order(symbol=symbol, origClientOrderId=client_order_id)
+    except BinanceAPIException as e:
+        if getattr(e, 'code', None) == -2013 or 'does not exist' in str(e).lower():
+            return False
+        log.warning(f"ORDER LOOKUP ERROR {symbol} {client_order_id}: {e}")
+        return None
+    except Exception as e:
+        log.warning(f"ORDER LOOKUP ERROR {symbol} {client_order_id}: {e}")
+        return None
+
+
+def _order_completion(order: dict, want_qty: Optional[float]) -> Tuple[bool, str]:
+    """찾은 주문이 체결로 끝났나. (끝났다, 설명) 반환.
+
+    상태만 보지 않고 체결량도 본다 — 거절·만료·취소·미체결을 완료로 취급하면
+    노출이 목표와 다른 채로 그 실행이 성공으로 끝난다.
+    """
+    status = str((order or {}).get('status') or '').upper()
+    executed = _safe_float((order or {}).get('executedQty'))
+    if status not in ORDER_DONE_STATUSES:
+        return False, f"status={status or '불명'} executedQty={executed}"
+    if want_qty is not None and want_qty > 0 and executed < want_qty * 0.999:
+        return False, f"status={status} 체결량 {executed} < 요청 {want_qty}"
+    return True, f"status={status} executedQty={executed}"
+
+
+def _resolve_order_acceptance(client: Client, symbol: str, client_order_id: str,
+                              want_qty: Optional[float]):
+    """결과 불명인 주문의 접수·체결을 읽기전용으로만 판정한다.
+
+    반환 (판정, 주문 또는 None, 설명).
+      'done'    — 그 이름표의 주문이 체결로 끝났다.
+      'partial' — 거래소에 있는데 체결로 안 끝났다(거절·만료·취소·미체결).
+      'unknown' — 끝내 확정하지 못했다. 없다는 답도 여기로 온다.
+    'unknown' 과 'partial' 둘 다 재전송하지 않는다. 다른 점은 뒤 매매를 멈추는가다 —
+    'unknown' 은 그 심볼에 무슨 일이 났는지 모르므로 그 실행의 남은 주문을 통째로 멈춘다.
+    """
+    last_desc = ''
+    saw_absent = False
     for attempt in range(1, ORDER_LOOKUP_ATTEMPTS + 1):
-        try:
-            return client.futures_get_order(symbol=symbol, origClientOrderId=client_order_id)
-        except BinanceAPIException as e:
-            # -2013 Order does not exist = 거래소가 못 받았다는 확정 답이다.
-            if getattr(e, 'code', None) == -2013 or 'does not exist' in str(e).lower():
-                return False
-            last_exc = e
-        except Exception as e:
-            last_exc = e
+        found = _lookup_order(client, symbol, client_order_id)
+        if isinstance(found, dict):
+            done, desc = _order_completion(found, want_qty)
+            last_desc = desc
+            if done:
+                return 'done', found, desc
+            status = str(found.get('status') or '').upper()
+            if status not in ORDER_TRANSIENT_STATUSES:
+                # 거절·만료·취소는 다시 물어도 안 바뀐다.
+                return 'partial', found, desc
+        elif found is False:
+            saw_absent = True
+            last_desc = '거래소가 그런 주문 없다고 답함'
+        else:
+            last_desc = '조회 실패'
         if attempt < ORDER_LOOKUP_ATTEMPTS:
             time.sleep(ORDER_LOOKUP_DELAYS[min(attempt - 1, len(ORDER_LOOKUP_DELAYS) - 1)])
-    log.error(f"ORDER LOOKUP FAILED {symbol} {client_order_id}: {last_exc}")
-    return None
+    if saw_absent:
+        last_desc += ' (없다는 답은 반영 지연과 구분되지 않는다)'
+    return 'unknown', None, last_desc
 
 
 def create_order_with_retry(client: Client, order_params: dict):
-    """주문 실행. 일시 오류만 제한 횟수 재시도.
+    """주문 실행. 결과가 불명인 주문은 어떤 경우에도 다시 보내지 않는다.
 
-    재전송 전에 반드시 접수 여부를 확인한다. 타임아웃·연결 끊김은 "거래소가 못 받았다" 가
-    아니라 "응답을 못 받았다" 이고, 그 상태에서 다시 보내면 같은 수량이 두 번 나간다.
-    reduceOnly 도 중복 체결을 막지 않는다. 확인 수단은 주문에 미리 붙이는 이름표
-    (newClientOrderId)다 — 없으면 거래소에 "그 주문 받았나" 를 물어볼 방법이 자체가 없다.
-    확인 결과가 셋으로 갈린다. 있다 → 그 주문을 결과로 돌려주고 재전송 안 함.
-    확실히 없다 → 같은 이름표로 다시 보냄. 모른다 → 보내지 않고 실패로 올림.
-    (2026-09-27. 사전매도에서 2026-09-26 에 없앤 것과 같은 결함이 본 주문에 남아 있었다.)
+    타임아웃·연결 끊김·내부 오류는 "거래소가 못 받았다" 가 아니라 "응답을 못 받았다" 다.
+    그 상태에서 다시 보내면 같은 수량이 두 번 나간다. reduceOnly 도 중복 체결을 막지
+    않는다. 거래소에 물어 "그런 주문 없다" 는 답을 받아도 재전송하지 않는다 — 반영
+    지연이면 방금 받은 주문에도 그렇게 답하고, 같은 이름표가 이미 체결된 주문의 재접수를
+    막는다는 보장도 없다(ai-debate run-20260927T014854Z).
+
+    그래서 갈래가 셋이다.
+      (a) 거래소가 실행 전에 거절했다고 답한 경우(요청 한도 초과·recvWindow 이탈)만
+          같은 이름표로 다시 보낸다. 주문이 만들어지지 않았다는 확정 답이라서다.
+      (b) 그 밖의 일시 오류 = 결과 불명. 읽기전용으로 접수·체결을 판정한다.
+          체결로 끝났으면 그 주문을 결과로 돌려주고, 아니면 실패로 올린다.
+          확정하지 못하면 OrderAcceptanceUnknown — 부르는 쪽이 그 실행의 남은 매매를 멈춘다.
+      (c) 되돌릴 수 없는 거절(증거금 부족 등)은 그대로 올린다.
     """
     params = dict(order_params)
     client_order_id = params.get('newClientOrderId') or _new_client_order_id()
     params['newClientOrderId'] = client_order_id
     symbol = params.get('symbol')
+    want_qty = _safe_float(params.get('quantity')) or None
+    side = params.get('side')
     last_exc = None
     for attempt in range(1, ORDER_MAX_RETRIES + 1):
-        if attempt > 1:
-            if not symbol:
-                raise OrderAcceptanceUnknown(
-                    f"심볼을 몰라 접수 여부를 조회할 수 없다 — 재전송 안 함 ({client_order_id})")
-            found = _find_order_by_client_id(client, symbol, client_order_id)
-            if found is None:
-                raise OrderAcceptanceUnknown(
-                    f"{symbol} 앞 주문 접수 여부 불명 — 재전송 안 함 "
-                    f"({client_order_id}, 직전 오류: {last_exc})")
-            if found is not False:
-                log.warning(
-                    f"ORDER ALREADY ACCEPTED {params.get('side')} {symbol} "
-                    f"({client_order_id}) — 응답만 유실됐다. 재전송 안 함."
-                )
-                return found
         try:
             return client.futures_create_order(**params)
-        except BinanceAPIException as e:
-            last_exc = e
-            if not _is_retryable_order_error(e) or attempt >= ORDER_MAX_RETRIES:
-                raise
-            delay = ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)]
-            log.warning(
-                f"ORDER RETRY {attempt}/{ORDER_MAX_RETRIES} {order_params.get('side')} "
-                f"{order_params.get('symbol')} after Binance error: {e}"
-            )
-            time.sleep(delay)
         except Exception as e:
             last_exc = e
-            if not _is_retryable_order_error(e) or attempt >= ORDER_MAX_RETRIES:
+            if not _is_retryable_order_error(e):
                 raise
-            delay = ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)]
-            log.warning(
-                f"ORDER RETRY {attempt}/{ORDER_MAX_RETRIES} {order_params.get('side')} "
-                f"{order_params.get('symbol')} after error: {e}"
-            )
-            time.sleep(delay)
+            if _is_rejected_before_execution(e):
+                if attempt >= ORDER_MAX_RETRIES:
+                    raise
+                delay = ORDER_RETRY_DELAYS[min(attempt - 1, len(ORDER_RETRY_DELAYS) - 1)]
+                log.warning(
+                    f"ORDER RETRY {attempt}/{ORDER_MAX_RETRIES} {side} {symbol} "
+                    f"— 거래소가 실행 전 거절: {e}"
+                )
+                time.sleep(delay)
+                continue
+            # 결과 불명. 여기서부터는 절대 다시 보내지 않는다.
+            if not symbol:
+                raise OrderAcceptanceUnknown(
+                    f"심볼을 몰라 접수 여부를 조회할 수 없다 ({client_order_id}, 오류: {e})")
+            verdict, found, desc = _resolve_order_acceptance(
+                client, symbol, client_order_id, want_qty)
+            if verdict == 'done':
+                log.warning(
+                    f"ORDER ALREADY FILLED {side} {symbol} ({client_order_id}) — "
+                    f"응답만 유실됐다. 재전송 안 함. {desc}"
+                )
+                return found
+            if verdict == 'partial':
+                raise OrderNotCompleted(
+                    f"{symbol} 주문이 체결로 끝나지 않았다 — 재전송 안 함 "
+                    f"({client_order_id}, {desc}, 직전 오류: {e})")
+            raise OrderAcceptanceUnknown(
+                f"{symbol} 주문 접수 여부 불명 — 재전송 안 함 "
+                f"({client_order_id}, {desc}, 직전 오류: {e})")
     if last_exc is not None:
         raise last_exc
 
@@ -1925,8 +2058,24 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
     for _sym_no_raw in _full_close_no_raw:
         _record_unsent(_sym_no_raw)
 
+    # 접수 여부를 확정하지 못한 주문이 하나라도 나오면 그 실행의 남은 주문을 통째로 멈춘다.
+    # 그 심볼에 무슨 일이 났는지 모르는 상태라, 뒤 주문을 계속 내면 계좌가 어디까지 갔는지
+    # 모르는 채로 더 움직인다. (ai-debate run-20260927T014854Z)
+    _acceptance_unknown: List[str] = []
+
     # 매도 먼저 실행, 매수 나중
     for side, symbol, qty, reduce_only, is_full_close in sorted(trades, key=lambda x: 0 if x[0] == 'SELL' else 1):
+        if _acceptance_unknown:
+            _halt_msg = (f"ORDER HALTED {side} {symbol}: 앞 주문 {_acceptance_unknown} 의 "
+                         "접수 여부가 불명이라 이번 실행의 남은 주문을 보내지 않는다")
+            log.error(_halt_msg)
+            _record_unsent(symbol)
+            if not reduce_only and symbol not in _skipped_buys:
+                _skipped_buys.append(symbol)
+            if error_alerts is not None:
+                error_alerts.append(_halt_msg)
+            continue
+
         if not reduce_only and (_reduce_failed_hard or _reduce_failed_untradable):
             _skip_msg = (f"BUY SKIPPED {symbol}: 앞선 축소 주문이 실패해 "
                          "이번 실행에서는 노출을 늘리지 않는다")
@@ -1981,6 +2130,17 @@ def execute_rebalance(client: Client, target: Dict[str, float], total_pv: float,
             # 예외도 그대로 올린다. 한 주문의 실패는 그 주문에서 끝나야 한다. (2026-08-28)
             # 예외라도 거래소가 접수했을 수 있다(타임아웃). 계좌를 건드렸다고 본다.
             _v25_mark_touch(f"order {side} {symbol} 시도 실패(체결 불명)")
+            if isinstance(e, OrderAcceptanceUnknown):
+                # 이 심볼이 어떤 상태인지 모른다. 뒤 주문을 계속 내면 계좌가 어디까지
+                # 갔는지 모르는 채 더 움직인다. 축소든 확대든 여기서 멈춘다.
+                _acceptance_unknown.append(symbol)
+                _reduce_failed_hard = True
+                _record_unsent(symbol)
+                log.error(f"ORDER ACCEPTANCE UNKNOWN {side} {symbol} qty={qty_str}: {e}")
+                if error_alerts is not None:
+                    error_alerts.append(
+                        f"ORDER ACCEPTANCE UNKNOWN {side} {symbol} {qty_str}: {e}")
+                continue
             # 억제는 노출을 줄이는 주문(reduceOnly)에만 적용한다. 늘리는 주문이 실패한 건
             # 거래불가가 원인이어도 평범한 오류로 남긴다 — 살 수 없는 걸 사려 했다는
             # 사실 자체가 유니버스 쪽 문제를 가리키므로 조용해지면 안 된다.
@@ -3289,7 +3449,16 @@ def main():
         # 2. 현재 포지션 (리밸런싱 전)
         positions_before, pv_before, pos_ok = get_current_positions(client)
         if not pos_ok:
-            log.error("현재 포지션/PV 조회 실패. 이번 실행은 거래 없이 스킵.")
+            # 기록 없이 돌아가면 이 실행 자체가 없던 일이 된다. 다음 실행이 헬스 파일을
+            # 보고 "마지막 실행은 어제 성공" 으로 읽어서, 조회가 며칠 연속 실패해도
+            # 아무 흔적이 없다. 그래서 시각·사유를 남기고 알림을 보낸다.
+            # streak 은 건드리지 않는다 — 매매 시도의 연속 실패를 세는 값이고
+            # 여기는 시도조차 못 한 실행이다. (ai-debate run-20260927T014854Z)
+            _fetch_fail = "포지션/PV 조회 실패 — 거래 없이 스킵"
+            log.error(f"현재 {_fetch_fail}.")
+            _v25_persist_abort_log(f"V25 SKIP: {_fetch_fail}")
+            _v25_record_cron_result(success=False, abort_reason=_fetch_fail,
+                                    touch_streak=False)
             send_telegram("⚠️ 바이낸스 포지션 조회 실패 — 이번 크론은 거래를 건너뜁니다.")
             return
         log.info(f"현재 PV: ${pv_before:.2f}")

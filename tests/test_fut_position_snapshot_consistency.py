@@ -26,7 +26,7 @@ import auto_trade_binance as a  # noqa: E402
 FAILS = []
 
 
-def check(name, cond, detail=''):
+def check(name, cond, detail: object = ''):
     if cond:
         print(f"  PASS  {name}")
     else:
@@ -168,6 +168,80 @@ c = FakeClient(acct(totalWalletBalance='0', totalUnrealizedProfit='0'), REAL_ROW
 pos, pv, ok = a.get_current_positions(c)
 check("총자산 0 + 보유 있음: 호출부가 거래를 건너뛴다(ok=False)", ok is False)
 check("총자산 0 + 보유 있음: 보유를 0 으로 넘겨주지 않는다", pos == {}, pos)
+
+print("\n== 계좌 목록과 상세 조회의 보유 심볼이 어긋나면 조회 실패 ==")
+# 합계만 보면 못 잡는 경우다 — 세 종목 중 하나만 빠져도 증거금 합계는 여전히 크다.
+# 그래서 futures_account 의 포지션 행과 상세 조회를 심볼 단위로 대조한다.
+ACCT_ROWS_3 = [
+    {'symbol': 'BNBUSDT', 'positionAmt': '63.63', 'leverage': '2'},
+    {'symbol': 'ETHUSDT', 'positionAmt': '9.044', 'leverage': '2'},
+    {'symbol': 'SOLUSDT', 'positionAmt': '597.65', 'leverage': '3'},
+    {'symbol': 'XRPUSDT', 'positionAmt': '0', 'leverage': '2'},
+]
+c = FakeClient(acct(positions=ACCT_ROWS_3), REAL_ROWS)  # 상세에는 SOL 이 없다
+pos, pv, ok = a.get_current_positions(c)
+check("일부 행 누락: ok=False", ok is False)
+check("일부 행 누락: 남은 두 종목을 사실로 돌려주지 않는다", pos == {} and pv == 0.0, (pos, pv))
+check("일부 행 누락: 재시도 횟수만큼 다시 읽는다",
+      c.row_calls == a.POSITION_FETCH_MAX_RETRIES, c.row_calls)
+
+print("\n== 상세에만 있고 계좌 목록에 없는 경우도 조회 실패 ==")
+c = FakeClient(acct(positions=[{'symbol': 'BNBUSDT', 'positionAmt': '63.63'}]), REAL_ROWS)
+pos, pv, ok = a.get_current_positions(c)
+check("상세 초과: ok=False", ok is False)
+
+print("\n== 두 목록이 맞으면 통과한다 (대조가 오탐을 만들지 않는다) ==")
+ok_rows = [{'symbol': 'BNBUSDT', 'positionAmt': '63.63'},
+           {'symbol': 'ETHUSDT', 'positionAmt': '9.044'},
+           {'symbol': 'XRPUSDT', 'positionAmt': '0'}]
+c = FakeClient(acct(positions=ok_rows), REAL_ROWS)
+pos, pv, ok = a.get_current_positions(c)
+check("일치: ok=True", ok is True)
+check("일치: 두 종목 다 읽힌다", sorted(pos) == ['BNB', 'ETH'], sorted(pos))
+check("일치: 재시도 안 한다", c.row_calls == 1, c.row_calls)
+
+print("\n== 둘 다 비었고 증거금도 없으면 통과한다 ==")
+c = FakeClient(acct(positions=[{'symbol': 'BNBUSDT', 'positionAmt': '0'}],
+                    totalPositionInitialMargin='0', totalMaintMargin='0',
+                    totalInitialMargin='0', totalUnrealizedProfit='0',
+                    totalWalletBalance='50000.0'), [])
+pos, pv, ok = a.get_current_positions(c)
+check("양쪽 다 빔: ok=True", ok is True)
+
+print("\n== 계좌 포지션 행의 수량이 비정상이면 조회 실패 ==")
+for label, amt in [("빈 문자열", ''), ("숫자 아님", 'null'), ("없음", None),
+                   ("무한대", 'Infinity')]:
+    c = FakeClient(acct(positions=[{'symbol': 'BNBUSDT', 'positionAmt': amt}]), REAL_ROWS)
+    pos, pv, ok = a.get_current_positions(c)
+    check(f"행 수량 {label}: ok=False", ok is False)
+
+print("\n== 필수 계좌 수치가 없거나 비정상이면 조회 실패 ==")
+# _safe_float 로 읽으면 누락이 0 이 되어 "총자산 0" 과 구분되지 않고,
+# 증거금 누락은 모순 검사를 통째로 무력화한다. 그래서 값 자체를 검사한다.
+REQUIRED_KEYS = ['totalWalletBalance', 'totalUnrealizedProfit',
+                 'totalPositionInitialMargin', 'totalMaintMargin']
+for key in REQUIRED_KEYS:
+    missing = acct()
+    missing.pop(key)
+    c = FakeClient(missing, REAL_ROWS)
+    pos, pv, ok = a.get_current_positions(c)
+    check(f"{key} 누락: ok=False", ok is False)
+    check(f"{key} 누락: 보유·총자산을 사실로 안 돌려준다", pos == {} and pv == 0.0, (pos, pv))
+
+for label, bad in [("빈 문자열", ''), ("None", None), ("숫자 아님", 'n/a'),
+                   ("NaN", 'NaN'), ("무한대", 'Infinity')]:
+    c = FakeClient(acct(totalWalletBalance=bad), REAL_ROWS)
+    pos, pv, ok = a.get_current_positions(c)
+    check(f"지갑잔고 {label}: ok=False", ok is False)
+    c = FakeClient(acct(totalPositionInitialMargin=bad), [])
+    pos, pv, ok = a.get_current_positions(c)
+    check(f"포지션증거금 {label}: ok=False", ok is False)
+
+print("\n== 미실현손익 0 은 정상값이다 (누락과 구분한다) ==")
+c = FakeClient(acct(totalUnrealizedProfit='0'), REAL_ROWS)
+pos, pv, ok = a.get_current_positions(c)
+check("미실현 0: ok=True", ok is True)
+check("미실현 0: 총자산 = 지갑", abs(pv - 81780.38793994) < 0.01, pv)
 
 print("\n== 조회 예외는 기존 경로 그대로 ==")
 
