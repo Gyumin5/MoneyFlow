@@ -86,6 +86,20 @@ check("38종", len(sp.REF_UNIVERSE) == 38, len(sp.REF_UNIVERSE))
 check("중복 없음", len(set(sp.REF_UNIVERSE)) == len(sp.REF_UNIVERSE))
 check("BTC 포함", 'BTC' in sp.REF_UNIVERSE)
 
+print("\n[8] 백테스트에 넘기는 전략값은 파라미터 대조표를 그대로 따라간다")
+from check_params_drift import CANONICAL   # noqa: E402
+
+_canon = CANONICAL['fut']['params']
+check("SMA 일수", sp.BT_FUT_PARAMS['sma_days'] == _canon['sma_bars'], sp.BT_FUT_PARAMS)
+check("단기 모멘텀 일수", sp.BT_FUT_PARAMS['mom_short_days'] == _canon['mom_short_bars'])
+check("장기 모멘텀 일수", sp.BT_FUT_PARAMS['mom_long_days'] == _canon['mom_long_bars'])
+check("변동성 문턱", sp.BT_FUT_PARAMS['vol_threshold'] == _canon['vol_threshold'])
+check("카나리 히스테리시스", sp.BT_FUT_PARAMS['canary_hyst'] == _canon['canary_hyst'])
+check("헬스 방식", sp.BT_FUT_PARAMS['health_mode'] == _canon['health_mode'])
+check("값을 따로 베껴 적지 않았다",
+      all(k not in sp.BT_FUT_PARAMS for k in ('snap_interval_bars', 'n_snapshots')),
+      sp.BT_FUT_PARAMS)
+
 print()
 if FAILS:
     print(f"==== 실패 {len(FAILS)}건: {FAILS}")

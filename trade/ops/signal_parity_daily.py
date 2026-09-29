@@ -34,6 +34,22 @@ sys.path.insert(0, os.path.join(_ROOT, 'trade'))
 
 BT_START = '2020-10-01'
 
+# 백테스트 쪽에 넘길 선물 전략값은 여기서 따로 적지 않고 파라미터 대조표에서 가져온다.
+# 같은 숫자를 세 번째로 베껴 적으면 그 사본만 낡아서, 라이브가 바뀐 게 아니라 이 감시가
+# 낡은 탓에 불일치가 나는 일이 생긴다. 이름이 다른 것만 여기서 옮긴다(bars → days).
+from check_params_drift import CANONICAL as _CANON      # noqa: E402
+
+_FUT = _CANON['fut']['params']
+BT_FUT_PARAMS = dict(
+    sma_days=_FUT['sma_bars'],
+    mom_short_days=_FUT['mom_short_bars'],
+    mom_long_days=_FUT['mom_long_bars'],
+    vol_threshold=_FUT['vol_threshold'],
+    canary_hyst=_FUT['canary_hyst'],
+    health_mode=_FUT['health_mode'],
+    vol_mode=_FUT['vol_mode'],
+)
+
 # 고정 유니버스 — 라이브는 CoinGecko 실시간 상위 40 종, 백테스트는 시점별 시가총액을
 # 쓴다. 그 차이까지 대조하면 선정 로직이 아니라 입력 차이를 매일 불일치로 신고하게 된다
 # (2026-06-06 통제 패리티에서 5.69% 갈림을 확인했고 의도된 갭으로 판정했다).
@@ -86,12 +102,11 @@ def _run_bt(bars, funding, universe, end_date):
     ub.get_mcap = lambda _date, _u=tuple(universe): list(_u)
     trace = []
     ub.run(bars, funding, interval='D', asset_type='fut', leverage=3.0,
-           sma_days=42, mom_short_days=18, mom_long_days=127,
-           vol_days=90, vol_threshold=0.05, canary_hyst=0.015,
+           vol_days=90,
            n_snapshots=1, snap_interval_bars=1,            # 스냅 기계 무력화
            universe_size=3, cap=1 / 3, tx_cost=0.0004, maint_rate=0.004,
-           health_mode='mom2vol', vol_mode='daily',
            drift_threshold=0.03,
+           **BT_FUT_PARAMS,
            dd_lookback=0, bl_drop=0.0, crash_threshold=-10.0,   # 가드 없음 (라이브 정합)
            start_date=BT_START, end_date=end_date, _trace=trace)
 
