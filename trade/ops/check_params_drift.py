@@ -21,6 +21,10 @@ PROJECT_ROOT = os.path.abspath(os.path.join(TRADE_DIR, '..'))
 sys.path.insert(0, HERE)
 sys.path.insert(0, TRADE_DIR)
 sys.path.insert(0, PROJECT_ROOT)
+# 집 저장소는 전략 모듈이 하위 폴더에 있다(서버는 전부 평면이라 이 경로가 없고 무해하다).
+# executor_stock 을 먼저 import 하면 그 쪽 부수효과로 경로가 붙지만, 그 순서에 기대면
+# import 하나만 바뀌어도 조용히 확인을 건너뛴다.
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'strategies', 'cap_defend'))
 
 FLOAT_TOL = 1e-9
 
@@ -49,6 +53,22 @@ CANONICAL = {
     'stock': {
         'source': 'executor_stock.py',
         'params': dict(SNAP_PERIOD_DAYS=69, N_SNAPS=3, SNAP_STAGGER_DAYS=23),
+        # 전략 상수는 stock_strategy_v25.py 에 있다. 여기 적어 두는 이유는 둘이다 —
+        # 하나는 이 값이 바뀌면 매일 경고가 뜨게 하는 것이고(2026-06-06 사고가 바로
+        # 이 계열이다: 라이브 Z랭킹 모멘텀이 순수 252일로 들어가 채택 백테스트와
+        # 종목 선정이 16.8% 날 어긋났는데 아무 경보도 없었다), 다른 하나는 주식
+        # 신호 대조(trade/ops/signal_parity_daily.py)가 백테스트 쪽 3-모멘텀 기간을
+        # 라이브 모듈에서 읽지 않게 하는 것이다. 라이브에서 읽으면 한쪽을 고칠 때
+        # 양쪽이 같이 움직여서 대조가 늘 통과한다.
+        'strategy_source': 'stock_strategy_v25.py',
+        'strategy': dict(
+            MOM_SHORT=30, MOM_MID=72, MOM_LONG=230,
+            SHARPE_LB=126, MOM12M_DAYS=252,
+            STOCK_CANARY_TICKER='EEM', STOCK_CANARY_MA_PERIOD=200,
+            STOCK_CANARY_HYST=0.005,
+            OFFENSIVE_STOCK_UNIVERSE=['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ'],
+            DEFENSIVE_STOCK_UNIVERSE=['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC'],
+        ),
     },
 }
 
@@ -108,6 +128,14 @@ def check_stock(_):
     diffs = []
     for k, v in CANONICAL['stock']['params'].items():
         live_v = getattr(mod, k, None)
+        if not _eq(live_v, v):
+            diffs.append(f"  stock/{k}: live={live_v} expected={v}")
+
+    smod = _import('stock_strategy_v25')
+    if smod is None:
+        return diffs + ['stock: stock_strategy_v25 import 실패']
+    for k, v in CANONICAL['stock']['strategy'].items():
+        live_v = getattr(smod, k, None)
         if not _eq(live_v, v):
             diffs.append(f"  stock/{k}: live={live_v} expected={v}")
     return diffs

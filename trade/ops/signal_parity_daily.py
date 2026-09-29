@@ -5,7 +5,12 @@
 라이브가 쓰는 선정함수 자체를 읽기 전용으로 다시 돌려 백테스트 엔진과 맞춰 본다.
 매매도 상태 저장도 하지 않는다.
 
-지금 덮는 것 = 선물(V25). 현물은 v24_shadow_today.py 가 이미 있고, 주식은 다음 층.
+덮는 것 둘.
+  선물(V25) = 라이브 선정함수를 집에서 다시 돌려 최근 신호일 몇 개를 대조한다.
+  주식(V25) = 서버가 그날 실제로 낸 신호(signal_state.json)를 읽어 와 대조한다.
+              주식은 다시 돌리지 않고 실제로 나온 답을 본다 — 서버에서 도는 코드와
+              서버가 쓴 가격으로 계산된 결과라 배포·데이터 어긋남까지 같이 걸린다.
+현물은 v24_shadow_today.py 가 이미 있다.
 
 판정 셋:
   0 = 비교한 모든 신호일에서 종목·비중이 같다
@@ -18,7 +23,8 @@
 양성 대조 실패(감시가 불일치를 못 잡는 상태), 예기치 못한 예외.
 
 쓰기:
-  python3 trade/ops/signal_parity_daily.py            # 최근 3 신호일
+  python3 trade/ops/signal_parity_daily.py                  # 선물+주식, 최근 3 신호일
+  python3 trade/ops/signal_parity_daily.py --sleeve stock
   python3 trade/ops/signal_parity_daily.py --days 7
   python3 trade/ops/signal_parity_daily.py --allow-stale-days 2
   python3 trade/ops/signal_parity_daily.py --skip-server-check --skip-self-test
@@ -34,7 +40,12 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, '..', '..'))
 sys.path.insert(0, os.path.join(_ROOT, 'strategies', 'cap_defend'))
 sys.path.insert(0, os.path.join(_ROOT, 'trade'))
+# 주식 채택 백테스트 함수는 research/ 에 있다(bt_stock_coin_v3 · bt_stock_mom3 ·
+# bt_stock_single_snap). V25 주식을 채택할 때 쓴 것이 그 셋이므로, 여기서 다시 옮겨
+# 적지 않고 그대로 부른다 — 옮겨 적으면 채택 근거와 감시가 서로 다른 코드가 된다.
+sys.path.insert(0, os.path.join(_ROOT, 'strategies', 'cap_defend', 'research'))
 
+SERVER = 'ubuntu@<서버주소>'
 BT_START = '2020-10-01'
 
 # 백테스트 쪽에 넘길 선물 전략값은 여기서 따로 적지 않고 파라미터 대조표에서 가져온다.
@@ -52,6 +63,24 @@ BT_FUT_PARAMS = dict(
     health_mode=_FUT['health_mode'],
     vol_mode=_FUT['vol_mode'],
 )
+
+# 주식 3-모멘텀 기간도 같은 표에서 가져온다. 라이브 모듈(stock_strategy_v25)에서 읽으면
+# 라이브를 고칠 때 백테스트 쪽도 같이 움직여서 대조가 늘 통과한다 — 2026-06-06 사고가
+# 정확히 이 축이었다(라이브 Z랭킹 모멘텀이 순수 252일로 들어가 선정이 16.8% 날 어긋남).
+_STK = _CANON['stock']['strategy']
+BT_STOCK_MOM = (_STK['MOM_SHORT'], _STK['MOM_MID'], _STK['MOM_LONG'])
+BT_STOCK_SHARPE_LB = _STK['SHARPE_LB']
+
+# 방어 국면 비중식은 균등(1/n)으로 본다. 2026-09-25 판정이 "라이브(균등)를 그대로 두고
+# 다음 주식 백테스트를 균등 기본으로 돌린다" 였다(history.md). cap 1/3+현금으로 보면
+# 방어일 792일 중 310일이 비중만 다르게 나와서, 실제 결정과 어긋난 값으로 매일 경보가 된다.
+BT_STOCK_DEF_MODE = 'ew'
+
+# 주식 신선도 허용치. 서버 신호 크론은 매일(주말 포함) 09:15 KST 에 도므로 갱신 지연은
+# 0일만 통과시킨다. 가격 기준일은 1세션까지 받는다 — 서버가 09:15 에 받는 야후 수정종가가
+# 직전 세션을 못 받는 일이 알려져 있다(2026-09-29 실측: 표기 신호일 09-28, 실제 종가 09-25).
+STOCK_UPDATE_LAG_ALLOW = 0
+STOCK_BASIS_GAP_ALLOW = 1
 
 # 고정 유니버스 — 라이브는 CoinGecko 실시간 상위 40 종, 백테스트는 시점별 시가총액을
 # 쓴다. 그 차이까지 대조하면 선정 로직이 아니라 입력 차이를 매일 불일치로 신고하게 된다
@@ -189,8 +218,43 @@ def decide(bt: dict, live: dict, required_day, days: int):
     return 0, compared, mismatched, ''
 
 
-def server_build_matches(timeout_sec: int = 30):
-    """집에서 다시 돌리는 선정함수가 서버에 실제로 깔린 것과 같은 판인지 본다.
+FUT_BUILD = [(os.path.join(_ROOT, 'trade', 'auto_trade_binance.py'),
+              '/home/ubuntu/auto_trade_binance.py')]
+
+# 주식은 신호를 만드는 쪽(recommend_personal → stock_strategy_v25)과 주문을 내는 쪽
+# (executor_stock)이 갈라져 있다. 셋 다 본다 — 대조는 신호 쪽만 보므로, 주문 쪽이 따로
+# 밀려 있으면 대조가 통과하는데 실제 매매는 다른 전략으로 도는 상태가 된다.
+STOCK_BUILD = [
+    (os.path.join(_ROOT, 'strategies', 'cap_defend', 'stock_strategy_v25.py'),
+     '/home/ubuntu/stock_strategy_v25.py'),
+    (os.path.join(_ROOT, 'strategies', 'cap_defend', 'recommend_personal.py'),
+     '/home/ubuntu/recommend_personal.py'),
+    (os.path.join(_ROOT, 'trade', 'executor_stock.py'),
+     '/home/ubuntu/executor_stock.py'),
+]
+
+
+def _ssh_text(remote_cmd: str, timeout_sec: int):
+    """서버에서 한 줄 명령을 돌려 표준출력을 가져온다. 읽기 전용으로만 쓴다.
+
+    반환 (출력, 사유). 출력이 None 이면 사유가 왜 못 읽었는지다.
+    """
+    import subprocess
+    try:
+        proc = subprocess.run(
+            ['ssh', '-i', os.path.expanduser('~/.ssh/id_rsa'),
+             '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes',
+             SERVER, remote_cmd],
+            capture_output=True, text=True, timeout=timeout_sec)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return None, f'서버를 못 읽었다: {type(exc).__name__}'
+    if proc.returncode != 0:
+        return None, f'서버 조회 실패 (rc={proc.returncode}) {proc.stderr.strip()[:120]}'
+    return proc.stdout, ''
+
+
+def server_build_matches(timeout_sec: int = 30, files=None):
+    """집에서 대조에 쓰는 코드가 서버에 실제로 깔린 것과 같은 판인지 본다.
 
     반환 (같은가, 설명). 같지 않거나 확인 자체를 못 하면 비교불능으로 올린다 —
     서버에 다른 판이 깔려 있는데 집 사본으로 대조해 통과를 찍으면 잘못된 안심이 된다.
@@ -198,28 +262,41 @@ def server_build_matches(timeout_sec: int = 30):
     import hashlib
     import subprocess
 
-    local_path = os.path.join(_ROOT, 'trade', 'auto_trade_binance.py')
-    try:
-        with open(local_path, 'rb') as fh:
-            local_md5 = hashlib.md5(fh.read()).hexdigest()
-    except OSError as exc:
-        return False, f'집 사본을 못 읽었다: {exc}'
+    pairs = list(files or FUT_BUILD)
+    local = []
+    for local_path, remote_path in pairs:
+        try:
+            with open(local_path, 'rb') as fh:
+                local.append(hashlib.md5(fh.read()).hexdigest())
+        except OSError as exc:
+            return False, f'집 사본을 못 읽었다: {exc}'
 
     try:
         proc = subprocess.run(
             ['ssh', '-i', os.path.expanduser('~/.ssh/id_rsa'),
              '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes',
-             'ubuntu@<서버주소>', 'md5sum /home/ubuntu/auto_trade_binance.py'],
+             SERVER, 'md5sum ' + ' '.join(rp for _, rp in pairs)],
             capture_output=True, text=True, timeout=timeout_sec)
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, f'서버 판본을 못 읽었다: {type(exc).__name__}'
     if proc.returncode != 0:
         return False, f'서버 판본 조회 실패 (rc={proc.returncode}) {proc.stderr.strip()[:120]}'
 
-    server_md5 = proc.stdout.split()[0] if proc.stdout.split() else ''
-    if server_md5 != local_md5:
-        return False, f'집 사본과 서버 배포본이 다르다 (집 {local_md5[:12]} · 서버 {server_md5[:12]})'
-    return True, f'집·서버 같은 판 ({local_md5[:12]})'
+    # md5sum 은 준 순서대로 한 줄씩 낸다. 줄 수가 모자라면 무엇이 빠졌는지 모르므로 막는다.
+    lines = [ln for ln in proc.stdout.strip().split('\n') if ln.strip()]
+    if len(lines) != len(pairs):
+        return False, f'서버 판본을 못 읽었다: 응답 {len(lines)}줄 (기대 {len(pairs)}줄)'
+
+    shown = []
+    for (local_path, remote_path), local_md5, line in zip(pairs, local, lines):
+        parts = line.split()
+        server_md5 = parts[0] if parts else ''
+        name = os.path.basename(remote_path)
+        if server_md5 != local_md5:
+            return False, (f'집 사본과 서버 배포본이 다르다 ({name}: '
+                           f'집 {local_md5[:12]} · 서버 {server_md5[:12]})')
+        shown.append(f'{name} {local_md5[:12]}')
+    return True, '집·서버 같은 판 (' + ' · '.join(shown) + ')'
 
 
 def self_check(allow_stale_days: int):
@@ -259,6 +336,253 @@ def self_check(allow_stale_days: int):
         return True, f'라이브 {key} 를 {original}→40 으로 틀리자 불일치로 잡혔다'
     return False, (f'라이브 {key} 를 {original}→40 으로 틀렸는데 rc={rc} 가 나왔다 — '
                    '이 감시는 불일치를 못 잡는다')
+
+
+def _norm_risky(weights: dict) -> dict:
+    """현금 칸을 빼고 위험자산 비중만 남긴다. 소수점 6자리에서 끊는다.
+
+    현금을 빼는 이유는 양쪽 정의가 같아서다 — 라이브는 executor 가 버퍼를 따로 곱하고
+    백테스트는 버퍼 0 으로 돌린다. 남는 현금 칸은 고른 종목 수에서 결정되므로,
+    위험자산 비중이 같으면 현금도 같다.
+    """
+    out = {}
+    for key, val in weights.items():
+        if key in ('CASH', 'Cash'):
+            continue
+        if val and abs(val) > 1e-9:
+            out[key] = round(float(val), 6)
+    return out
+
+
+STOCK_TICKERS = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ', 'IEF', 'BIL', 'BNDX']
+
+
+def server_stock_signal(timeout_sec: int = 30):
+    """서버가 그날 실제로 낸 주식 신호와 그 신호를 만든 가격 기준일을 읽어 온다. 읽기 전용.
+
+    라이브를 집에서 다시 돌리지 않고 실제로 나온 답을 본다. 서버에 깔린 코드와 서버가
+    받은 가격으로 계산된 결과라, 선정 로직뿐 아니라 배포·데이터 어긋남까지 같이 걸린다.
+
+    가격 기준일을 따로 읽는 이유가 핵심이다. signal_state.json 의 signal_date 는
+    비트코인 시계열의 마지막 날짜라 주식이 실제로 쓴 종가의 날짜가 아니다 — 주식 쪽은
+    야후 수정종가가 장 마감 몇 시간 뒤에 채워져서 09:15 KST 다운로드가 직전 세션을
+    못 받는 일이 있다(2026-09-29 실측: 신호일 표기는 09-28, 실제 계산은 09-25 종가).
+    표기된 날짜로 대조하면 매일 불일치가 나는데 원인은 선정 로직이 아니다. 그래서
+    서버가 실제로 쓴 CSV 의 마지막 날짜를 기준일로 잡고, 그 날짜로 양쪽을 맞춘다.
+    """
+    import json
+
+    probe = '; '.join(f'printf "%s %s\\n" {t} "$(tail -1 /home/ubuntu/data/{t}.csv | cut -d, -f1)"'
+                      for t in STOCK_TICKERS)
+    out, why = _ssh_text(f'cat /home/ubuntu/signal_state.json; echo "@@@"; {probe}', timeout_sec)
+    if out is None:
+        raise ParityDataStale(f'서버 주식 신호를 못 읽었다: {why}')
+    if '@@@' not in out:
+        raise ParityDataStale('서버 응답이 잘렸다 (가격 기준일 부분이 없다)')
+    head, tail = out.split('@@@', 1)
+
+    try:
+        data = json.loads(head)
+    except ValueError as exc:
+        raise ParityDataStale(f'서버 주식 신호가 JSON 이 아니다: {exc}') from exc
+    stock = data.get('stock') or {}
+    meta = data.get('meta') or {}
+    for key in ('risk_on', 'offense_weights', 'defense_weights'):
+        if key not in stock:
+            raise ParityDataStale(f'서버 주식 신호에 {key} 가 없다')
+    if not meta.get('signal_date') or not meta.get('updated_at'):
+        raise ParityDataStale('서버 주식 신호에 신호일·갱신시각이 없다')
+
+    basis = {}
+    for line in tail.strip().split('\n'):
+        parts = line.split()
+        if len(parts) == 2:
+            basis[parts[0]] = parts[1][:10]
+    missing = [t for t in STOCK_TICKERS if t not in basis]
+    if missing:
+        raise ParityDataStale(f'서버 가격 기준일을 못 읽었다: {", ".join(missing)}')
+    # 종목마다 기준일이 다르면 그 신호는 섞인 날짜로 계산된 것이다. 라이브도 같은 조건을
+    # 검사해 건너뛰게 되어 있으니, 여기서도 대조하지 않는다.
+    dates = sorted(set(basis.values()))
+    if len(dates) != 1:
+        raise ParityDataStale(f'서버 주식 가격 기준일이 종목마다 다르다: {basis}')
+
+    return {
+        'risk_on': bool(stock['risk_on']),
+        'off_w': _norm_risky(stock['offense_weights']),
+        'def_w': _norm_risky(stock['defense_weights']),
+        'signal_date': str(meta['signal_date'])[:10],
+        'updated_at': str(meta['updated_at']),
+        'basis_date': dates[0],
+    }
+
+
+def _stock_prices():
+    """주식 가격 시계열. 채택 백테스트와 같은 로더를 쓴다."""
+    import pandas as pd
+
+    from bt_stock_coin_v3 import DEF_TICKERS, OFF_R7
+    from stock_engine import load_prices
+
+    tickers = sorted(set(OFF_R7) | set(DEF_TICKERS))
+    pdf = pd.DataFrame(load_prices(tickers, start='2005-01-01'))
+    pdf = pdf[~pdf.index.duplicated(keep='first')].sort_index()
+    idx = pd.DatetimeIndex(pdf.index)
+    pdf = pdf[idx.normalize() == idx]      # 시각이 붙은 행은 버린다 (일봉만 쓴다)
+    return pdf.dropna(how='all')
+
+
+def _stock_bt(pdf, sig_ts, mom=None):
+    """채택 백테스트 쪽의 그 날 선정. 스냅·드리프트·체결은 안 본다 (선정만 대조한다)."""
+    from bt_stock_coin_v3 import precompute
+    from bt_stock_mom3 import fresh_pick_3mom
+    from bt_stock_single_snap import picks_to_target, select_off
+
+    ms, mid, ml = mom or BT_STOCK_MOM
+    # 백테스트 쪽은 샤프와 방어 모멘텀 기간을 126 으로 박아 두고 있다. 정본 표가 그와
+    # 달라지면 이 감시가 조용히 옛 정의로 대조하게 되므로 그 자리에서 멈춘다.
+    if BT_STOCK_SHARPE_LB != 126:
+        raise ParityDataStale(
+            f'정본 표의 주식 샤프 기간이 {BT_STOCK_SHARPE_LB} 인데 채택 백테스트는 126 으로 박혀 있다')
+
+    ranked, mom_off, mom_def, canary = precompute(pdf, [ms, mid, ml], [126])
+    on = bool(canary.at[sig_ts])
+    off_picks = fresh_pick_3mom(ranked.at[sig_ts],
+                                mom_off[ms].loc[sig_ts],
+                                mom_off[mid].loc[sig_ts],
+                                mom_off[ml].loc[sig_ts])
+    return {
+        'risk_on': on,
+        'off_w': _norm_risky(picks_to_target(off_picks, 0.0, 'cap')),
+        'def_w': _norm_risky(select_off(sig_ts, mom_def, 0.0, BT_STOCK_DEF_MODE)),
+    }
+
+
+def decide_stock(live: dict, bt: dict):
+    """주식 대조 판정. 순수 함수 — 시험에서 그대로 부른다.
+
+    반환 (rc, 어긋난 항목들). rc 0 = 셋 다 같다, 1 = 하나라도 다르다.
+    셋을 다 본다 — 카나리(공격·방어 국면 판정), 공격 국면 목표, 방어 국면 목표.
+    지금 쓰지 않는 국면도 같이 보는 이유는 국면이 바뀌는 날 처음 어긋남을 보게 되면
+    그날 바로 매매가 갈리기 때문이다.
+    """
+    bad = []
+    if live['risk_on'] != bt['risk_on']:
+        bad.append(f"카나리: 라이브 {live['risk_on']} · 백테스트 {bt['risk_on']}")
+    if live['off_w'] != bt['off_w']:
+        bad.append(f"공격 목표: 라이브 {live['off_w']} · 백테스트 {bt['off_w']}")
+    if live['def_w'] != bt['def_w']:
+        bad.append(f"방어 목표: 라이브 {live['def_w']} · 백테스트 {bt['def_w']}")
+    return (1 if bad else 0), bad
+
+
+def self_check_stock(pdf, live: dict, sig_ts):
+    """주식 양성 대조 — 백테스트 쪽 입력을 일부러 틀리게 해서 불일치가 잡히는지 본다.
+
+    고르는 방식이 중요하다. 라이브가 안 고른 공격 종목 하나의 최근 1년 가격을 하루 2%씩
+    복리로 밀어 올린다 — 그 종목은 Z랭킹 1위가 되고 3-모멘텀(30·72·230일) 필터도 전부
+    통과하므로 어떤 시장 국면에서도 반드시 공격 목표가 달라진다. 기간 파라미터를 흔드는
+    방식은 못 쓴다: 그날 상위 종목이 그대로면 안 잡혀도 감시 고장이 아니라 그날의
+    둔감함이 되어 판정이 흐려진다(선물 쪽에서 2026-09-29 실측). 12년에 걸친 직선 기울기도
+    못 쓴다 — 하루치 기울기가 0.02% 라 30일 모멘텀 부호를 못 뒤집는다(같은 날 실측).
+
+    반환 (통과했나, 설명).
+    """
+    import numpy as np
+
+    from bt_stock_coin_v3 import OFF_R7
+
+    held = set(live['off_w'])
+    cand = [t for t in OFF_R7 if t not in held and t in pdf.columns]
+    if not cand:
+        return False, '부풀릴 공격 종목이 없다 — 양성 대조를 만들 수 없다'
+
+    tried = []
+    for victim in cand:
+        ramp = np.ones(len(pdf))
+        tail = min(260, len(pdf))
+        ramp[-tail:] = 1.02 ** np.arange(1, tail + 1)
+        fake = pdf.copy()
+        fake[victim] = fake[victim] * ramp
+        rc, _bad = decide_stock(live, _stock_bt(fake, sig_ts))
+        if rc == 1:
+            return True, f'백테스트 쪽 {victim} 가격을 부풀리자 불일치로 잡혔다'
+        tried.append(victim)
+    return False, (f'백테스트 쪽 {", ".join(tried)} 가격을 차례로 부풀렸는데 전부 '
+                   '같다고 나왔다 — 이 감시는 불일치를 못 잡는다')
+
+
+def check_stock(check_server: bool = True, self_test: bool = True) -> int:
+    """주식 신호 대조. 신선도 허용치는 선물 쪽 --days 와 묶지 않는다.
+
+    선물의 허용치는 "몇 개 신호일을 비교하나" 에서 나오는데 주식은 서버가 낸 답 하나를
+    보는 것이라 축이 다르다. 서버 신호 크론은 매일(주말 포함) 09:15 KST 에 돌므로
+    갱신 지연은 0일만 통과시킨다 — 얼어붙은 신호와 대조해 매일 통과를 찍는 것이
+    이 감시의 가장 흔한 고장 방식이다. 가격 기준일 차이는 1세션까지 받는다(서버의
+    야후 수정종가 지연이 알려진 값이다).
+    """
+    import pandas as pd
+
+    update_allow = STOCK_UPDATE_LAG_ALLOW
+    allow_gap = STOCK_BASIS_GAP_ALLOW
+
+    print('== 주식(V25) 신호 대조 ==')
+
+    if check_server:
+        same, why = server_build_matches(files=STOCK_BUILD)
+        print(f'판본 확인: {why}')
+        if not same:
+            raise ParityDataStale(why)
+
+    live = server_stock_signal()
+    # 서버의 신호 갱신이 오늘 돌았는지 본다. 09:15 KST 크론이 죽으면 신호가 그 자리에
+    # 얼어붙는데, 그걸 모르고 옛 신호와 대조하면 매일 통과를 찍는다.
+    today = datetime.now().date()
+    updated_day = datetime.strptime(live['updated_at'][:10], '%Y-%m-%d').date()
+    update_lag = (today - updated_day).days
+    print(f"서버 신호 갱신 {live['updated_at']} · 표기 신호일 {live['signal_date']} "
+          f"· 갱신 지연 {update_lag}일 (허용 {update_allow})")
+    if update_lag > update_allow:
+        raise ParityDataStale(
+            f"서버 주식 신호가 {update_lag}일 전({live['updated_at']}) 것이다. "
+            '09:15 KST 신호 크론이 돌았는지 봐라.')
+
+    pdf = _stock_prices()
+    sig_ts = pd.Timestamp(live['basis_date'])
+    if sig_ts not in pdf.index:
+        raise ParityDataStale(
+            f"집 주식 가격에 서버 기준일 {live['basis_date']} 이 없다 (마지막 "
+            f'{str(pdf.index[-1])[:10]}). 데이터를 먼저 갱신해라: '
+            'python3 strategies/cap_defend/refresh_backtest_data.py --target stock')
+
+    gap = len(pdf.index) - 1 - pdf.index.get_loc(sig_ts)
+    print(f"서버 가격 기준일 {live['basis_date']} · 집 가격 마지막 "
+          f'{str(pdf.index[-1])[:10]} · {gap}세션 차이 (허용 {allow_gap})')
+    if gap > allow_gap:
+        raise ParityDataStale(
+            f"서버 주식 가격이 {gap}세션 밀렸다 (기준일 {live['basis_date']}, "
+            f'집 마지막 {str(pdf.index[-1])[:10]}). 서버 쪽 다운로드를 봐라.')
+
+    if self_test:
+        passed, why = self_check_stock(pdf, live, sig_ts)
+        print(f'양성 대조: {why}')
+        if not passed:
+            raise ParityDataStale(why)
+
+    bt = _stock_bt(pdf, sig_ts)
+    rc, bad = decide_stock(live, bt)
+    print(f"  카나리   라이브 {live['risk_on']} · 백테스트 {bt['risk_on']}")
+    print(f"  공격     라이브 {live['off_w']}")
+    print(f"           백테스트 {bt['off_w']}")
+    print(f"  방어     라이브 {live['def_w']}")
+    print(f"           백테스트 {bt['def_w']}")
+    if rc == 1:
+        for line in bad:
+            print(f'  다름 — {line}')
+        print('판정: 불일치 — 라이브 신호와 채택 백테스트가 갈렸다. 사람이 봐야 한다.')
+        return 1
+    print('판정: 일치')
+    return 0
 
 
 def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
@@ -319,6 +643,8 @@ def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description='라이브 선정함수와 채택 백테스트의 일별 대조')
+    parser.add_argument('--sleeve', choices=['fut', 'stock', 'all'], default='all',
+                        help='무엇을 대조할지 (기본 all — 선물과 주식 둘 다)')
     parser.add_argument('--days', type=int, default=3, help='비교할 최근 신호일 수 (기본 3)')
     parser.add_argument('--allow-stale-days', type=int, default=1,
                         help='허용할 데이터 지연 일수 (기본 1)')
@@ -328,16 +654,38 @@ def main() -> int:
                         help='양성 대조를 건너뛴다 (손으로 빨리 볼 때만)')
     args = parser.parse_args()
 
-    try:
-        return check_fut(args.days, args.allow_stale_days,
-                         check_server=not args.skip_server_check,
-                         self_test=not args.skip_self_test)
-    except ParityDataStale as exc:
-        print(f'판정: 비교 못 함 — {exc}')
-        return 2
-    except Exception as exc:                      # noqa: BLE001 — 감시는 죽어도 사유를 남긴다
-        print(f'판정: 비교 못 함 — 예기치 못한 실패: {type(exc).__name__}: {exc}')
-        return 2
+    jobs = []
+    if args.sleeve in ('fut', 'all'):
+        jobs.append(('선물', lambda: check_fut(
+            args.days, args.allow_stale_days,
+            check_server=not args.skip_server_check,
+            self_test=not args.skip_self_test)))
+    if args.sleeve in ('stock', 'all'):
+        jobs.append(('주식', lambda: check_stock(
+            check_server=not args.skip_server_check,
+            self_test=not args.skip_self_test)))
+
+    # 한쪽이 비교불능이어도 다른 쪽은 끝까지 본다. 먼저 실패한 것 때문에 나머지를
+    # 건너뛰면 그날 감시 범위가 조용히 줄어든다. 최종 판정은 나쁜 쪽을 따른다(2 > 1 > 0).
+    results = []
+    for name, run in jobs:
+        try:
+            rc = run()
+        except ParityDataStale as exc:
+            print(f'판정: 비교 못 함 — {exc}')
+            rc = 2
+        except Exception as exc:                  # noqa: BLE001 — 감시는 죽어도 사유를 남긴다
+            print(f'판정: 비교 못 함 — 예기치 못한 실패: {type(exc).__name__}: {exc}')
+            rc = 2
+        results.append((name, rc))
+        print()
+
+    worst = max(rc for _, rc in results)
+    if len(results) > 1:
+        label = {0: '일치', 1: '불일치', 2: '비교 못 함'}
+        summary = ' · '.join(f'{name} {label[rc]}' for name, rc in results)
+        print(f'전체 판정: {summary}')
+    return worst
 
 
 if __name__ == '__main__':

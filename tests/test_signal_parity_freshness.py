@@ -180,6 +180,104 @@ check("시간 초과는 막힌다", not ok and 'TimeoutExpired' in why, why)
 ok, why = with_fake_ssh(lambda *a, **k: _Proc(0, ''))
 check("빈 응답은 막힌다", not ok, why)
 
+print("\n[12] 주식 판정 — 카나리·공격·방어 셋 중 하나라도 다르면 잡는다")
+L = {'risk_on': True,
+     'off_w': {'QQQ': 0.333333, 'PDBC': 0.333333, 'EEM': 0.333333},
+     'def_w': {'PDBC': 0.5, 'BIL': 0.5}}
+
+
+def stock_case(**over):
+    b = {'risk_on': L['risk_on'], 'off_w': dict(L['off_w']), 'def_w': dict(L['def_w'])}
+    b.update(over)
+    return sp.decide_stock(L, b)
+
+
+rc, bad = stock_case()
+check("셋 다 같으면 rc 0", (rc, bad) == (0, []), (rc, bad))
+
+rc, bad = stock_case(risk_on=False)
+check("카나리가 다르면 rc 1", rc == 1 and any('카나리' in b for b in bad), bad)
+
+rc, bad = stock_case(off_w={'QQQ': 0.333333, 'PDBC': 0.333333, 'SPY': 0.333333})
+check("공격 종목이 다르면 rc 1", rc == 1 and any('공격' in b for b in bad), bad)
+
+rc, bad = stock_case(off_w={'QQQ': 0.5, 'PDBC': 0.25, 'EEM': 0.25})
+check("공격 비중만 달라도 rc 1", rc == 1 and any('공격' in b for b in bad), bad)
+
+rc, bad = stock_case(def_w={'PDBC': 0.333333, 'BIL': 0.333333, 'IEF': 0.333333})
+check("지금 안 쓰는 방어 국면이 달라도 rc 1", rc == 1 and any('방어' in b for b in bad), bad)
+
+rc, bad = stock_case(risk_on=False, off_w={'SPY': 1.0}, def_w={'BIL': 1.0})
+check("셋 다 다르면 셋 다 적는다", rc == 1 and len(bad) == 3, bad)
+
+print("\n[13] 주식 위험자산 비중 정규화 — 현금 칸은 빼고 본다")
+check("Cash 가 빠진다", sp._norm_risky({'Cash': 0.07, 'QQQ': 0.31}) == {'QQQ': 0.31})
+check("CASH 도 빠진다", sp._norm_risky({'CASH': 0.07, 'QQQ': 0.31}) == {'QQQ': 0.31})
+check("버퍼만 다른 같은 선정은 같다고 나온다",
+      sp._norm_risky({'QQQ': 1 / 3, 'PDBC': 1 / 3, 'EEM': 1 / 3, 'Cash': 0.0})
+      == sp._norm_risky({'QQQ': 0.3333333333, 'PDBC': 0.3333333333, 'EEM': 0.3333333333}))
+check("0 비중 종목은 빠진다", sp._norm_risky({'QQQ': 0.0, 'EEM': 0.5}) == {'EEM': 0.5})
+
+print("\n[14] 주식 전략값도 파라미터 대조표를 그대로 따라간다")
+_scanon = CANONICAL['stock']['strategy']
+check("3-모멘텀 기간", sp.BT_STOCK_MOM ==
+      (_scanon['MOM_SHORT'], _scanon['MOM_MID'], _scanon['MOM_LONG']), sp.BT_STOCK_MOM)
+check("샤프 기간", sp.BT_STOCK_SHARPE_LB == _scanon['SHARPE_LB'], sp.BT_STOCK_SHARPE_LB)
+check("방어 비중식은 균등", sp.BT_STOCK_DEF_MODE == 'ew', sp.BT_STOCK_DEF_MODE)
+check("서버 신호 갱신 지연은 당일만 통과", sp.STOCK_UPDATE_LAG_ALLOW == 0)
+check("가격 기준일 차이는 1세션까지", sp.STOCK_BASIS_GAP_ALLOW == 1)
+check("비교하는 종목이 정본 유니버스와 같다",
+      sorted(sp.STOCK_TICKERS) == sorted(set(_scanon['OFFENSIVE_STOCK_UNIVERSE'])
+                                         | set(_scanon['DEFENSIVE_STOCK_UNIVERSE'])),
+      sp.STOCK_TICKERS)
+
+print("\n[15] 서버 주식 신호 읽기 — 못 믿을 응답은 전부 비교불능으로 돌린다")
+_GOOD_JSON = ('{"stock": {"risk_on": true, "offense_weights": {"QQQ": 0.31, "Cash": 0.07}, '
+              '"defense_weights": {"BIL": 0.5, "PDBC": 0.5}}, '
+              '"meta": {"signal_date": "2026-09-28", "updated_at": "2026-09-29 09:15"}}')
+
+
+def _basis(date_by_ticker):
+    return '\n'.join(f'{t} {date_by_ticker.get(t, "2026-09-25")}' for t in sp.STOCK_TICKERS)
+
+
+def read_stock(stdout, rc=0):
+    _sp.run = lambda *a, **k: _Proc(rc, stdout)
+    try:
+        return sp.server_stock_signal(timeout_sec=1), None
+    except sp.ParityDataStale as exc:
+        return None, str(exc)
+    finally:
+        _sp.run = _real_run
+
+
+got, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({})}\n')
+check("정상 응답은 읽힌다", got is not None, why)
+if got:
+    check("현금 칸을 뺀 공격 비중", got['off_w'] == {'QQQ': 0.31}, got['off_w'])
+    check("가격 기준일은 CSV 마지막 날짜", got['basis_date'] == '2026-09-25', got['basis_date'])
+    check("표기 신호일은 따로 들고 있다", got['signal_date'] == '2026-09-28', got['signal_date'])
+
+_, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({"SPY": "2026-09-24"})}\n')
+check("종목마다 기준일이 다르면 막힌다", why and '기준일이 종목마다 다르다' in why, why)
+
+_, why = read_stock(f'{_GOOD_JSON}\n')
+check("기준일 부분이 없으면 막힌다", why and '잘렸다' in why, why)
+
+_, why = read_stock(f'{{"stock": {{}}, "meta": {{}}}}\n@@@\n{_basis({})}\n')
+check("신호 키가 없으면 막힌다", why and 'risk_on' in why, why)
+
+_, why = read_stock(f'not json\n@@@\n{_basis({})}\n')
+check("JSON 이 아니면 막힌다", why and 'JSON' in why, why)
+
+_, why = read_stock(f'{{"stock": {{"risk_on": true, "offense_weights": {{}}, '
+                    f'"defense_weights": {{}}}}, "meta": {{"signal_date": "2026-09-28"}}}}'
+                    f'\n@@@\n{_basis({})}\n')
+check("갱신시각이 없으면 막힌다", why and '갱신시각' in why, why)
+
+_, why = read_stock('', rc=255)
+check("접속 실패는 막힌다", why and '못 읽었다' in why, why)
+
 print()
 if FAILS:
     print(f"==== 실패 {len(FAILS)}건: {FAILS}")
