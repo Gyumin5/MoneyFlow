@@ -10,15 +10,18 @@
 판정 셋:
   0 = 비교한 모든 신호일에서 종목·비중이 같다
   1 = 하나라도 다르다 (사람이 봐야 한다)
-  2 = 비교 자체를 못 했다 (데이터가 밀렸거나 불러오기 실패)
+  2 = 비교 자체를 못 했다
 
 2 를 0 처럼 넘기지 않는 게 요점이다. 데이터가 밀린 채 옛 날짜만 비교하면
-감시는 매일 통과를 찍으면서 아무것도 안 보게 된다.
+감시는 매일 통과를 찍으면서 아무것도 안 보게 된다. 2 로 올리는 것 넷 —
+데이터가 기대 신호일에 안 닿음, 집 사본과 서버 배포본의 판본 차이,
+양성 대조 실패(감시가 불일치를 못 잡는 상태), 예기치 못한 예외.
 
 쓰기:
   python3 trade/ops/signal_parity_daily.py            # 최근 3 신호일
   python3 trade/ops/signal_parity_daily.py --days 7
   python3 trade/ops/signal_parity_daily.py --allow-stale-days 2
+  python3 trade/ops/signal_parity_daily.py --skip-server-check --skip-self-test
 """
 from __future__ import annotations
 
@@ -123,8 +126,14 @@ def _run_bt(bars, funding, universe, end_date):
     return out
 
 
-def _run_live(bars, universe, signal_dates):
-    """라이브 선정함수를 읽기 전용으로 다시 돌린다. 주문도 상태 저장도 없다."""
+def _run_live(bars, universe, keep_dates):
+    """라이브 선정함수를 읽기 전용으로 다시 돌린다. 주문도 상태 저장도 없다.
+
+    상태는 이력 시작부터 날짜 간 이어서 재생한다 — 카나리에 히스테리시스가 있어서
+    앞 날짜의 판정을 물려받아야 한다. 비교할 며칠만 잘라 빈 상태로 시작하면
+    사잇구간(죽은 띠)에서 라이브와 다른 답이 나오고, 그러면 일치가 나와도 우연이다.
+    돌려주는 것은 keep_dates 에 든 날짜뿐이지만 계산은 처음부터 한다.
+    """
     import auto_trade_binance as atb
     atb.UNIVERSE = [c + 'USDT' for c in universe]
     atb.UNIVERSE_SIZE = 3
@@ -134,26 +143,142 @@ def _run_live(bars, universe, signal_dates):
     params['snap_interval_bars'] = 1
 
     full_dates = list(bars['BTC'].index)
-    fpos = {d: i for i, d in enumerate(full_dates)}
+    start_i = next((i for i, d in enumerate(full_dates) if str(d)[:10] >= BT_START), None)
+    if start_i is None:
+        raise ParityDataStale(f'{BT_START} 이후 봉이 없다')
 
+    keep = set(keep_dates)
+    state: dict = {}
     out = {}
-    for sig_date in signal_dates:
-        idx = fpos.get(sig_date)
-        if idx is None or idx + 1 >= len(full_dates):
-            # 라이브는 마지막 봉을 진행중으로 보므로 신호일 다음 봉이 있어야 한다.
-            continue
+    # 마지막 봉은 라이브가 진행중으로 보므로 신호일이 될 수 없다 → len-1 까지.
+    for idx in range(start_i, len(full_dates) - 1):
+        sig_date = full_dates[idx]
         next_bar = full_dates[idx + 1]
         bslice = {coin: df[df.index <= next_bar] for coin, df in bars.items()}
-        state = {}
         combined = atb.compute_strategy_target('D_SMA42', params, {'D': bslice}, state)
-        out[sig_date] = _norm(combined)
+        if sig_date in keep:
+            out[sig_date] = _norm(combined)
     return out
 
 
-def check_fut(days: int, allow_stale_days: int) -> int:
+def decide(bt: dict, live: dict, required_day, days: int):
+    """비교 결과를 판정한다. 순수 함수 — 시험에서 그대로 부른다.
+
+    반환 (rc, 비교한 날짜들, 다른 날짜들, 사유).
+      rc 0 = 기대 신호일을 포함해 비교한 모든 날이 같다
+      rc 1 = 하나라도 다르다
+      rc 2 = 기대 신호일을 비교하지 못했다 (양쪽 중 한쪽이라도 그 날을 못 냈다)
+
+    기대 신호일을 강제하는 게 요점이다. 마지막 데이터 날짜만 보고 "있는 것 중
+    최근 N개" 를 비교하면, 어제 것이 없을 때 그 전 날짜만 조용히 비교하고 통과를 찍는다.
+    """
+    if required_day is None:
+        return 2, [], [], '기대 신호일을 정하지 못했다'
+    if required_day not in bt:
+        return 2, [], [], f'백테스트가 기대 신호일 {str(required_day)[:10]} 의 목표를 안 냈다'
+    if required_day not in live:
+        return 2, [], [], f'라이브 선정이 기대 신호일 {str(required_day)[:10]} 의 목표를 안 냈다'
+
+    candidates = sorted(d for d in bt if d <= required_day and d in live)
+    compared = candidates[-max(1, days):]
+    if required_day not in compared:
+        compared.append(required_day)
+    mismatched = [d for d in compared if bt[d] != live[d]]
+    if mismatched:
+        return 1, compared, mismatched, '라이브 선정과 채택 백테스트가 갈렸다'
+    return 0, compared, mismatched, ''
+
+
+def server_build_matches(timeout_sec: int = 30):
+    """집에서 다시 돌리는 선정함수가 서버에 실제로 깔린 것과 같은 판인지 본다.
+
+    반환 (같은가, 설명). 같지 않거나 확인 자체를 못 하면 비교불능으로 올린다 —
+    서버에 다른 판이 깔려 있는데 집 사본으로 대조해 통과를 찍으면 잘못된 안심이 된다.
+    """
+    import hashlib
+    import subprocess
+
+    local_path = os.path.join(_ROOT, 'trade', 'auto_trade_binance.py')
+    try:
+        with open(local_path, 'rb') as fh:
+            local_md5 = hashlib.md5(fh.read()).hexdigest()
+    except OSError as exc:
+        return False, f'집 사본을 못 읽었다: {exc}'
+
+    try:
+        proc = subprocess.run(
+            ['ssh', '-i', os.path.expanduser('~/.ssh/id_rsa'),
+             '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes',
+             'ubuntu@<서버주소>', 'md5sum /home/ubuntu/auto_trade_binance.py'],
+            capture_output=True, text=True, timeout=timeout_sec)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return False, f'서버 판본을 못 읽었다: {type(exc).__name__}'
+    if proc.returncode != 0:
+        return False, f'서버 판본 조회 실패 (rc={proc.returncode}) {proc.stderr.strip()[:120]}'
+
+    server_md5 = proc.stdout.split()[0] if proc.stdout.split() else ''
+    if server_md5 != local_md5:
+        return False, f'집 사본과 서버 배포본이 다르다 (집 {local_md5[:12]} · 서버 {server_md5[:12]})'
+    return True, f'집·서버 같은 판 ({local_md5[:12]})'
+
+
+def self_check(allow_stale_days: int):
+    """양성 대조 — 한쪽을 일부러 틀리게 해서 이 감시가 실제로 불일치를 잡는지 본다.
+
+    매일 같이 돌린다. 감시가 고장나는 가장 흔한 방식은 경보가 뜨는 게 아니라
+    무엇을 비교하든 늘 "같다" 를 찍게 되는 것이고, 그건 정상 실행만 보고는 구분이 안 된다.
+
+    무엇을 틀리게 하느냐가 중요하다. 라이브 쪽 단기 모멘텀 기간을 쓴다 — 헬스 판정에
+    바로 들어가서 보유 종목을 바꾸므로, 어떤 시장 국면에서도 목표가 달라진다.
+    카나리 SMA 기간이나 장기 모멘텀 기간은 못 쓴다 — 비트코인이 SMA 에서 멀리 떨어진
+    날에는 기간을 바꿔도 카나리가 그대로 켜져 있고 상위 두 종목도 그대로라,
+    안 잡혀도 감시 고장이 아니라 그날의 둔감함이다(2026-09-29 실측).
+
+    반환 (통과했나, 설명).
+    """
+    import contextlib
+    import io
+
+    import auto_trade_binance as atb
+
+    key = 'mom_short_bars'
+    original = atb.STRATEGIES['D_SMA42'].get(key)
+    atb.STRATEGIES['D_SMA42'][key] = 40
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = check_fut(days=1, allow_stale_days=allow_stale_days,
+                           check_server=False, self_test=False)
+    finally:
+        if original is None:
+            atb.STRATEGIES['D_SMA42'].pop(key, None)
+        else:
+            atb.STRATEGIES['D_SMA42'][key] = original
+
+    if rc == 1:
+        return True, f'라이브 {key} 를 {original}→40 으로 틀리자 불일치로 잡혔다'
+    return False, (f'라이브 {key} 를 {original}→40 으로 틀렸는데 rc={rc} 가 나왔다 — '
+                   '이 감시는 불일치를 못 잡는다')
+
+
+def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
+              self_test: bool = True) -> int:
     import unified_backtest as ub
 
     print('== 선물(V25) 신호 대조 ==')
+
+    if check_server:
+        same, why = server_build_matches()
+        print(f'판본 확인: {why}')
+        if not same:
+            raise ParityDataStale(why)
+
+    if self_test:
+        passed, why = self_check(allow_stale_days)
+        print(f'양성 대조: {why}')
+        if not passed:
+            raise ParityDataStale(why)
+
     bars, funding = ub.load_data('D')
     last, expected, lag = _check_freshness(bars, allow_stale_days)
     print(f'데이터 마지막 봉 {last.date()} · 기대 신호일 {expected.date()} · 지연 {lag}일')
@@ -164,24 +289,13 @@ def check_fut(days: int, allow_stale_days: int) -> int:
     end_date = str(bars['BTC'].index[-1])[:10]
     bt = _run_bt(bars, funding, universe, end_date)
 
-    # 비교 대상 = 양쪽 다 낼 수 있는 가장 최근 신호일 N 개.
-    candidates = sorted(d for d in bt if d <= last)
-    signal_dates = candidates[-days:]
-    if not signal_dates:
-        raise ParityDataStale('비교할 신호일이 없다 — 백테스트가 궤적을 못 냈다')
+    # 기대 신호일은 반드시 비교한다. 그 앞으로 N-1 개를 더 본다.
+    wanted = sorted(d for d in bt if d <= expected)[-max(1, days):]
+    if expected not in wanted:
+        wanted.append(expected)
+    live = _run_live(bars, universe, wanted)
 
-    live = _run_live(bars, universe, signal_dates)
-
-    compared, mismatched = [], []
-    for sig_date in signal_dates:
-        if sig_date not in live:
-            continue
-        compared.append(sig_date)
-        if bt[sig_date] != live[sig_date]:
-            mismatched.append(sig_date)
-
-    if not compared:
-        raise ParityDataStale('라이브 선정함수가 비교 가능한 날을 하나도 못 냈다')
+    rc, compared, mismatched, why = decide(bt, live, expected, days)
 
     for sig_date in compared:
         if sig_date in mismatched:
@@ -193,9 +307,11 @@ def check_fut(days: int, allow_stale_days: int) -> int:
             # 이 하니스가 라이브를 실제로 반영하는지 확인된다.
             print(f'  {str(sig_date)[:10]}  같음  {live[sig_date]}')
 
-    print(f'비교 {len(compared)}일 · 불일치 {len(mismatched)}일')
-    if mismatched:
-        print('판정: 불일치 — 라이브 선정과 채택 백테스트가 갈렸다. 사람이 봐야 한다.')
+    if rc == 2:
+        raise ParityDataStale(why)
+    print(f'비교 {len(compared)}일 · 불일치 {len(mismatched)}일 · 기대 신호일 {str(expected)[:10]} 포함')
+    if rc == 1:
+        print(f'판정: 불일치 — {why}. 사람이 봐야 한다.')
         return 1
     print('판정: 일치')
     return 0
@@ -206,10 +322,16 @@ def main() -> int:
     parser.add_argument('--days', type=int, default=3, help='비교할 최근 신호일 수 (기본 3)')
     parser.add_argument('--allow-stale-days', type=int, default=1,
                         help='허용할 데이터 지연 일수 (기본 1)')
+    parser.add_argument('--skip-server-check', action='store_true',
+                        help='집 사본과 서버 배포본의 판본 대조를 건너뛴다 (손으로 볼 때만)')
+    parser.add_argument('--skip-self-test', action='store_true',
+                        help='양성 대조를 건너뛴다 (손으로 빨리 볼 때만)')
     args = parser.parse_args()
 
     try:
-        return check_fut(args.days, args.allow_stale_days)
+        return check_fut(args.days, args.allow_stale_days,
+                         check_server=not args.skip_server_check,
+                         self_test=not args.skip_self_test)
     except ParityDataStale as exc:
         print(f'판정: 비교 못 함 — {exc}')
         return 2
