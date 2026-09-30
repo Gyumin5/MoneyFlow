@@ -61,7 +61,13 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - canary_hyst=0.015, universe_size=3, cap=1/3, health=mom2vol (vol_cap 5%, vol_lookback 90d)
 - drift_threshold=0.10 (자본금 기준 half-turnover)
 - drift 발화 시 refill v2 (라이브 `_apply_refill_v2_to_state`): mom2 음수(ms<0&ml<0) 코인 → fresh healthy 교체. BT 정합 = `unified_backtest.py` DRIFT_HEALTH_MODE='refill' (v24_shadow_today.py 가 설정). 검증(2026-06-06, strategies/cap_defend/research/bt_spot_refill_vs_anchor.py): drift=0.10 에서 refill ≡ anchor-only (5.4yr 종목교체 0일, CAGR/MDD/Cal 동일) — 발화일 보유코인이 항상 모멘텀 양수. 즉 현물 종목교체는 사실상 앵커(217)에서만. refill 은 미래 모멘텀급락+drift 동시 발생 대비 dormant 방어.
-- 가드 없음. Upbit warning/delisting 코인은 universe 에서 즉시 제외.
+- 전략 가드 없음. Upbit warning/delisting 코인은 universe 에서 즉시 제외.
+- 데이터 가드 하나 (2026-09-30, 토론 run-20260930T002529Z): 시총 목록은 마지막 유효 조회로부터
+  `MARKET_META_MAX_AGE_H`=36시간까지만 쓴다(선물과 같은 값). 만료되면 일반 매매를 멈추고 경보한다.
+  고정 목록 fallback 은 제거했다. 예외 하나 — BTC 완료봉으로 카나리 OFF 가 독립 확인되면 청산만
+  허용한다(`EngineResult.liquidation_only`). 조회 실패를 빈 유니버스나 현금 100% 목표로 표현하지
+  않는다 — 그건 전량청산 지시로 읽힌다. 구현은 `coin_live_engine.fetch_coingecko_top` /
+  `_independent_canary` / `_market_meta_blocked`, 검증은 `trade/test_spot_market_meta_age.py`.
 - TX: 0.04% (BT), 실매매는 Upbit 수수료
 - 단독 sleeve (BT 5.8yr, 2020-10-01~2026-08-24, 라이브 체결규칙 정합): CAGR +77.6%, MDD -17.8%, Cal 4.35
   · 옛 표기 "Cal 4.63 / CAGR +82% (5.4yr)" 는 BT 에만 있던 5% 체결 밴드로 잰 값이라 stale.

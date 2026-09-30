@@ -521,6 +521,16 @@ def _norm_cash_map(target: Dict[str, float]) -> Dict[str, float]:
     return out
 
 
+def is_canary_flip_alert(alert: str) -> bool:
+    """이 엔진 알림이 '카나리 플립' 통지인가 (텔레그램 미전송 대상, 2026-08-20 사용자 요청).
+
+    플립 알림의 정확한 형태로만 거른다. '카나리' 라는 낱말만 보고 거르면 시총 목록 만료
+    경보처럼 반드시 나가야 하는 알림까지 같이 삼킨다 — 그 경보는 본문에 카나리 판정 결과를
+    담기 때문이다(2026-09-30).
+    """
+    return '카나리 ON 🟢' in alert or '카나리 OFF 🔴' in alert
+
+
 def targets_equal(a: Dict[str, float], b: Dict[str, float], tol: float = 0.005) -> bool:
     """두 target 이 경제적으로 같은가. 현금 키 표기·메타키 차이는 무시한다."""
     a, b = _norm_cash_map(a), _norm_cash_map(b)
@@ -931,8 +941,7 @@ def run_once(dry_run: bool = False) -> int:
 
     for a in result.alerts:
         log(f'  [engine] {a}')
-        # 카나리 플립 알림은 텔레그램 미전송 (2026-08-20 사용자 요청). 로그·엔진 상태는 그대로.
-        if '카나리' in a:
+        if is_canary_flip_alert(a):
             continue
         _tg(a)
 

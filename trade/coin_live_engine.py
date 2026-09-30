@@ -26,6 +26,13 @@ drift 트리거 (V24 신규):
 - 유니버스: CoinGecko Top40 ∩ Binance spot TRADING ∩ Upbit KRW normal ∩ 253일 이상 ∩ 30일 평균 10억원 ≥ → Top 40
 - Freshness: expected_last_bar_ts 일치 체크
 - Schema version: V24 (state['schema_version'] = 'V24')
+
+시총 목록 나이 제한 (2026-09-30, 토론 run-20260930T002529Z):
+- 시총 목록은 마지막 유효 조회로부터 MARKET_META_MAX_AGE_H(36시간)까지만 쓴다.
+- 만료되면 일반 매매를 멈추고 경보한다. 고정 목록으로 대신 채우지 않는다.
+- 예외 하나 — BTC 완료봉으로 카나리 OFF 가 독립 확인되면 청산(매도)만 허용한다.
+  fail-closed 가드가 매매가 꼭 필요한 유일한 경우를 막은 2026-08-15 사고 때문이다.
+- 조회 실패를 빈 유니버스나 현금 100% 목표로 표현하지 않는다 — 그건 전량청산 지시로 읽힌다.
 """
 
 from __future__ import annotations
@@ -59,9 +66,22 @@ STABLECOINS = {
     'GUSD', 'PYUSD', 'LUSD', 'FRAX', 'USTC',
 }
 
-HARDCODED_FALLBACK = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'SHIB', 'TRX']
-
 UPBIT_MARKET_ALL_URL = 'https://api.upbit.com/v1/market/all?is_details=true'
+
+# 시총 목록 나이 상한 (2026-09-30). 선물(auto_trade_binance.MARKET_META_MAX_AGE_H)과 같은 값.
+# 하루 한 번 도는 크론이므로 36시간은 "첫 실패는 약 24시간 캐시로 넘기고 이틀째 실패에서 멈춘다".
+MARKET_META_MAX_AGE_H = 36.0
+CG_MIN_ROWS = 20          # 이보다 적은 응답은 형태 이상으로 본다 (요청은 40)
+CG_SHRINK_RATIO = 0.6     # 직전 캐시 대비 이 비율 미만으로 줄면 급격한 축소로 보고 거부
+
+
+class MarketMetaUnavailable(RuntimeError):
+    """시총 목록을 신뢰할 수 있는 나이 안에서 얻지 못했다.
+
+    조회 실패를 빈 유니버스로 돌려주면 엔진이 현금 100% 를 목표로 내고 그건 전량청산
+    지시로 읽힌다. 그래서 오류는 오류로 올린다 — 호출자가 매매 차단인지 카나리 청산인지를
+    따로 판정한다.
+    """
 
 # V24 멤버 설정 (1D 단일, snap=217봉×7, drift 0.10, 2026-04-30 확정)
 # V24 (2026-05-27): refill v2 도입 — drift fire 시 mom2 음수 슬롯을 fresh healthy 로 교체
@@ -173,9 +193,62 @@ def _cg_auth_headers() -> Dict[str, str]:
     return {'x-cg-demo-api-key': key} if key else {}
 
 
+def validate_cg_rows(data, prev_count: int = 0) -> Tuple[bool, str]:
+    """시총 응답이 캐시에 넣어도 되는 형태인가.
+
+    형태·고유 종목 수·직전 대비 급격한 축소 셋을 본다. 망가진 응답으로 캐시를 덮어쓰면
+    그 순간부터 나이 제한이 아무 의미가 없어진다 — 신선하지만 틀린 목록이 되기 때문이다.
+    """
+    if not isinstance(data, list):
+        return False, f'목록이 아님({type(data).__name__})'
+    if len(data) < CG_MIN_ROWS:
+        return False, f'행 수 부족({len(data)} < {CG_MIN_ROWS})'
+    syms = set()
+    for item in data:
+        if not isinstance(item, dict):
+            return False, '행이 딕셔너리가 아님'
+        sym = str(item.get('symbol', '') or '').strip().upper()
+        if not sym:
+            return False, '심볼 빈 행 있음'
+        syms.add(sym)
+    if len(syms) < CG_MIN_ROWS:
+        return False, f'고유 심볼 부족({len(syms)} < {CG_MIN_ROWS})'
+    if prev_count and len(data) < prev_count * CG_SHRINK_RATIO:
+        return False, f'급격한 축소({prev_count} → {len(data)})'
+    return True, ''
+
+
+def _load_cg_cache(cache_path: Optional[str]) -> Tuple[Optional[List[Dict]], Optional[datetime], str]:
+    """캐시 파일 → (데이터, 실제 성공 시각, 사유). 못 읽으면 (None, None, 사유)."""
+    if not cache_path or not os.path.exists(cache_path):
+        return None, None, '캐시 없음'
+    try:
+        with open(cache_path) as f:
+            cached = json.load(f)
+    except Exception as e:
+        return None, None, f'캐시 로드 실패({e})'
+    ts = parse_utc_iso(cached.get('ts', ''))
+    if ts is None:
+        return None, None, '캐시 시각 없음/손상'
+    data = cached.get('data')
+    if not isinstance(data, list) or not data:
+        return None, ts, '캐시 내용 비어있음'
+    return data, ts, ''
+
+
 def fetch_coingecko_top(session: requests.Session, fetch_limit: int = COINGECKO_FETCH_LIMIT,
-                         retries: int = 5, cache_path: Optional[str] = None) -> List[Dict]:
-    """CoinGecko Top N 가져오기 (N=fetch_limit). 실패 시 cache fallback."""
+                         retries: int = 5, cache_path: Optional[str] = None,
+                         max_age_h: float = MARKET_META_MAX_AGE_H,
+                         now_utc: Optional[datetime] = None) -> Tuple[List[Dict], Dict]:
+    """CoinGecko Top N 가져오기. 실패하면 캐시로 떨어지되 나이 상한을 지킨다.
+
+    Returns: (데이터, meta) — meta = {'source': 'live'|'cache', 'ts': iso, 'age_h': float}
+    Raises: MarketMetaUnavailable — 신선한 조회도 실패하고 쓸 수 있는 캐시도 없을 때.
+    """
+    now_utc = now_utc or utc_now()
+    prev_data, prev_ts, _ = _load_cg_cache(cache_path)
+    prev_count = len(prev_data) if prev_data else 0
+
     headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 CoinExecutor/1.0'}
     headers.update(_cg_auth_headers())
     for attempt in range(1, retries + 1):
@@ -185,15 +258,22 @@ def fetch_coingecko_top(session: requests.Session, fetch_limit: int = COINGECKO_
             resp = session.get(COINGECKO_URL, params=params, headers=headers, timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
+                ok, why = validate_cg_rows(data, prev_count)
+                if not ok:
+                    # 캐시를 덮어쓰지 않는다. 다음 시도로 넘긴다.
+                    log.warning('CoinGecko 응답 검증 실패 (attempt %d): %s', attempt, why)
+                    time.sleep(10)
+                    continue
+                fetched_at = utc_now()
                 if cache_path:
                     try:
                         tmp = cache_path + '.tmp'
                         with open(tmp, 'w') as f:
-                            json.dump({'ts': to_utc_iso(utc_now()), 'data': data}, f)
+                            json.dump({'ts': to_utc_iso(fetched_at), 'data': data}, f)
                         os.replace(tmp, cache_path)
                     except Exception as e:
                         log.warning('CoinGecko 캐시 저장 실패: %s', e)
-                return data
+                return data, {'source': 'live', 'ts': to_utc_iso(fetched_at), 'age_h': 0.0}
             elif resp.status_code == 429:
                 wait = 30 * attempt
                 log.warning('CoinGecko 429 rate limit, %ds 대기 (attempt %d)', wait, attempt)
@@ -205,16 +285,21 @@ def fetch_coingecko_top(session: requests.Session, fetch_limit: int = COINGECKO_
             log.warning('CoinGecko 호출 오류 (attempt %d): %s', attempt, e)
             time.sleep(10)
 
-    # Cache fallback
-    if cache_path and os.path.exists(cache_path):
-        try:
-            with open(cache_path) as f:
-                cached = json.load(f)
-            log.warning('CoinGecko 캐시 fallback 사용 (ts=%s)', cached.get('ts'))
-            return cached.get('data', [])
-        except Exception as e:
-            log.warning('CoinGecko 캐시 로드 실패: %s', e)
-    return []
+    # 캐시 fallback — 저장된 실제 성공 시각으로만 나이를 잰다.
+    data, ts, why = _load_cg_cache(cache_path)
+    if data is None or ts is None:
+        raise MarketMetaUnavailable(f'시총 목록 조회 실패, 캐시 사용 불가 ({why})')
+    age_h = (now_utc - ts).total_seconds() / 3600.0
+    if age_h < 0:
+        raise MarketMetaUnavailable(f'시총 캐시 시각이 미래 ({to_utc_iso(ts)})')
+    if age_h > max_age_h:
+        raise MarketMetaUnavailable(
+            f'시총 캐시 {age_h:.1f}시간 경과 (상한 {max_age_h:.0f}시간, ts={to_utc_iso(ts)})')
+    ok, why = validate_cg_rows(data)
+    if not ok:
+        raise MarketMetaUnavailable(f'시총 캐시 내용 이상 ({why})')
+    log.warning('CoinGecko 캐시 fallback 사용 (ts=%s, %.1f시간 전)', to_utc_iso(ts), age_h)
+    return data, {'source': 'cache', 'ts': to_utc_iso(ts), 'age_h': age_h}
 
 
 def fetch_binance_exchange_info(session: requests.Session,
@@ -363,38 +448,40 @@ def build_dynamic_universe(session: requests.Session, cache_dir: str,
             'binance_trading_count': int,
             'upbit_listed_count': int,
             'filtered_count': int,
-            'fallback_used': bool,
+            'cg_ts': str, 'cg_age_h': float, 'cg_source': 'live'|'cache',
             'upbit_status': {coin: {warning, caution, listed}},
             'binance_status': {coin: 'TRADING' or other},
         }
+
+    Raises:
+        MarketMetaUnavailable — 시총 목록·거래소 상태 중 하나라도 못 얻었을 때. 고정 목록으로
+        대신 채우지 않는다(2026-09-30 토론 run-20260930T002529Z): 그건 목록을 조용히 바꾸는
+        것이라 조회 실패가 다른 전략으로 도는 결과가 된다.
     """
     cg_cache = os.path.join(cache_dir, 'universe_cg_cache.json')
     bn_cache = os.path.join(cache_dir, 'binance_exchinfo_cache.json')
     os.makedirs(cache_dir, exist_ok=True)
 
-    meta = {'fallback_used': False, 'binance_status': {}, 'upbit_status': {}}
+    meta: Dict = {'binance_status': {}, 'upbit_status': {}}
 
-    cg_data = fetch_coingecko_top(session, cache_path=cg_cache)
+    cg_data, cg_meta = fetch_coingecko_top(session, cache_path=cg_cache)
     binance_status = fetch_binance_exchange_info(session, cache_path=bn_cache)
     upbit_status = fetch_upbit_market_status(session)
 
     meta['coingecko_count'] = len(cg_data)
+    meta['cg_ts'] = cg_meta.get('ts')
+    meta['cg_age_h'] = cg_meta.get('age_h')
+    meta['cg_source'] = cg_meta.get('source')
     meta['binance_trading_count'] = sum(1 for s in binance_status.values() if s == 'TRADING')
     meta['upbit_listed_count'] = len(upbit_status)
     meta['binance_status'] = binance_status
     meta['upbit_status'] = upbit_status
 
-    if not cg_data or not binance_status or not upbit_status:
-        log.warning('외부 API 일부 실패 → 하드코딩 fallback 사용')
-        meta['fallback_used'] = True
-        # fallback도 최소한의 필터만 적용
-        filtered = [c for c in HARDCODED_FALLBACK
-                    if c not in STABLECOINS
-                    and (not binance_status or binance_status.get(c) == 'TRADING')
-                    and (not upbit_status or (upbit_status.get(c, {}).get('listed', False)
-                                               and not upbit_status.get(c, {}).get('warning', False)))]
-        meta['filtered_count'] = len(filtered)
-        return filtered[:UNIVERSE_TOP_N], meta
+    # 거래소 상태 조회 실패는 각각 따로 올린다 — 어느 쪽이 막혔는지가 알림에 남아야 한다.
+    if not binance_status:
+        raise MarketMetaUnavailable('바이낸스 거래상태 조회 실패')
+    if not upbit_status:
+        raise MarketMetaUnavailable('업비트 상장상태 조회 실패')
 
     final: List[str] = []
     # Top N 시총순으로 순회
@@ -898,6 +985,100 @@ class EngineResult:
     drift_half_turnover: float = 0.0
     drift_threshold: float = DRIFT_THRESHOLD_SPOT
     canary_info: Dict[str, Dict] = field(default_factory=dict)  # 멤버별 카나리 상세
+    # 2026-09-30: 시총 목록 만료 시 — 카나리 OFF 가 독립 확인된 경우만 True (매도 전용)
+    liquidation_only: bool = False
+    market_meta: Optional[Dict] = None  # {'ok': bool, 'reason': str, ...}
+
+
+def _independent_canary(session: requests.Session, state: Dict,
+                        now_utc: datetime) -> Tuple[Optional[bool], Dict]:
+    """시총 목록 없이 BTC 완료봉만으로 카나리 ON/OFF 를 판정한다.
+
+    유니버스가 없어도 "지금 팔아야 하는 국면인가" 는 BTC 하나로 답이 난다. 이 판정이
+    유니버스 생성보다 앞서야 2026-08-15 사고(매매가 꼭 필요한 유일한 경우를 가드가 막음)가
+    안 되풀이된다. 상태는 건드리지 않는다 — 여기서 스냅샷·카나리 상태를 갱신하면 막힌
+    실행이 전략을 조용히 전진시킨다.
+
+    Returns: (canary_on 또는 None(판정 불가), 상세)
+    """
+    cfg = MEMBER_D_SMA42
+    interval = cfg['interval']
+    sma_p = cfg['sma_bars']
+    hyst = cfg['canary_hyst']
+    info: Dict = {'sma_bars': sma_p, 'hyst': hyst}
+    try:
+        df = fetch_binance_klines(session, 'BTCUSDT', interval, KLINE_LIMITS[interval])
+    except Exception as e:
+        info['reason'] = f'BTC 봉 조회 예외({e})'
+        return None, info
+    if df is None or df.empty:
+        info['reason'] = 'BTC 봉 조회 실패'
+        return None, info
+    bars = slice_to_last_closed({'BTC': df}, interval, now_utc)
+    btc = bars.get('BTC')
+    if btc is None or len(btc) < sma_p + 2:
+        info['reason'] = 'BTC 봉 부족'
+        return None, info
+
+    latest_ts = btc.index[-1].to_pydatetime()
+    if latest_ts.tzinfo is None:
+        latest_ts = latest_ts.replace(tzinfo=timezone.utc)
+    expected_ts = expected_last_closed_bar_ts(interval, now_utc)
+    info['bar_ts'] = to_utc_iso(latest_ts)
+    if latest_ts != expected_ts:
+        # 완료봉이 기대 봉과 다르면 믿을 수 있는 봉이 아니다 — 판정하지 않는다.
+        info['reason'] = f'완료봉 불일치(기대 {to_utc_iso(expected_ts)})'
+        return None, info
+
+    close = np.asarray(btc['Close'].values, dtype=float)
+    sma_val = _calc_sma(close, sma_p)
+    if not sma_val or sma_val <= 0 or not math.isfinite(sma_val):
+        info['reason'] = 'SMA 산출 실패'
+        return None, info
+    cur = float(close[-1])
+    prev_canary = bool(((state.get('members', {}) or {}).get('D_SMA42', {}) or {})
+                       .get('canary_on', False))
+    if prev_canary:
+        canary_on = not (cur < sma_val * (1 - hyst))
+    else:
+        canary_on = cur > sma_val * (1 + hyst)
+    info.update({'cur': cur, 'sma_val': sma_val, 'ratio': cur / sma_val,
+                 'prev': prev_canary, 'on': canary_on})
+    return canary_on, info
+
+
+def _market_meta_blocked(session: requests.Session, state: Dict, now_utc: datetime,
+                          reason: str) -> EngineResult:
+    """시총 목록을 못 얻었을 때의 결과. 카나리 OFF 가 확인될 때만 매도를 연다."""
+    canary_on, cinfo = _independent_canary(session, state, now_utc)
+    meta = {'ok': False, 'reason': reason, 'canary': cinfo}
+
+    if canary_on is False:
+        meta['action'] = 'liquidation_only'
+        alert = (f'🔴 현물 시총 목록 사용 불가 — {reason}. '
+                 f'BTC 완료봉으로 카나리 OFF 확인(BTC ${cinfo.get("cur", 0):,.0f} / '
+                 f'SMA ${cinfo.get("sma_val", 0):,.0f}) → 청산만 수행한다.')
+        log.error(alert)
+        return EngineResult(combined_target={'Cash': 1.0}, member_targets={},
+                            fresh={'MARKET_META': False}, new_bar={}, canary_flipped={},
+                            all_fresh=True, any_new_bar=True,
+                            universe=[], universe_meta={'market_meta_blocked': True},
+                            alerts=[alert], liquidation_only=True, market_meta=meta)
+
+    if canary_on is True:
+        meta['action'] = 'block'
+        alert = (f'🛑 현물 시총 목록 사용 불가 — {reason}. '
+                 f'카나리 ON 이라 매매를 차단한다(전략 상태 무변경).')
+    else:
+        meta['action'] = 'block'
+        alert = (f'🛑 현물 시총 목록 사용 불가 — {reason}. '
+                 f'카나리도 판정 불가({cinfo.get("reason", "사유 불명")}) → 매매 차단.')
+    log.error(alert)
+    return EngineResult(combined_target={}, member_targets={},
+                        fresh={'MARKET_META': False}, new_bar={}, canary_flipped={},
+                        all_fresh=False, any_new_bar=False,
+                        universe=[], universe_meta={'market_meta_blocked': True},
+                        alerts=[alert], liquidation_only=False, market_meta=meta)
 
 
 def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
@@ -918,15 +1099,27 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     # 1) 유니버스 (새 봉에서만 갱신, 그 외는 캐시 사용)
     cached_universe = state.get('universe_cache', {})
     cached_universe_ts = parse_utc_iso(cached_universe.get('ts', ''))
-    # 유니버스 캐시는 D봉 기준으로 하루 1회 갱신 (intrabar drift 방지)
+    # 유니버스 캐시 재사용도 원본 시총 조회 시각으로 나이를 잰다 (2026-09-30).
+    # 유니버스 캐시의 ts 는 "이 목록을 만든 시각" 이라 재사용할 때마다 현재 시각으로
+    # 갱신되면 원본이 아무리 낡아도 20시간마다 새것처럼 보인다.
+    cached_cg_ts = parse_utc_iso((cached_universe.get('meta', {}) or {}).get('cg_ts', '') or '')
+    cached_cg_age_h = ((now_utc - cached_cg_ts).total_seconds() / 3600.0
+                       if cached_cg_ts else None)
+    cg_stale = (cached_cg_age_h is None
+                or cached_cg_age_h < 0
+                or cached_cg_age_h > MARKET_META_MAX_AGE_H)
     need_universe_refresh = (
         not cached_universe.get('universe')
         or not cached_universe_ts
         or (now_utc - cached_universe_ts).total_seconds() > 20 * 3600
+        or cg_stale
     )
     if need_universe_refresh:
-        universe, u_meta = build_dynamic_universe(session, cache_dir,
-                                                    upbit_price_fn=upbit_price_fn)
+        try:
+            universe, u_meta = build_dynamic_universe(session, cache_dir,
+                                                        upbit_price_fn=upbit_price_fn)
+        except MarketMetaUnavailable as e:
+            return _market_meta_blocked(session, state, now_utc, str(e))
         state['universe_cache'] = {
             'ts': to_utc_iso(now_utc),
             'universe': universe,
@@ -934,9 +1127,11 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         }
     else:
         universe = cached_universe.get('universe', [])
-        u_meta = {'fallback_used': False,
-                  'upbit_status': {}, 'binance_status': {},
+        u_meta = {'upbit_status': {}, 'binance_status': {},
                   'filtered_count': len(universe),
+                  'cg_ts': to_utc_iso(cached_cg_ts) if cached_cg_ts else None,
+                  'cg_age_h': cached_cg_age_h,
+                  'cg_source': 'universe_cache',
                   'cached': True}
 
     if not universe:
