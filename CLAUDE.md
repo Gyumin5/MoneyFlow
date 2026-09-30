@@ -406,6 +406,7 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
 - `trade/ops/watchdog_serve.sh` → `~/watchdog_serve.sh`
 - `trade/ops/run_executor.sh` → `~/run_executor.sh`
 - `trade/ops/run_recommend.sh` → `~/run_recommend.sh`
+- `trade/ops/parity_watch.py` → `~/parity_watch.py` (집 감시의 침묵을 서버에서 잡는다. 매매 경로 아님)
 - `trade/ops/crontab.txt` → `crontab -l` 사본
 
 ## 데이터 품질

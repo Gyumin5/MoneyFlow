@@ -37,6 +37,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -826,6 +827,9 @@ def main() -> int:
                         help='집 사본과 서버 배포본의 판본 대조를 건너뛴다 (손으로 볼 때만)')
     parser.add_argument('--skip-self-test', action='store_true',
                         help='양성 대조를 건너뛴다 (손으로 빨리 볼 때만)')
+    parser.add_argument('--receipt',
+                        help='영수증 파일 경로. 각 검사의 내부 판정을 원자적으로 적는다 '
+                             '(서버의 침묵 감시가 이걸 읽는다)')
     args = parser.parse_args()
 
     jobs = []
@@ -862,7 +866,40 @@ def main() -> int:
         label = {0: '일치', 1: '불일치', 2: '비교 못 함'}
         summary = ' · '.join(f'{name} {label[rc]}' for name, rc in results)
         print(f'전체 판정: {summary}')
+
+    if args.receipt:
+        write_receipt(args.receipt, 'parity', dict(results), worst)
     return worst
+
+
+def write_receipt(path: str, mode: str, checks: dict, worst: int):
+    """이 실행이 실제로 무엇을 어떻게 판정했는지 한 파일로 남긴다.
+
+    껍데기 종료값이 아니라 검사별 내부 판정을 적는 이유 — 껍데기가 0 으로 끝나도
+    안쪽에서 검사 하나가 비교불능이었을 수 있고, 반대로 껍데기가 죽으면 판정 자체가
+    없다. 서버의 침묵 감시(parity_watch.py)는 이 파일이 오늘 날짜로 있는지,
+    그 안의 판정이 깨끗한지 둘 다 본다.
+
+    실행 식별자는 껍데기가 환경변수로 준다. 두 실행(갱신·대조)에 서로 다른 값을 줘야
+    옛 영수증이 다시 올라온 것을 다음 날 잡을 수 있다.
+    """
+    now = datetime.now()
+    body = {
+        'mode': mode,
+        'date': now.strftime('%Y-%m-%d'),
+        'run_id': os.environ.get('PARITY_RUN_ID')
+                  or f"{mode}-{now.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}",
+        'checks': checks,
+        'worst': worst,
+        'finished_at': now.strftime('%Y-%m-%d %H:%M:%S KST'),
+        'host': os.uname().nodename,
+    }
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or '.', exist_ok=True)
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        json.dump(body, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, path)
+    print(f'영수증: {path} (run_id={body["run_id"]})')
 
 
 if __name__ == '__main__':

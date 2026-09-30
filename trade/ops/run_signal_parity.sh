@@ -12,8 +12,12 @@
 # 직접 쏘지 않는 이유는 raw 출력으로는 판단이 안 되기 때문이다 — 세션이 먼저 읽고
 # 무엇이 갈렸는지 해석해 운영자에게 전한다.
 #
-# 침묵도 고장이다. 매 실행이 state/signal-parity/last.json 에 판정과 시각을 남기므로,
-# 그 파일이 오늘 날짜로 갱신되지 않은 것 자체가 감시가 안 돌았다는 증거가 된다.
+# 침묵도 고장이다. 그런데 이 집이 꺼지면 감시도 경보 통로도 같이 죽어서, 아무 일도
+# 안 일어나는 것이 "이상 없음" 으로 읽힌다. 그래서 매 실행이 영수증을 서버에 올린다.
+# 서버의 독립 크론(parity_watch.py)이 유예시각 뒤에 그 영수증을 보고, 없거나 낡았거나
+# 판정이 나쁘면 서버 자기 통로로 알린다. 두 실행에 서로 다른 실행 식별자를 준다 —
+# 옛 영수증이 다시 올라온 것을 서버가 다음 날 잡기 위해서다.
+# (2026-09-30 토론 run-20260930T054956Z)
 set -uo pipefail
 
 REPO=/home/gmoh/mon/251229
@@ -21,6 +25,9 @@ SESSION=251229
 SEND=/home/gmoh/dotfiles/bin/claude-userbot-send
 REFRESH_TIMEOUT=600
 PARITY_TIMEOUT=600
+SERVER=ubuntu@<서버주소>
+SERVER_KEY=/home/gmoh/.ssh/id_rsa
+SERVER_RECEIPT_DIR=/home/ubuntu/parity-receipts
 
 cd "$REPO" || exit 1
 
@@ -28,9 +35,11 @@ MODE="${1:-parity}"
 TODAY=$(date '+%Y-%m-%d')
 NOW() { date '+%Y-%m-%d %H:%M KST'; }
 
-mkdir -p logs state/signal-parity
+mkdir -p logs state/signal-parity/receipts
 LOG="logs/signal_parity_${TODAY}.log"
 STAMP=state/signal-parity/last.json
+RECEIPT="state/signal-parity/receipts/${TODAY}.${MODE}.json"
+export PARITY_RUN_ID="${MODE}-$(date '+%Y%m%dT%H%M%S')-$$"
 
 notify() {
   [ -x "$SEND" ] || return 0
@@ -45,12 +54,30 @@ stamp() {
   mv -f "${STAMP}.tmp" "$STAMP"
 }
 
+push_receipt() {
+  # 서버에 원자적으로 올린다. 임시 이름으로 받아서 mv 로 바꾼다 — 서버 크론이
+  # 반쯤 쓰인 파일을 읽지 않게. 못 올리면 집에만 알린다. 서버는 영수증이 없는 것을
+  # 보고 따로 경보하므로, 이 실패가 침묵으로 끝나지 않는다.
+  local src="$1" name="$2"
+  [ -f "$src" ] || return 1
+  if timeout 60 ssh -i "$SERVER_KEY" -o ConnectTimeout=15 -o BatchMode=yes "$SERVER" \
+       "mkdir -p ${SERVER_RECEIPT_DIR} && cat > ${SERVER_RECEIPT_DIR}/.${name}.tmp && \
+        mv -f ${SERVER_RECEIPT_DIR}/.${name}.tmp ${SERVER_RECEIPT_DIR}/${name}" \
+       < "$src" >/dev/null 2>&1; then
+    return 0
+  fi
+  notify "신호 대조 영수증을 서버에 못 올렸다(${name}). 서버의 침묵 감시가 오늘 영수증이 없다고 경보할 것이다 — 진짜 원인은 감시 실패가 아니라 집→서버 ssh 다. 집 로그 ${REPO}/${LOG}."
+  return 1
+}
+
 case "$MODE" in
   refresh)
     # 선물(코인 일봉)과 주식을 둘 다 당긴다. 한쪽이 실패해도 나머지는 당긴다 —
     # 먼저 실패한 것 때문에 건너뛰면 그 자산군 대조가 조용히 밀린 데이터로 돈다.
     worst=0
     failed=""
+    fut_rc=9
+    stock_rc=9
     for target in futures stock; do
       {
         echo "=== $(NOW) 데이터 갱신 시작 ($target)"
@@ -59,12 +86,17 @@ case "$MODE" in
       } >> "$LOG" 2>&1
       rc=$(sed -n "s/^=== 갱신 rc=\([0-9]*\) ($target)$/\1/p" "$LOG" | tail -1)
       rc="${rc:-9}"
+      [ "$target" = "futures" ] && fut_rc="$rc" || stock_rc="$rc"
       if [ "$rc" != "0" ]; then
         failed="${failed}${failed:+, }${target} rc=${rc}"
         [ "$rc" -gt "$worst" ] 2>/dev/null && worst="$rc"
       fi
     done
     stamp refresh "$worst" "일봉 갱신 (선물+주식)${failed:+ 실패: $failed}"
+    printf '{"mode":"refresh","date":"%s","run_id":"%s","checks":{"선물 일봉":%s,"주식 일봉":%s},"worst":%s,"finished_at":"%s","host":"%s"}\n' \
+      "$TODAY" "$PARITY_RUN_ID" "$fut_rc" "$stock_rc" "$worst" "$(NOW)" "$(hostname)" \
+      > "${RECEIPT}.tmp" && mv -f "${RECEIPT}.tmp" "$RECEIPT"
+    push_receipt "$RECEIPT" "${TODAY}.refresh.json"
     if [ -n "$failed" ]; then
       notify "신호 대조 — 데이터 갱신 실패(${failed}). 로그 ${REPO}/${LOG}. 124 는 ${REFRESH_TIMEOUT}초 초과다. 밀린 데이터로 10:00 대조가 돌면 비교불능(rc 2)이 된다. 원인을 보고 운영자에게 전해라."
     fi
@@ -74,7 +106,7 @@ case "$MODE" in
   parity)
     {
       echo "=== $(NOW) 신호 대조 시작"
-      timeout "$PARITY_TIMEOUT" python3 trade/ops/signal_parity_daily.py --days 3
+      timeout "$PARITY_TIMEOUT" python3 trade/ops/signal_parity_daily.py --days 3 --receipt "$RECEIPT"
       echo "=== 대조 rc=$?"
     } >> "$LOG" 2>&1
     rc=$(sed -n 's/^=== 대조 rc=\([0-9]*\)$/\1/p' "$LOG" | tail -1)
@@ -88,6 +120,16 @@ case "$MODE" in
                    /^판정:/{one=$0}
                    END{print (all!=""? all : one)}' "$LOG")
     stamp parity "$rc" "$(printf '%s' "$verdict" | tr -d '"\\')"
+
+    # 파이썬이 중간에 죽으면 영수증 자체가 없다. 그때는 껍데기가 대신 적는다 —
+    # 검사별 판정을 모르므로 비워 두고, 서버는 '검사 판정이 하나도 없다' 로 경보한다.
+    # 서버가 '영수증 없음' 과 '판정 못 남김' 을 구분해서 보게 하려는 것이다.
+    if [ ! -f "$RECEIPT" ]; then
+      printf '{"mode":"parity","date":"%s","run_id":"%s","checks":{},"worst":%s,"finished_at":"%s","host":"%s","note":"껍데기가 적음 — 파이썬이 판정을 남기지 못했다"}\n' \
+        "$TODAY" "$PARITY_RUN_ID" "$rc" "$(NOW)" "$(hostname)" \
+        > "${RECEIPT}.tmp" && mv -f "${RECEIPT}.tmp" "$RECEIPT"
+    fi
+    push_receipt "$RECEIPT" "${TODAY}.parity.json"
 
     case "$rc" in
       0) : ;;   # 일치 — 조용히 넘어간다. 기록은 STAMP 와 로그에 남는다.
