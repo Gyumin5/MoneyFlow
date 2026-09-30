@@ -714,6 +714,26 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     log.append("<h2>📈 주식 포트폴리오 분석 (V24: R7B + EEM SMA300 hyst2% + Zscore3 Sh126d, 가드 없음)</h2>")
     eem = all_prices.get('EEM')
     meta = {'signal_dist': {}, 'next_candidates': []}
+
+    # 이 신호가 실제로 쓴 종가의 날짜. 09:15 KST 에는 야후 수정종가가 직전 세션을
+    # 아직 안 채운 날이 있어, 아침에 보는 종목이 그날 밤 체결 종목과 다를 수 있다.
+    # signal_state.json 의 meta.signal_date 는 비트코인 날짜라 여기 쓰면 안 된다.
+    # (2026-09-30 토론 run-20260930T045429Z)
+    try:
+        import stock_strategy_v25 as _ss25_basis
+        meta['basis'] = _ss25_basis.stock_basis(all_prices)
+        _b = meta['basis']
+        _shown = _b['basis'] if _b['basis'] else f"{_b['oldest']} (섞임)"
+        log.append(f"<p><b>[기준일]</b> 주식 종가 {_shown} · 직전 평일 {_b['expected']}</p>")
+        if _b['warn']:
+            log.append(f"<p class='error'>⚠ {_b['warn']}</p>")
+            if _b['mixed']:
+                log.append("<p class='error'>종목별: "
+                           + ", ".join(f"{t} {d}" for t, d in _b['per_ticker'].items())
+                           + "</p>")
+    except Exception as _e:
+        meta['basis'] = None
+        log.append(f"<p class='error'>주식 종가 기준일 확인 불가: {_e}</p>")
     # 이전 추천 종목 (HTML 리포트 비교 표시용)
     stock_holdings: list = []
     signal_flipped = False
@@ -2306,14 +2326,30 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
+        # 주식 기준일은 따로 적는다. meta.signal_date 는 비트코인 시계열의 마지막
+        # 날짜라 주식이 쓴 종가의 날짜가 아니다 — 그걸 주식 기준일로 읽으면 executor 의
+        # 대체 신호 검증이 틀린 날짜를 보고 통과시킨다.
+        # 이번에 새로 계산한 쪽만 이 기준일에 해당한다. 반대편(위에서 이전 신호를 그대로
+        # 복사해 온 공격 또는 방어 목표)은 오늘 값이 아니므로 stale 로 표시한다.
+        _sb_meta = (s_meta or {}).get('basis') if isinstance(s_meta, dict) else None
+        _stock_block = {
+            'offense_picks': offense_picks,
+            'offense_weights': offense_weights,
+            'defense_picks': defense_picks,
+            'defense_weights': defense_weights,
+            'risk_on': is_stock_risk_on,
+            'computed_side': 'offense' if is_stock_risk_on else 'defense',
+            'stale_side': 'defense' if is_stock_risk_on else 'offense',
+        }
+        if _sb_meta:
+            _stock_block['basis_date'] = (str(_sb_meta['basis']) if _sb_meta['basis']
+                                          else None)
+            _stock_block['basis_oldest'] = str(_sb_meta['oldest'])
+            _stock_block['basis_mixed'] = bool(_sb_meta['mixed'])
+            _stock_block['basis_lag_bd'] = _sb_meta['lag_bd']
+            _stock_block['basis_per_ticker'] = _sb_meta['per_ticker']
         new_signal = {
-            'stock': {
-                'offense_picks': offense_picks,
-                'offense_weights': offense_weights,
-                'defense_picks': defense_picks,
-                'defense_weights': defense_weights,
-                'risk_on': is_stock_risk_on,
-            },
+            'stock': _stock_block,
             'coin': {
                 'picks': sorted([t.replace('-USD', '') for t in c_port.keys() if t != 'Cash']),
                 'weights': {t.replace('-USD', ''): w for t, w in c_port.items()},
@@ -2470,6 +2506,19 @@ if __name__ == "__main__":
         c_disp_n = {str(k).replace('-USD', ''): v for k, v in c_disp.items()}
         c_lines.extend(_fmt_disp(c_disp_n, _cur_spot))
         s_lines = ['🎯 주식 목표']
+        # 목표 바로 옆에 기준일을 적는다. 운영자가 매일 아침 보는 화면이 이것뿐이라
+        # 상세 구역에 묻어두면 안 본다. (2026-09-30 토론)
+        try:
+            _sb = (s_meta or {}).get('basis') if 's_meta' in locals() else None
+        except Exception:
+            _sb = None
+        if _sb:
+            _sb_shown = _sb['basis'] if _sb['basis'] else f"{_sb['oldest']} (섞임)"
+            s_lines.append(f"  기준 종가 {_sb_shown}")
+            if _sb['warn']:
+                s_lines.append(f"  ⚠ {_sb['warn']}")
+        else:
+            s_lines.append("  기준 종가 확인 불가")
         _stock_buf = get_cash_buffer('stock')
         s_port_disp = {}
         _has_cash = any(str(k).lower() == 'cash' for k in (s_port or {}).keys())

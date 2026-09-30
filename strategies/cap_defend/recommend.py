@@ -323,9 +323,36 @@ def calc_weighted_mom(s):
     return calc_ret(s, 252)
 
 
+def _stock_basis_html(all_prices) -> str:
+    """이 주식 신호가 실제로 쓴 종가의 날짜 한 줄. 지연·날짜 섞임이면 경고를 같이 낸다.
+
+    리포트는 09:15 KST 에 도는데 야후 수정종가가 그 시점에 직전 세션을 아직 안 채우는
+    날이 있다. 그러면 아침에 보는 종목이 그날 밤 23:35 executor 가 실제로 체결할 종목과
+    다를 수 있다. 매매는 executor 가 그때 가격을 다시 받아 하므로 영향이 없지만,
+    운영자가 보는 화면은 그 사실을 말해야 한다.
+    표기 날짜를 signal_state.json 의 meta.signal_date 에서 가져오면 안 된다 —
+    그건 비트코인 시계열의 마지막 날짜다. (2026-09-30 토론 run-20260930T045429Z)
+    """
+    try:
+        import stock_strategy_v25 as _ss25
+        b = _ss25.stock_basis(all_prices)
+    except Exception as e:
+        return f"<p class='error'>주식 종가 기준일 확인 불가: {e}</p>"
+    shown = b['basis'] if b['basis'] else f"{b['oldest']} (섞임)"
+    out = [f"<p><b>[기준일]</b> 주식 종가 {shown} · 직전 평일 {b['expected']}</p>"]
+    if b['warn']:
+        out.append(f"<p class='error'>⚠ {b['warn']}</p>")
+        if b['mixed']:
+            out.append("<p class='error'>종목별: "
+                       + ", ".join(f"{t} {d}" for t, d in b['per_ticker'].items())
+                       + "</p>")
+    return "".join(out)
+
+
 def run_stock_strategy_v15(log, all_prices):
     """V24 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 (executor 단계 가드 없음)"""
     log.append("<h2>📈 주식 포트폴리오 분석 (V24: R7+EEM+Zscore3+Sh252)</h2>")
+    log.append(_stock_basis_html(all_prices))
 
     # --- Crash Breaker (legacy 신호용 — V24 executor 는 무시) ---
     vt = all_prices.get(STOCK_CRASH_TICKER)

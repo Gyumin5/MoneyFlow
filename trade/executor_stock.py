@@ -1475,6 +1475,34 @@ def _signal_state_fresh(signal):
     except Exception:
         log(f'  ⚠️ fallback signal: updated_at 파싱 실패 ({updated_at})')
         return False
+
+    # 주식 기준일 검증 (2026-09-30 토론 run-20260930T045429Z).
+    # updated_at 은 리포트가 '언제 돌았나' 이지 '어느 종가를 썼나' 가 아니다. 아침
+    # 09:15 에는 야후 수정종가가 직전 세션을 아직 안 채운 날이 있어, 24시간 안의
+    # 싱싱한 파일이 한 세션 낡은 종가로 만든 신호를 들고 있을 수 있다.
+    # 이 경로는 밤 가격 받기가 실패했을 때만 탄다 — 그때 낡은 종목으로 주문을 내느니
+    # 그날은 안 내는 쪽이 맞다. meta.signal_date 는 비트코인 날짜라 여기 쓰지 않는다.
+    stk = signal.get('stock', {}) or {}
+    if 'basis_date' not in stk and 'basis_oldest' not in stk:
+        log('  ⚠️ fallback signal: 주식 기준일이 기록돼 있지 않다 → 차단 '
+            '(리포트 판본이 낡았다)')
+        return False
+    if stk.get('basis_mixed'):
+        log(f"  ⚠️ fallback signal: 종목마다 종가 날짜가 다르다 "
+            f"({stk.get('basis_per_ticker')}) → 차단")
+        return False
+    try:
+        lag_bd = int(stk.get('basis_lag_bd'))
+    except (TypeError, ValueError):
+        log(f"  ⚠️ fallback signal: 주식 기준일 지연을 못 읽었다 "
+            f"({stk.get('basis_lag_bd')!r}) → 차단")
+        return False
+    if lag_bd > DATE_ALIGN_TOLERANCE_BD:
+        log(f"  ⚠️ fallback signal: 주식 종가가 {lag_bd}영업일 이전 "
+            f"(허용 {DATE_ALIGN_TOLERANCE_BD}) → 차단")
+        return False
+    log(f"  📅 fallback signal 주식 기준일 {stk.get('basis_date')} "
+        f"(지연 {lag_bd}영업일, 계산된 쪽 {stk.get('computed_side', '?')})")
     return True
 
 
