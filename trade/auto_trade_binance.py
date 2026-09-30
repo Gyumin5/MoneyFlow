@@ -1272,15 +1272,21 @@ def get_current_positions(client: Client):
                         lev = 1.0
                     # 상시 무결성 검사(_v25_standing_check)가 마진모드 변경을 보려면 필요하다.
                     # futures_position_information 은 marginType(str), futures_account 는 isolated(bool).
+                    # 셋을 가른다 — isolated / cross / 조회 불명. 불명을 cross 로 적으면
+                    # 그 심볼의 마진모드 검사가 조용히 통과한다(2026-09-30 토론 지적).
                     if 'isolated' in p:
-                        _iso = bool(p.get('isolated'))
+                        _margin_mode = 'isolated' if bool(p.get('isolated')) else 'cross'
+                    elif p.get('marginType'):
+                        _margin_mode = _MARGIN_NORM.get(str(p.get('marginType')).lower())
                     else:
-                        _iso = (p.get('marginType') or '').lower() == 'isolated'
+                        _margin_mode = None
+                    _iso = (_margin_mode == 'isolated')
                     positions[coin] = {
                         'qty': amt,
                         'qty_raw': str(p.get('positionAmt') or ''),
                         'symbol': sym,
                         'isolated': _iso,
+                        'margin_mode': _margin_mode,
                         'entry_price': _safe_float(p.get('entryPrice')),
                         'mark_price': mark,
                         'pnl': _safe_float(p.get('unRealizedProfit')),
@@ -2485,9 +2491,25 @@ def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], Lis
     """
     crit: List[str] = []
     info: List[str] = []
+
+    # 롱 전용 불변식 — 기준 스냅샷과 무관하게 먼저 본다.
+    # 이 전략은 숏을 만들지 않는다. 우리 매도는 전부 reduceOnly 라 수량이 0 아래로
+    # 내려갈 수 없다. 그래서 음수 수량은 언제나 우리가 안 낸 주문이다.
+    # 기준 비교 앞에 두는 이유는 기준이 없거나(최초 실행·무효화 후) 그 심볼이 기준에
+    # 없는 날에도 이 축은 판정할 수 있기 때문이다 — 그날들이 정확히 외부 숏이
+    # 조용히 통과하던 구간이다. (2026-09-30 토론 run-20260930T045424Z)
+    for coin, cur in (positions or {}).items():
+        try:
+            q = float((cur or {}).get('qty') or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if q < 0:
+            crit.append(f"{coin} 숏 포지션 {q} — 이 전략은 숏을 만들지 않는다(외부 주문 의심)")
+
     base_pos = (baseline or {}).get('positions') or {}
     if not base_pos:
-        return crit, ['standing: 기준 스냅샷 없음 → 검사 생략']
+        info.append('standing: 기준 스냅샷 없음 → 기준 대비 검사 생략 (롱 전용 검사는 했다)')
+        return crit, info
     for coin, b in base_pos.items():
         cur = positions.get(coin)
         try:
@@ -2546,9 +2568,31 @@ def _v25_exec_reconcile(intent: dict, actual: dict, unsent_before: Optional[dict
     intent_pos = intent.get('positions', {})
     actual_pos = actual.get('positions', {})
     unsent = unsent_before or {}
+    want_margin = _MARGIN_NORM.get(str(intent.get('margin_type') or '').lower())
     for sym in set(intent_pos) | set(actual_pos) | set(unsent):
         i = intent_pos.get(sym, {})
         a = actual_pos.get(sym, {})
+
+        # 방향과 마진모드는 갈래를 안 탄다 — 미전송 심볼이든 주문을 낸 심볼이든 같이 본다.
+        # 명목은 절댓값으로 비교하므로 같은 크기의 숏이 명목 검사를 그대로 통과한다.
+        # 우리 매도는 전부 reduceOnly 라 음수 수량은 우리가 안 낸 주문이다. 크기 축을
+        # 여기 더하지 않는 이유는 따로다 — 의도 수량을 저장하지 않아 목표 명목을 가격으로
+        # 나눠 만들어야 하는데, 그러면 5% 체결 밴드(일부러 주문을 생략하는 구간)와 겹쳐
+        # 정상 실행이 경보가 된다. (2026-09-30 토론 run-20260930T045424Z)
+        if sym in actual_pos:
+            try:
+                _q = float(a.get('qty') or 0.0)
+            except (TypeError, ValueError):
+                _q = 0.0
+            if _q < 0:
+                diffs.append(f"{sym} 숏 포지션 {_q} — 이 전략은 숏을 만들지 않는다")
+            if want_margin:
+                _mm = a.get('margin_mode')
+                if _mm is None:
+                    diffs.append(f"{sym} 마진모드 조회 불명 — {want_margin} 인지 확인 못 함")
+                elif _mm != want_margin:
+                    diffs.append(f"{sym} 마진모드 {_mm} (기대 {want_margin})")
+
         if sym in unsent:
             _b = unsent[sym] or {}
             _before = abs(float(_b.get('notional', 0) or 0))
@@ -2581,8 +2625,9 @@ def _v25_exec_reconcile(intent: dict, actual: dict, unsent_before: Optional[dict
             diffs.append(f"{sym} notional: intent=${i.get('notional', 0):.2f} actual=${a.get('notional', 0):.2f}")
         if i.get('leverage') and a.get('leverage') and abs(float(i['leverage']) - float(a['leverage'])) > 0.01:
             diffs.append(f"{sym} L: intent={i['leverage']} actual={a['leverage']}")
-    if intent.get('margin_type') and actual.get('margin_type') and intent['margin_type'].lower() != actual['margin_type'].lower():
-        diffs.append(f"margin: intent={intent['margin_type']} actual={actual['margin_type']}")
+    # 계좌 단위 margin_type 비교는 없앴다. 실제 스냅샷에 그 키가 들어간 적이 없어
+    # 5년 내내 실행되지 않는 문장이었고, Binance 의 마진모드는 원래 심볼 단위다.
+    # 위 루프의 심볼별 비교가 그 자리를 대신한다. (2026-09-30 토론)
     return diffs
 
 
@@ -4014,8 +4059,14 @@ def main():
             # V25 cycle 6: cron 결과 헬스 기록 + reconciliation
             v25_success = not (v25_abort or error_alerts)
             intent_snapshot = {
+                # 현금 버퍼를 여기서도 곱한다. 주문 크기는 execute_rebalance 가
+                # total_pv * (1 - CASH_BUFFER) * w * L 로 잡는데, 의도 쪽만 버퍼 없이
+                # 적으면 정상 실행이 늘 버퍼만큼(1%) 어긋난 것으로 잡힌다. 허용폭이
+                # 5% 라 경보까지 가진 않지만 그 폭의 오분의 일을 상시로 까먹는다.
+                # (2026-09-30 토론 run-20260930T045424Z 지적)
                 'positions': {coin + 'USDT': {
-                    'notional': pv_before * combined.get(coin, 0.0) * target_lev_map.get(coin, 1),
+                    'notional': (pv_before * (1 - CASH_BUFFER)
+                                 * combined.get(coin, 0.0) * target_lev_map.get(coin, 1)),
                     'leverage': target_lev_map.get(coin, 0),
                 } for coin in target_lev_map.keys()},
                 'margin_type': MARGIN_TYPE,
@@ -4028,6 +4079,9 @@ def main():
                     # 수량은 부호를 들고 있다(positionAmt). 같은 명목의 방향반전을
                     # 명목만으로는 구분할 수 없어 체결 검사에 필요하다. (9차 검토)
                     'qty': pos.get('qty', 0.0),
+                    # 'isolated' | 'cross' | None(조회 불명). None 을 cross 로 적으면
+                    # 그 심볼의 마진모드 검사가 조용히 통과한다. (2026-09-30 토론)
+                    'margin_mode': pos.get('margin_mode'),
                 } for pos in positions_after.values()},
                 'pv': pv_after,
             }
