@@ -5,12 +5,16 @@
 라이브가 쓰는 선정함수 자체를 읽기 전용으로 다시 돌려 백테스트 엔진과 맞춰 본다.
 매매도 상태 저장도 하지 않는다.
 
-덮는 것 둘.
+덮는 것 셋.
   선물(V25) = 라이브 선정함수를 집에서 다시 돌려 최근 신호일 몇 개를 대조한다.
   주식(V25) = 서버가 그날 실제로 낸 신호(signal_state.json)를 읽어 와 대조한다.
               주식은 다시 돌리지 않고 실제로 나온 답을 본다 — 서버에서 도는 코드와
               서버가 쓴 가격으로 계산된 결과라 배포·데이터 어긋남까지 같이 걸린다.
-현물은 v24_shadow_today.py 가 이미 있다.
+  선물 스냅 상태 = 서버의 binance_state.json 이 스스로 모순되지 않는지 본다.
+              앞의 둘은 "오늘 선정이 맞나" 를 보는데, 스냅 슬롯이 사라지거나 저장된
+              합산이 스냅 평균과 다르면 선정이 맞아도 체결 목표가 틀린다. 그 축이다.
+현물은 아직 이 감시에 없다. v24_shadow_today.py 는 손으로 돌리는 단발 도구이고
+어느 crontab 에도 없다 — 그것을 "현물은 이미 본다" 로 읽으면 안 된다.
 
 판정 셋:
   0 = 비교한 모든 신호일에서 종목·비중이 같다
@@ -23,8 +27,9 @@
 양성 대조 실패(감시가 불일치를 못 잡는 상태), 예기치 못한 예외.
 
 쓰기:
-  python3 trade/ops/signal_parity_daily.py                  # 선물+주식, 최근 3 신호일
+  python3 trade/ops/signal_parity_daily.py                  # 셋 다, 최근 3 신호일
   python3 trade/ops/signal_parity_daily.py --sleeve stock
+  python3 trade/ops/signal_parity_daily.py --sleeve snap     # 선물 스냅 상태만
   python3 trade/ops/signal_parity_daily.py --days 7
   python3 trade/ops/signal_parity_daily.py --allow-stale-days 2
   python3 trade/ops/signal_parity_daily.py --skip-server-check --skip-self-test
@@ -90,6 +95,14 @@ REF_UNIVERSE = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOGE', 'DOT',
                 'TRX', 'LINK', 'LTC', 'UNI', 'ATOM', 'BCH', 'XLM', 'VET', 'FIL', 'THETA',
                 'EOS', 'AAVE', 'ALGO', 'GRT', 'NEAR', 'FTM', 'SAND', 'MANA', 'AXS', 'GALA',
                 'CHZ', 'APE', 'FLOW', 'ICP', 'APT', 'ARB', 'OP', 'SUI']
+
+
+# 선물 스냅 상태 검사 (2026-09-30). 신호 대조가 못 보는 축 하나를 메운다 — 대조는
+# "오늘 선정이 맞나" 를 보지만 스냅 상태 자체가 어긋나면(슬롯이 사라지거나, 합산이
+# 스냅 평균과 다르거나, 비중 합이 1 이 아니거나) 선정이 맞아도 체결 목표가 틀린다.
+FUT_STATE_REMOTE = '/home/ubuntu/binance_state.json'
+FUT_STATE_MEMBER = 'D_SMA42'
+SNAP_TOL = 1e-9
 
 
 class ParityDataStale(Exception):
@@ -641,10 +654,171 @@ def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
     return 0
 
 
+def expected_last_closed_daily(now_utc: datetime) -> datetime:
+    """지금 시점에 마지막으로 닫힌 일봉의 여는 시각(UTC 자정 기준).
+
+    바이낸스 일봉은 여는 시각으로 이름이 붙고 24시간 뒤에 닫힌다. 그래서 지금 닫혀
+    있는 마지막 봉은 "오늘 UTC 자정" 이 아니라 그 하루 앞이다.
+    """
+    midnight = now_utc.astimezone(timezone.utc).replace(hour=0, minute=0, second=0,
+                                                        microsecond=0)
+    return midnight - timedelta(days=1)
+
+
+def snap_state_diffs(member: dict, n_expected: int, cap: float,
+                     tol: float = SNAP_TOL) -> list:
+    """선물 스냅 상태가 스스로 모순되지 않는가. 어긋난 것들을 문장으로 돌려준다.
+
+    순수 함수다 — 서버도 시계도 안 본다. 보는 것 넷.
+      1. 스냅 개수가 파라미터 대조표의 n_snapshots 와 같은가
+      2. 스냅마다 비중 합이 1 이고, 음수가 없고, 종목당 cap 을 안 넘는가
+      3. 저장된 합산(last_combined)이 스냅 평균과 정확히 같은가
+      4. 합산의 비중 합이 1 인가
+    3번이 이 검사의 핵심이다. 선정이 맞아도 합산이 어긋나면 체결 목표가 틀린다.
+    """
+    diffs = []
+    snaps = member.get('snapshots')
+    if not isinstance(snaps, list):
+        return [f'snapshots 가 목록이 아니다({type(snaps).__name__})']
+    if len(snaps) != n_expected:
+        diffs.append(f'스냅 개수 {len(snaps)} (기대 {n_expected})')
+    if not snaps:
+        return diffs
+
+    agg = {}
+    for i, snap in enumerate(snaps):
+        if not isinstance(snap, dict):
+            diffs.append(f'스냅 {i} 이 딕셔너리가 아니다({type(snap).__name__})')
+            continue
+        total = 0.0
+        for coin, w in snap.items():
+            try:
+                wf = float(w)
+            except (TypeError, ValueError):
+                diffs.append(f'스냅 {i} {coin} 비중이 숫자가 아니다({w!r})')
+                continue
+            if wf < -tol:
+                diffs.append(f'스냅 {i} {coin} 비중 음수({wf:.9f})')
+            # 현금은 상한을 안 받는다. 코인만 cap 1/3 이다.
+            if coin.upper() != 'CASH' and wf > cap + 1e-6:
+                diffs.append(f'스냅 {i} {coin} 비중 {wf:.9f} 이 상한 {cap:.9f} 초과')
+            total += wf
+            agg[coin] = agg.get(coin, 0.0) + wf / len(snaps)
+        if abs(total - 1.0) > 1e-6:
+            diffs.append(f'스냅 {i} 비중 합 {total:.9f} (기대 1.0)')
+
+    combined = member.get('last_combined')
+    if not isinstance(combined, dict):
+        diffs.append(f'last_combined 가 딕셔너리가 아니다({type(combined).__name__})')
+        return diffs
+
+    comb = {}
+    for coin, w in combined.items():
+        try:
+            comb[coin] = float(w)
+        except (TypeError, ValueError):
+            diffs.append(f'last_combined {coin} 비중이 숫자가 아니다({w!r})')
+    for coin in sorted(set(agg) | set(comb)):
+        gap = abs(agg.get(coin, 0.0) - comb.get(coin, 0.0))
+        if gap > tol:
+            diffs.append(f'{coin} 합산 {comb.get(coin, 0.0):.9f} ≠ 스냅 평균 '
+                         f'{agg.get(coin, 0.0):.9f} (차 {gap:.2e})')
+    csum = sum(comb.values())
+    if abs(csum - 1.0) > 1e-6:
+        diffs.append(f'last_combined 비중 합 {csum:.9f} (기대 1.0)')
+    return diffs
+
+
+def self_check_snap(member: dict, n_expected: int, cap: float):
+    """양성 대조 — 합산을 일부러 흔들어 이 검사가 실제로 잡는지 본다.
+
+    검사가 고장나는 흔한 방식은 경보가 뜨는 게 아니라 무엇을 넣든 "이상 없음" 을
+    찍게 되는 것이다. 정상 실행만 보고는 그 상태를 구분할 수 없다.
+    """
+    import copy
+    if not snap_state_diffs(member, n_expected, cap):
+        pass  # 현재 상태는 정상이어야 한다. 정상 여부 판정은 호출자가 한다.
+    poisoned = copy.deepcopy(member)
+    comb = poisoned.get('last_combined')
+    if not isinstance(comb, dict) or not comb:
+        return False, '양성 대조를 못 했다: last_combined 가 비었다'
+    key = sorted(comb)[0]
+    comb[key] = float(comb[key]) + 0.01
+    if not snap_state_diffs(poisoned, n_expected, cap):
+        return False, f'양성 대조 실패: {key} 합산을 0.01 흔들었는데 안 잡힌다'
+    return True, f'양성 대조 통과 ({key} 합산 0.01 흔들기를 잡는다)'
+
+
+def check_snap_state(allow_stale_days: int, self_test: bool = True) -> int:
+    """서버의 선물 스냅 상태를 읽어 스스로 모순이 없는지 본다. 읽기 전용이다.
+
+    판본 대조를 안 한다 — 이 검사는 집 사본 코드를 한 줄도 안 돌리고 서버가 쓴
+    상태 파일만 본다. 여기에 판본 대조를 붙이면 상관없는 이유로 비교불능이 된다.
+    """
+    import json
+
+    print('== 선물 스냅 상태 검사 ==')
+
+    raw, why = _ssh_text(f'cat {FUT_STATE_REMOTE}', 30)
+    if raw is None:
+        raise ParityDataStale(f'선물 상태 파일을 못 읽었다: {why}')
+    try:
+        state = json.loads(raw)
+    except ValueError as exc:
+        raise ParityDataStale(f'선물 상태 파일이 JSON 이 아니다: {exc}')
+    member = (state.get('strategies') or {}).get(FUT_STATE_MEMBER)
+    if not isinstance(member, dict):
+        raise ParityDataStale(f'상태에 strategies.{FUT_STATE_MEMBER} 가 없다')
+
+    # 상태가 기대 봉까지 왔는가. 안 왔으면 스냅 내용이 맞아도 그건 어제 답이다.
+    expected_bar = expected_last_closed_daily(datetime.now(timezone.utc))
+    raw_ts = str(member.get('last_bar_ts') or '')
+    try:
+        actual_bar = datetime.fromisoformat(raw_ts.replace('Z', '+00:00'))
+    except ValueError:
+        raise ParityDataStale(f'last_bar_ts 를 못 읽었다({raw_ts!r})')
+    if actual_bar.tzinfo is None:
+        actual_bar = actual_bar.replace(tzinfo=timezone.utc)
+    lag_days = (expected_bar - actual_bar).days
+    print(f'상태 마지막 봉 {str(actual_bar)[:10]} · 기대 봉 {str(expected_bar)[:10]} '
+          f'· 지연 {lag_days}일 · bar_counter {member.get("bar_counter")} '
+          f'· 카나리 {"ON" if member.get("canary_on") else "OFF"}')
+    if lag_days < 0:
+        print('판정: 불일치 — 상태의 마지막 봉이 미래다. 사람이 봐야 한다.')
+        return 1
+    if lag_days > allow_stale_days:
+        raise ParityDataStale(f'선물 상태가 기대 봉까지 안 왔다 (지연 {lag_days}일)')
+
+    n_expected = int(_CANON['fut']['params']['n_snapshots'])
+    cap = float(_CANON['spot']['params']['cap'])   # 종목당 상한은 현물·선물 같은 1/3
+
+    if self_test:
+        passed, why = self_check_snap(member, n_expected, cap)
+        print(f'양성 대조: {why}')
+        if not passed:
+            raise ParityDataStale(why)
+
+    diffs = snap_state_diffs(member, n_expected, cap)
+    snaps = member.get('snapshots') or []
+    print(f'스냅 {len(snaps)}개 (기대 {n_expected}) · 상한 {cap:.6f}')
+    for i, snap in enumerate(snaps):
+        if isinstance(snap, dict):
+            print(f'  스냅 {i}: {dict(sorted(snap.items(), key=lambda x: -x[1]))}')
+    print(f'  합산: {dict(sorted((member.get("last_combined") or {}).items(), key=lambda x: -x[1]))}')
+
+    if diffs:
+        print(f'판정: 불일치 — {len(diffs)}건. 사람이 봐야 한다.')
+        for d in diffs:
+            print(f'    {d}')
+        return 1
+    print('판정: 이상 없음')
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='라이브 선정함수와 채택 백테스트의 일별 대조')
-    parser.add_argument('--sleeve', choices=['fut', 'stock', 'all'], default='all',
-                        help='무엇을 대조할지 (기본 all — 선물과 주식 둘 다)')
+    parser.add_argument('--sleeve', choices=['fut', 'stock', 'snap', 'all'], default='all',
+                        help='무엇을 볼지 (기본 all — 선물 대조·주식 대조·선물 스냅 상태 셋)')
     parser.add_argument('--days', type=int, default=3, help='비교할 최근 신호일 수 (기본 3)')
     parser.add_argument('--allow-stale-days', type=int, default=1,
                         help='허용할 데이터 지연 일수 (기본 1)')
@@ -664,6 +838,9 @@ def main() -> int:
         jobs.append(('주식', lambda: check_stock(
             check_server=not args.skip_server_check,
             self_test=not args.skip_self_test)))
+    if args.sleeve in ('snap', 'all'):
+        jobs.append(('선물 스냅 상태', lambda: check_snap_state(
+            args.allow_stale_days, self_test=not args.skip_self_test)))
 
     # 한쪽이 비교불능이어도 다른 쪽은 끝까지 본다. 먼저 실패한 것 때문에 나머지를
     # 건너뛰면 그날 감시 범위가 조용히 줄어든다. 최종 판정은 나쁜 쪽을 따른다(2 > 1 > 0).

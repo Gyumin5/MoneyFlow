@@ -179,7 +179,7 @@ MoneyFlow/
 │   ├── executor_coin.py               코인 executor (V24, 업비트, 09:05)
 │   ├── executor_stock.py              주식 executor (V25, 한국투자증권, 23:35)
 │   ├── auto_trade_binance.py          선물 자동매매 (V25, 바이낸스, 09:05)
-│   ├── v24_shadow_today.py            코인 shadow 검증 (unified_backtest 호출)
+│   ├── v24_shadow_today.py            코인 현물 shadow 검증 (unified_backtest 호출, 단발)
 │   ├── api_server.py                  Flask API 서버 (자산 조회)
 │   ├── ops/                           서버 크론 스크립트 / 운영 유틸
 │   ├── config.py                      서버 설정 (API 키, 비밀번호 등)
