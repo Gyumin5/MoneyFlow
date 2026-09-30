@@ -393,6 +393,25 @@ def fetch_spot_klines(client: Client, symbol: str, interval: str, limit: int = 5
         return pd.DataFrame()
 
 
+def _cg_auth_headers() -> Dict[str, str]:
+    """CoinGecko 데모 키가 있으면 인증 헤더를 얹는다.
+
+    2026-09-30: 키 없는 공개 호출이 403(CloudFront Request blocked)으로 막혔다.
+    키가 없으면 예전처럼 키 없이 부른다 — 그 경로는 지금 막혀 있으므로 캐시로 떨어진다.
+    """
+    key = ''
+    try:
+        sys.path.insert(0, SCRIPT_DIR)
+        import config
+        key = (getattr(config, 'COINGECKO_API_KEY', '') or '').strip()
+    except ImportError:
+        pass
+    # config.py 가 있어도 키가 없을 수 있다(집 사본). 그때는 환경변수를 본다.
+    if not key:
+        key = os.environ.get('COINGECKO_API_KEY', '').strip()
+    return {'x-cg-demo-api-key': key} if key else {}
+
+
 def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
                                  cache_path: Optional[str] = None) -> List[Dict]:
     """CoinGecko top N 시총순 fetch. 실패 시 MARKET_META_MAX_AGE_H 이내 캐시만 사용.
@@ -400,6 +419,7 @@ def fetch_coingecko_top_futures(limit: int = UNIVERSE_TARGET_SIZE,
     2026-08-27: 예전에는 캐시 나이를 안 봐서 몇 달 전 시총 순위로도 돌 수 있었다.
     """
     headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 BinanceFut/1.0'}
+    headers.update(_cg_auth_headers())
     for attempt in range(1, 4):
         try:
             r = requests.get(COINGECKO_URL, params={

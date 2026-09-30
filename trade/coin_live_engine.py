@@ -159,10 +159,25 @@ def normalize_cash_key(target: Dict[str, float]) -> Dict[str, float]:
 
 
 # ─── 데이터 수집: CoinGecko / Binance / Upbit ───
+def _cg_auth_headers() -> Dict[str, str]:
+    """CoinGecko 데모 키가 있으면 인증 헤더를 얹는다.
+
+    2026-09-30: 키 없는 공개 호출이 403(CloudFront Request blocked)으로 막혔다.
+    키가 없으면 예전처럼 키 없이 부른다 — 그 경로는 지금 막혀 있으므로 캐시로 떨어진다.
+    """
+    try:
+        from config import COINGECKO_API_KEY
+        key = (COINGECKO_API_KEY or '').strip()
+    except ImportError:
+        key = os.environ.get('COINGECKO_API_KEY', '').strip()
+    return {'x-cg-demo-api-key': key} if key else {}
+
+
 def fetch_coingecko_top(session: requests.Session, fetch_limit: int = COINGECKO_FETCH_LIMIT,
                          retries: int = 5, cache_path: Optional[str] = None) -> List[Dict]:
     """CoinGecko Top N 가져오기 (N=fetch_limit). 실패 시 cache fallback."""
     headers = {'accept': 'application/json', 'User-Agent': 'Mozilla/5.0 CoinExecutor/1.0'}
+    headers.update(_cg_auth_headers())
     for attempt in range(1, retries + 1):
         try:
             params = {'vs_currency': 'usd', 'order': 'market_cap_desc',

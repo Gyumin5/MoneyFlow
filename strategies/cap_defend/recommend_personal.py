@@ -324,16 +324,34 @@ VOLATILITY_WINDOW = 90
 # --- V15 Configuration ---
 VOL_CAP_FILTER = 0.05
 
+
+def _cg_headers() -> dict:
+    """CoinGecko 호출 헤더. 데모 키가 있으면 인증 헤더를 얹는다.
+
+    2026-09-30: 키 없는 공개 호출이 403(CloudFront Request blocked)으로 막혔다.
+    키가 없으면 예전처럼 키 없이 부른다.
+    """
+    headers = {"accept": "application/json", "User-Agent": "Mozilla/5.0"}
+    try:
+        from config import COINGECKO_API_KEY
+        key = (COINGECKO_API_KEY or "").strip()
+    except ImportError:
+        key = os.environ.get("COINGECKO_API_KEY", "").strip()
+    if key:
+        headers["x-cg-demo-api-key"] = key
+    return headers
+
+
 def get_dynamic_coin_universe(log: list) -> (list, dict):
     print("\n--- 🛰️ Step 1: Coin Universe Selection (V15: LIVE CoinGecko + Upbit Filter) ---")
     log.append("<h2>🛰️ Step 1: 코인 유니버스 선정 (V24: Live CoinGecko Top 40)</h2>")
     
     COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/markets"
     FETCH_LIMIT = 40
-    MIN_TRADE_VALUE_KRW = 1_000_000_000 
-    DAYS_TO_CHECK = 260 
-    headers = {"accept": "application/json", "User-Agent": "Mozilla/5.0"}
-    
+    MIN_TRADE_VALUE_KRW = 1_000_000_000
+    DAYS_TO_CHECK = 260
+    headers = _cg_headers()
+
     UNIVERSE_CACHE_FILE = os.path.join(DATA_DIR, "universe_cache.json")
     cg_data = []
 
@@ -640,7 +658,8 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
                 cid = coin_id_map[ticker]
                 url = f"https://api.coingecko.com/api/v3/coins/{cid}/market_chart"
                 # Timeout 30s
-                resp = requests.get(url, params={'vs_currency':'usd','days':'500'}, timeout=30)
+                resp = requests.get(url, params={'vs_currency':'usd','days':'500'},
+                                    headers=_cg_headers(), timeout=30)
                 if resp.status_code == 200:
                     data = resp.json().get('prices', [])
                     df = pd.DataFrame(data, columns=['ts', 'Adj_Close'])
