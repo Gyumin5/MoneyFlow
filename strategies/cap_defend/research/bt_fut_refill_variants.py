@@ -14,9 +14,25 @@
 기준선 주의. bt_coin_param_resweep 의 FUT_BASE 는 문턱 0.03 이다(2026-09-22 측정 당시 값).
 지금 라이브는 0.015 이므로 여기서는 0.015 로 덮어쓴다. 그래서 캐시도 따로 쓴다.
 
+2차 (2026-10-01, 토론 run-20261001T120336Z 뒤). 1차의 "모멘텀순 전체풀" 은 라이브와 다르다 —
+라이브는 채움 후보에서 BTC 를 뺀다. 그래서 진짜 라이브 팔을 넣고, 풀 넓이와 BTC 취급을
+정렬 축과 분리해 다시 잰다.
+
+채택 기준을 결과 보기 전에 못박는다. 아래 넷을 다 만족할 때만 채택 후보로 올린다.
+  ① 실제 운영 기준선(넓은풀·모멘텀순·BTC제외) 대비 두 비용 조건 모두 순위평균이 낮다.
+  ② 이긴 앵커가 두 조건 각각 5/7 이상이다.
+  ③ 합성 최대낙폭이 기준선 대비 0.5%포인트 넘게 나빠지지 않는다.
+  ④ BTC 포함·제외 두 변형이 모두 기준선을 이긴다(한쪽만 이기면 BTC 덕이라 기각).
+  좁은풀과 넓은풀의 순위평균 차가 0.2 이내로 실질 동률이면 단순한 좁은풀을 고른다.
+  시총순은 범주형 축이라 인접값 고원을 못 본다 — 대신 순위 교란 안정성으로 대신한다
+  (시총 순위 30일 지연, 인접쌍 교환). 교란에서 기준선에 지면 순위 정보가 아니라
+  특정 배열에 얹힌 것으로 보고 기각한다.
+
 엔진은 환경변수로만 바뀌어 있고 측정이 끝나면 되돌린다. 정본에 실험 코드를 남기지 않는다.
   REFILL_FAIL_MODE = mom2 | smacross,  REFILL_FAIL_SMA_S / _L
   REFILL_ORDER     = bt | alpha | mom | mcap
+  REFILL_POOL      = fresh | wide,  REFILL_EXCL_BTC = 0 | 1
+  REFILL_MCAP_LAG  = N일 지연,  REFILL_MCAP_SWAP = 1 이면 인접쌍 교환
   DRIFT_HEALTH_MODE = refill | off   (기존 토글)
 
 실행: cd /home/gmoh/mon/251229/strategies/cap_defend/research && python3 bt_fut_refill_variants.py
@@ -69,16 +85,38 @@ ARMS_ORDER: list[tuple[str, dict]] = [
     ("시총순 전체풀", dict(REFILL_ORDER="mcap")),
 ]
 
+LIVE = "넓은풀 모멘텀순 BTC제외"   # 실제 운영 규칙 = 2차의 기준선
+
+# 2차: 풀 넓이 · BTC 취급 · 정렬을 분리한다.
+ARMS_POOL: list[tuple[str, dict]] = [
+    (CUR, {}),                                   # 현행 백테스트 (좁은풀·알파벳·BTC포함)
+    (LIVE, dict(REFILL_ORDER="mom", REFILL_POOL="wide", REFILL_EXCL_BTC="1")),
+    ("넓은풀 모멘텀순 BTC포함", dict(REFILL_ORDER="mom", REFILL_POOL="wide")),
+    ("넓은풀 시총순 BTC포함", dict(REFILL_ORDER="mcap", REFILL_POOL="wide")),
+    ("넓은풀 시총순 BTC제외", dict(REFILL_ORDER="mcap", REFILL_POOL="wide",
+                                 REFILL_EXCL_BTC="1")),
+    ("좁은풀 시총순 BTC포함", dict(REFILL_ORDER="mcap", REFILL_POOL="fresh")),
+    ("좁은풀 시총순 BTC제외", dict(REFILL_ORDER="mcap", REFILL_POOL="fresh",
+                                 REFILL_EXCL_BTC="1")),
+    # 순위 교란 안정성(범주형 축이라 인접값 고원을 못 보는 것의 대체).
+    ("넓은풀 시총순 지연30일", dict(REFILL_ORDER="mcap", REFILL_POOL="wide",
+                                 REFILL_MCAP_LAG="30")),
+    ("넓은풀 시총순 인접교환", dict(REFILL_ORDER="mcap", REFILL_POOL="wide",
+                                 REFILL_MCAP_SWAP="1")),
+]
+
 AXES: dict[str, list[tuple[str, dict]]] = {
-    "탈락조건": ARMS_FAIL,
-    "채움순서": ARMS_ORDER,
+    "풀·BTC·정렬": ARMS_POOL,
 }
 
 ENV_KEYS = ("DRIFT_HEALTH_MODE", "REFILL_FAIL_MODE",
-            "REFILL_FAIL_SMA_S", "REFILL_FAIL_SMA_L", "REFILL_ORDER")
+            "REFILL_FAIL_SMA_S", "REFILL_FAIL_SMA_L", "REFILL_ORDER",
+            "REFILL_POOL", "REFILL_EXCL_BTC", "REFILL_MCAP_LAG",
+            "REFILL_MCAP_SWAP")
 ENV_DEFAULT = dict(DRIFT_HEALTH_MODE="refill", REFILL_FAIL_MODE="mom2",
                    REFILL_FAIL_SMA_S="18", REFILL_FAIL_SMA_L="127",
-                   REFILL_ORDER="bt")
+                   REFILL_ORDER="bt", REFILL_POOL="fresh", REFILL_EXCL_BTC="0",
+                   REFILL_MCAP_LAG="0", REFILL_MCAP_SWAP="0")
 
 
 def set_env(over: dict) -> None:
@@ -151,21 +189,24 @@ def report(axis: str, arms, stress: bool, stock_eq, spot_eq) -> None:
         for name in curves:
             rank[name].append(sums[name] / max(n, 1))
 
+    ref = LIVE if LIVE in rank and rank[LIVE] else CUR
     tag = "비용 5배" if stress else "기본 비용"
     print(f"\n=== {axis} · {tag} · 앵커 {len(R.ANCHORS)}곳 · 합성 60/25/15 ===")
-    print(f"{'팔':<18}{'순위평균':>9}{'중앙':>7}{'최악':>7}{'현행대비':>9}"
+    print(f"  기준선 = {ref}")
+    print(f"{'팔':<24}{'순위평균':>9}{'중앙':>7}{'최악':>7}{'기준대비':>9}"
           f"{'합성Cal':>8}{'합성Sharpe':>11}{'합성CAGR':>10}{'합성MDD':>9}"
           f"{'선물Cal':>8}{'선물CAGR':>10}{'선물MDD':>9}{'이긴앵커':>9}")
-    base = rank.get(CUR, [])
+    base = rank.get(ref, [])
     base_mean = float(np.mean(base)) if base else float("nan")
     rows = sorted((float(np.mean(r)), n, r) for n, r in rank.items() if r)
     for mean_r, name, r in rows:
         c = comp[name]
         f = fut[name]
-        wins = ("" if name == CUR or not base
+        wins = ("" if name == ref or not base
                 else f"{sum(1 for x, y in zip(r, base) if x < y)}/{len(base)}")
-        mark = "  <- 현행" if name == CUR else ""
-        print(f"{name:<18}{mean_r:>9.3f}{float(np.median(r)):>7.3f}{max(r):>7.3f}"
+        mark = ("  <- 기준(라이브)" if name == ref
+                else "  <- 현행 백테스트" if name == CUR else "")
+        print(f"{name:<24}{mean_r:>9.3f}{float(np.median(r)):>7.3f}{max(r):>7.3f}"
               f"{mean_r-base_mean:>+9.3f}"
               f"{np.mean([x['Cal'] for x in c]):>8.2f}"
               f"{np.mean([x['Sharpe'] for x in c]):>11.2f}"
@@ -231,15 +272,52 @@ def main() -> None:
         for stress in (False, True):
             report(axis, arms, stress, stock_eq, spot_eq)
 
-    print("\n=== 리필 발화·탈락 건수 (앵커 0 · 기본 비용 · 선물 슬리브 단독) ===")
-    print("발화 = 드리프트가 켜진 날. 탈락일 = 리필이 코인을 하나라도 떨어뜨린 날.")
-    print("탈락수 = 떨어뜨린 스냅-코인 수(스냅 5개라 하루 최대 5).")
-    print(f"  {'팔':<18}{'발화':>7}{'탈락일':>8}{'탈락수':>8}{'체결':>8}")
+    print("\n=== 리필이 실제로 바꾼 사건 (앵커 7곳 전부 · 기본 비용 · 선물 단독) ===")
+    print("탈락일 = 리필이 코인을 하나라도 떨어뜨린 날. 채움 = (날짜,스냅,코인) 건수.")
+    print("서로 다른 날 = 앵커를 합쳐 중복을 뺀 날짜 수. 겹치는 창은 같은 사건을 여러 번 센다.")
+    fills_by_arm = {}
+    print(f"  {'팔':<24}{'탈락일':>8}{'탈락수':>8}{'채움':>7}{'서로다른날':>11}"
+          f"{'BTC·ETH비중':>12}  상위 채움코인")
+    import json
     for name, env in uniq.items():
-        m = run_fut_arm(env, 0, False, want_counts=True)
-        print(f"  {name:<18}{int(m.get('Rebal', 0)):>7}"
-              f"{int(m.get('RefillDays', 0)):>8}{int(m.get('RefillDrops', 0)):>8}"
-              f"{int(m.get('Trades', 0)):>8}", flush=True)
+        cpath = os.path.join(OUT, f"counts__{_key(name, 0, False)}.json")
+        if os.path.exists(cpath):
+            with open(cpath) as fh:
+                blob = json.load(fh)
+            days, drops = blob["days"], blob["drops"]
+            allf = [tuple(x) for x in blob["fills"]]
+        else:
+            days = drops = 0
+            allf = []
+            for a in R.ANCHORS:
+                m = run_fut_arm(env, a, False, want_counts=True)
+                days += int(m.get('RefillDays', 0))
+                drops += int(m.get('RefillDrops', 0))
+                allf += list(m.get('RefillFills', []))
+            with open(cpath, "w") as fh:
+                json.dump({"days": days, "drops": drops, "fills": allf}, fh)
+        fills_by_arm[name] = allf
+        hist = {}
+        for _d, _si, _c in allf:
+            hist[_c] = hist.get(_c, 0) + 1
+        top = ", ".join(f"{c}×{n}" for c, n in
+                        sorted(hist.items(), key=lambda x: (-x[1], x[0]))[:5])
+        be = sum(n for c, n in hist.items() if c in ('BTC', 'ETH'))
+        share = f"{100*be/len(allf):.0f}%" if allf else "-"
+        print(f"  {name:<24}{days:>8}{drops:>8}{len(allf):>7}"
+              f"{len({d for d, _s, _c in allf}):>11}{share:>12}  {top}", flush=True)
+
+    if LIVE in fills_by_arm:
+        base_set = {(d, si, c) for d, si, c in fills_by_arm[LIVE]}
+        base_days = {d for d, _s, _c in fills_by_arm[LIVE]}
+        print("\n  기준선(라이브) 대비 선택이 실제로 갈린 정도:")
+        for name, f in fills_by_arm.items():
+            if name == LIVE:
+                continue
+            s = {(d, si, c) for d, si, c in f}
+            dd = {d for d, _s, _c in f}
+            print(f"    {name:<24} 갈린 채움 {len(s ^ base_set):>4}건 · "
+                  f"갈린 날 {len(dd ^ base_days):>3}일 · 공통 날 {len(dd & base_days):>3}일")
 
     print(f"\n총 {time.time()-t0:.0f}초")
 
