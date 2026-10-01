@@ -1,18 +1,20 @@
 diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
-index 6a0d963..b1b18c0 100644
+index 6a0d963..273599c 100644
 --- a/strategies/cap_defend/backtest_futures_v25.py
 +++ b/strategies/cap_defend/backtest_futures_v25.py
-@@ -344,6 +344,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -344,6 +344,11 @@ def run(bars, funding, interval='D', leverage=3.0,
      canary_on_bar = None
      pfd_done = True
      rebal_count = 0
 +    refill_drops = 0   # 측정용 (2026-10-01): refill 이 떨어뜨린 스냅-코인 수
 +    refill_days = 0    # 측정용 (2026-10-01): 하나라도 떨어뜨린 날 수
 +    refill_fills = []  # 측정용 (2026-10-01): (날짜, 스냅번호, 채워 넣은 코인)
++    refill_cap_viol = 0  # 측정용 (2026-10-01): 리필 채움이 1/3 을 넘긴 건수(그 자리에서만)
++    refill_max_w = 0.0   # 측정용 (2026-10-01): 리필이 만든 최대 코인 비중
      liq_count = 0
      liq_log = []
      trade_count = 0
-@@ -969,17 +972,79 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -969,18 +974,185 @@ def run(bars, funding, interval='D', leverage=3.0,
                  if _drift_refill:
                      # 사용자 결정: 두 mom 모두 음수면 fail (vol 무시).
                      # 메모리 Do-Not-Repeat: health-fail 에 vol 포함 금지.
@@ -34,6 +36,7 @@ index 6a0d963..b1b18c0 100644
 +                    _rf_nobtc = _os.environ.get('REFILL_EXCL_BTC', '0') == '1'
 +                    _rf_lag = int(_os.environ.get('REFILL_MCAP_LAG', '0'))
 +                    _rf_swap = _os.environ.get('REFILL_MCAP_SWAP', '0') == '1'
++                    _policy = _os.environ.get('REFILL_POLICY', '')
 +                    _rf_minbars = (max(mom30, mom90) if _rf_mode != 'smacross'
 +                                   else max(mom30, mom90, _rf_l))
 +
@@ -59,6 +62,7 @@ index 6a0d963..b1b18c0 100644
                          return ms < 0 and ml < 0
 -                    fresh = _compute_weights(prev_date)
 -                    healthy_coins = sorted([c for c in fresh.keys() if c != 'CASH'])
+-                    for si in range(n_snapshots):
 +
 +                    # 시총 순위(정렬 기준). 지연·인접쌍 교환은 안정성 시험용.
 +                    _mcap_src = prev_date
@@ -96,10 +100,115 @@ index 6a0d963..b1b18c0 100644
 +                    else:  # 'bt' / 'alpha'
 +                        healthy_coins = sorted(_cands)
 +                    _rf_day_hit = False
-                     for si in range(n_snapshots):
++                    # ── 정책 변종 (2026-10-01 토론 run-20261001T125747Z 가 고정한 공통 규칙) ──
++                    #   REFILL_POLICY = v1cash | v2mcap | v3volmom | bmom | v4snap | v5all
++                    #   빈 값이면 아래 기존 경로(1차·2차 축)를 그대로 쓴다.
++                    if _policy:
++                        _mcap_list = list(get_mcap(prev_date))
++                        _mcap_pos2 = {c: i for i, c in enumerate(_mcap_list)}
++                        _need2 = max(mom30, mom90)
++                        _volreq = _policy == 'v3volmom'
++
++                        def _arr2(coin, extra=0):
++                            df_c = bars.get(coin)
++                            if df_c is None:
++                                return None
++                            ci_c = (btc_idx_map.get(prev_date, -1) if coin == 'BTC'
++                                    else df_c.index.get_indexer([prev_date], method='ffill')[0])
++                            if ci_c < 0 or ci_c < max(_need2, extra):
++                                return None
++                            return df_c['Close'].values[:ci_c + 1]
++
++                        def _failed2(coin):
++                            a = _arr2(coin)
++                            if a is None:
++                                return False   # 데이터 없는 보유는 유지한다
++                            return calc_mom(a, mom30) < 0 and calc_mom(a, mom90) < 0
++
++                        _pool2 = []
++                        for _c in _mcap_list:
++                            if _c == 'BTC':
++                                continue
++                            _a = _arr2(_c, _vol_bars if _volreq else 0)
++                            if _a is None:
++                                continue
++                            _ms2 = calc_mom(_a, mom30)
++                            _ml2 = calc_mom(_a, mom90)
++                            if not (_ms2 > 0 and _ml2 > 0):
++                                continue
++                            if _volreq:
++                                _v2 = (calc_vol_bars(_a, _vol_bars, bars_per_year)
++                                       if vol_mode == 'bar'
++                                       else calc_vol_daily(_a, bpd, lookback_bars=_vol_bars))
++                                if _v2 > vol_threshold:
++                                    continue
++                            _pool2.append((_c, _ms2, _ml2))
++                        if _policy == 'v2mcap':
++                            _pool2.sort(key=lambda x: (_mcap_pos2.get(x[0], 10**6), x[0]))
++                        else:
++                            _pool2.sort(key=lambda x: (-x[1], -x[2],
++                                                       _mcap_pos2.get(x[0], 10**6), x[0]))
++                        _cands2 = [c for c, _x, _y in _pool2]
++                        _fresh_all = (_compute_weights(prev_date)
++                                      if _policy in ('v4snap', 'v5all') else None)
++                        _dstr = prev_date.strftime('%Y-%m-%d')
++
++                        for si in range(n_snapshots):
++                            sn = snapshots[si]
++                            sn_coins = sorted([c for c in sn.keys() if c != 'CASH'])
++                            failed = [c for c in sn_coins if _failed2(c)]
++                            refill_drops += len(failed)
++                            if _policy == 'v5all':
++                                _rf_day_hit = True
++                                new_sn = dict(_fresh_all)
++                                for _c in new_sn:
++                                    if _c != 'CASH' and _c not in sn_coins:
++                                        refill_fills.append((_dstr, si, _c))
++                                snapshots[si] = new_sn
++                                continue
++                            if not failed:
++                                continue
++                            _rf_day_hit = True
++                            if _policy == 'v4snap':
++                                new_sn = dict(_fresh_all)
++                                for _c in new_sn:
++                                    if _c != 'CASH' and _c not in sn_coins:
++                                        refill_fills.append((_dstr, si, _c))
++                                snapshots[si] = new_sn
++                                continue
++                            new_sn = {c: sn[c] for c in sn_coins if c not in failed}
++                            new_sn['CASH'] = sn.get('CASH', 0)
++                            _R = sum(sn[c] for c in failed)
++                            if _policy == 'v1cash':
++                                new_sn['CASH'] += _R
++                            else:
++                                _picks2 = [c for c in _cands2 if c not in new_sn][:len(failed)]
++                                if _picks2:
++                                    _w2 = min(_R / len(_picks2), cap)
++                                    for _c in _picks2:
++                                        new_sn[_c] = new_sn.get(_c, 0) + _w2
++                                        refill_fills.append((_dstr, si, _c))
++                                    new_sn['CASH'] += _R - _w2 * len(_picks2)
++                                else:
++                                    new_sn['CASH'] += _R
++                            for _k, _v in new_sn.items():
++                                if _k == 'CASH':
++                                    continue
++                                refill_max_w = max(refill_max_w, _v)
++                                if _v > cap + 1e-9:
++                                    refill_cap_viol += 1
++                            snapshots[si] = new_sn
++                        if _rf_day_hit:
++                            refill_days += 1
++                        combined = _merge_snapshots()
++                        _policy_done = True
++                    else:
++                        _policy_done = False
++                    for si in ([] if _policy else range(n_snapshots)):
                          sn = snapshots[si]
                          sn_coins = sorted([c for c in sn.keys() if c != 'CASH'])
-@@ -990,6 +1055,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+                         new_sn = {}
+@@ -990,6 +1162,8 @@ def run(bars, funding, interval='D', leverage=3.0,
                                  new_sn[c] = sn[c]
                              else:
                                  replaced_w += sn[c]
@@ -108,26 +217,30 @@ index 6a0d963..b1b18c0 100644
                          new_sn['CASH'] = sn.get('CASH', 0)
                          if replaced_w > 0:
                              if _drift_cash_only:
-@@ -1003,9 +1070,13 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -1003,9 +1177,16 @@ def run(bars, funding, interval='D', leverage=3.0,
                                      w_per = replaced_w / len(picks)
                                      for c in picks:
                                          new_sn[c] = new_sn.get(c, 0) + w_per
 +                                        refill_fills.append(
 +                                            (prev_date.strftime('%Y-%m-%d'), si, c))
++                                        if new_sn[c] > cap + 1e-9:
++                                            refill_cap_viol += 1
++                                            refill_max_w = max(refill_max_w, new_sn[c])
                                  else:
                                      new_sn['CASH'] = new_sn.get('CASH', 0) + replaced_w
                          snapshots[si] = new_sn
-+                    if _rf_day_hit:
++                    if _rf_day_hit and not _policy:
 +                        refill_days += 1
                      # combined 재계산
                      combined = _merge_snapshots()
                  # V25 옵션 B: CASH 슬롯 refill (drift 발화 + 빈 CASH 슬롯 + fresh healthy 존재 시)
-@@ -1112,6 +1183,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -1112,6 +1293,9 @@ def run(bars, funding, interval='D', leverage=3.0,
      result = {
          'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
          'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,
 +        'RefillDrops': refill_drops, 'RefillDays': refill_days,
-+        'RefillFills': refill_fills,
++        'RefillFills': refill_fills, 'RefillCapViol': refill_cap_viol,
++        'RefillMaxW': refill_max_w,
          'Stops': stop_count, 'Stop': stop_count,
          'Cat': cat_stop_count, 'Cushion': cushion_force_count, 'GrossCap': gross_cap_count,
      }

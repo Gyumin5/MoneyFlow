@@ -105,18 +105,48 @@ ARMS_POOL: list[tuple[str, dict]] = [
                                  REFILL_MCAP_SWAP="1")),
 ]
 
+# 3차 (2026-10-01, 토론 run-20261001T125747Z 가 정의한 정책 변종).
+# 공통 규칙은 엔진 쪽 REFILL_POLICY 분기에 들어 있다 — 데이터 없는 보유는 유지,
+# 신규 후보는 두 모멘텀 양수, 후보 풀은 get_mcap 목록에서 BTC 제외, 비중 상한 1/3 준수,
+# 모자란 몫은 현금. DRIFT_CASH_REFILL 은 전 팔에서 끈다.
+B_ARM = "B 모멘텀순 상한준수"
+ARMS_POLICY: list[tuple[str, dict]] = [
+    (B_ARM, dict(REFILL_POLICY="bmom")),
+    ("V1 탈락비중 현금화", dict(REFILL_POLICY="v1cash")),
+    ("V2 넓은풀 시총순 상한", dict(REFILL_POLICY="v2mcap")),
+    ("V3 건강풀 모멘텀순", dict(REFILL_POLICY="v3volmom")),
+    ("V4 탈락스냅 재선정", dict(REFILL_POLICY="v4snap")),
+    ("V5 전스냅 재선정", dict(REFILL_POLICY="v5all")),
+    (CUR, {}),
+]
+
+# 쌍대 비교 목록 — 팔 구성에 따라 순위가 흔들리는 것을 없애려고 둘씩만 넣고 잰다.
+PAIRS: list[tuple[str, str]] = [
+    ("V1 탈락비중 현금화", B_ARM),
+    ("V2 넓은풀 시총순 상한", B_ARM),
+    ("V3 건강풀 모멘텀순", B_ARM),
+    ("V4 탈락스냅 재선정", B_ARM),
+    ("V5 전스냅 재선정", B_ARM),
+    (CUR, B_ARM),
+    ("V1 탈락비중 현금화", "V2 넓은풀 시총순 상한"),
+    ("V3 건강풀 모멘텀순", "V2 넓은풀 시총순 상한"),
+    ("V4 탈락스냅 재선정", "V2 넓은풀 시총순 상한"),
+    ("V5 전스냅 재선정", "V2 넓은풀 시총순 상한"),
+]
+
 AXES: dict[str, list[tuple[str, dict]]] = {
-    "풀·BTC·정렬": ARMS_POOL,
+    "정책 변종": ARMS_POLICY,
 }
 
 ENV_KEYS = ("DRIFT_HEALTH_MODE", "REFILL_FAIL_MODE",
             "REFILL_FAIL_SMA_S", "REFILL_FAIL_SMA_L", "REFILL_ORDER",
             "REFILL_POOL", "REFILL_EXCL_BTC", "REFILL_MCAP_LAG",
-            "REFILL_MCAP_SWAP")
+            "REFILL_MCAP_SWAP", "REFILL_POLICY", "DRIFT_CASH_REFILL")
 ENV_DEFAULT = dict(DRIFT_HEALTH_MODE="refill", REFILL_FAIL_MODE="mom2",
                    REFILL_FAIL_SMA_S="18", REFILL_FAIL_SMA_L="127",
                    REFILL_ORDER="bt", REFILL_POOL="fresh", REFILL_EXCL_BTC="0",
-                   REFILL_MCAP_LAG="0", REFILL_MCAP_SWAP="0")
+                   REFILL_MCAP_LAG="0", REFILL_MCAP_SWAP="0",
+                   REFILL_POLICY="", DRIFT_CASH_REFILL="off")
 
 
 def set_env(over: dict) -> None:
@@ -218,6 +248,40 @@ def report(axis: str, arms, stress: bool, stock_eq, spot_eq) -> None:
               f"{wins:>9}{mark}")
 
 
+def pairwise(pairs, stress: bool, stock_eq, spot_eq) -> None:
+    """팔 둘만 넣은 순위합. 팔 구성에 따른 순위 이동을 없앤다."""
+    tag = "비용 5배" if stress else "기본 비용"
+    print(f"\n=== 쌍대 비교 · {tag} · 앵커 {len(R.ANCHORS)}곳 · 합성 60/25/15 ===")
+    print("낮은 쪽이 우세. 이김 = 후보의 창 순위평균이 기준보다 낮은 앵커 수.")
+    print(f"{'후보':<22}{'기준':<22}{'후보순위':>9}{'기준순위':>9}{'차':>8}{'이김':>6}"
+          f"{'합성Cal':>8}{'기준Cal':>8}{'합성MDD':>9}{'기준MDD':>9}"
+          f"{'선물MDD':>9}{'기준선물MDD':>12}")
+    for a, b in pairs:
+        ra, rb, ma, mb, fa, fb = [], [], [], [], [], []
+        for an in R.ANCHORS:
+            ea = _load("fu", _key(a, an, stress))
+            eb = _load("fu", _key(b, an, stress))
+            if ea is None or eb is None:
+                continue
+            ca = R.build_alloc(stock_eq[an], spot_eq[(an, stress)], ea)
+            cb = R.build_alloc(stock_eq[an], spot_eq[(an, stress)], eb)
+            sums, _w, n = R.window_rs({a: ca, b: cb})
+            ra.append(sums[a] / max(n, 1))
+            rb.append(sums[b] / max(n, 1))
+            ma.append(R.metrics(ca))
+            mb.append(R.metrics(cb))
+            fa.append(R.metrics(ea))
+            fb.append(R.metrics(eb))
+        if not ra:
+            continue
+        wins = sum(1 for x, y in zip(ra, rb) if x < y)
+        print(f"{a:<22}{b:<22}{float(np.mean(ra)):>9.3f}{float(np.mean(rb)):>9.3f}"
+              f"{float(np.mean(ra))-float(np.mean(rb)):>+8.3f}{wins:>4}/{len(ra)}"
+              f"{np.mean([x['Cal'] for x in ma]):>8.2f}{np.mean([x['Cal'] for x in mb]):>8.2f}"
+              f"{np.mean([x['MDD'] for x in ma]):>8.2f}%{np.mean([x['MDD'] for x in mb]):>8.2f}%"
+              f"{np.mean([x['MDD'] for x in fa]):>8.2f}%{np.mean([x['MDD'] for x in fb]):>11.2f}%")
+
+
 def main() -> None:
     os.makedirs(EQDIR, exist_ok=True)
     os.makedirs(R.EQDIR, exist_ok=True)
@@ -272,30 +336,38 @@ def main() -> None:
         for stress in (False, True):
             report(axis, arms, stress, stock_eq, spot_eq)
 
+    for stress in (False, True):
+        pairwise(PAIRS, stress, stock_eq, spot_eq)
+
     print("\n=== 리필이 실제로 바꾼 사건 (앵커 7곳 전부 · 기본 비용 · 선물 단독) ===")
     print("탈락일 = 리필이 코인을 하나라도 떨어뜨린 날. 채움 = (날짜,스냅,코인) 건수.")
     print("서로 다른 날 = 앵커를 합쳐 중복을 뺀 날짜 수. 겹치는 창은 같은 사건을 여러 번 센다.")
     fills_by_arm = {}
     print(f"  {'팔':<24}{'탈락일':>8}{'탈락수':>8}{'채움':>7}{'서로다른날':>11}"
-          f"{'BTC·ETH비중':>12}  상위 채움코인")
+          f"{'상한위반':>9}{'최대비중':>9}{'BTC·ETH비중':>12}  상위 채움코인")
     import json
     for name, env in uniq.items():
-        cpath = os.path.join(OUT, f"counts__{_key(name, 0, False)}.json")
+        cpath = os.path.join(OUT, f"counts2__{_key(name, 0, False)}.json")
         if os.path.exists(cpath):
             with open(cpath) as fh:
                 blob = json.load(fh)
             days, drops = blob["days"], blob["drops"]
+            viol, maxw = blob["viol"], blob["maxw"]
             allf = [tuple(x) for x in blob["fills"]]
         else:
-            days = drops = 0
+            days = drops = viol = 0
+            maxw = 0.0
             allf = []
             for a in R.ANCHORS:
                 m = run_fut_arm(env, a, False, want_counts=True)
                 days += int(m.get('RefillDays', 0))
                 drops += int(m.get('RefillDrops', 0))
+                viol += int(m.get('RefillCapViol', 0))
+                maxw = max(maxw, float(m.get('RefillMaxW', 0.0)))
                 allf += list(m.get('RefillFills', []))
             with open(cpath, "w") as fh:
-                json.dump({"days": days, "drops": drops, "fills": allf}, fh)
+                json.dump({"days": days, "drops": drops, "viol": viol,
+                           "maxw": maxw, "fills": allf}, fh)
         fills_by_arm[name] = allf
         hist = {}
         for _d, _si, _c in allf:
@@ -305,7 +377,8 @@ def main() -> None:
         be = sum(n for c, n in hist.items() if c in ('BTC', 'ETH'))
         share = f"{100*be/len(allf):.0f}%" if allf else "-"
         print(f"  {name:<24}{days:>8}{drops:>8}{len(allf):>7}"
-              f"{len({d for d, _s, _c in allf}):>11}{share:>12}  {top}", flush=True)
+              f"{len({d for d, _s, _c in allf}):>11}{viol:>9}{maxw:>9.3f}"
+              f"{share:>12}  {top}", flush=True)
 
     if LIVE in fills_by_arm:
         base_set = {(d, si, c) for d, si, c in fills_by_arm[LIVE]}
