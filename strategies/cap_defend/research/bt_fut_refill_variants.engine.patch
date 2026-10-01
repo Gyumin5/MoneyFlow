@@ -1,5 +1,5 @@
 diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
-index 6a0d963..273599c 100644
+index 6a0d963..066ef5a 100644
 --- a/strategies/cap_defend/backtest_futures_v25.py
 +++ b/strategies/cap_defend/backtest_futures_v25.py
 @@ -344,6 +344,11 @@ def run(bars, funding, interval='D', leverage=3.0,
@@ -14,7 +14,7 @@ index 6a0d963..273599c 100644
      liq_count = 0
      liq_log = []
      trade_count = 0
-@@ -969,18 +974,185 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -969,18 +974,186 @@ def run(bars, funding, interval='D', leverage=3.0,
                  if _drift_refill:
                      # 사용자 결정: 두 mom 모두 음수면 fail (vol 무시).
                      # 메모리 Do-Not-Repeat: health-fail 에 vol 포함 금지.
@@ -37,6 +37,7 @@ index 6a0d963..273599c 100644
 +                    _rf_lag = int(_os.environ.get('REFILL_MCAP_LAG', '0'))
 +                    _rf_swap = _os.environ.get('REFILL_MCAP_SWAP', '0') == '1'
 +                    _policy = _os.environ.get('REFILL_POLICY', '')
++                    _rf_cap = _os.environ.get('REFILL_CAP', '0') == '1'
 +                    _rf_minbars = (max(mom30, mom90) if _rf_mode != 'smacross'
 +                                   else max(mom30, mom90, _rf_l))
 +
@@ -208,7 +209,7 @@ index 6a0d963..273599c 100644
                          sn = snapshots[si]
                          sn_coins = sorted([c for c in sn.keys() if c != 'CASH'])
                          new_sn = {}
-@@ -990,6 +1162,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -990,6 +1163,8 @@ def run(bars, funding, interval='D', leverage=3.0,
                                  new_sn[c] = sn[c]
                              else:
                                  replaced_w += sn[c]
@@ -217,8 +218,14 @@ index 6a0d963..273599c 100644
                          new_sn['CASH'] = sn.get('CASH', 0)
                          if replaced_w > 0:
                              if _drift_cash_only:
-@@ -1003,9 +1177,16 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -1001,11 +1176,22 @@ def run(bars, funding, interval='D', leverage=3.0,
+                                 if fresh_picks:
+                                     picks = fresh_picks[:n_failed]
                                      w_per = replaced_w / len(picks)
++                                    if _rf_cap:
++                                        w_per = min(w_per, cap)
++                                        new_sn['CASH'] = (new_sn.get('CASH', 0)
++                                                          + replaced_w - w_per * len(picks))
                                      for c in picks:
                                          new_sn[c] = new_sn.get(c, 0) + w_per
 +                                        refill_fills.append(
@@ -234,7 +241,7 @@ index 6a0d963..273599c 100644
                      # combined 재계산
                      combined = _merge_snapshots()
                  # V25 옵션 B: CASH 슬롯 refill (drift 발화 + 빈 CASH 슬롯 + fresh healthy 존재 시)
-@@ -1112,6 +1293,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -1112,6 +1298,9 @@ def run(bars, funding, interval='D', leverage=3.0,
      result = {
          'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
          'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,

@@ -162,6 +162,12 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   카나리 OFF 청산·레버리지/마진 변경은 밴드를 타지 않는다. 주문 실패 시엔 밴드와 무관하게 rebalancing_needed 유지.
 - cash buffer: 1% (CASH_BUFFER). 값은 `binance_state.json` 의 `fut_cash_buffer` 로 읽고,
   코드 기본값(`CASH_BUFFER_DEFAULT`)도 같은 1% 다.
+- 코인당 상한 cap=1/3 은 선정 경로만이 아니라 리필 경로에도 건다 (2026-10-02). 스냅샷 안에
+  저장되는 목표 비중에 적용하고, 채울 후보가 빈 자리 수보다 적어 못 나눈 몫은 현금에 남긴다.
+  코인당 받는 몫 = `min(replaced/후보수, max(0, cap - 그 코인의 기존 비중))`. 풀·정렬·BTC 취급·
+  선발 수·리필 발화 조건은 안 바꾼다. 이미 상한을 넘겨 저장된 비중은 소급해서 안 줄인다
+  (다음 정규 갱신까지 유지). 구현 `trade/auto_trade_binance.py` apply_refill_v2_fut 와
+  `strategies/cap_defend/backtest_futures_v25.py` 리필 블록, 시험 `trade/test_fut_refill_cap.py`.
 
 ### V24 → V25 마이그레이션 (2026-05-28)
 

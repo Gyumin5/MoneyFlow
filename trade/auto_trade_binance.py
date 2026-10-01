@@ -1107,9 +1107,24 @@ def apply_refill_v2_fut(state: Dict, data: Dict[str, Dict[str, pd.DataFrame]]) -
                 n_failed = max(1, n_failed)
                 if fresh_picks:
                     picks_made = fresh_picks[:n_failed]
-                    w_per = replaced / len(picks_made)
+                    # 코인당 상한 CAP 은 선정 경로만이 아니라 리필 경로에도 건다.
+                    # 채울 후보가 빈 자리 수보다 적으면 한 코인이 빈 비중을 통째로
+                    # 받아 CAP 을 넘는다. 넓은 풀을 쓰는 지금 규칙에서는 후보가
+                    # 모자란 적이 없어 실제로 걸린 적은 없지만(5.97년 BT 0건),
+                    # 상한이 없는 것과 안 걸리는 것은 다르다. 못 나눈 몫은 현금으로.
+                    placed = 0.0
                     for c in picks_made:
-                        new_sn[c] = new_sn.get(c, 0.0) + w_per
+                        room = max(0.0, CAP - new_sn.get(c, 0.0))
+                        w_c = min(replaced / len(picks_made), room)
+                        if w_c <= 0:
+                            continue
+                        new_sn[c] = new_sn.get(c, 0.0) + w_c
+                        placed += w_c
+                    leftover = replaced - placed
+                    if leftover > 1e-12:
+                        new_sn['CASH'] = new_sn.get('CASH', 0.0) + leftover
+                        log.info(f"refill v2 [{strat_name}] snap[{si}]: CAP 상한으로 "
+                                 f"{leftover:.4f} 를 현금에 남긴다 (picks={picks_made})")
                 else:
                     new_sn['CASH'] = new_sn.get('CASH', 0.0) + replaced
             new_snaps.append(new_sn)

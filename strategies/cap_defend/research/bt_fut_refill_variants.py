@@ -117,6 +117,10 @@ ARMS_POLICY: list[tuple[str, dict]] = [
     ("V3 건강풀 모멘텀순", dict(REFILL_POLICY="v3volmom")),
     ("V4 탈락스냅 재선정", dict(REFILL_POLICY="v4snap")),
     ("V5 전스냅 재선정", dict(REFILL_POLICY="v5all")),
+    ("현행+상한만", dict(REFILL_CAP="1")),
+    (LIVE, dict(REFILL_POOL="wide", REFILL_ORDER="mom", REFILL_EXCL_BTC="1")),
+    ("라이브규칙+상한", dict(REFILL_POOL="wide", REFILL_ORDER="mom",
+                      REFILL_EXCL_BTC="1", REFILL_CAP="1")),
     (CUR, {}),
 ]
 
@@ -132,6 +136,10 @@ PAIRS: list[tuple[str, str]] = [
     ("V3 건강풀 모멘텀순", "V2 넓은풀 시총순 상한"),
     ("V4 탈락스냅 재선정", "V2 넓은풀 시총순 상한"),
     ("V5 전스냅 재선정", "V2 넓은풀 시총순 상한"),
+    ("현행+상한만", CUR),
+    ("V2 넓은풀 시총순 상한", "현행+상한만"),
+    ("라이브규칙+상한", LIVE),
+    ("현행+상한만", "라이브규칙+상한"),
 ]
 
 AXES: dict[str, list[tuple[str, dict]]] = {
@@ -141,12 +149,12 @@ AXES: dict[str, list[tuple[str, dict]]] = {
 ENV_KEYS = ("DRIFT_HEALTH_MODE", "REFILL_FAIL_MODE",
             "REFILL_FAIL_SMA_S", "REFILL_FAIL_SMA_L", "REFILL_ORDER",
             "REFILL_POOL", "REFILL_EXCL_BTC", "REFILL_MCAP_LAG",
-            "REFILL_MCAP_SWAP", "REFILL_POLICY", "DRIFT_CASH_REFILL")
+            "REFILL_MCAP_SWAP", "REFILL_POLICY", "DRIFT_CASH_REFILL", "REFILL_CAP")
 ENV_DEFAULT = dict(DRIFT_HEALTH_MODE="refill", REFILL_FAIL_MODE="mom2",
                    REFILL_FAIL_SMA_S="18", REFILL_FAIL_SMA_L="127",
                    REFILL_ORDER="bt", REFILL_POOL="fresh", REFILL_EXCL_BTC="0",
                    REFILL_MCAP_LAG="0", REFILL_MCAP_SWAP="0",
-                   REFILL_POLICY="", DRIFT_CASH_REFILL="off")
+                   REFILL_POLICY="", DRIFT_CASH_REFILL="off", REFILL_CAP="0")
 
 
 def set_env(over: dict) -> None:

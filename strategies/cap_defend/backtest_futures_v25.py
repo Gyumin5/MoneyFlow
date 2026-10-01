@@ -1000,9 +1000,23 @@ def run(bars, funding, interval='D', leverage=3.0,
                                 n_failed = max(1, len(sn_coins) - (len(new_sn) - 1))
                                 if fresh_picks:
                                     picks = fresh_picks[:n_failed]
-                                    w_per = replaced_w / len(picks)
+                                    # 코인당 상한 cap 은 선정 경로만이 아니라 리필
+                                    # 경로에도 건다. 채울 후보가 빈 자리 수보다 적으면
+                                    # 한 코인이 빈 비중을 통째로 받아 cap 을 넘는다
+                                    # (5.97년 × 앵커 7곳에서 24건, 최대 0.667).
+                                    # 못 나눈 몫은 현금으로 남긴다. 라이브
+                                    # auto_trade_binance.apply_refill_v2_fut 와 같은 식.
+                                    placed = 0.0
                                     for c in picks:
-                                        new_sn[c] = new_sn.get(c, 0) + w_per
+                                        room = max(0.0, cap - new_sn.get(c, 0))
+                                        w_c = min(replaced_w / len(picks), room)
+                                        if w_c <= 0:
+                                            continue
+                                        new_sn[c] = new_sn.get(c, 0) + w_c
+                                        placed += w_c
+                                    leftover = replaced_w - placed
+                                    if leftover > 1e-12:
+                                        new_sn['CASH'] = new_sn.get('CASH', 0) + leftover
                                 else:
                                     new_sn['CASH'] = new_sn.get('CASH', 0) + replaced_w
                         snapshots[si] = new_sn
