@@ -1,0 +1,97 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 6a0d963..7a485de 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -344,6 +344,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+     canary_on_bar = None
+     pfd_done = True
+     rebal_count = 0
++    refill_drops = 0   # 측정용 (2026-10-01): refill 이 떨어뜨린 스냅-코인 수
++    refill_days = 0    # 측정용 (2026-10-01): 하나라도 떨어뜨린 날 수
+     liq_count = 0
+     liq_log = []
+     trade_count = 0
+@@ -969,17 +971,51 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 if _drift_refill:
+                     # 사용자 결정: 두 mom 모두 음수면 fail (vol 무시).
+                     # 메모리 Do-Not-Repeat: health-fail 에 vol 포함 금지.
+-                    def _is_failed(coin):
++                    # ─ 측정용 변형 (2026-10-01, 끝나면 되돌린다) ─
++                    #   REFILL_FAIL_MODE = 'mom2'(현행) | 'smacross'
++                    #   REFILL_FAIL_SMA_S / _L = 교차에 쓸 이동평균 기간
++                    #   REFILL_ORDER = 'bt'(현행: fresh 픽 알파벳) | 'alpha' | 'mom' | 'mcap'
++                    _rf_mode = _os.environ.get('REFILL_FAIL_MODE', 'mom2')
++                    _rf_s = int(_os.environ.get('REFILL_FAIL_SMA_S', '18'))
++                    _rf_l = int(_os.environ.get('REFILL_FAIL_SMA_L', '127'))
++                    _rf_order = _os.environ.get('REFILL_ORDER', 'bt')
++                    _rf_minbars = (max(mom30, mom90) if _rf_mode != 'smacross'
++                                   else max(mom30, mom90, _rf_l))
++
++                    def _closed(coin):
+                         df_c = bars.get(coin)
+-                        if df_c is None: return True
++                        if df_c is None: return None
+                         ci_c = df_c.index.get_indexer([prev_date], method='ffill')[0]
+-                        if ci_c < 0 or ci_c < max(mom30, mom90): return True
+-                        c_arr = df_c['Close'].values[:ci_c+1]
++                        if ci_c < 0 or ci_c < _rf_minbars: return None
++                        return df_c['Close'].values[:ci_c+1]
++
++                    def _is_failed(coin):
++                        c_arr = _closed(coin)
++                        if c_arr is None: return True
++                        if _rf_mode == 'smacross':
++                            return calc_sma(c_arr, _rf_s) < calc_sma(c_arr, _rf_l)
+                         ms = calc_mom(c_arr, mom30)
+                         ml = calc_mom(c_arr, mom90)
+                         return ms < 0 and ml < 0
+-                    fresh = _compute_weights(prev_date)
+-                    healthy_coins = sorted([c for c in fresh.keys() if c != 'CASH'])
++
++                    if _rf_order == 'bt':
++                        fresh = _compute_weights(prev_date)
++                        healthy_coins = sorted([c for c in fresh.keys() if c != 'CASH'])
++                    else:
++                        # 라이브 정합 풀: 두 모멘텀 모두 양수인 전 후보(변동성 조건 없음).
++                        _pool = []
++                        for _c in get_mcap(prev_date):
++                            _a = _closed(_c)
++                            if _a is None: continue
++                            _ms = calc_mom(_a, mom30)
++                            if _ms > 0 and calc_mom(_a, mom90) > 0:
++                                _pool.append((_c, _ms))
++                        if _rf_order == 'mom':
++                            _pool.sort(key=lambda x: (-x[1], x[0]))
++                        elif _rf_order == 'alpha':
++                            _pool.sort(key=lambda x: x[0])
++                        healthy_coins = [c for c, _ in _pool]
++                    _rf_day_hit = False
+                     for si in range(n_snapshots):
+                         sn = snapshots[si]
+                         sn_coins = sorted([c for c in sn.keys() if c != 'CASH'])
+@@ -990,6 +1026,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+                                 new_sn[c] = sn[c]
+                             else:
+                                 replaced_w += sn[c]
++                                refill_drops += 1
++                                _rf_day_hit = True
+                         new_sn['CASH'] = sn.get('CASH', 0)
+                         if replaced_w > 0:
+                             if _drift_cash_only:
+@@ -1006,6 +1044,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+                                 else:
+                                     new_sn['CASH'] = new_sn.get('CASH', 0) + replaced_w
+                         snapshots[si] = new_sn
++                    if _rf_day_hit:
++                        refill_days += 1
+                     # combined 재계산
+                     combined = _merge_snapshots()
+                 # V25 옵션 B: CASH 슬롯 refill (drift 발화 + 빈 CASH 슬롯 + fresh healthy 존재 시)
+@@ -1112,6 +1152,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+     result = {
+         'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
+         'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,
++        'RefillDrops': refill_drops, 'RefillDays': refill_days,
+         'Stops': stop_count, 'Stop': stop_count,
+         'Cat': cat_stop_count, 'Cushion': cushion_force_count, 'GrossCap': gross_cap_count,
+     }
