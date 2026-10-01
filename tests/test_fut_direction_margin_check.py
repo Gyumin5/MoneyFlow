@@ -125,8 +125,93 @@ check('T13 버퍼 누락분은 허용폭보다 작다(그래서 조용히 먹힌
 print(f"  버퍼 누락 시 상시 어긋남 ${gap:.2f} / 허용폭 ${tol:.2f} "
       f"= 폭의 {gap / tol:.0%}")
 
+# ─────────────────────────────────────────────────────────────
+# 2026-10-01 실사고. 위 마진모드 검사를 올린 첫 정규 실행에서 보유 다섯 종목 전부
+# "마진모드 조회 불명" 이 떴다(success=False, streak=1, 사흘이면 자동 잠금).
+# 원인은 포지션 상세 조회의 응답에 마진모드가 아예 없다는 것이다 — 실측 키 목록에
+# marginType 도 isolated 도 없다. 마진모드를 들고 있는 것은 계좌 응답의 isolated
+# (bool) 뿐이고, 같은 실행의 verify_margin 은 그 경로를 써서 cross 를 정확히 읽었다.
+# 그래서 포지션 스냅샷도 계좌 응답에서 만든 표를 되돌림으로 쓴다.
+print("\n# 마진모드 출처 (2026-10-01 회귀)")
+
+
+def _acct(rows):
+    return {'totalWalletBalance': '10000', 'totalUnrealizedProfit': '0',
+            'totalPositionInitialMargin': '500', 'totalMaintMargin': '50',
+            'positions': rows}
+
+
+class FakeClient:
+    """계좌 응답과 포지션 상세를 따로 주는 가짜 거래소. 망 미사용."""
+
+    def __init__(self, acct_rows, detail_rows):
+        self._acct_rows = acct_rows
+        self._detail = detail_rows
+
+    def futures_account(self):
+        return _acct(self._acct_rows)
+
+    def futures_position_information(self):
+        return self._detail
+
+    def futures_symbol_ticker(self):
+        return [{'symbol': 'BTCUSDT', 'price': '100'}]
+
+
+# 실측 그대로 — 상세 행에는 마진모드 키가 없다.
+DETAIL_NO_MARGIN = [{
+    'symbol': 'BTCUSDT', 'positionAmt': '1.0', 'markPrice': '100',
+    'notional': '100', 'positionInitialMargin': '50', 'entryPrice': '100',
+    'unRealizedProfit': '0', 'liquidationPrice': '0', 'positionSide': 'BOTH',
+}]
+
+
+def snap(acct_rows, detail_rows=None):
+    pos, _pv, ok = a.get_current_positions(
+        FakeClient(acct_rows, detail_rows if detail_rows is not None
+                   else DETAIL_NO_MARGIN))
+    return pos, ok
+
+
+p, ok = snap([{'symbol': 'BTCUSDT', 'positionAmt': '1.0', 'isolated': False}])
+check('T14 상세에 마진모드가 없어도 계좌 응답으로 cross 를 읽는다',
+      ok and p.get('BTC', {}).get('margin_mode') == 'cross',
+      p.get('BTC', {}).get('margin_mode'))
+
+p, ok = snap([{'symbol': 'BTCUSDT', 'positionAmt': '1.0', 'isolated': True}])
+check('T15 계좌 응답이 isolated 면 isolated 로 읽는다',
+      ok and p.get('BTC', {}).get('margin_mode') == 'isolated',
+      p.get('BTC', {}).get('margin_mode'))
+
+# 되돌림이 "무조건 cross" 가 아니라는 양성 대조. 계좌 행에도 마진모드가 없으면
+# 불명을 그대로 남긴다 — 없는 값을 cross 로 채우면 검사가 조용히 통과한다.
+p, ok = snap([{'symbol': 'BTCUSDT', 'positionAmt': '1.0'}])
+check('T16 양쪽 어디에도 없으면 조회 불명을 유지한다',
+      ok and p.get('BTC', {}).get('margin_mode') is None,
+      (ok, p.get('BTC', {}).get('margin_mode')))
+
+_d = [dict(DETAIL_NO_MARGIN[0], marginType='isolated')]
+p, ok = snap([{'symbol': 'BTCUSDT', 'positionAmt': '1.0', 'isolated': False}], _d)
+check('T17 상세에 값이 있으면 그쪽이 우선이다 (되돌림이 덮지 않는다)',
+      ok and p.get('BTC', {}).get('margin_mode') == 'isolated',
+      p.get('BTC', {}).get('margin_mode'))
+
+# 사고 재현 — 이 스냅샷이 체결 검사를 그대로 통과해야 한다.
+p, _ok = snap([{'symbol': 'BTCUSDT', 'positionAmt': '1.0', 'isolated': False}])
+_actual = {'positions': {'BTCUSDT': dict(p['BTC'], notional=1000.0, leverage=3)}}
+_intent = {'positions': {'BTCUSDT': {'notional': 1000.0, 'leverage': 3}},
+           'margin_type': 'CROSSED'}
+d = a._v25_exec_reconcile(_intent, _actual)
+check('T18 cross 계좌의 정상 실행에 마진모드 경보가 안 뜬다', d == [], d)
+
+p, _ok = snap([{'symbol': 'BTCUSDT', 'positionAmt': '1.0', 'isolated': True}])
+_actual_iso = {'positions': {'BTCUSDT': dict(p['BTC'], notional=1000.0, leverage=3)}}
+d = a._v25_exec_reconcile(_intent, _actual_iso)
+check('T19 진짜 isolated 는 여전히 잡는다 (되돌림이 검사를 무력화하지 않는다)',
+      has(d, 'BTCUSDT', '마진모드', 'isolated'), d)
+
 print()
 if FAILS:
     print(f"실패 {len(FAILS)}건: {FAILS}")
     sys.exit(1)
-print("ALL PASS (T1~T13)")
+print("ALL PASS (T1~T19)")

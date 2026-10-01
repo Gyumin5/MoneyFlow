@@ -1223,6 +1223,10 @@ def get_current_positions(client: Client):
             # 남아 있으면 통과해버린다. 없으면(응답에 목록 자체가 없으면) None 으로 두고
             # 아래 증거금 대조만 한다.
             acct_symbols: Optional[set] = None
+            # 심볼 → 마진모드. 아래 포지션 상세(futures_position_information)에는 이 값이
+            # 아예 없다 — 2026-10-01 실측 키 목록에 marginType 도 isolated 도 없고,
+            # 마진모드를 들고 있는 것은 이 계좌 응답의 isolated(bool) 뿐이다.
+            _acct_margin: Dict[str, str] = {}
             _acct_rows = info.get('positions')
             if isinstance(_acct_rows, list) and _acct_rows:
                 acct_symbols = set()
@@ -1233,6 +1237,15 @@ def get_current_positions(client: Client):
                             f"계좌 포지션 행 수량 비정상: {_r.get('symbol')} {_r.get('positionAmt')!r}")
                     if _amt != 0 and _r.get('symbol'):
                         acct_symbols.add(_r['symbol'])
+                    _rsym = _r.get('symbol')
+                    if _rsym:
+                        if 'isolated' in _r:
+                            _acct_margin[_rsym] = ('isolated' if bool(_r.get('isolated'))
+                                                   else 'cross')
+                        elif _r.get('marginType'):
+                            _mnorm = _MARGIN_NORM.get(str(_r.get('marginType')).lower())
+                            if _mnorm:
+                                _acct_margin[_rsym] = _mnorm
 
             # futures_account()['positions']는 markPrice/unRealizedProfit이 null로 오는 경우가 있어
             # 포지션 상세는 futures_position_information() 기준으로 읽는다.
@@ -1274,12 +1287,15 @@ def get_current_positions(client: Client):
                     # futures_position_information 은 marginType(str), futures_account 는 isolated(bool).
                     # 셋을 가른다 — isolated / cross / 조회 불명. 불명을 cross 로 적으면
                     # 그 심볼의 마진모드 검사가 조용히 통과한다(2026-09-30 토론 지적).
+                    # 2026-10-01 실측: 이 응답(futures_position_information)에는 마진모드가
+                    # 없다. 그래서 계좌 응답에서 만든 표를 되돌림으로 쓴다 — 그 표도 없으면
+                    # 조회 불명(None)이다. 상세 조회의 값이 있으면 그게 우선이다.
                     if 'isolated' in p:
                         _margin_mode = 'isolated' if bool(p.get('isolated')) else 'cross'
                     elif p.get('marginType'):
                         _margin_mode = _MARGIN_NORM.get(str(p.get('marginType')).lower())
                     else:
-                        _margin_mode = None
+                        _margin_mode = _acct_margin.get(sym)
                     _iso = (_margin_mode == 'isolated')
                     positions[coin] = {
                         'qty': amt,
