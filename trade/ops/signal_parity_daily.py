@@ -24,7 +24,12 @@
 2 를 0 처럼 넘기지 않는 게 요점이다. 데이터가 밀린 채 옛 날짜만 비교하면
 감시는 매일 통과를 찍으면서 아무것도 안 보게 된다. 2 로 올리는 것 넷 —
 데이터가 기대 신호일에 안 닿음, 집 사본과 서버 배포본의 판본 차이,
-양성 대조 실패(감시가 불일치를 못 잡는 상태), 예기치 못한 예외.
+자기시험 실패(감시가 불일치를 못 잡는 상태), 예기치 못한 예외.
+
+자기시험은 그날 정상 대조를 먼저 내고 기록한 뒤에 돈다. 순서가 반대면 자기시험이
+실패한 날에 그날 선정이 맞았는지 자체가 계산되지 않는다. 선물 쪽 자기시험은 실데이터가
+아니라 시장과 무관한 합성 일봉을 쓴다 — 실데이터를 흔드는 방식은 그날 뽑힌 종목이
+그대로면 아무것도 증명하지 못한다(180 신호일 중 130일, 2026-10-03 실측).
 
 쓰기:
   python3 trade/ops/signal_parity_daily.py                  # 셋 다, 최근 3 신호일
@@ -104,6 +109,33 @@ REF_UNIVERSE = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOGE', 'DOT',
 FUT_STATE_REMOTE = '/home/ubuntu/binance_state.json'
 FUT_STATE_MEMBER = 'D_SMA42'
 SNAP_TOL = 1e-9
+
+
+# 선물 자기시험용 합성 일봉. 시장과 무관하게 고정된 값이라 그날 국면에 따라 둔감해지지
+# 않는다 — 라이브가 뽑은 종목이 무엇이든, 전액 현금인 날이든 똑같이 돈다.
+# 두 벌을 만든다: 비트코인만 일정 복리로 오르는 벌과 내리는 벌. 나머지 후보는 전부
+# 아주 느리게 내려서 어느 벌에서도 건강 판정을 통과하지 못한다.
+# 날짜도 고정이다. 오늘 날짜를 쓰면 자기시험 결과가 날짜에 따라 달라질 수 있는데,
+# 자기시험은 그런 축이 하나도 없어야 매일 같은 것을 증명한다.
+SYN_START = '2025-01-01'
+SYN_BARS = 300            # 워밍업(장기 모멘텀 127봉)과 백테스트 시작 지연(43봉)을 다 덮는다
+SYN_BASE = 100.0
+SYN_RATE = 0.004          # 비트코인 하루 복리 변화율 (±0.4%)
+SYN_FLAT_RATE = 0.0005    # 나머지 후보 하루 복리 하락률 (-0.05%)
+SYN_NAME = {True: '상승', False: '하락'}
+
+# 미리 정한 기대 목표. 합성 입력이 무엇을 내야 하는지를 엔진에 묻지 않고 먼저 적는다 —
+# 양쪽이 같은 답을 내는 것만 보면 둘이 같이 틀린 경우를 통과시킨다.
+#   상승 = 카나리 ON, 건강한 코인은 비트코인 하나 → 상한 1/3 + 나머지 현금
+#   하락 = 카나리 OFF → 전액 현금
+SYN_EXPECT = {
+    True: {'BTC': round(1 / 3, 6), 'CASH': round(2 / 3, 6)},
+    False: {'CASH': 1.0},
+}
+
+# 보조 대조(판정에 안 쓴다)에서 실데이터 보유 코인을 떨구는 세기와 길이.
+AUX_TAIL = 128
+AUX_RATE = 0.03
 
 
 class ParityDataStale(Exception):
@@ -202,6 +234,97 @@ def _run_live(bars, universe, keep_dates):
         if sig_date in keep:
             out[sig_date] = _norm(combined)
     return out
+
+
+def _compare_fut(bt_bars, bt_funding, universe, required_day, days,
+                 live_bars=None, live=None):
+    """엔진 둘을 돌려 한 번 대조한다. 정상 실행과 자기시험이 같이 쓰는 길이다.
+
+    같은 길을 쓰는 게 요점이다 — 자기시험이 별도 경로로 판정하면 "자기시험은 통과하는데
+    정상 실행은 다른 코드로 돈다" 가 되어 증명이 성립하지 않는다.
+
+    live 를 주면 라이브 재생을 생략한다. 백테스트 쪽 입력만 흔드는 교란에서 라이브 답은
+    안 바뀌므로 같은 계산을 두 번 하지 않는다.
+    """
+    end_date = str(bt_bars['BTC'].index[-1])[:10]
+    bt = _run_bt(bt_bars, bt_funding, universe, end_date)
+    if live is None:
+        # 기대 신호일은 반드시 비교한다. 그 앞으로 N-1 개를 더 본다.
+        wanted = sorted(d for d in bt if d <= required_day)[-max(1, days):]
+        if required_day not in wanted:
+            wanted.append(required_day)
+        live = _run_live(live_bars if live_bars is not None else bt_bars, universe, wanted)
+    rc, compared, mismatched, why = decide(bt, live, required_day, days)
+    return {'rc': rc, 'compared': compared, 'mismatched': mismatched,
+            'why': why, 'bt': bt, 'live': live}
+
+
+def synthetic_bars(universe, rising: bool):
+    """시장과 무관한 합성 일봉 한 벌. 실제 입력 형식(일봉 OHLCV)과 실제 유니버스를 쓴다."""
+    import numpy as np
+    import pandas as pd
+
+    idx = pd.date_range(SYN_START, periods=SYN_BARS, freq='D')
+    steps = np.arange(SYN_BARS)
+    btc = SYN_BASE * np.power(1.0 + (SYN_RATE if rising else -SYN_RATE), steps)
+    flat = SYN_BASE * np.power(1.0 - SYN_FLAT_RATE, steps)
+    out = {}
+    for coin in universe:
+        px = btc if coin == 'BTC' else flat
+        out[coin] = pd.DataFrame({'Open': px, 'High': px, 'Low': px, 'Close': px,
+                                  'Volume': np.full(SYN_BARS, 1e9)}, index=idx)
+    return out
+
+
+def synthetic_facts(syn, rising: bool):
+    """합성 일봉이 의도한 조건을 실제로 만드는지 생성 뒤에 직접 잰다.
+
+    세기를 눈대중으로 박아두면 다음에 파라미터가 바뀌었을 때 조용히 둔감해진다.
+    그래서 카나리 문턱·모멘텀 부호·변동성 상한을 매 실행에서 다시 재고,
+    하나라도 안 맞으면 통과가 아니라 실패로 돌린다.
+
+    반환 (만족하나, 설명).
+    """
+    import numpy as np
+
+    sma_p = _FUT['sma_bars']
+    hyst = _FUT['canary_hyst']
+    mom_s, mom_l = _FUT['mom_short_bars'], _FUT['mom_long_bars']
+    vol_th = _FUT['vol_threshold']
+
+    btc = syn['BTC']['Close'].values[:-1]          # 마지막 봉은 진행중 — 신호일까지만
+    ratio = float(btc[-1] / np.mean(btc[-sma_p:]))
+    m_short = float(btc[-1] / btc[-mom_s - 1] - 1)
+    m_long = float(btc[-1] / btc[-mom_l - 1] - 1)
+    vol = float(np.std(np.diff(np.log(btc[-90:]))))
+
+    other = next((c for c in syn if c != 'BTC'), None)
+    if other is None:
+        return False, '합성 유니버스에 비트코인 말고 다른 후보가 없다'
+    flat = syn[other]['Close'].values[:-1]
+    flat_short = float(flat[-1] / flat[-mom_s - 1] - 1)
+    flat_long = float(flat[-1] / flat[-mom_l - 1] - 1)
+
+    detail = (f'{SYN_NAME[rising]} 합성: 비트코인 종가/평균선 {ratio:.4f} '
+              f'(문턱 {1 + hyst:.3f}·{1 - hyst:.3f}) · 단기모멘텀 {m_short:+.3f} · '
+              f'장기모멘텀 {m_long:+.3f} · 변동성 {vol:.4f} (상한 {vol_th}) · '
+              f'나머지 후보 단기 {flat_short:+.3f} 장기 {flat_long:+.3f}')
+
+    if flat_short >= 0 or flat_long >= 0:
+        return False, detail + ' — 나머지 후보가 건강 판정을 통과해 버린다'
+    if rising:
+        if ratio <= 1 + hyst:
+            return False, detail + ' — 카나리를 켤 만큼 안 올랐다'
+        if m_short <= 0 or m_long <= 0:
+            return False, detail + ' — 비트코인 모멘텀이 양수가 아니다'
+        if vol > vol_th:
+            return False, detail + ' — 비트코인 변동성이 상한을 넘는다'
+    else:
+        if ratio >= 1 - hyst:
+            return False, detail + ' — 카나리를 끌 만큼 안 내렸다'
+        if m_short >= 0 or m_long >= 0:
+            return False, detail + ' — 비트코인 모멘텀이 음수가 아니다'
+    return True, detail
 
 
 def decide(bt: dict, live: dict, required_day, days: int):
@@ -313,43 +436,93 @@ def server_build_matches(timeout_sec: int = 30, files=None):
     return True, '집·서버 같은 판 (' + ' · '.join(shown) + ')'
 
 
-def self_check(allow_stale_days: int):
-    """양성 대조 — 한쪽을 일부러 틀리게 해서 이 감시가 실제로 불일치를 잡는지 본다.
+def self_check(universe):
+    """자기시험 — 시장과 무관한 합성 일봉을 두 엔진에 넣어 이 감시가 실제로 도는지 본다.
 
-    매일 같이 돌린다. 감시가 고장나는 가장 흔한 방식은 경보가 뜨는 게 아니라
-    무엇을 비교하든 늘 "같다" 를 찍게 되는 것이고, 그건 정상 실행만 보고는 구분이 안 된다.
+    감시가 고장나는 가장 흔한 방식은 경보가 뜨는 게 아니라 무엇을 비교하든 늘 "같다" 를
+    찍게 되는 것이고, 그건 정상 실행만 보고는 구분이 안 된다. 그래서 매일 같이 돌린다.
 
-    무엇을 틀리게 하느냐가 중요하다. 라이브 쪽 단기 모멘텀 기간을 쓴다 — 헬스 판정에
-    바로 들어가서 보유 종목을 바꾸므로, 어떤 시장 국면에서도 목표가 달라진다.
-    카나리 SMA 기간이나 장기 모멘텀 기간은 못 쓴다 — 비트코인이 SMA 에서 멀리 떨어진
-    날에는 기간을 바꿔도 카나리가 그대로 켜져 있고 상위 두 종목도 그대로라,
-    안 잡혀도 감시 고장이 아니라 그날의 둔감함이다(2026-09-29 실측).
+    실데이터를 흔드는 방식은 안 쓴다. 파라미터든 가격이든, 그날 뽑힌 종목이 그대로면
+    목표가 안 바뀌어서 "감시 고장" 과 "그날의 둔감함" 이 구분되지 않는다 — 단기 모멘텀
+    기간을 흔드는 방식은 180 신호일 중 130일(72.2%)에서 아무것도 증명하지 못했다.
+    합성 입력은 그 축이 없다. 시장 국면도 보유 종목도 날짜도 결과를 바꾸지 않는다.
+
+    넷을 다 요구한다 — 둘은 교란이 없을 때 거짓 경보가 안 나는지(음성 대조), 둘은
+    한쪽만 흔들었을 때 반드시 잡히는지(양성 대조)다. 방향도 양쪽 다 본다.
+    기대 목표는 엔진에 묻지 않고 미리 정해 둔 값과 맞춘다(SYN_EXPECT) — 양쪽이 같은
+    답을 내는 것만 보면 둘이 같이 틀린 경우가 통과한다.
 
     반환 (통과했나, 설명).
     """
-    import contextlib
-    import io
+    syn = {}
+    facts = {}
+    for rising in (True, False):
+        syn[rising] = synthetic_bars(universe, rising)
+        ok, detail = synthetic_facts(syn[rising], rising)
+        facts[rising] = detail
+        if not ok:
+            return False, f'합성 일봉이 의도한 조건을 못 만든다 — {detail}'
 
-    import auto_trade_binance as atb
+    required = syn[True]['BTC'].index[-2]      # 마지막 봉은 진행중, 그 앞이 신호일
+    end_date = str(syn[True]['BTC'].index[-1])[:10]
 
-    key = 'mom_short_bars'
-    original = atb.STRATEGIES['D_SMA42'].get(key)
-    atb.STRATEGIES['D_SMA42'][key] = 40
-    try:
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            rc = check_fut(days=1, allow_stale_days=allow_stale_days,
-                           check_server=False, self_test=False)
-    finally:
-        if original is None:
-            atb.STRATEGIES['D_SMA42'].pop(key, None)
-        else:
-            atb.STRATEGIES['D_SMA42'][key] = original
+    bt, live = {}, {}
+    for rising in (True, False):
+        bt[rising] = _run_bt(syn[rising], {}, universe, end_date)
+        live[rising] = _run_live(syn[rising], universe, [required])
+        for side, got in (('백테스트', bt[rising]), ('라이브', live[rising])):
+            if required not in got:
+                return False, (f'{SYN_NAME[rising]} 합성에서 {side} 가 기대 신호일 '
+                               f'{str(required)[:10]} 의 목표를 안 냈다')
+            if got[required] != SYN_EXPECT[rising]:
+                return False, (f'{SYN_NAME[rising]} 합성에서 {side} 목표가 '
+                               f'{got[required]} 로 나왔다 — 미리 정한 '
+                               f'{SYN_EXPECT[rising]} 과 다르다. {facts[rising]}')
 
-    if rc == 1:
-        return True, f'라이브 {key} 를 {original}→40 으로 틀리자 불일치로 잡혔다'
-    return False, (f'라이브 {key} 를 {original}→40 으로 틀렸는데 rc={rc} 가 나왔다 — '
-                   '이 감시는 불일치를 못 잡는다')
+    shown = []
+    for live_r, bt_r, want in ((True, True, 0), (False, False, 0),
+                               (True, False, 1), (False, True, 1)):
+        rc, _compared, _bad, _why = decide(bt[bt_r], live[live_r], required, 1)
+        tag = f'라이브 {SYN_NAME[live_r]}·백테스트 {SYN_NAME[bt_r]}'
+        if rc != want:
+            kind = '교란이 없는데 불일치가 났다' if want == 0 else '이 감시는 불일치를 못 잡는다'
+            return False, f'{tag} 에서 판정 {rc} 가 나왔다 (기대 {want}) — {kind}'
+        shown.append(f'{tag}→{rc}')
+    return True, ('합성 일봉 네 갈래가 전부 기대대로 (' + ' · '.join(shown) + '). '
+                  + facts[True] + ' / ' + facts[False])
+
+
+def aux_check(bars, funding, universe, required_day, days, live_target, live):
+    """보조 대조 — 실데이터에서 그날 보유한 코인 하나의 종가를 떨궈 본다. 판정에 안 쓴다.
+
+    합성 입력이 못 보는 것을 본다: 실제 가격 배열, 실제 날짜, 그날 실제로 뽑힌 종목.
+    대신 그날 선정이 이 축에 둔감하면 안 잡히는데 그건 감시 고장이 아니다 — 그래서
+    결과를 기록만 하고 판정에는 쓰지 않는다. 필수 자기시험은 위의 합성 쪽이다.
+
+    정상 대조가 일치일 때만 부른다. 이미 불일치인 날에 교란을 얹어 나온 불일치를
+    "교란이 잡혔다" 로 읽으면 안 되기 때문이다.
+    """
+    import numpy as np
+
+    held = [c for c in sorted(live_target) if c != 'CASH']
+    if not held:
+        return '해당 없음 — 그날 목표가 전액 현금이라 떨굴 코인이 없다'
+    victim = held[0]
+    df = bars[victim].copy()                   # 흔드는 것 하나만 사본을 뜬다
+    tail = min(AUX_TAIL, len(df))
+    ramp = np.concatenate([np.ones(len(df) - tail),
+                           np.power(1.0 - AUX_RATE, np.arange(1, tail + 1))])
+    for col in ('Open', 'High', 'Low', 'Close'):
+        if col in df.columns:
+            df[col] = df[col].values.astype(float) * ramp
+    fake = dict(bars)                          # 겉 사전만 얕은 사본 — 원본은 안 건드린다
+    fake[victim] = df
+    res = _compare_fut(fake, funding, universe, required_day, days, live=live)
+    if res['rc'] == 1:
+        return (f'백테스트 쪽 {victim} 최근 {tail}봉을 하루 {AUX_RATE:.0%} 복리로 '
+                '떨구자 불일치로 잡혔다')
+    return (f'백테스트 쪽 {victim} 최근 {tail}봉을 하루 {AUX_RATE:.0%} 복리로 떨궜는데 '
+            f'판정 {res["rc"]} 가 나왔다 — 그날 선정이 이 축에 둔감하다 (판정에 안 쓴다)')
 
 
 def _norm_risky(weights: dict) -> dict:
@@ -611,12 +784,6 @@ def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
         if not same:
             raise ParityDataStale(why)
 
-    if self_test:
-        passed, why = self_check(allow_stale_days)
-        print(f'양성 대조: {why}')
-        if not passed:
-            raise ParityDataStale(why)
-
     bars, funding = ub.load_data('D')
     last, expected, lag = _check_freshness(bars, allow_stale_days)
     print(f'데이터 마지막 봉 {last.date()} · 기대 신호일 {expected.date()} · 지연 {lag}일')
@@ -624,19 +791,12 @@ def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
     universe = [c for c in REF_UNIVERSE if c in bars]
     print(f'고정 유니버스 {len(universe)}종')
 
-    end_date = str(bars['BTC'].index[-1])[:10]
-    bt = _run_bt(bars, funding, universe, end_date)
-
-    # 기대 신호일은 반드시 비교한다. 그 앞으로 N-1 개를 더 본다.
-    wanted = sorted(d for d in bt if d <= expected)[-max(1, days):]
-    if expected not in wanted:
-        wanted.append(expected)
-    live = _run_live(bars, universe, wanted)
-
-    rc, compared, mismatched, why = decide(bt, live, expected, days)
-
-    for sig_date in compared:
-        if sig_date in mismatched:
+    # 오늘의 정상 대조를 먼저 내고 기록한다. 자기시험을 앞에 두면 그게 실패한 날에는
+    # 그날 선정이 맞았는지 자체가 계산되지 않아, 사람이 볼 수 있었던 사실이 사라진다.
+    res = _compare_fut(bars, funding, universe, expected, days)
+    bt, live = res['bt'], res['live']
+    for sig_date in res['compared']:
+        if sig_date in res['mismatched']:
             print(f'  {str(sig_date)[:10]}  다름')
             print(f'      백테스트 {bt[sig_date]}')
             print(f'      라이브   {live[sig_date]}')
@@ -644,12 +804,39 @@ def check_fut(days: int, allow_stale_days: int, check_server: bool = True,
             # 같을 때도 값을 찍는다 — 서버 실행 로그의 그날 선정과 눈으로 맞춰볼 수 있어야
             # 이 하니스가 라이브를 실제로 반영하는지 확인된다.
             print(f'  {str(sig_date)[:10]}  같음  {live[sig_date]}')
+    if res['rc'] == 2:
+        print(f"정상 대조: 비교 못 함 — {res['why']}")
+    else:
+        print(f"정상 대조: {'불일치' if res['rc'] == 1 else '일치'} · 비교 "
+              f"{len(res['compared'])}일 · 불일치 {len(res['mismatched'])}일 · "
+              f'기대 신호일 {str(expected)[:10]} 포함')
 
-    if rc == 2:
-        raise ParityDataStale(why)
-    print(f'비교 {len(compared)}일 · 불일치 {len(mismatched)}일 · 기대 신호일 {str(expected)[:10]} 포함')
-    if rc == 1:
-        print(f'판정: 불일치 — {why}. 사람이 봐야 한다.')
+    self_ok, self_why = True, '건너뜀 (--skip-self-test)'
+    if self_test:
+        self_ok, self_why = self_check(universe)
+    print(f'자기시험: {self_why}')
+
+    if not self_test:
+        aux_why = '건너뜀 (--skip-self-test)'
+    elif res['rc'] != 0:
+        aux_why = '해당 없음 — 정상 대조가 일치일 때만 본다'
+    else:
+        aux_why = aux_check(bars, funding, universe, expected, days,
+                            live[expected], live)
+    print(f'보조 대조: {aux_why}')
+
+    # 최종 판정. 자기시험 실패는 정상 대조의 결과를 지우지 않는다 — 위에 이미 찍었다.
+    if res['rc'] == 2 or not self_ok:
+        reasons = []
+        if res['rc'] == 2:
+            reasons.append(res['why'])
+        if res['rc'] == 1:
+            reasons.append('그날 정상 대조는 불일치였다 (위 출력을 봐라)')
+        if not self_ok:
+            reasons.append(f'자기시험 실패: {self_why}')
+        raise ParityDataStale(' · '.join(reasons))
+    if res['rc'] == 1:
+        print(f"판정: 불일치 — {res['why']}. 사람이 봐야 한다.")
         return 1
     print('판정: 일치')
     return 0
@@ -826,7 +1013,7 @@ def main() -> int:
     parser.add_argument('--skip-server-check', action='store_true',
                         help='집 사본과 서버 배포본의 판본 대조를 건너뛴다 (손으로 볼 때만)')
     parser.add_argument('--skip-self-test', action='store_true',
-                        help='양성 대조를 건너뛴다 (손으로 빨리 볼 때만)')
+                        help='자기시험(양성·음성 대조)을 건너뛴다 (손으로 빨리 볼 때만)')
     parser.add_argument('--receipt',
                         help='영수증 파일 경로. 각 검사의 내부 판정을 원자적으로 적는다 '
                              '(서버의 침묵 감시가 이걸 읽는다)')
