@@ -1,0 +1,192 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 13dd1d9..2f64050 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -590,9 +590,48 @@ def run(bars, funding, interval='D', leverage=3.0,
+                         margins[coin] += add_margin
+                         trade_count += 1
+ 
++    # ── 실험 토글 (2026-10-07 선정 순위 축). SELECT_RANK 가 비면 아무것도 안 한다. ──
++    _RANK_MODE = os.environ.get('SELECT_RANK', '')
++    _RANK_LAG = int(os.environ.get('SELECT_RANK_LAG', '0') or 0)
++    _RANK_SWAP = os.environ.get('SELECT_RANK_SWAP', '0') == '1'
++    _RANK_SEED = int(os.environ.get('SELECT_RANK_SEED', '0') or 0)
++    _POOL40 = os.environ.get('SELECT_POOL40', '0') == '1'
++
++    def _rank_axes_picks(healthy, sig_date):
++        _rdir = os.path.join(BASE_DIR, 'research')
++        if _rdir not in sys.path:
++            sys.path.insert(0, _rdir)
++        import rank_axes_select as _ra
++        closes, vols, dvols = {}, {}, {}
++        for coin in healthy:
++            df = bars.get(coin)
++            ci = df.index.get_indexer([sig_date], method='ffill')[0]
++            c = df['Close'].values[:ci + 1]
++            closes[coin] = c
++            cl = c[:-_RANK_LAG] if (_RANK_LAG and len(c) > _RANK_LAG) else c
++            if vol_mode == 'bar':
++                vols[coin] = calc_vol_bars(cl, _vol_bars, bars_per_year)
++            else:
++                vols[coin] = calc_vol_daily(cl, bpd, lookback_bars=_vol_bars)
++            if _RANK_MODE == 'sdvol':
++                hi = ci + 1 - _RANK_LAG if _RANK_LAG else ci + 1
++                lo = max(0, hi - _ra.DVOL_BARS)
++                v = df['Volume'].values[lo:hi]
++                p = df['Close'].values[lo:hi]
++                dvols[coin] = float(np.mean(v * p)) if len(v) else 0.0
++        return _ra.select(_RANK_MODE, healthy, universe_size,
++                          closes=closes, vols=vols, dvols=dvols,
++                          mom_short_bars=mom30, mom_long_bars=mom90,
++                          calc_mom=calc_mom, lag=_RANK_LAG,
++                          swap=_RANK_SWAP, seed=_RANK_SEED)
++
+     def _compute_weights(sig_date):
+         """V18 선정 + 비중 계산. sig_date=시그널 기준(t-1)."""
+         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
++        if _POOL40:
++            # 풀 폭 검증 ③ — 원시 시총 목록을 앞 40개로 먼저 자른다.
++            # 심볼 매핑·데이터 필터·헬스보다 앞이고, 탈락분을 41위 이하로 안 채운다.
++            mcap_order = mcap_order[:40]
+ 
+         healthy = []
+         min_bars = max(mom30, mom90, _vol_bars, sma_period)
+@@ -634,7 +673,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+             if ok:
+                 healthy.append(coin)
+ 
+-        picks = healthy[:universe_size]
++        picks = _rank_axes_picks(healthy, sig_date) if _RANK_MODE else healthy[:universe_size]
+ 
+         # Greedy absorption
+         if selection == 'greedy' and len(picks) > 1:
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 65dfe39..5636816 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -552,9 +552,70 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                         margins[coin] += add_margin
+                         trade_count += 1
+ 
++    # ── 실험 토글 (2026-10-07 선정 순위 축). SELECT_RANK 가 비면 아무것도 안 한다. ──
++    _RANK_MODE = os.environ.get('SELECT_RANK', '')
++    _RANK_LAG = int(os.environ.get('SELECT_RANK_LAG', '0') or 0)
++    _RANK_SWAP = os.environ.get('SELECT_RANK_SWAP', '0') == '1'
++    _RANK_SEED = int(os.environ.get('SELECT_RANK_SEED', '0') or 0)
++    _POOL40 = os.environ.get('SELECT_POOL40', '0') == '1'
++
++    # 게이트 ⑤ 노출 맞춤. 기록 회차는 스냅마다 총 배정 비중을 적고, 적용 회차는
++    # 미리 계산해 둔 e*(=두 팔의 작은 쪽) 로 줄인다. 개별 cap 은 안 올린다.
++    _EXPO_REC = os.environ.get('EXPO_REC', '')
++    _EXPO_APPLY = os.environ.get('EXPO_APPLY', '')
++    _expo_log = []
++    _expo_tbl = {}
++    if _EXPO_APPLY:
++        with open(_EXPO_APPLY) as _f:
++            for _ln in _f:
++                _a, _b, _c = _ln.split()
++                _expo_tbl[(int(_a), int(_b))] = float(_c)
++
++    def _expo(bar_idx, si, w):
++        if not (_EXPO_REC or _EXPO_APPLY):
++            return w
++        e = 1.0 - float(w.get('CASH', 0.0))
++        if _EXPO_REC:
++            _expo_log.append((bar_idx, si, e))
++            return w
++        tgt = _expo_tbl.get((bar_idx, si))
++        if tgt is None or e <= 1e-12:
++            return w
++        if tgt <= 1e-12:
++            return {'CASH': 1.0}
++        k = tgt / e
++        out = {c: v * k for c, v in w.items() if c != 'CASH'}
++        out['CASH'] = 1.0 - sum(out.values())
++        return out
++
++    def _rank_axes_picks(healthy, sig_date):
++        _rdir = os.path.join(BASE_DIR, 'research')
++        if _rdir not in sys.path:
++            sys.path.insert(0, _rdir)
++        import rank_axes_select as _ra
++        closes, vols, dvols = {}, {}, {}
++        for coin in healthy:
++            df = bars.get(coin)
++            ci = df.index.get_indexer([sig_date], method='ffill')[0]
++            c = df['Close'].values[:ci + 1]
++            closes[coin] = c
++            cl = c[:-_RANK_LAG] if (_RANK_LAG and len(c) > _RANK_LAG) else c
++            if vol_mode == 'bar':
++                vols[coin] = calc_vol_bars(cl, _vol_bars, bars_per_year)
++            else:
++                vols[coin] = calc_vol_daily(cl, bpd, lookback_bars=_vol_bars)
++        return _ra.select(_RANK_MODE, healthy, universe_size,
++                          closes=closes, vols=vols, dvols=dvols,
++                          mom_short_bars=mom30, mom_long_bars=mom90,
++                          calc_mom=calc_mom, lag=_RANK_LAG,
++                          swap=_RANK_SWAP, seed=_RANK_SEED)
++
+     def _compute_weights(sig_date):
+         """V18 선정 + 비중 계산. sig_date=시그널 기준(t-1)."""
+         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
++        if _POOL40:
++            # 풀 폭 검증 ③ — 원시 시총 목록을 앞 40개로 먼저 자른다.
++            mcap_order = mcap_order[:40]
+ 
+         healthy = []
+         min_bars = max(mom30, mom90, mom60, _vol_bars, sma_period, health_sma_period)
+@@ -644,7 +705,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 s_std = s_arr.std() or 1.0
+                 z = (m_arr - m_arr.mean()) / m_std + (s_arr - s_arr.mean()) / s_std
+                 healthy = [k for _, k in sorted(zip(-z, keys))]
+-        picks = healthy[:universe_size]
++        picks = _rank_axes_picks(healthy, sig_date) if _RANK_MODE else healthy[:universe_size]
+ 
+         # Greedy absorption
+         if selection == 'greedy' and len(picks) > 1:
+@@ -964,14 +1025,14 @@ def run(bars, funding, interval='1h', leverage=1.0,
+             # 첫 바
+             for si in range(n_snapshots):
+                 if canary_on:
+-                    snapshots[si] = _compute_weights(prev_date)
++                    snapshots[si] = _expo(bar_i, si, _compute_weights(prev_date))
+                 else:
+                     snapshots[si] = {'CASH': 1.0}
+             need_rebal = True
+         elif canary_flipped:
+             for si in range(n_snapshots):
+                 if canary_on:
+-                    snapshots[si] = _compute_weights(prev_date)
++                    snapshots[si] = _expo(bar_i, si, _compute_weights(prev_date))
+                 else:
+                     snapshots[si] = {'CASH': 1.0}
+             need_rebal = True
+@@ -979,7 +1040,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+             if canary_on_bar and not pfd_done and (bar_i - canary_on_bar) >= pfd_bars:
+                 pfd_done = True
+                 for si in range(n_snapshots):
+-                    snapshots[si] = _compute_weights(prev_date)
++                    snapshots[si] = _expo(bar_i, si, _compute_weights(prev_date))
+                 need_rebal = True
+ 
+         # ── 앵커 리밸런싱 (Risk-On + 미플립) ──
+@@ -992,7 +1053,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 for si in range(n_snapshots):
+                     offset = int(si * snap_interval_bars / n_snapshots)
+                     if (bar_i + phase_offset_bars) % snap_interval_bars == offset:
+-                        new_w = _compute_weights(prev_date)
++                        new_w = _expo(bar_i, si, _compute_weights(prev_date))
+                         if new_w != snapshots[si]:
+                             snapshots[si] = new_w
+                             if not _anchor_defer:
+@@ -1084,6 +1145,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         prev_canary = canary_on
+ 
+     # ── 결과 ──
++    if _EXPO_REC:
++        with open(_EXPO_REC, 'w') as _f:
++            for _a, _b, _c in _expo_log:
++                _f.write(f"{_a} {_b} {_c!r}\n")
+     if not pv_list:
+         return {}
+     pvdf = pd.DataFrame(pv_list).set_index('Date')
