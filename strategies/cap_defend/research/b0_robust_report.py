@@ -253,7 +253,10 @@ def a_of(sleeve, ex, stress, both=False):
 
 
 def excl_block(sleeve, name, ex, is_group, a_empty, lines, both=False):
-    lab = "현물" if sleeve == "sp" else "선물"
+    # both=True 는 두 슬리브에 같은 제외를 거는 측정이라 슬리브 축이 없다. 한 줄로만 적고
+    # 분모도 같은 조건(두 슬리브 위약)의 A(공집합)을 쓴다 — 한쪽 슬리브 분모를 쓰면
+    # 같은 측정이 현물·선물에서 다른 판정으로 갈린다.
+    lab = "두 슬리브" if both else ("현물" if sleeve == "sp" else "선물")
     row = dict(sleeve=lab, name=name, ex=list(ex), group=is_group, both=both)
     for cost_name, stress in (("기본", False), ("5배", True)):
         A = a_of(sleeve, ex, stress, both)
@@ -421,8 +424,17 @@ def main() -> None:
             excl.append(excl_block(sleeve, coin, [coin], False, a_empty, lines))
         for gname, g in B.GROUPS[sleeve]:
             excl.append(excl_block(sleeve, gname, g, True, a_empty, lines))
-        for gname, g in B.COMMON:
-            excl.append(excl_block(sleeve, gname, g, True, a_empty, lines, both=True))
+
+    # 두 슬리브 동시 제외 — 슬리브 축이 없으므로 한 번만 잰다. 분모도 같은 조건이다.
+    a_both = {c: a_of("sp", [], s, True) for c, s in (("기본", False), ("5배", True))}
+    lines.append(f"\n-- 두 슬리브 동시 · A(공집합) 기본 {a_both['기본']:+.3f} "
+                 f"· 5배 {a_both['5배']:+.3f} --")
+    for c in ("기본", "5배"):
+        if not (a_both[c] >= A_EMPTY_MIN):
+            lines.append(f"  !! 두 슬리브 {c} A(공집합)이 {A_EMPTY_MIN} 미만 "
+                         f"— 잔존율 판정은 불충분으로 적는다")
+    for gname, g in B.COMMON:
+        excl.append(excl_block("sp", gname, g, True, a_both, lines, both=True))
     report["excl"] = excl
 
     lines.append("\n==== ④ 기간 집중 ====")
