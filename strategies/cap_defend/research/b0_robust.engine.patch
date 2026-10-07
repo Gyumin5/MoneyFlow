@@ -1,0 +1,398 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 13dd1d9..40c8a73 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -47,6 +47,13 @@ BASE_DIR = '/home/gmoh/mon/251229/strategies/cap_defend'
+ # 절대 수치를 그대로 읽을 수 없다 — 2026-09-22 까지 0.05 로 박혀 있었다.
+ CASH_BUFFER = 0.01
+ 
++
++def _env_exclude():
++    """연구 전용 제외 집합. B0_EXCLUDE 가 비면 빈 집합이라 평소 경로를 안 건드린다."""
++    raw = os.environ.get('B0_EXCLUDE', '')
++    return frozenset(x.strip().upper() for x in raw.split(',') if x.strip())
++
++
+ # ─── 심볼/슬리피지 ───
+ def _discover_tickers():
+     """가지고 있는 선물 데이터에서 심볼표를 만든다.
+@@ -349,6 +356,15 @@ def run(bars, funding, interval='D', leverage=3.0,
+     trade_count = 0
+     stop_count = 0
+     pv_list = []
++    # 자산별 장부 — 연구 전용(B0_LEDGER). 현물 엔진과 같은 식이다.
++    _led_on = bool(os.environ.get("B0_LEDGER", ""))
++    _led_cash = {}
++    _led_rows = []
++
++    def _led(coin, amt):
++        if _led_on:
++            _led_cash[coin] = _led_cash.get(coin, 0.0) + float(amt)
++
+ 
+     btc_close = btc_df['Close'].values
+     btc_idx_map = {d: i for i, d in enumerate(btc_df.index)}
+@@ -447,6 +463,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+         pnl = holdings[coin] * (exit_p - entry_prices[coin])
+         tx = holdings[coin] * exit_p * tx_cost
+         capital += margins[coin] + pnl - tx
++        _led(coin, (margins[coin] + pnl - tx))
+         del holdings[coin]; del entry_prices[coin]; del margins[coin]; entry_levs.pop(coin, None)
+         entry_bar_index.pop(coin, None)
+         trade_count += 1
+@@ -537,6 +554,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 pnl = holdings[coin] * (exit_p - entry_prices[coin])
+                 tx = holdings[coin] * cur * tx_cost
+                 capital += margins[coin] + pnl - tx
++                _led(coin, (margins[coin] + pnl - tx))
+                 del holdings[coin]; del entry_prices[coin]; del margins[coin]; entry_levs.pop(coin, None)
+                 entry_bar_index.pop(coin, None)
+                 trade_count += 1
+@@ -550,6 +568,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                     pnl = sell_qty * (exit_p - entry_prices[coin])
+                     tx = sell_qty * cur * tx_cost
+                     capital += sell_margin + pnl - tx
++                    _led(coin, (sell_margin + pnl - tx))
+                     holdings[coin] -= sell_qty
+                     margins[coin] -= sell_margin
+                     trade_count += 1
+@@ -569,6 +588,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 tx = notional * tx_cost
+                 if capital >= margin + tx:
+                     capital -= margin + tx
++                    _led(coin, -(margin + tx))
+                     holdings[coin] = qty
+                     entry_prices[coin] = entry_p
+                     entry_bar_index[coin] = _get_bar_index(coin, date)
+@@ -584,12 +604,30 @@ def run(bars, funding, interval='D', leverage=3.0,
+                     tx = add_notional * tx_cost
+                     if capital >= add_margin + tx:
+                         capital -= add_margin + tx
++                        _led(coin, -(add_margin + tx))
+                         total = holdings[coin] + delta
+                         entry_prices[coin] = (entry_prices[coin] * holdings[coin] + entry_p * delta) / total
+                         holdings[coin] = total
+                         margins[coin] += add_margin
+                         trade_count += 1
+ 
++    # ── 실험 토글 (2026-10-07 현행 규칙의 우연 여부). B0_ARM 이 비면 아무것도 안 한다. ──
++    _ARM = os.environ.get('B0_ARM', '')
++    _NO_ABSORB = os.environ.get('SELECT_NO_ABSORB', '0') == '1'
++
++    def _b0r_picks(healthy, sig_date):
++        _rdir = os.path.join(BASE_DIR, 'research')
++        if _rdir not in sys.path:
++            sys.path.insert(0, _rdir)
++        import b0_robust_select as _bs
++        _ci = btc_df.index.get_indexer([sig_date], method='ffill')[0]
++        _ep = int(_ci) // max(1, int(snap_interval_bars))
++        return _bs.select(_ARM, healthy, universe_size, epoch=_ep)
++
++    # 제외 집합 — 연구 환경변수로만 켜진다. 리필은 _compute_weights 결과를 쓰므로
++    # 여기 한 곳만 막으면 선정·리필이 같은 집합을 본다.
++    _excl_all = _env_exclude()
++
+     def _compute_weights(sig_date):
+         """V18 선정 + 비중 계산. sig_date=시그널 기준(t-1)."""
+         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
+@@ -597,6 +635,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+         healthy = []
+         min_bars = max(mom30, mom90, _vol_bars, sma_period)
+         for coin in mcap_order:
++            if coin in _excl_all:
++                continue
+             df = bars.get(coin)
+             if df is None:
+                 continue
+@@ -634,10 +674,10 @@ def run(bars, funding, interval='D', leverage=3.0,
+             if ok:
+                 healthy.append(coin)
+ 
+-        picks = healthy[:universe_size]
++        picks = _b0r_picks(healthy, sig_date) if _ARM else healthy[:universe_size]
+ 
+         # Greedy absorption
+-        if selection == 'greedy' and len(picks) > 1:
++        if selection == 'greedy' and len(picks) > 1 and not _NO_ABSORB:
+             for i in range(len(picks) - 1, 0, -1):
+                 df_a = bars.get(picks[i - 1])
+                 df_b = bars.get(picks[i])
+@@ -736,6 +776,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                                     sleeve_pv_pre=pv_pre,
+                                     sleeve_loss_pct=(margins[coin]-returned)/pv_pre if pv_pre>0 else 0))
+                 capital += returned
++                _led(coin, (returned))
+                 del holdings[coin]; del entry_prices[coin]; del margins[coin]; entry_levs.pop(coin, None)
+                 entry_bar_index.pop(coin, None)
+                 liq_count += 1
+@@ -766,6 +807,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 pnl = holdings[coin] * (exit_p - entry_prices[coin])
+                 tx = holdings[coin] * exit_p * tx_cost
+                 capital += margins[coin] + pnl - tx
++                _led(coin, (margins[coin] + pnl - tx))
+                 del holdings[coin]; del entry_prices[coin]; del margins[coin]; entry_levs.pop(coin, None)
+                 entry_bar_index.pop(coin, None)
+                 trade_count += 1
+@@ -793,6 +835,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 pnl = holdings[coin] * (exit_p - entry)
+                 tx = holdings[coin] * exit_p * tx_cost
+                 capital += margins[coin] + pnl - tx
++                _led(coin, (margins[coin] + pnl - tx))
+                 del holdings[coin]; del entry_prices[coin]; del margins[coin]; entry_levs.pop(coin, None)
+                 entry_bar_index.pop(coin, None)
+                 trade_count += 1
+@@ -832,6 +875,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+                     pnl = holdings[worst_coin] * (exit_p - entry_prices[worst_coin])
+                     tx = holdings[worst_coin] * exit_p * tx_cost
+                     capital += margins[worst_coin] + pnl - tx
++                    _led(worst_coin, (margins[worst_coin] + pnl - tx))
+                     del holdings[worst_coin]; del entry_prices[worst_coin]; del margins[worst_coin]; entry_levs.pop(worst_coin, None)
+                     entry_bar_index.pop(worst_coin, None)
+                     trade_count += 1
+@@ -856,6 +900,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 if cur > 0:
+                     # 롱: notional × sum(rate)
+                     capital -= holdings[coin] * cur * fr_sum
++                    _led(coin, -(holdings[coin] * cur * fr_sum))
++        if _led_on and capital < 0:
++            _led('_FLOOR', -capital)
+         capital = max(capital, 0)
+ 
+         # ── 카나리 (t-1 기준) ──
+@@ -1099,11 +1146,26 @@ def run(bars, funding, interval='D', leverage=3.0,
+                     liq_fee = max(eq_at, 0) * 0.015
+                     returned = max(eq_at - liq_fee, 0)
+                     capital += returned
++                    _led(coin, (returned))
+                     del holdings[coin]; del entry_prices[coin]; del margins[coin]; entry_levs.pop(coin, None)
+                     entry_bar_index.pop(coin, None)
+                     liq_count += 1
+ 
+-        pv_list.append({'Date': date, 'Value': _port_val(date)})
++        _pv_now = _port_val(date)
++        pv_list.append({'Date': date, 'Value': _pv_now})
++        if _led_on:
++            _pos = {}
++            for _c in holdings:
++                _df = bars.get(_c)
++                if _df is None:
++                    continue
++                _ci = _df.index.get_indexer([date], method='ffill')[0]
++                _cur = float(_df['Close'].iloc[_ci]) if _ci >= 0 else 0
++                if _cur > 0:
++                    _pos[_c] = margins[_c] + holdings[_c] * (_cur - entry_prices[_c])
++            _led_rows.append({'Date': date, 'pv': _pv_now,
++                              'cash': dict(_led_cash), 'pos': _pos})
++            _led_cash.clear()
+         prev_canary = canary_on
+ 
+     # ── 결과 ──
+@@ -1130,6 +1192,8 @@ def run(bars, funding, interval='D', leverage=3.0,
+         'Cat': cat_stop_count, 'Cushion': cushion_force_count, 'GrossCap': gross_cap_count,
+     }
+     result['_equity'] = eq  # equity curve (pd.Series)
++    if _led_on:
++        result['_ledger'] = _led_rows
+     result['_liq_log'] = liq_log
+     return result
+ 
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 65dfe39..01fb2c6 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -45,6 +45,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ # 1% 는 그 예약분보다 크므로 그 미체결 방지 성질은 그대로 유지된다.
+ CASH_BUFFER = 0.01
+ 
++
++def _env_exclude():
++    """연구 전용 제외 집합. B0_EXCLUDE 가 비면 빈 집합이라 평소 경로를 안 건드린다."""
++    raw = os.environ.get('B0_EXCLUDE', '')
++    return frozenset(x.strip().upper() for x in raw.split(',') if x.strip())
++
++
+ # ─── 심볼/슬리피지 ───
+ def _discover_tickers():
+     """가지고 있는 선물 데이터에서 심볼표를 만든다.
+@@ -344,6 +351,16 @@ def run(bars, funding, interval='1h', leverage=1.0,
+     trade_count = 0
+     stop_count = 0
+     pv_list = []
++    # 자산별 장부 — 연구 전용(B0_LEDGER). 자본 변동은 전부 코인 하나에 귀속되므로
++    # 그 합과 보유가치 변화의 합이 순자산 변화와 정확히 같아야 한다.
++    _led_on = bool(os.environ.get("B0_LEDGER", ""))
++    _led_cash = {}
++    _led_rows = []
++
++    def _led(coin, amt):
++        if _led_on:
++            _led_cash[coin] = _led_cash.get(coin, 0.0) + float(amt)
++
+ 
+     btc_close = btc_df['Close'].values
+     btc_idx_map = {d: i for i, d in enumerate(btc_df.index)}
+@@ -440,6 +457,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         pnl = holdings[coin] * (exit_p - entry_prices[coin])
+         tx = holdings[coin] * exit_p * tx_cost
+         capital += margins[coin] + pnl - tx
++        _led(coin, (margins[coin] + pnl - tx))
+         del holdings[coin]; del entry_prices[coin]; del margins[coin]
+         entry_bar_index.pop(coin, None)
+         trade_count += 1
+@@ -501,6 +519,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 pnl = holdings[coin] * (exit_p - entry_prices[coin])
+                 tx = holdings[coin] * cur * tx_cost
+                 capital += margins[coin] + pnl - tx
++                _led(coin, (margins[coin] + pnl - tx))
+                 del holdings[coin]; del entry_prices[coin]; del margins[coin]
+                 entry_bar_index.pop(coin, None)
+                 trade_count += 1
+@@ -514,6 +533,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     pnl = sell_qty * (exit_p - entry_prices[coin])
+                     tx = sell_qty * cur * tx_cost
+                     capital += sell_margin + pnl - tx
++                    _led(coin, (sell_margin + pnl - tx))
+                     holdings[coin] -= sell_qty
+                     margins[coin] -= sell_margin
+                     trade_count += 1
+@@ -532,6 +552,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 tx = notional * tx_cost
+                 if capital >= margin + tx:
+                     capital -= margin + tx
++                    _led(coin, -(margin + tx))
+                     holdings[coin] = qty
+                     entry_prices[coin] = entry_p
+                     entry_bar_index[coin] = _get_bar_index(coin, date)
+@@ -546,19 +567,37 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     tx = add_notional * tx_cost
+                     if capital >= add_margin + tx:
+                         capital -= add_margin + tx
++                        _led(coin, -(add_margin + tx))
+                         total = holdings[coin] + delta
+                         entry_prices[coin] = (entry_prices[coin] * holdings[coin] + entry_p * delta) / total
+                         holdings[coin] = total
+                         margins[coin] += add_margin
+                         trade_count += 1
+ 
++    # ── 실험 토글 (2026-10-07 현행 규칙의 우연 여부). B0_ARM 이 비면 아무것도 안 한다. ──
++    _ARM = os.environ.get('B0_ARM', '')
++    _NO_ABSORB = os.environ.get('SELECT_NO_ABSORB', '0') == '1'
++
++    def _b0r_picks(healthy, sig_date):
++        _rdir = os.path.join(BASE_DIR, 'research')
++        if _rdir not in sys.path:
++            sys.path.insert(0, _rdir)
++        import b0_robust_select as _bs
++        _ci = btc_df.index.get_indexer([sig_date], method='ffill')[0]
++        _ep = int(_ci) // max(1, int(snap_interval_bars))
++        return _bs.select(_ARM, healthy, universe_size, epoch=_ep)
++
++    # 제외 집합 — 인자와 연구 환경변수의 합집합. 선정·리필이 같은 집합을 본다.
++    # 리필이 이 집합을 안 보면 제외한 코인이 drift 발화일에 되돌아온다(제외 누수).
++    _excl_all = frozenset(exclude_assets or ()) | _env_exclude()
++
+     def _compute_weights(sig_date):
+         """V18 선정 + 비중 계산. sig_date=시그널 기준(t-1)."""
+         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
+ 
+         healthy = []
+         min_bars = max(mom30, mom90, mom60, _vol_bars, sma_period, health_sma_period)
+-        _excluded = exclude_assets or frozenset()
++        _excluded = _excl_all
+         for coin in mcap_order:
+             if coin in blacklist:
+                 continue
+@@ -644,10 +683,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 s_std = s_arr.std() or 1.0
+                 z = (m_arr - m_arr.mean()) / m_std + (s_arr - s_arr.mean()) / s_std
+                 healthy = [k for _, k in sorted(zip(-z, keys))]
+-        picks = healthy[:universe_size]
++        picks = _b0r_picks(healthy, sig_date) if _ARM else healthy[:universe_size]
+ 
+         # Greedy absorption
+-        if selection == 'greedy' and len(picks) > 1:
++        if selection == 'greedy' and len(picks) > 1 and not _NO_ABSORB:
+             for i in range(len(picks) - 1, 0, -1):
+                 df_a = bars.get(picks[i - 1])
+                 df_b = bars.get(picks[i])
+@@ -738,7 +777,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         sig_date=t-1 (look-ahead 방지). snapshots in-place 수정."""
+         healthy = []
+         for coin in bars.keys():
+-            if coin == 'BTC' or coin in blacklist:
++            if coin == 'BTC' or coin in blacklist or coin in _excl_all:
+                 continue
+             m = _coin_mom2(coin, sig_date)
+             if m is None:
+@@ -849,6 +888,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 liq_fee = max(eq, 0) * 0.015
+                 returned = max(eq - liq_fee, 0)
+                 capital += returned
++                _led(coin, (returned))
+                 del holdings[coin]; del entry_prices[coin]; del margins[coin]
+                 entry_bar_index.pop(coin, None)
+                 liq_count += 1
+@@ -868,6 +908,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     if cur > 0:
+                         # 롱: notional × rate
+                         capital -= holdings[coin] * cur * fr
++                        _led(coin, -(holdings[coin] * cur * fr))
+         capital = max(capital, 0)
+ 
+         # ── 카나리 (t-1 기준) ──
+@@ -906,6 +947,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     if cur > 0:
+                         pnl = holdings[coin] * (cur - entry_prices[coin])
+                         capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
++                        _led(coin, (margins[coin] + pnl - holdings[coin] * cur * tx_cost))
+                 holdings.clear(); entry_prices.clear(); margins.clear(); entry_bar_index.clear()
+                 for si in range(n_snapshots):
+                     snapshots[si] = {'CASH': 1.0}
+@@ -930,6 +972,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     slip = _slip(coin)
+                     pnl = holdings[coin] * (cur * (1 - slip) - entry_prices[coin])
+                     capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
++                    _led(coin, (margins[coin] + pnl - holdings[coin] * cur * tx_cost))
+                     del holdings[coin]; del entry_prices[coin]; del margins[coin]
+                     entry_bar_index.pop(coin, None)
+                     trade_count += 1
+@@ -952,6 +995,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                     slip = _slip(coin)
+                     pnl = holdings[coin] * (cur * (1 - slip) - entry_prices[coin])
+                     capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
++                    _led(coin, (margins[coin] + pnl - holdings[coin] * cur * tx_cost))
+                     del holdings[coin]; del entry_prices[coin]; del margins[coin]
+                     entry_bar_index.pop(coin, None)
+                     blacklist[coin] = bl_cooldown
+@@ -1080,7 +1124,21 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 pending_rebalance = {'due_i': bar_i + int(execution_delay_bars),
+                                       'target': dict(combined)}
+ 
+-        pv_list.append({'Date': date, 'Value': _port_val(date)})
++        _pv_now = _port_val(date)
++        pv_list.append({'Date': date, 'Value': _pv_now})
++        if _led_on:
++            _pos = {}
++            for _c in holdings:
++                _df = bars.get(_c)
++                if _df is None:
++                    continue
++                _ci = _df.index.get_indexer([date], method='ffill')[0]
++                _cur = float(_df['Close'].iloc[_ci]) if _ci >= 0 else 0
++                if _cur > 0:
++                    _pos[_c] = margins[_c] + holdings[_c] * (_cur - entry_prices[_c])
++            _led_rows.append({'Date': date, 'pv': _pv_now,
++                              'cash': dict(_led_cash), 'pos': _pos})
++            _led_cash.clear()
+         prev_canary = canary_on
+ 
+     # ── 결과 ──
+@@ -1106,6 +1164,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         'Stops': stop_count,
+     }
+     result['_equity'] = eq  # equity curve (pd.Series)
++    if _led_on:
++        result['_ledger'] = _led_rows
+     return result
+ 
+ 
