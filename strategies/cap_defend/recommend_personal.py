@@ -107,6 +107,131 @@ except Exception:
 
 # --- 1. Constants & Configuration ---
 DATA_DIR = "./data"
+
+
+def _atomic_tmp(fp):
+    """원자 저장용 임시 경로. 같은 디렉토리여야 rename 이 원자적이다.
+
+    프로세스 번호와 나노초를 같이 넣는다 — 한 프로세스가 같은 파일을 두 번 겹쳐 쓸 때도
+    임시이름이 갈려야 한다.
+    """
+    return f"{fp}.tmp{os.getpid()}-{time.time_ns()}"
+
+
+def _save_csv_atomic(df, fp, cols=None):
+    """가격 캐시를 원자적으로 저장한다.
+
+    recommend.py 와 recommend_personal.py 는 같은 분(09:15)에 각자의 flock 으로 떠서
+    같은 data/<ticker>.csv 를 쓴다. 대상 경로에 직접 to_csv 하면 두 쓰기가 겹쳐
+    파일이 섞인다 — 2026-10-12 에 QQQ.csv 마지막 줄이 한 글자 밀린 채 한 번 더 붙어
+    QQQ 가 유니버스에서 통째로 빠졌다. 임시파일에 쓰고 rename 하면 겹쳐도 나중 쓰기가
+    통째로 이기므로 반쪽 파일이 안 남는다.
+    """
+    tmp = _atomic_tmp(fp)
+    try:
+        (df if cols is None else df[cols]).to_csv(tmp, index=False)
+        os.replace(tmp, fp)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _save_json_atomic(obj, fp):
+    """JSON 캐시·상태를 원자적으로 저장한다. 이유는 _save_csv_atomic 과 같다."""
+    tmp = _atomic_tmp(fp)
+    try:
+        with open(tmp, 'w') as f:
+            json.dump(obj, f)
+        os.replace(tmp, fp)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _cache_problem(fp):
+    """가격 캐시를 쓸 수 있는지 본다. 쓸 수 있으면 None, 아니면 사유 한 줄.
+
+    한 줄이라도 깨졌으면 그 파일을 통째로 못 믿는 것으로 본다. 깨진 줄만 버리고
+    진행하는 안은 기각했다(2026-10-12 토론 run-20261012T010744Z) — 날짜는 멀쩡한 채
+    가격만 잘린 줄은 그대로 남아서, 입력이 조용히 틀린 채로 신호가 나간다.
+    errors='coerce' 는 깨짐을 찾는 데만 쓰고 그 결과를 입력으로 받지 않는다.
+    """
+    if not os.path.exists(fp):
+        return "파일이 없다"
+    try:
+        df = pd.read_csv(fp)
+    except Exception as e:
+        return f"읽기 실패 ({type(e).__name__}: {e})"
+    for col in ('Date', 'Adj_Close'):
+        if col not in df.columns:
+            return f"{col} 열이 없다"
+    if df.empty:
+        return "줄이 없다"
+    dates = pd.to_datetime(df['Date'], errors='coerce')
+    n_bad = int(dates.isna().sum())
+    if n_bad:
+        return f"날짜가 깨진 줄 {n_bad}개"
+    n_dup = int(dates.duplicated().sum())
+    if n_dup:
+        return f"날짜가 겹치는 줄 {n_dup}개"
+    if dates.max().date() > datetime.now().date():
+        return f"미래 날짜가 있다 ({dates.max().date()})"
+    vals = pd.to_numeric(df['Adj_Close'], errors='coerce')
+    n_badv = (int(vals.isna().sum()) + int((vals <= 0).sum())
+              + int(vals.isin([float('inf'), float('-inf')]).sum()))
+    if n_badv:
+        return f"가격이 깨진 줄 {n_badv}개"
+    return None
+
+
+def load_price(ticker):
+    """가격 캐시를 읽는다. 못 쓰는 파일이면 사유를 남기고 빈 시리즈를 돌려준다.
+
+    빈 시리즈는 그 종목이 입력에서 빠졌다는 뜻이다. 주식처럼 전 종목이 있어야 하는
+    자리는 require_stock_prices 가 따로 막는다 — 여기서 조용히 넘어가면 그날 신호가
+    종목 하나 빠진 채로 계산된다(2026-10-12 QQQ 사고).
+    """
+    fp = os.path.join(DATA_DIR, f"{ticker}.csv")
+    bad = _cache_problem(fp)
+    if bad:
+        print(f"  ⚠️ {ticker}: 가격 캐시를 못 쓴다 ({bad}) — 입력에서 제외")
+        return pd.Series(dtype=float)
+    df = pd.read_csv(fp)
+    df['Date'] = pd.to_datetime(df['Date'])
+    s = df.set_index('Date')['Adj_Close'].astype(float).sort_index()
+    stale_days = (datetime.now().date() - s.index.max().date()).days
+    if stale_days > 7:
+        print(f"  ⚠️ {ticker}: 가격 캐시가 {stale_days}일 낡았다 — 입력에서 제외")
+        return pd.Series(dtype=float)
+    return s
+
+
+def require_stock_prices(prices):
+    """주식 전략 입력이 온전한지 본다. 온전하면 None, 아니면 사유 한 줄.
+
+    보는 것은 선정 결과가 아니라 입력 집합이다 — 뽑힌 종목 수로 판정하지 않는다.
+    PDBC·SPY 둘만 뽑히는 것은 정상일 수 있다. 상장폐지·티커 변경은 입력 정의가 바뀐
+    사건이므로 그때는 코드의 목록을 먼저 고친다.
+    """
+    need = sorted(set(OFFENSIVE_STOCK_UNIVERSE + DEFENSIVE_STOCK_UNIVERSE + CANARY_ASSETS))
+    missing = [t for t in need if t not in prices or prices[t].empty]
+    if missing:
+        return "주식 입력 종목이 빠졌다: " + ", ".join(missing)
+    short = [t for t in need if len(prices[t]) < STOCK_CANARY_MA_PERIOD + 20]
+    if short:
+        return "주식 입력 이력이 모자라다: " + ", ".join(f"{t} {len(prices[t])}봉" for t in short)
+    basis = {t: prices[t].index.max().date() for t in need}
+    if len(set(basis.values())) > 1:
+        return "주식 입력 기준일이 종목마다 다르다: " + ", ".join(
+            f"{t}={d}" for t, d in sorted(basis.items()))
+    return None
+
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 APP_HOME = os.environ.get("MONEYFLOW_APP_HOME", os.getcwd())
 ASSETS_DB = os.environ.get("ASSETS_DB", os.path.join(APP_HOME, "assets.db"))
@@ -125,7 +250,7 @@ COIN_MEMBER_META = {
 
 def _save_signal_state(data):
     """signal_state.json 원자적 저장."""
-    tmp = SIGNAL_STATE_FILE + '.tmp'
+    tmp = _atomic_tmp(SIGNAL_STATE_FILE)
     with open(tmp, 'w') as f:
         json.dump(data, f)
     os.replace(tmp, SIGNAL_STATE_FILE)
@@ -364,9 +489,8 @@ def get_dynamic_coin_universe(log: list) -> (list, dict):
             
             if cg_response.status_code == 200:
                 cg_data = cg_response.json()
-                # Save to Cache
-                with open(UNIVERSE_CACHE_FILE, 'w') as f:
-                    json.dump(cg_data, f)
+                # Save to Cache (두 리포트가 같은 분에 쓰므로 원자적으로)
+                _save_json_atomic(cg_data, UNIVERSE_CACHE_FILE)
                 print(f"    ✅ Got {len(cg_data)} coins from CoinGecko (Cached)")
                 break
             elif cg_response.status_code == 429:
@@ -535,12 +659,6 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
     log.append("<h2>📥 Step 2: 데이터 다운로드 (Yahoo 우선 + 품질검증)</h2>")
     os.makedirs(DATA_DIR, exist_ok=True)
     
-    # USD-KRW 환율 조회 (품질 검증용)
-    usd_krw_rate = 1450.0
-    try:
-        usdt_price = pyupbit.get_current_price("KRW-USDT")
-        if usdt_price: usd_krw_rate = usdt_price
-    except: pass
     
     # [V12.3] Robust Session with Retries
     from requests.adapters import HTTPAdapter
@@ -560,18 +678,20 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
         fp = os.path.join(DATA_DIR, f"{ticker}.csv")
         success = False
         
-        # 1. Fresh Cache Check
-        # 오늘 다운로드한 파일이 있으면 재사용 (삭제하지 않음)
+        # 1. Fresh Cache Check — 파일 시각이 오늘이어도 내용 검사를 통과해야 재사용한다.
+        #    안 그러면 깨진 파일이 오늘 자로 굳어 영원히 다시 안 받는다(2026-10-12 QQQ).
         if os.path.exists(fp):
             try:
-                # 파일 수정 시간 확인
                 mtime = datetime.fromtimestamp(os.path.getmtime(fp)).date()
                 if mtime == today_str:
-                    #print(f"  ✅ Using cached data for {ticker}")
-                    # 캐시된 파일도 품질 검증을 통과했다고 가정하거나, 로드 시점에 다시 검증할 수 있음.
-                    # 여기서는 '이미 검증되어 저장된 파일'이라고 가정하고 스킵.
-                    success = True
-            except: pass
+                    bad = _cache_problem(fp)
+                    if bad:
+                        print(f"  ⚠️ {ticker}: 오늘 받은 캐시가 깨졌다 ({bad}) — 원천에서 다시 받는다")
+                        log.append(f"<p class='warning'>{ticker} 캐시 깨짐({bad}) — 재수집</p>")
+                    else:
+                        success = True
+            except Exception as e:
+                print(f"  ⚠️ {ticker}: 캐시 상태 확인 실패 ({type(e).__name__}: {e}) — 다시 받는다")
         
         if success:
             continue
@@ -595,7 +715,7 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
                         if len(df) > 0 and df['Date'].iloc[-1] == today_d:
                             df = df.iloc[:-1]
                         if len(df) > 0:
-                            df.to_csv(fp, index=False)
+                            _save_csv_atomic(df, fp)
                             success = True
                             print(f"  - Downloaded {ticker} (Binance Spot {bn_symbol})")
                 else:
@@ -605,9 +725,14 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
             # crypto: Yahoo/CoinGecko fallback 사용 안 함 (source 통일)
             if not success:
                 if os.path.exists(fp):
+                    bad = _cache_problem(fp)
                     file_date = datetime.fromtimestamp(os.path.getmtime(fp)).date()
-                    print(f"  ⚠️ {ticker} Binance fetch 실패 → STALE {file_date}")
-                    log.append(f"<p class='warning'>Used stale data for {ticker} ({file_date})</p>")
+                    if bad:
+                        print(f"  🛑 {ticker}: 재수집 실패 + 기존 캐시도 못 씀 ({bad})")
+                        log.append(f"<p class='error'>XXX {ticker}: 재수집 실패 + 캐시 깨짐({bad})</p>")
+                    else:
+                        print(f"  ⚠️ {ticker} Binance fetch 실패 → STALE {file_date}")
+                        log.append(f"<p class='warning'>Used stale data for {ticker} ({file_date})</p>")
                 else:
                     log.append(f"<p class='error'>XXX Failed to download: {ticker}</p>")
             continue
@@ -627,30 +752,14 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
                 df = pd.DataFrame({'Date': pd.to_datetime(res['timestamp'], unit='s').date, 'Adj_Close': res['indicators']['adjclose'][0]['adjclose']})
                 df = df.dropna().drop_duplicates('Date')
 
-                if False and ticker.endswith('-USD') and len(df) > 0:
-                    symbol = ticker.replace('-USD', '')
-                    try:
-                        upbit_ohlcv = pyupbit.get_ohlcv(f"KRW-{symbol}", interval="day", count=1)
-                        if upbit_ohlcv is not None and len(upbit_ohlcv) > 0:
-                            upbit_close_krw = upbit_ohlcv['close'].iloc[-1]
-                            yahoo_last_usd = df['Adj_Close'].iloc[-1]
-                            yahoo_last_krw = yahoo_last_usd * usd_krw_rate
-
-                            if upbit_close_krw > 0 and yahoo_last_krw > 0:
-                                diff_pct = abs(yahoo_last_krw - upbit_close_krw) / upbit_close_krw
-                                if diff_pct > 0.10:
-                                    print(f"  ⚠️ {ticker}: 가격 불일치 (Yahoo {yahoo_last_krw:,.0f}원 vs Upbit {upbit_close_krw:,.0f}원, diff={diff_pct:.0%}) - 제외")
-                                    # 저장하지 않고 스킵
-                                    continue 
-                    except: pass
-                
-                df.to_csv(fp, index=False)
+                _save_csv_atomic(df, fp)
                 success = True
                 print(f"  - Downloaded {ticker} (Yahoo)")
-                
+            else:
+                print(f"  ⚠️ Yahoo {ticker}: status {resp.status_code}")
+
         except Exception as e:
-            # print(f"  ⚠️ Yahoo download failed for {ticker}: {e}")
-            pass
+            print(f"  ⚠️ Yahoo {ticker}: {type(e).__name__}: {e}")
             
         # 3. Fallback to CoinGecko
         if not success and ticker in coin_id_map:
@@ -664,40 +773,30 @@ def download_required_data(tickers: list, log: list, coin_id_map: dict):
                     data = resp.json().get('prices', [])
                     df = pd.DataFrame(data, columns=['ts', 'Adj_Close'])
                     df['Date'] = pd.to_datetime(df['ts'], unit='ms').dt.date
-                    df[['Date','Adj_Close']].drop_duplicates('Date').to_csv(fp, index=False)
+                    _save_csv_atomic(df.drop_duplicates('Date'), fp, cols=['Date','Adj_Close'])
                     print(f"  - Downloaded {ticker} (CoinGecko)")
                     success = True
-             except: pass
+             except Exception as e:
+                print(f"  ⚠️ CoinGecko {ticker}: {type(e).__name__}: {e}")
         
         # 4. Final Safety Net: Stale Data Fallback
+        #    깨진 파일은 여기서 살려 쓰지 않는다. 지우지도 않는다 — 공유 파일이라
+        #    다른 프로세스가 같은 순간에 제대로 받아 둔 것일 수 있다.
         if not success:
             if os.path.exists(fp):
-                # 기존 파일이 있으면 (어제 파일 등) 사용
+                bad = _cache_problem(fp)
                 file_date = datetime.fromtimestamp(os.path.getmtime(fp)).date()
-                print(f"  ⚠️ Failed to update {ticker}, using STALE data from {file_date}")
-                log.append(f"<p class='warning'>Used stale data for {ticker} ({file_date})</p>")
-                # success = True로 간주하지 않고, 에러 로그는 남기지 않음 (데이터가 있으므로)
+                if bad:
+                    print(f"  🛑 {ticker}: 재수집 실패 + 기존 캐시도 못 씀 ({bad})")
+                    log.append(f"<p class='error'>XXX {ticker}: 재수집 실패 + 캐시 깨짐({bad})</p>")
+                else:
+                    print(f"  ⚠️ Failed to update {ticker}, using STALE data from {file_date}")
+                    log.append(f"<p class='warning'>Used stale data for {ticker} ({file_date})</p>")
             else:
                 log.append(f"<p class='error'>XXX Failed to download: {ticker}</p>")
 
 
 # --- 4. Logic Engines ---
-def load_price(ticker):
-    try:
-        df = pd.read_csv(os.path.join(DATA_DIR, f"{ticker}.csv"), parse_dates=['Date'])
-        # [Validation] Check Data Recency
-        if df.empty: return pd.Series(dtype=float)
-        
-        last_date = df['Date'].iloc[-1].date() if hasattr(df['Date'].iloc[-1], 'date') else df['Date'].iloc[-1]
-        today = datetime.now().date()
-        
-        # 만약 데이터 마지막 날짜가 7일 이상 지났으면 쓸모없는 데이터 (상폐/티커변경 등)
-        if (today - last_date).days > 7:
-            return pd.Series(dtype=float)
-
-        return df.set_index('Date')['Adj_Close'].sort_index()
-    except: return pd.Series(dtype=float)
-
 def calc_sma(s, w): return s.rolling(w).mean().iloc[-1] if len(s) >= w else np.nan
 def calc_ret(s, d): return s.iloc[-1]/s.iloc[-1-d] - 1 if len(s) >= d+1 and s.iloc[-1-d]!=0 else np.nan
 def calc_sharpe(s, d):
@@ -2102,6 +2201,20 @@ if __name__ == "__main__":
     prices = {t: load_price(t) for t in all_tickers}
     
     if prices['BTC-USD'].empty: sys.exit(1)
+
+    # 주식 입력이 온전하지 않으면 여기서 멈춘다. 종목 하나가 조용히 빠진 채 계산된
+    # 신호를 signal_state.json 에 발행하면, 23:35 실매매가 야후 직접조회에 실패했을 때
+    # 그 틀린 바구니를 예비 경로로 쓴다(2026-10-12 QQQ 사고).
+    # 크론 래퍼(run_recommend.sh)가 비정상 종료를 텔레그램으로 알리고 5분 뒤 한 번 더 돈다.
+    stock_bad = require_stock_prices(prices)
+    if stock_bad:
+        print(f"\n🛑 주식 입력 불량으로 리포트를 중단한다 — {stock_bad}")
+        try:
+            send_telegram(f"🛑 개인 리포트 중단: 주식 입력 불량 — {stock_bad}")
+        except Exception as _e:
+            print(f"  ⚠️ 중단 알림 전송 실패: {_e}")
+        sys.exit(2)
+
     target_date = prices['BTC-USD'].index[-1]
     
     # Get USD-KRW Rate
@@ -2744,7 +2857,7 @@ if __name__ == "__main__":
                                 alloc_lines.append(f"  ⚠️ trigger alert 전송 실패: {_ex_tg}")
                         alloc_lines.append(f"  ⚠️ 트리거 ON ({reason}) — 텔레그램 알림 발송 (수동 송금 권장)")
                     if _ts_path and (_was_active or _alloc_transit_active):
-                        _tmp = _ts_path + '.tmp'
+                        _tmp = _atomic_tmp(_ts_path)
                         with open(_tmp, 'w') as _f:
                             json.dump(_ts_obj, _f, ensure_ascii=False, indent=2)
                         os.replace(_tmp, _ts_path)
