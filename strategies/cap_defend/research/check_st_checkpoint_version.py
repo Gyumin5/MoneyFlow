@@ -14,6 +14,7 @@ import os
 import sys
 
 import numpy as np
+import pandas as pd
 
 RES = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(RES))
@@ -46,3 +47,32 @@ for a in range(7):
             bad += 1
 
 print(f"\n어긋난 칸 {bad}/14")
+
+# 코인 축 스윕도 합성 60/25/15 를 쓰므로 자기 폴더에 주식 슬리브 곡선을 따로 들고 있다
+# (bt_coin_param_resweep.run_stock, 비용 조건과 무관하게 앵커당 한 벌). 같은 이유로
+# 판본이 갈릴 수 있어 함께 잰다. 인자 fix 를 주면 어긋난 것을 지금 코드로 덮어쓴다.
+print("\n코인 스윕이 들고 있는 주식 슬리브 곡선")
+import bt_coin_param_resweep as R  # noqa: E402
+
+fix = "fix" in sys.argv
+bad2 = 0
+for a in range(7):
+    p = os.path.join(R.EQDIR, f"st__a{a}.csv")
+    if not os.path.exists(p):
+        print(f"  a{a}: 저장본 없음")
+        bad2 += 1
+        continue
+    old = pd.read_csv(p, index_col=0, parse_dates=True)["eq"]
+    new = R.run_stock(a, False)
+    j = old.index.intersection(new.index)
+    d = float(np.max(np.abs(old[j].values / new[j].values - 1.0)))
+    same = d < 1e-9 and len(old) == len(new)
+    print(f"  a{a}: 최대 상대괴리 {d:.3e} · 길이 {len(old)}/{len(new)} → "
+          f"{'같다' if same else '다르다'}")
+    if not same:
+        bad2 += 1
+        if fix:
+            new.to_csv(p, header=["eq"])
+            print(f"     지금 코드 결과로 덮어썼다 ({p})")
+
+print(f"\n어긋난 칸 {bad2}/7" + (" (덮어쓰기 완료)" if fix else ""))
