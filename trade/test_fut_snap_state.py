@@ -130,15 +130,20 @@ class TestSnapStateDiffs(unittest.TestCase):
 
 
 class TestSelfCheck(unittest.TestCase):
+    """자기시험은 서버 상태가 아니라 깨끗한 합성 상태로 돈다.
 
-    def test_positive_control_passes_on_healthy_state(self):
-        ok, why = self_check_snap(healthy(), N, CAP)
+    2026-10-14 토론(run-20261014T154635Z)의 필수 수정이다. 서버 상태로 흔들면 그날
+    상태 모양에 따라 대조가 둔해진다 — 전액 현금인 날에는 흔들 종목이 없다.
+    """
+
+    def test_all_controls_bite(self):
+        for name, ok, why in self_check_snap(N, CAP, 'CASH'):
+            self.assertTrue(ok, f'{name}: {why}')
+
+    def test_clean_synthetic_passes_first(self):
+        name, ok, why = self_check_snap(N, CAP, 'CASH')[0]
+        self.assertEqual(name, '깨끗한 합성 상태')
         self.assertTrue(ok, why)
-
-    def test_positive_control_reports_when_combined_missing(self):
-        ok, why = self_check_snap({'snapshots': [], 'last_combined': {}}, N, CAP)
-        self.assertFalse(ok)
-        self.assertIn('양성 대조', why)
 
 
 class TestExpectedBar(unittest.TestCase):

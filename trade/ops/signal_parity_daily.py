@@ -44,7 +44,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -113,6 +115,17 @@ FUT_STATE_MEMBER = 'D_SMA42'
 SPOT_STATE_REMOTE = '/home/ubuntu/trade_state.json'
 SPOT_STATE_MEMBER = 'D_SMA42'
 SNAP_TOL = 1e-9
+
+# 현물 스냅 상태의 허용 지연은 0일이다. 현물·선물 크론은 매일 09:05 KST(00:05 UTC)에
+# 돌고 그때 마지막으로 닫힌 일봉은 어제 UTC 자정이라, 집 감시가 도는 10:00 KST 에는
+# 지연이 0 인 게 정상이다. 1일을 허용하면 그날 크론이 통째로 죽어도 통과한다.
+SPOT_SNAP_STALE_ALLOW = 0
+
+# 현금 키 경계. 엔진 안(스냅·멤버 합산)은 대문자 CASH, 체결기 쪽 목표는 저장 시점에
+# 어느 표기를 쓰는지가 자산군마다 다르다 — 현물 last_target_snapshot 은 Cash,
+# 선물 last_target 은 CASH 다(2026-10-15 서버 상태 실측). 그래서 표기를 한쪽으로
+# 통일하라고 요구하지 않고, 딕셔너리마다 "여기는 이 표기" 를 못박아 검사한다.
+CASH_ENGINE, CASH_EXEC_SPOT, CASH_EXEC_FUT = 'CASH', 'Cash', 'CASH'
 
 
 # 선물 자기시험용 합성 일봉. 시장과 무관하게 고정된 값이라 그날 국면에 따라 둔감해지지
@@ -873,33 +886,62 @@ def expected_last_closed_daily(now_utc: datetime) -> datetime:
     return midnight - timedelta(days=1)
 
 
-def _cash_folded(d: dict, label: str, diffs: list) -> dict:
-    """현금 키를 대문자 CASH 하나로 접는다. `_ts` 같은 메타 키는 뺀다.
+def _cash_folded(d: dict, label: str, diffs: list, expect: str = CASH_ENGINE) -> dict:
+    """현금 키를 대문자 CASH 하나로 접는다. 확인된 메타 키 `_ts` 만 뺀다.
 
-    엔진 안은 대문자 CASH, 체결·리포트 쪽은 Cash 라서 같은 값이 두 표기로 저장된다.
-    표기가 다르다는 이유로 불일치를 신고하면 매일 거짓 경보가 난다. 반대로 한
-    딕셔너리 안에 둘이 같이 있으면 그건 표기 문제가 아니라 2026-08-20 헛주문 사고의
-    모양이라 그 자리에서 신고한다.
+    같은 값이 자리마다 다른 표기로 저장되므로(엔진 안 CASH, 현물 체결 목표 Cash)
+    표기가 다르다는 이유만으로 불일치를 신고하면 매일 거짓 경보가 난다. 그래서
+    비교는 접어서 하되, 그 자리에 허용된 표기인지는 따로 본다. 보는 것 둘.
+      · 한 딕셔너리에 CASH 와 Cash 가 같이 있다 — 2026-08-20 헛주문 사고의 모양이다
+      · 그 자리에 안 맞는 표기 하나만 있다 — 위를 안 거치고 조용히 흘러드는 길이다
+    현금 비중이 아예 없는 딕셔너리에 현금 키를 요구하지는 않는다.
+
+    밑줄 접두사만으로 모르는 키를 버리지 않는다. `_ts` 외의 키는 비중으로 세고,
+    숫자가 아니거나 NaN·무한대면 그 자리에서 신고한다 — 버리면 합 검사가 눈감는다.
     """
     seen = [k for k in d if k.upper() == 'CASH']
     if len(seen) > 1:
         diffs.append(f'{label} 에 현금 키가 둘 이상이다({sorted(seen)}) — '
                      f'표기가 섞이면 체결 쪽이 현금을 코인으로 읽는다')
+    for k in seen:
+        if k != expect:
+            diffs.append(f'{label} 의 현금 키가 {k!r} 다 — 여기는 {expect!r} 만 쓴다')
     out = {}
     for k, v in d.items():
         if k == '_ts':
             continue
         key = 'CASH' if k.upper() == 'CASH' else k
-        try:
-            out[key] = out.get(key, 0.0) + float(v)
-        except (TypeError, ValueError):
+        # 숫자로 읽히는 문자열('0.33')도 받지 않는다. JSON 이 수로 쓴 값만 비중이다 —
+        # 문자열이 흘러들면 다른 데서 조용히 자료형이 바뀌었다는 뜻이라 그 자체가 사건이다.
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
             diffs.append(f'{label} {k} 비중이 숫자가 아니다({v!r})')
+            continue
+        wf = float(v)
+        if not math.isfinite(wf):
+            diffs.append(f'{label} {k} 비중이 유한한 수가 아니다({v!r})')
+            continue
+        out[key] = out.get(key, 0.0) + wf
     return out
+
+
+def cash_boundary_diffs(items: list) -> list:
+    """현금 키 경계만 따로 본다. items = [(딕셔너리, 이름, 허용 표기)].
+
+    비교에 안 쓰는 저장값(멤버 합산, 멤버별 목표)도 표기 경계는 같이 본다. 값이
+    어긋나는 건 리필 때문에 정상일 수 있지만, 표기가 어긋나는 건 어느 자리에서도
+    정상이 아니다.
+    """
+    diffs = []
+    for d, label, expect in items:
+        if isinstance(d, dict):
+            _cash_folded(d, label, diffs, expect)
+    return diffs
 
 
 def snap_state_diffs(member: dict, n_expected: int, cap: float,
                      tol: float = SNAP_TOL, combined: dict = None,
-                     combined_label: str = 'last_combined') -> list:
+                     combined_label: str = 'last_combined',
+                     exec_cash: str = CASH_ENGINE, cap_note: str = '') -> list:
     """스냅 상태가 스스로 모순되지 않는가. 어긋난 것들을 문장으로 돌려준다.
 
     순수 함수다 — 서버도 시계도 안 본다. 보는 것 넷.
@@ -929,24 +971,19 @@ def snap_state_diffs(member: dict, n_expected: int, cap: float,
         if not isinstance(snap, dict):
             diffs.append(f'스냅 {i} 이 딕셔너리가 아니다({type(snap).__name__})')
             continue
+        folded = _cash_folded(snap, f'스냅 {i}', diffs, CASH_ENGINE)
         total = 0.0
-        for coin, w in snap.items():
-            try:
-                wf = float(w)
-            except (TypeError, ValueError):
-                diffs.append(f'스냅 {i} {coin} 비중이 숫자가 아니다({w!r})')
-                continue
+        for coin, wf in folded.items():
             if wf < -tol:
                 diffs.append(f'스냅 {i} {coin} 비중 음수({wf:.9f})')
             # 현금은 상한을 안 받는다. 코인만 cap 1/3 이다.
-            if coin.upper() != 'CASH' and wf > cap + 1e-6:
-                diffs.append(f'스냅 {i} {coin} 비중 {wf:.9f} 이 상한 {cap:.9f} 초과')
+            if coin != 'CASH' and wf > cap + 1e-6:
+                diffs.append(f'스냅 {i} {coin} 비중 {wf:.9f} 이 상한 {cap:.9f} 초과'
+                             + (f' — {cap_note}' if cap_note else ''))
             total += wf
-            key = 'CASH' if coin.upper() == 'CASH' else coin
-            agg[key] = agg.get(key, 0.0) + wf / len(snaps)
+            agg[coin] = agg.get(coin, 0.0) + wf / len(snaps)
         if abs(total - 1.0) > 1e-6:
             diffs.append(f'스냅 {i} 비중 합 {total:.9f} (기대 1.0)')
-        _cash_folded(snap, f'스냅 {i}', diffs)
 
     if combined is None:
         combined = member.get('last_combined')
@@ -954,7 +991,7 @@ def snap_state_diffs(member: dict, n_expected: int, cap: float,
         diffs.append(f'{combined_label} 가 딕셔너리가 아니다({type(combined).__name__})')
         return diffs
 
-    comb = _cash_folded(combined, combined_label, diffs)
+    comb = _cash_folded(combined, combined_label, diffs, exec_cash)
     for coin in sorted(set(agg) | set(comb)):
         gap = abs(agg.get(coin, 0.0) - comb.get(coin, 0.0))
         if gap > tol:
@@ -966,35 +1003,108 @@ def snap_state_diffs(member: dict, n_expected: int, cap: float,
     return diffs
 
 
-def self_check_snap(member: dict, n_expected: int, cap: float,
-                    combined: dict = None, combined_label: str = 'last_combined'):
-    """양성 대조 — 합산을 일부러 흔들어 이 검사가 실제로 잡는지 본다.
+def synthetic_snap_state(n_expected: int, exec_cash: str) -> tuple:
+    """깨끗한 합성 스냅 상태 한 벌. 자기시험은 서버 상태가 아니라 이걸로 한다.
+
+    서버 상태로 자기시험을 하면 그날 상태가 어떤 모양이냐에 따라 대조가 둔해진다 —
+    전액 현금인 날에는 흔들 종목이 없고, 이미 어긋난 날에는 무엇을 흔들어도 잡힌다.
+    """
+    snap = {'AAA': 1 / 3, 'BBB': 1 / 3, CASH_ENGINE: 1 / 3}
+    member = {'snapshots': [dict(snap) for _ in range(n_expected)]}
+    target = {'AAA': 1 / 3, 'BBB': 1 / 3, exec_cash: 1 / 3}
+    return member, target
+
+
+def _ctl_move(m, t, c):
+    t['AAA'] += 0.01
+    t['BBB'] -= 0.01
+
+
+def _ctl_cash_split(m, t, c):
+    half = t.pop(c) / 2
+    t['CASH'], t['Cash'] = half, half
+
+
+def _ctl_cash_spelling(m, t, c):
+    t['Cash' if c == 'CASH' else 'CASH'] = t.pop(c)
+
+
+def _ctl_count(m, t, c):
+    m['snapshots'].pop()
+
+
+def _ctl_cap(m, t, c):
+    m['snapshots'][0].update({'AAA': 2 / 3, 'BBB': 0.0})
+
+
+def _ctl_sum(m, t, c):
+    m['snapshots'][0]['AAA'] += 0.01
+
+
+def _ctl_negative(m, t, c):
+    s = m['snapshots'][0]
+    s['AAA'], s[CASH_ENGINE] = -0.01, s[CASH_ENGINE] + 1 / 3 + 0.01
+    s['BBB'] = 1 / 3
+
+
+def _ctl_nan(m, t, c):
+    m['snapshots'][0]['AAA'] = float('nan')
+
+
+# 대조마다 "어느 규칙이 물어야 하는가" 를 같이 못박는다. 다른 경보가 대신 떴다는
+# 이유로 통과를 인정하면, 정작 그 규칙이 고장나도 자기시험이 초록으로 남는다.
+SNAP_CONTROLS = [
+    ('합을 보존한 목표 비중 이동', _ctl_move, '합산'),
+    ('합·평균을 보존한 현금 키 분할', _ctl_cash_split, '현금 키가 둘 이상'),
+    ('체결 목표 현금 표기 뒤집기', _ctl_cash_spelling, '현금 키가'),
+    ('스냅 개수', _ctl_count, '스냅 개수'),
+    ('종목당 상한', _ctl_cap, '상한'),
+    ('스냅 비중 합', _ctl_sum, '비중 합'),
+    ('음수 비중', _ctl_negative, '음수'),
+    ('유한하지 않은 값', _ctl_nan, '유한한 수가 아니다'),
+]
+
+
+def self_check_snap(n_expected: int, cap: float, exec_cash: str,
+                    combined_label: str = 'last_target') -> list:
+    """대조 묶음 — 깨끗한 합성 상태를 규칙별로 하나씩 망가뜨려 그 규칙이 무는지 본다.
 
     검사가 고장나는 흔한 방식은 경보가 뜨는 게 아니라 무엇을 넣든 "이상 없음" 을
     찍게 되는 것이다. 정상 실행만 보고는 그 상태를 구분할 수 없다.
     """
     import copy
-    src = member.get('last_combined') if combined is None else combined
-    if not isinstance(src, dict) or not src:
-        return False, f'양성 대조를 못 했다: {combined_label} 가 비었다'
-    poisoned_comb = copy.deepcopy(src)
-    key = sorted(k for k in poisoned_comb if k != '_ts')[0]
-    poisoned_comb[key] = float(poisoned_comb[key]) + 0.01
-    if combined is None:
-        poisoned = copy.deepcopy(member)
-        poisoned['last_combined'] = poisoned_comb
-        hit = snap_state_diffs(poisoned, n_expected, cap)
-    else:
-        hit = snap_state_diffs(member, n_expected, cap, combined=poisoned_comb,
-                               combined_label=combined_label)
-    if not hit:
-        return False, f'양성 대조 실패: {key} 합산을 0.01 흔들었는데 안 잡힌다'
-    return True, f'양성 대조 통과 ({key} 합산 0.01 흔들기를 잡는다)'
+
+    base_m, base_t = synthetic_snap_state(n_expected, exec_cash)
+    results = []
+    clean = snap_state_diffs(base_m, n_expected, cap, combined=base_t,
+                             combined_label=combined_label, exec_cash=exec_cash)
+    if clean:
+        results.append(('깨끗한 합성 상태', False,
+                        f'정상 대조가 먼저 걸렸다: {clean[0]}'))
+        return results
+    results.append(('깨끗한 합성 상태', True, '이상 없음으로 통과'))
+
+    for name, mutate, expect in SNAP_CONTROLS:
+        m, t = copy.deepcopy(base_m), copy.deepcopy(base_t)
+        mutate(m, t, exec_cash)
+        hit = snap_state_diffs(m, n_expected, cap, combined=t,
+                               combined_label=combined_label, exec_cash=exec_cash)
+        matched = [d for d in hit if expect in d]
+        if matched:
+            results.append((name, True, matched[0]))
+        elif hit:
+            results.append((name, False,
+                            f'다른 규칙만 물었다({hit[0]}) — 기대 사유 {expect!r}'))
+        else:
+            results.append((name, False, f'안 잡힌다 — 기대 사유 {expect!r}'))
+    return results
 
 
 def _snap_state_check(title: str, remote: str, pick_member, pick_combined,
                       n_expected: int, cap: float,
-                      allow_stale_days: int, self_test: bool) -> int:
+                      allow_stale_days: int, self_test: bool,
+                      exec_cash: str = CASH_ENGINE, cap_note: str = '',
+                      extra_boundary=None) -> int:
     """서버가 쓴 상태 파일 하나를 읽어 스냅이 스스로 모순이 없는지 본다. 읽기 전용이다.
 
     판본 대조를 안 한다 — 이 검사는 집 사본 코드를 한 줄도 안 돌리고 서버가 쓴
@@ -1034,22 +1144,26 @@ def _snap_state_check(title: str, remote: str, pick_member, pick_combined,
     if lag_days < 0:
         print('판정: 불일치 — 상태의 마지막 봉이 미래다. 사람이 봐야 한다.')
         return 1
+    if (actual_bar.astimezone(timezone.utc).hour,
+            actual_bar.minute, actual_bar.second) != (0, 0, 0):
+        print(f'판정: 불일치 — 마지막 봉 시각이 UTC 자정이 아니다({actual_bar}). '
+              f'일봉이 아닌 값이 들어왔다.')
+        return 1
     if lag_days > allow_stale_days:
         raise ParityDataStale(f'{title}: 상태가 기대 봉까지 안 왔다 (지연 {lag_days}일)')
+    if lag_days > 0:
+        print(f'주의: 지연 {lag_days}일이다. 허용치({allow_stale_days}일) 안이라 '
+              f'판정은 이어가지만 이상 없음과 같은 상태가 아니다.')
 
     combined, label = pick_combined(state, member)
     if combined is None:
         raise ParityDataStale(f'{title}: 체결 목표({label})가 상태에 없다')
 
-    if self_test:
-        passed, why = self_check_snap(member, n_expected, cap,
-                                      combined=combined, combined_label=label)
-        print(f'양성 대조: {why}')
-        if not passed:
-            raise ParityDataStale(why)
-
-    diffs = snap_state_diffs(member, n_expected, cap,
-                             combined=combined, combined_label=label)
+    diffs = snap_state_diffs(member, n_expected, cap, combined=combined,
+                             combined_label=label, exec_cash=exec_cash,
+                             cap_note=cap_note)
+    if extra_boundary:
+        diffs += cash_boundary_diffs(extra_boundary(state, member))
     snaps = member.get('snapshots') or []
     print(f'스냅 {len(snaps)}개 (기대 {n_expected}) · 상한 {cap:.6f}')
     for i, snap in enumerate(snaps):
@@ -1058,55 +1172,334 @@ def _snap_state_check(title: str, remote: str, pick_member, pick_combined,
     shown = {k: v for k, v in combined.items() if k != '_ts'}
     print(f'  체결 목표({label}): {dict(sorted(shown.items(), key=lambda x: -x[1]))}')
 
+    # 참고 — 저장된 멤버 합산은 리필 날 스냅 평균과 다른 게 정상이다(리필이 스냅만
+    # 고치고 이 값은 안 고친다). 판정에 넣지 않고 사람이 볼 수 있게만 적는다.
+    stored = member.get('last_combined')
+    if isinstance(stored, dict):
+        ref = _cash_folded(stored, 'last_combined', [], CASH_ENGINE)
+        mean = {}
+        for snap in snaps:
+            if isinstance(snap, dict):
+                for k, v in _cash_folded(snap, '', [], CASH_ENGINE).items():
+                    mean[k] = mean.get(k, 0.0) + v / len(snaps)
+        gap = max([abs(ref.get(k, 0.0) - mean.get(k, 0.0))
+                   for k in set(ref) | set(mean)] or [0.0])
+        print(f'  참고: 저장된 last_combined 와 스냅 평균의 최대 차 {gap:.9f} '
+              f'(리필 날은 0 이 아닌 게 정상, 판정에 안 넣는다)')
+
     if diffs:
         print(f'판정: 불일치 — {len(diffs)}건. 사람이 봐야 한다.')
         for d in diffs:
             print(f'    {d}')
-        return 1
-    print('판정: 이상 없음')
-    return 0
+        rc = 1
+    else:
+        print('판정: 이상 없음')
+        rc = 0
+
+    # 실제 상태 판정을 먼저 남긴 뒤에 자기시험을 한다. 순서를 뒤집으면 자기시험이
+    # 걸린 날 그날 상태가 어땠는지가 기록에 아예 안 남는다.
+    if self_test:
+        failed = []
+        for name, passed, why in self_check_snap(n_expected, cap, exec_cash, label):
+            print(f'대조 {"통과" if passed else "실패"} — {name}: {why}')
+            if not passed:
+                failed.append(f'{name}: {why}')
+        if failed:
+            raise ParityDataStale(f'{title}: 자기시험 {len(failed)}건 실패 — '
+                                  f'{failed[0]}')
+    return rc
+
+
+STOCK_LOG_GLOB = 'executor_stock.log executor_stock.log.*'
+STOCK_STATE_REMOTE = '/home/ubuntu/kis_trade_state.json'
+_RE_EXEC_DAY = re.compile(r'^\[(\d{4}-\d{2}-\d{2})')
+_RE_EXEC_ORDER = re.compile(r'주문 (buy|sell) ([A-Z]+) (\d+)주')
+_RE_EXEC_BAL = re.compile(r"잔고: (\{[^}]*\})")
+_RE_EXEC_TARGET = re.compile(r"보고 \(silent\): target=(\{[^}]*\})")
+
+
+def parse_stock_exec_log(raw: str) -> dict:
+    """주식 executor 로그를 날짜별로 접는다. 순수 함수다.
+
+    모으는 것 셋 — 그날 낸 주문(부호 있는 주식 수), 그날 끝 잔고, 찍혔으면 목표.
+    같은 날 두 번 돌면 주문은 합치고 잔고는 뒤엣것이 끝이다.
+    """
+    days = {}
+    for line in raw.splitlines():
+        m = _RE_EXEC_DAY.match(line)
+        if not m:
+            continue
+        rec = days.setdefault(m.group(1),
+                              {'orders': [], 'balance': None, 'target': None})
+        mo = _RE_EXEC_ORDER.search(line)
+        if mo:
+            qty = int(mo.group(3))
+            rec['orders'].append((mo.group(2), qty if mo.group(1) == 'buy' else -qty))
+        mt = _RE_EXEC_TARGET.search(line)
+        if mt:
+            rec['target'] = sorted(
+                t for t, w in re.findall(r"'([A-Za-z]+)': ([0-9.e-]+)", mt.group(1))
+                if t != 'Cash' and float(w) > 1e-9)
+        mb = _RE_EXEC_BAL.search(line)
+        if mb:
+            rec['balance'] = {k: int(v) for k, v in
+                              re.findall(r"'([A-Z]+)': (\d+)", mb.group(1))}
+    return days
+
+
+def stock_exec_diffs(before: dict, after: dict, orders: list,
+                     target_set: list = None) -> list:
+    """실행 결과가 주문과 목표로 설명되는가. 어긋난 것들을 문장으로 돌려준다.
+
+    주식 수로만 본다. 금액으로 재면 executor 가 쓰는 결제기준 배율(_settle_scale)이
+    로그에 안 남아서 멀쩡한 날도 그 배율만큼 어긋나 보인다. 주식 수에는 그 미지수가
+    없고, 부분체결·조용한 거절·계좌 외부 변경이 전부 이 항등식에서 드러난다.
+
+      그날 끝 잔고 = 전날 끝 잔고 + 그날 낸 주문의 부호 합
+    """
+    diffs = []
+    expected = dict(before)
+    for ticker, qty in orders:
+        expected[ticker] = expected.get(ticker, 0) + qty
+    expected = {k: v for k, v in expected.items() if v != 0}
+    actual = {k: v for k, v in after.items() if v != 0}
+    for ticker in sorted(set(expected) | set(actual)):
+        want, got = expected.get(ticker, 0), actual.get(ticker, 0)
+        if want != got:
+            diffs.append(f'{ticker} 주식 수 {got} (전날 {before.get(ticker, 0)} + '
+                         f'주문 {want - before.get(ticker, 0):+d} = {want} 이어야 한다)')
+    if target_set is not None:
+        extra = sorted(set(actual) - set(target_set))
+        if extra:
+            diffs.append(f'목표에 없는 종목을 들고 있다 {extra} '
+                         f'(목표 {sorted(target_set)}) — 매도가 안 나갔거나 거절됐다')
+    return diffs
+
+
+def stock_target_gap(held: dict, target_set: list) -> list:
+    """목표에 있는데 안 들고 있는 종목. 판정이 아니라 참고다.
+
+    비중이 작은 종목은 주문 금액이 최소주문에 못 미쳐 합법적으로 안 사진다. 그걸
+    불일치로 올리면 소액 계좌에서 매일 경보가 난다. 반대 방향(목표에 없는데 들고
+    있다)은 그런 합법 경로가 없어서 판정에 넣는다.
+    """
+    return sorted(set(target_set) - {k for k, v in held.items() if v})
+
+
+def self_check_stock_exec() -> list:
+    """대조 묶음 — 깨끗한 합성 실행을 규칙별로 망가뜨려 그 규칙이 무는지 본다.
+
+    서버 실제 기록이 아니라 합성으로 하는 이유는 스냅 검사와 같다. 그날 주문이
+    없거나 잔고가 비면 실제 기록으로는 흔들 자리가 없어서 대조가 조용히 둔해진다.
+    """
+    before = {'SPY': 10, 'EEM': 10}
+    orders = [('SPY', -3), ('VNQ', 5)]
+    after = {'SPY': 7, 'EEM': 10, 'VNQ': 5}
+    target = ['EEM', 'SPY', 'VNQ']
+
+    results = []
+    clean = stock_exec_diffs(before, after, orders, target)
+    if clean:
+        return [('깨끗한 합성 실행', False, f'정상 대조가 먼저 걸렸다: {clean[0]}')]
+    results.append(('깨끗한 합성 실행', True, '이상 없음으로 통과'))
+
+    controls = [
+        ('잔고 한 주 어긋남',
+         (before, dict(after, SPY=after['SPY'] + 1), orders, target), '주식 수'),
+        ('주문이 로그에 안 찍힘',
+         (before, after, [('SPY', -3)], target), '주식 수'),
+        ('목표 밖 종목 보유',
+         (before, dict(after, TLT=4), orders + [('TLT', 4)], target),
+         '목표에 없는 종목'),
+    ]
+    for name, args, expect in controls:
+        hit = stock_exec_diffs(*args)
+        matched = [d for d in hit if expect in d]
+        if matched:
+            results.append((name, True, matched[0]))
+        elif hit:
+            results.append((name, False,
+                            f'다른 규칙만 물었다({hit[0]}) — 기대 사유 {expect!r}'))
+        else:
+            results.append((name, False, f'안 잡힌다 — 기대 사유 {expect!r}'))
+    return results
+
+
+def merged_stock_target(state: dict) -> list:
+    """상태파일의 스냅 셋을 병합해 그날 목표 종목 집합을 낸다.
+
+    executor 가 체결에 쓰는 목표와 같은 집합이다. 비중이 아니라 집합만 쓰는 이유는
+    비중 비교에는 평가금액이 필요하고 그 축에 결제기준 배율이 숨어 있기 때문이다.
+    """
+    snaps = (state.get('snapshots') or {})
+    picks = set()
+    for snap in snaps.values():
+        for t in (snap.get('picks') or []):
+            if t != 'Cash':
+                picks.add(t)
+    return sorted(picks)
+
+
+def check_stock_exec(self_test: bool = True) -> int:
+    """주식 실행 결과를 서버 로그·상태로 독립 대조한다. 읽기 전용이다.
+
+    목표를 복원하지 못하면 통과가 아니라 판정 불가로 낸다 — 복원 못 한 날을 조용히
+    넘기면 이 감시는 "아무 일도 안 일어난 날" 과 "확인을 못 한 날" 을 같은 값으로
+    찍는다.
+    """
+    import json
+
+    print('== 주식 실행 결과 대조 ==')
+
+    raw, why = _ssh_text(
+        f'cd /home/ubuntu && for f in {STOCK_LOG_GLOB}; do [ -f "$f" ] && cat "$f"; done',
+        60)
+    if raw is None:
+        raise ParityDataStale(f'주식 실행 로그를 못 읽었다: {why}')
+    days = parse_stock_exec_log(raw)
+    known = sorted(d for d in days if days[d]['balance'] is not None)
+    if len(known) < 2:
+        raise ParityDataStale(f'잔고가 찍힌 실행일이 {len(known)}일뿐이라 대조할 짝이 없다')
+
+    prev, cur = known[-2], known[-1]
+    before, after = days[prev]['balance'], days[cur]['balance']
+    orders = days[cur]['orders']
+
+    # 목표는 그날 로그가 적은 것을 먼저 쓴다. 상태파일은 오늘 값이라 검사하는 날과
+    # 어긋날 수 있어서 로그가 없을 때만 쓰고, 썼으면 썼다고 적는다.
+    target_set, src = days[cur]['target'], f'{cur} 로그'
+    if not target_set:
+        raw_state, why = _ssh_text(f'cat {STOCK_STATE_REMOTE}', 30)
+        if raw_state is None:
+            print(f'목표 복원 실패: {why}')
+        else:
+            try:
+                target_set = merged_stock_target(json.loads(raw_state))
+                src = '상태파일 스냅 병합(오늘 값)'
+            except ValueError as exc:
+                print(f'목표 복원 실패: 상태 파일이 JSON 이 아니다: {exc}')
+    if not target_set:
+        raise ParityDataStale('주식 목표를 복원하지 못했다 — 통과로 적지 않는다')
+
+    print(f'직전 실행 {prev} 잔고 {before}')
+    print(f'마지막 실행 {cur} 잔고 {after} · 주문 {orders or "없음"}')
+    print(f'목표 종목 {target_set} ({src})')
+    missing = stock_target_gap(after, target_set)
+    if missing:
+        print(f'참고: 목표에 있는데 안 들고 있다 {missing} — 최소주문 미만이면 정상이다. '
+              f'판정에 안 넣는다.')
+
+    diffs = stock_exec_diffs(before, after, orders, target_set)
+    if diffs:
+        print(f'판정: 불일치 — {len(diffs)}건. 사람이 봐야 한다.')
+        for d in diffs:
+            print(f'    {d}')
+        rc = 1
+    else:
+        print('판정: 이상 없음')
+        rc = 0
+
+    if self_test:
+        failed = []
+        for name, passed, why in self_check_stock_exec():
+            print(f'대조 {"통과" if passed else "실패"} — {name}: {why}')
+            if not passed:
+                failed.append(f'{name}: {why}')
+        if failed:
+            raise ParityDataStale(f'주식 실행 결과 대조: 자기시험 {len(failed)}건 실패 — '
+                                  f'{failed[0]}')
+    return rc
+
+
+def _single_member(holder: dict, want: str, title: str, field: str) -> dict:
+    """멤버가 그 하나뿐임을 확인하고 돌려준다. 아니면 비교불능이다.
+
+    스냅 평균을 전체 체결 목표와 맞댈 수 있는 것은 그 목표가 이 멤버 것일 때뿐이다.
+    멤버가 둘 이상이면 목표는 앙상블 합산이라 평균과 다른 게 정상인데, 그때 비교
+    대상을 멤버 자기 합산으로 조용히 바꾸면 검사 이름은 그대로인 채 보는 것이 약해진다
+    (리필 날 거짓 경보가 나는 바로 그 값이다). 그래서 대체하지 않고 비교불능으로 적는다.
+    """
+    members = holder or {}
+    if list(members) != [want]:
+        raise ParityDataStale(
+            f'{title}: {field} 구성이 단일 {want} 가 아니다({sorted(members)}) — '
+            f'이 비교는 단일 멤버일 때만 뜻이 있다')
+    return members[want]
 
 
 def _fut_combined(state: dict, member: dict):
-    """선물이 그날 체결에 쓴 목표. 리필이 스냅을 고쳐도 같이 따라오는 값이다.
+    """선물이 그날 체결에 쓴 목표. 리필이 스냅을 고쳐도 같이 따라오는 값이다."""
+    target = state.get('last_target')
+    if not isinstance(target, dict):
+        raise ParityDataStale('선물 스냅 상태 검사: last_target 이 상태에 없다 — '
+                              'last_combined 로 대체하지 않는다')
+    return target, 'last_target'
 
-    멤버가 둘 이상이면 last_target 은 앙상블 합산이라 멤버 하나의 스냅 평균과
-    다른 게 정상이다. 그때는 비교 대상을 멤버 자기 합산으로 되돌린다.
-    """
-    strategies = state.get('strategies') or {}
-    if len(strategies) == 1 and isinstance(state.get('last_target'), dict):
-        return state['last_target'], 'last_target'
-    return member.get('last_combined'), 'last_combined'
+
+def _spot_combined(state: dict, member: dict):
+    """현물이 그날 체결에 쓴 목표. 멤버별 목표와 같은 구성인지도 같이 본다."""
+    target = state.get('last_target_snapshot')
+    if not isinstance(target, dict):
+        raise ParityDataStale('현물 스냅 상태 검사: last_target_snapshot 이 상태에 '
+                              '없다 — last_combined 로 대체하지 않는다')
+    mine = (state.get('last_member_targets') or {}).get(SPOT_STATE_MEMBER)
+    if isinstance(mine, dict):
+        a = _cash_folded(target, '', [], CASH_EXEC_SPOT)
+        b = _cash_folded(mine, '', [], CASH_EXEC_SPOT)
+        gap = max([abs(a.get(k, 0.0) - b.get(k, 0.0))
+                   for k in set(a) | set(b)] or [0.0])
+        if gap > 1e-9:
+            raise ParityDataStale(
+                f'현물 스냅 상태 검사: 멤버 목표와 전체 목표가 다르다(최대 차 {gap:.9f}) — '
+                f'전체 목표가 이 멤버 것이라고 볼 수 없다')
+    return target, 'last_target_snapshot'
 
 
 def check_snap_state(allow_stale_days: int, self_test: bool = True) -> int:
     """선물 스냅 상태."""
+    title = '선물 스냅 상태 검사'
     return _snap_state_check(
-        '선물 스냅 상태 검사', FUT_STATE_REMOTE,
-        lambda st: (st.get('strategies') or {}).get(FUT_STATE_MEMBER),
+        title, FUT_STATE_REMOTE,
+        lambda st: _single_member(st.get('strategies'), FUT_STATE_MEMBER,
+                                  title, 'strategies'),
         _fut_combined,
         int(_CANON['fut']['params']['n_snapshots']),
         float(_CANON['spot']['params']['cap']),   # 종목당 상한은 현물·선물 같은 1/3
-        allow_stale_days, self_test)
+        allow_stale_days, self_test,
+        exec_cash=CASH_EXEC_FUT,
+        extra_boundary=lambda st, m: [
+            (m.get('last_combined'), 'last_combined', CASH_ENGINE)])
 
 
-def check_spot_snap_state(allow_stale_days: int, self_test: bool = True) -> int:
+def check_spot_snap_state(allow_stale_days: int = SPOT_SNAP_STALE_ALLOW,
+                          self_test: bool = True) -> int:
     """현물 스냅 상태. 선물과 보는 것은 같고 상태 파일 모양만 다르다."""
+    title = '현물 스냅 상태 검사'
     return _snap_state_check(
-        '현물 스냅 상태 검사', SPOT_STATE_REMOTE,
-        lambda st: (st.get('members') or {}).get(SPOT_STATE_MEMBER),
-        lambda st, m: (st.get('last_target_snapshot'), 'last_target_snapshot'),
+        title, SPOT_STATE_REMOTE,
+        lambda st: _single_member(st.get('members'), SPOT_STATE_MEMBER,
+                                  title, 'members'),
+        _spot_combined,
         int(_CANON['spot']['params']['n_snapshots']),
         float(_CANON['spot']['params']['cap']),
-        allow_stale_days, self_test)
+        allow_stale_days, self_test,
+        exec_cash=CASH_EXEC_SPOT,
+        # 현물 리필에는 종목당 상한이 안 걸린다(선물만 2026-10-02 에 걸었다).
+        # 상한 위반을 봤을 때 먼저 의심할 자리라 같이 적되, 그걸 이유로 통과시키지 않는다.
+        cap_note='현물 리필에는 상한이 안 걸린다. 리필 날이면 그 경로를 먼저 본다',
+        extra_boundary=lambda st, m: [
+            (m.get('last_combined'), 'last_combined', CASH_ENGINE),
+            ((st.get('last_member_targets') or {}).get(SPOT_STATE_MEMBER),
+             f'last_member_targets.{SPOT_STATE_MEMBER}', CASH_EXEC_SPOT)])
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description='라이브 선정함수와 채택 백테스트의 일별 대조')
     parser.add_argument('--sleeve',
-                        choices=['fut', 'stock', 'snap', 'spotsnap', 'all'], default='all',
+                        choices=['fut', 'stock', 'snap', 'spotsnap', 'stockexec', 'all'],
+                        default='all',
                         help='무엇을 볼지 (기본 all — 선물 대조·주식 대조·선물 스냅 상태·'
-                             '현물 스냅 상태 넷)')
+                             '현물 스냅 상태·주식 실행 결과 다섯)')
     parser.add_argument('--days', type=int, default=3, help='비교할 최근 신호일 수 (기본 3)')
     parser.add_argument('--allow-stale-days', type=int, default=1,
                         help='허용할 데이터 지연 일수 (기본 1)')
@@ -1133,8 +1526,12 @@ def main() -> int:
         jobs.append(('선물 스냅 상태', lambda: check_snap_state(
             args.allow_stale_days, self_test=not args.skip_self_test)))
     if args.sleeve in ('spotsnap', 'all'):
+        # 현물은 허용 지연을 CLI 값이 아니라 0 으로 못박는다 — 아래 상수 주석 참조.
         jobs.append(('현물 스냅 상태', lambda: check_spot_snap_state(
-            args.allow_stale_days, self_test=not args.skip_self_test)))
+            SPOT_SNAP_STALE_ALLOW, self_test=not args.skip_self_test)))
+    if args.sleeve in ('stockexec', 'all'):
+        jobs.append(('주식 실행 결과', lambda: check_stock_exec(
+            self_test=not args.skip_self_test)))
 
     # 한쪽이 비교불능이어도 다른 쪽은 끝까지 본다. 먼저 실패한 것 때문에 나머지를
     # 건너뛰면 그날 감시 범위가 조용히 줄어든다. 최종 판정은 나쁜 쪽을 따른다(2 > 1 > 0).
