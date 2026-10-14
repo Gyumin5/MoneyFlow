@@ -207,6 +207,7 @@ def main() -> None:
     print("\n=== 판정 ===")
     pit, fix = SOURCES[0][0], SOURCES[1][0]
     ok = True
+    flipped = False
     for stress in (False, True):
         tag = "비용 5배" if stress else "기본 비용"
         r = res.get(stress, {})
@@ -217,12 +218,20 @@ def main() -> None:
         dp, wp, np_ = r[pit]
         df, wf, nf = r[fix]
         same = (dp < 0) == (df < 0)
+        enough = wf >= 5
         print(f"  {tag}: 시점별 차 {dp:+.3f}({wp}/{np_}) · 고정 차 {df:+.3f}({wf}/{nf}) · "
-              f"부호 {'같다' if same else '뒤집힌다'}")
+              f"부호 {'같다' if same else '뒤집힌다'} · "
+              f"고정 이긴앵커 {'5/7 이상' if enough else '5/7 미만'}")
         if not same or df >= 0:
+            flipped = True
+        if not enough:
             ok = False
-    print("  ① 통과 — 출처를 바꿔도 시총순 우위가 남는다." if ok
-          else "  ② 또는 ③ — 본문 판정 규칙대로 읽어라(부호 뒤집힘=기각, 앵커수만 모자람=운영자 판단).")
+    if flipped:
+        print("  ② 기각 — 고정 출처에서 부호가 뒤집힌다. 라이브는 시점별 목록을 안 쓴다.")
+    elif ok:
+        print("  ① 통과 — 출처를 바꿔도 시총순 우위가 두 비용 조건 모두에서 남는다.")
+    else:
+        print("  ③ 운영자 판단 — 부호는 남지만 고정 출처에서 이긴 앵커가 5/7 아래로 떨어진다.")
     print(f"\n총 {time.time()-t0:.0f}초")
 
 
