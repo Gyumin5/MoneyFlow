@@ -208,16 +208,19 @@ def main() -> None:
     os.makedirs(EQDIR, exist_ok=True)
     t0 = time.time()
 
+    # 쪼갠 몫은 계산만 하고 보고를 안 하므로 코인 곡선이 필요 없다.
+    shard = os.environ.get("SHARD", "")
     coin: dict[tuple, tuple] = {}
-    for a in ANCHORS:
-        for stress in (False, True):
-            suf = "__s5" if stress else ""
-            sp = pd.read_csv(f"{COIN_EQ}/sp__현행__a{a}{suf}.csv",
-                             index_col=0, parse_dates=True)["eq"]
-            fu = pd.read_csv(f"{COIN_EQ}/fu__현행__a{a}{suf}.csv",
-                             index_col=0, parse_dates=True)["eq"]
-            coin[(a, stress)] = (sp, fu)
-    print(f"코인 현행 곡선 {len(coin)}쌍 로드")
+    if not shard:
+        for a in ANCHORS:
+            for stress in (False, True):
+                suf = "__s5" if stress else ""
+                sp = pd.read_csv(f"{COIN_EQ}/sp__현행__a{a}{suf}.csv",
+                                 index_col=0, parse_dates=True)["eq"]
+                fu = pd.read_csv(f"{COIN_EQ}/fu__현행__a{a}{suf}.csv",
+                                 index_col=0, parse_dates=True)["eq"]
+                coin[(a, stress)] = (sp, fu)
+        print(f"코인 현행 곡선 {len(coin)}쌍 로드")
 
     todo, seen = [], set()
     for arms in AXES.values():
@@ -231,6 +234,13 @@ def main() -> None:
                     todo.append((name, over, a, stress))
     print(f"계산할 조합 {len(todo)}건")
 
+    # SHARD=i/n 이면 번호가 i 인 조합만 계산하고 보고는 건너뛴다. 조합마다 파일
+    # 이름이 달라서 몫끼리 같은 파일을 건드리지 않는다(코인 하니스와 같은 규약).
+    if shard:
+        si, sn = (int(x) for x in shard.split("/"))
+        todo = [item for i, item in enumerate(todo) if i % sn == si]
+        print(f"  이 몫 {si}/{sn} = {len(todo)}건")
+
     for i, (name, over, a, stress) in enumerate(todo, 1):
         k = _key(name, a, stress)
         if _load_st(k) is not None:
@@ -243,6 +253,10 @@ def main() -> None:
         if i % 40 == 0:
             print(f"  {i}/{len(todo)} ({time.time()-t0:.0f}초)")
     print(f"  전부 완료 ({time.time()-t0:.0f}초)")
+
+    if shard:
+        print("쪼갠 몫이라 보고는 건너뛴다 — 전부 모인 뒤에 보고만 따로 돌려라.")
+        return
 
     for axis, arms in AXES.items():
         report(axis, arms, False, coin)
