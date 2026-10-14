@@ -13,7 +13,8 @@
 재는 법:
   · 축 하나에 한 값만 바꾼다. 공유 파라미터(변동성 문턱·모멘텀 기간·카나리)는
     현물·선물 양쪽에 같이 건다. 슬리브 고유 파라미터는 그쪽만 건다.
-  · 앵커는 7곳이다. 현물 위상은 31의 배수를 피하고(스냅 간격 217 = 7 × 31 이라
+  · 앵커는 7곳이다(ANCHORS_N=11 이면 11곳 — 뒤에 덧붙인 넷을 더 쓴다).
+    현물 위상은 31의 배수를 피하고(스냅 간격 217 = 7 × 31 이라
     31의 배수는 스냅 집합을 자기 자신으로 옮겨 같은 포트폴리오가 된다),
     선물 위상은 19의 배수를 피한다(95 = 5 × 19). 주식은 앵커 0~6.
   · 결정층은 합성 60/25/15 윈도우 순위합이고, 앵커 0 하나가 아니라 앵커 7곳
@@ -23,6 +24,8 @@
 중간 결과는 state/20260922-resweep/eq/*.csv 에 남고 재시작하면 이어 간다.
 
 실행: cd /home/gmoh/mon/251229/strategies/cap_defend/research && python3 bt_coin_param_resweep.py
+      SHARD=0/6 … SHARD=5/6 으로 여섯 벌을 같이 돌리면 계산만 나눠 한다(보고는 건너뜀).
+      다 모이면 SHARD 없이 한 번 더 돌려 보고만 받는다 — 끝난 조합은 건너뛴다.
 """
 from __future__ import annotations
 
@@ -51,9 +54,13 @@ TX_SPOT, TX_FUT = 0.004, 0.0006
 STRESS = 5.0
 
 # 위상: 현물은 31의 배수, 선물은 19의 배수를 피한다(스냅 집합이 자기 자신으로 옮겨감).
-PH_SPOT = [0, 4, 9, 13, 18, 22, 27]
-PH_FUT = [0, 3, 5, 8, 11, 14, 16]
-ANCHORS = list(range(len(PH_SPOT)))
+# 앞 일곱이 기본값이고 뒤 넷은 ANCHORS_N=11 일 때만 쓴다. 뒤에 덧붙이는 까닭은
+# 앵커 번호가 체크포인트 파일 이름(a0~a6)이라, 사이에 끼워 넣으면 이미 계산된
+# 곡선이 다른 위상을 가리키게 되기 때문이다. 넷은 기존 일곱의 빈 칸을 메운다
+# (현물 주기 31 에 2·6·15·24, 선물 주기 19 에 2·6·10·17).
+PH_SPOT = [0, 4, 9, 13, 18, 22, 27] + [2, 6, 15, 24]
+PH_FUT = [0, 3, 5, 8, 11, 14, 16] + [2, 6, 10, 17]
+ANCHORS = list(range(int(os.environ.get("ANCHORS_N", 7))))
 
 CUR = "현행"
 
@@ -367,6 +374,15 @@ def main() -> None:
         uniq.append(item)
     print(f"\n계산할 조합 {len(uniq)}건 (현행 중복 제거 후)")
 
+    # 쪼개 돌리기. SHARD=i/n 이면 번호가 i 인 조합만 계산하고 보고는 건너뛴다.
+    # 조합마다 파일 이름이 달라서 쪼갠 몫끼리 같은 파일을 건드리지 않는다 —
+    # 그래서 여러 벌을 동시에 돌려도 서로의 결과를 덮거나 반쯤 쓴 파일을 읽지 않는다.
+    shard = os.environ.get("SHARD", "")
+    if shard:
+        si, sn = (int(x) for x in shard.split("/"))
+        uniq = [item for i, item in enumerate(uniq) if i % sn == si]
+        print(f"  이 몫 {si}/{sn} = {len(uniq)}건")
+
     done = 0
     for name, sp_over, fu_over, a, stress in uniq:
         k = _key(name, a, stress)
@@ -378,6 +394,10 @@ def main() -> None:
         if done % 20 == 0:
             print(f"  {done}/{len(uniq)} ({time.time()-t0:.0f}초)")
     print(f"  전부 완료 ({time.time()-t0:.0f}초)")
+
+    if shard:
+        print("쪼갠 몫이라 보고는 건너뛴다 — 전부 모인 뒤에 보고만 따로 돌려라.")
+        return
 
     for axis, arms in AXES.items():
         report(axis, arms, False, stock_eq)
