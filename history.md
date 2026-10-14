@@ -30,7 +30,7 @@ supersedes: 2026-10-15/#51 의 "운영자 판단으로 올린다"
   bt_fut_universe_source.engine.patch. 패치 없이 돌리면 하니스가 사전 점검에서 멈춘다.
   측정 claude-job-251229-threepol-1792018607, 로그 state/20261015-threepol/out.log.
 - 보고서: reports/2026-10-15-선물-리필-세-규칙.html
-- 검증 커밋: HASHHERE
+- 검증 커밋: de7aaf1
 
 ## [2026-10-15] #51 선물 리필 시총순 — 유니버스 출처 민감도는 운영자 판단으로 올린다
 tags: 선물, 리필, 유니버스출처
