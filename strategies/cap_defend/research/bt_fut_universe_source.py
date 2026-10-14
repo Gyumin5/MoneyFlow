@@ -158,6 +158,25 @@ def main() -> None:
             spot_eq[(a, s)] = V.ensure_spot(a, s)
     print(f"  완료 ({time.time()-t0:.0f}초)", flush=True)
 
+    # ─ 사전 점검: 두 팔이 실제로 다른 곡선을 내나 ─
+    # 2026-10-15 첫 실행이 56벌을 다 돌고 '차 +0.000' 을 냈는데, 결과가 아니라 결함이었다.
+    # 리필 정렬 토글(REFILL_ORDER 등)은 정본 엔진에 없고 research/bt_fut_refill_variants
+    # .engine.patch 를 얹어야 생긴다. 패치 없이 돌리면 환경변수가 아무것도 안 해서 두 팔이
+    # 같은 곡선을 내고, 그게 "차이 없음" 으로 보인다. 빈 결과와 같은 결과는 구분이 안 되므로
+    # 재기 전에 한 벌로 확인하고 다르지 않으면 멈춘다.
+    print("사전 점검: 두 팔이 다른 곡선을 내는지 한 벌로 확인...", flush=True)
+    _a = run_arm(dict(ARMS[0][1]), SOURCES[0][1], R.ANCHORS[0], False)
+    _b = run_arm(dict(ARMS[1][1]), SOURCES[0][1], R.ANCHORS[0], False)
+    _j = _a.index.intersection(_b.index)
+    _d = float(np.max(np.abs(np.asarray(_a[_j]) / np.asarray(_b[_j]) - 1.0)))
+    print(f"  두 팔 최대 상대괴리 {_d:.3e}", flush=True)
+    if _d < 1e-9:
+        print("  두 팔이 같은 곡선이다 — 리필 정렬 토글이 엔진에 없다는 뜻이다.\n"
+              "  cd /home/gmoh/mon/251229 && git apply --3way "
+              "strategies/cap_defend/research/bt_fut_refill_variants.engine.patch\n"
+              "  를 먼저 얹어라. 재지 않고 멈춘다.")
+        return
+
     todo = [(an, env, sn, fx, a, s)
             for an, env in ARMS for sn, fx in SOURCES
             for a in R.ANCHORS for s in (False, True)]

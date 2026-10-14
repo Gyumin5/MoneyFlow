@@ -1,0 +1,17 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 13dd1d9..d183e09 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -106,6 +106,12 @@ def get_mcap(date):
+     global _MCAP
+     if _MCAP is None:
+         _MCAP = _load_mcap()
++    # ─ 측정용 변형 (2026-10-15, 끝나면 되돌린다) ─
++    #   UNIVERSE_FIXED='1' 이면 날짜와 무관하게 마지막 달 목록을 쓴다. 라이브가
++    #   코인게코 상위 40 을 매일 그대로 읽는 것(= 오늘의 한 벌)을 흉내 내는 것이고,
++    #   과거 구간에는 생존편향이 들어간다. 수준 비교용이 아니라 민감도 시험용이다.
++    if os.environ.get('UNIVERSE_FIXED') == '1' and _MCAP:
++        return _MCAP[max(_MCAP)]
+     mk = date.strftime('%Y-%m') + '-01'
+     if mk in _MCAP:
+         return _MCAP[mk]

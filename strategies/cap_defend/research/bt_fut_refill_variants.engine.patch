@@ -1,5 +1,5 @@
 diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
-index 6a0d963..066ef5a 100644
+index 13dd1d9..50ed698 100644
 --- a/strategies/cap_defend/backtest_futures_v25.py
 +++ b/strategies/cap_defend/backtest_futures_v25.py
 @@ -344,6 +344,11 @@ def run(bars, funding, interval='D', leverage=3.0,
@@ -218,21 +218,18 @@ index 6a0d963..066ef5a 100644
                          new_sn['CASH'] = sn.get('CASH', 0)
                          if replaced_w > 0:
                              if _drift_cash_only:
-@@ -1001,11 +1176,22 @@ def run(bars, funding, interval='D', leverage=3.0,
-                                 if fresh_picks:
-                                     picks = fresh_picks[:n_failed]
-                                     w_per = replaced_w / len(picks)
-+                                    if _rf_cap:
-+                                        w_per = min(w_per, cap)
-+                                        new_sn['CASH'] = (new_sn.get('CASH', 0)
-+                                                          + replaced_w - w_per * len(picks))
-                                     for c in picks:
-                                         new_sn[c] = new_sn.get(c, 0) + w_per
+@@ -1014,12 +1189,19 @@ def run(bars, funding, interval='D', leverage=3.0,
+                                             continue
+                                         new_sn[c] = new_sn.get(c, 0) + w_c
+                                         placed += w_c
 +                                        refill_fills.append(
 +                                            (prev_date.strftime('%Y-%m-%d'), si, c))
 +                                        if new_sn[c] > cap + 1e-9:
 +                                            refill_cap_viol += 1
 +                                            refill_max_w = max(refill_max_w, new_sn[c])
+                                     leftover = replaced_w - placed
+                                     if leftover > 1e-12:
+                                         new_sn['CASH'] = new_sn.get('CASH', 0) + leftover
                                  else:
                                      new_sn['CASH'] = new_sn.get('CASH', 0) + replaced_w
                          snapshots[si] = new_sn
@@ -241,7 +238,7 @@ index 6a0d963..066ef5a 100644
                      # combined 재계산
                      combined = _merge_snapshots()
                  # V25 옵션 B: CASH 슬롯 refill (drift 발화 + 빈 CASH 슬롯 + fresh healthy 존재 시)
-@@ -1112,6 +1298,9 @@ def run(bars, funding, interval='D', leverage=3.0,
+@@ -1126,6 +1308,9 @@ def run(bars, funding, interval='D', leverage=3.0,
      result = {
          'Sharpe': sh, 'CAGR': cagr, 'MDD': mdd, 'Cal': cal,
          'Liq': liq_count, 'Trades': trade_count, 'Rebal': rebal_count,
