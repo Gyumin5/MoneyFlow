@@ -1,0 +1,116 @@
+diff --git a/strategies/cap_defend/research/bt_stock_window_rank.py b/strategies/cap_defend/research/bt_stock_window_rank.py
+index 56ab999..3ddb25e 100644
+--- a/strategies/cap_defend/research/bt_stock_window_rank.py
++++ b/strategies/cap_defend/research/bt_stock_window_rank.py
+@@ -73,6 +73,11 @@ def _run_single_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+     holdings = {CASH_KEY: 1.0}
+     cur_picks = []; target = {CASH_KEY: 1.0}
+     prev_can = canary.iloc[0] if len(canary) > 0 else False
++    # 측정용 토글 — STOCK_SIG_LAG=1 이면 신호를 전 거래일 것으로 쓴다(라이브 정합).
++    # 0(기본)이면 기존 동작과 같다. bt_stock_mom3 의 같은 이름 토글과 한 쌍.
++    import os as _os_lag
++    sig_lag = int(_os_lag.environ.get('STOCK_SIG_LAG', '0'))
++
+     equity = []
+     for i, d in enumerate(sim_dates):
+         if i > 0:
+@@ -84,21 +89,22 @@ def _run_single_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+                     p_now = pdf.at[d, k] if d in pdf.index else np.nan
+                     if pd.notna(p_prev) and pd.notna(p_now) and p_prev > 0:
+                         holdings[k] = holdings[k] * (p_now / p_prev)
+-        can_now = bool(canary.at[d]) if d in canary.index else prev_can
++        sgd = sim_dates[max(0, i - sig_lag)] if sig_lag else d
++        can_now = bool(canary.at[sgd]) if sgd in canary.index else prev_can
+         if i >= anchor and (i - anchor) % snap_interval == 0:
+             if can_now:
+                 cur_picks = fresh_pick(ranked.at[d], mom_off[ms].loc[d], mom_off[ml].loc[d])
+                 target = picks_to_target(cur_picks, cash_buf, weight_mode)
+             else:
+                 cur_picks = []
+-                target = select_off(d, mom_def, cash_buf, weight_mode)
++                target = select_off(sgd, mom_def, cash_buf, weight_mode)
+         if can_now != prev_can:
+             if can_now:
+                 cur_picks = fresh_pick(ranked.at[d], mom_off[ms].loc[d], mom_off[ml].loc[d])
+                 target = picks_to_target(cur_picks, cash_buf, weight_mode)
+             else:
+                 cur_picks = []
+-                target = select_off(d, mom_def, cash_buf, weight_mode)
++                target = select_off(sgd, mom_def, cash_buf, weight_mode)
+             prev_can = can_now
+         total = sum(holdings.values())
+         if total <= 0:
+@@ -111,7 +117,7 @@ def _run_single_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+                 target = picks_to_target(cur_picks, cash_buf, weight_mode)
+             else:
+                 cur_picks = []
+-                target = select_off(d, mom_def, cash_buf, weight_mode)
++                target = select_off(sgd, mom_def, cash_buf, weight_mode)
+             pv = total * (1 - TX * ht)
+             holdings = {k: pv * w for k, w in target.items() if w > 0}
+         equity.append(sum(holdings.values()))
+@@ -133,7 +139,7 @@ def _run_multi_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+     holdings = {CASH_KEY: 1.0}
+     prev_can = canary.iloc[0] if len(canary) > 0 else False
+ 
+-    def pick_for_snap(d, can_now):
++    def pick_for_snap(sgd, can_now):
+         if can_now:
+             if use_mom:
+                 return fresh_pick(ranked.at[d], mom_off[ms].loc[d], mom_off[ml].loc[d])
+@@ -148,6 +154,11 @@ def _run_multi_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+                 agg[k] = agg.get(k, 0.0) + v / n_snaps
+         return agg
+ 
++    # 측정용 토글 — STOCK_SIG_LAG=1 이면 신호를 전 거래일 것으로 쓴다(라이브 정합).
++    # 0(기본)이면 기존 동작과 같다. bt_stock_mom3 의 같은 이름 토글과 한 쌍.
++    import os as _os_lag
++    sig_lag = int(_os_lag.environ.get('STOCK_SIG_LAG', '0'))
++
+     equity = []
+     for i, d in enumerate(sim_dates):
+         if i > 0:
+@@ -159,23 +170,24 @@ def _run_multi_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+                     p_now = pdf.at[d, k] if d in pdf.index else np.nan
+                     if pd.notna(p_prev) and pd.notna(p_now) and p_prev > 0:
+                         holdings[k] = holdings[k] * (p_now / p_prev)
+-        can_now = bool(canary.at[d]) if d in canary.index else prev_can
++        sgd = sim_dates[max(0, i - sig_lag)] if sig_lag else d
++        can_now = bool(canary.at[sgd]) if sgd in canary.index else prev_can
+         for s in snaps:
+             if (i - s['phase']) >= 0 and (i - s['phase']) % snap_int == 0:
+                 if can_now:
+-                    s['picks'] = pick_for_snap(d, can_now)
++                    s['picks'] = pick_for_snap(sgd, can_now)
+                     s['target'] = picks_to_target(s['picks'], cash_buf, weight_mode)
+                 else:
+                     s['picks'] = []
+-                    s['target'] = select_off(d, mom_def, cash_buf, weight_mode)
++                    s['target'] = select_off(sgd, mom_def, cash_buf, weight_mode)
+         if can_now != prev_can:
+             for s in snaps:
+                 if can_now:
+-                    s['picks'] = pick_for_snap(d, can_now)
++                    s['picks'] = pick_for_snap(sgd, can_now)
+                     s['target'] = picks_to_target(s['picks'], cash_buf, weight_mode)
+                 else:
+                     s['picks'] = []
+-                    s['target'] = select_off(d, mom_def, cash_buf, weight_mode)
++                    s['target'] = select_off(sgd, mom_def, cash_buf, weight_mode)
+             prev_can = can_now
+         target = merge_targets()
+         total = sum(holdings.values())
+@@ -186,11 +198,11 @@ def _run_multi_eq(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+         if ht >= drift_thr:
+             for s in snaps:
+                 if can_now:
+-                    s['picks'] = pick_for_snap(d, can_now)
++                    s['picks'] = pick_for_snap(sgd, can_now)
+                     s['target'] = picks_to_target(s['picks'], cash_buf, weight_mode)
+                 else:
+                     s['picks'] = []
+-                    s['target'] = select_off(d, mom_def, cash_buf, weight_mode)
++                    s['target'] = select_off(sgd, mom_def, cash_buf, weight_mode)
+             target = merge_targets()
+             pv = total * (1 - TX * ht)
+             holdings = {k: pv * w for k, w in target.items() if w > 0}
