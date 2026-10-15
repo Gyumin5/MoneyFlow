@@ -154,14 +154,13 @@ def control_spec(name):
     return {k: np.array([v], dtype=np.int64) for k, v in d.items()}
 
 
-def run_cell(anchor: int, stress: bool, spec, shift: int = 0, quick=False):
+def run_cell(anchor: int, stress: bool, spec, quick=False):
+    # 음성 대조는 여기 없다 — alloc_grid_placebo.py 가 맡는다. 게이트를 밀면 T1·T3U 와
+    # 현행 기준선까지 같이 나빠져서, 후보가 좋아진 게 아니라 기준선이 떨어진 것을 재게 된다.
     eq_st, eq_sp, eq_fu = sleeve_curves(anchor, stress)
     axis, Rm, is_bd = L.build_ledger(eq_st, eq_sp, eq_fu)
     tab = L.bd_tables(axis, is_bd)
     g = L.gate_series_ledger(axis)
-    if shift:
-        # 음성 대조 — 세 게이트의 관계를 보존한 채 공통 원형 이동
-        g = {k: pd.Series(np.roll(v.values, shift), index=axis) for k, v in g.items()}
     gate = np.column_stack([np.asarray(g[s].values, dtype=bool) for s in S.SLEEVES])
     E = S.build_E(g)
     EV, names, _ = L.event_matrix(E, axis)
@@ -204,7 +203,7 @@ def run_cell(anchor: int, stress: bool, spec, shift: int = 0, quick=False):
         acc['per_yr'][s0:s1] = inf['dones'] / yrs
         acc['multi'][s0:s1] = inf['multi_months']
     dt = time.time() - t0
-    meta = dict(anchor=anchor, stress=bool(stress), shift=int(shift),
+    meta = dict(anchor=anchor, stress=bool(stress),
                 n=n_all, 창=len(bounds), 영업일=int(is_bd.sum()), 연수=yrs,
                 발화E=int(len(live)), 초=round(dt, 1),
                 base={k: v for k, v in base.items() if k != 'cal'},
@@ -217,7 +216,6 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--anchor', type=int, default=0)
     ap.add_argument('--cost', choices=['base', 'x5'], default='base')
-    ap.add_argument('--shift', type=int, default=0)
     ap.add_argument('--quick', action='store_true')
     ap.add_argument('--e', type=int, default=0, help='고유 E 개수 (0=자동)')
     a = ap.parse_args()
@@ -235,9 +233,9 @@ def main() -> int:
     spec, counts = G.build(e_live, 0)
     print(f"후보 {len(spec['e_idx']):,}개 (+대조 {counts['대조']})")
 
-    acc, meta, base = run_cell(a.anchor, a.cost == 'x5', spec, a.shift, a.quick)
+    acc, meta, base = run_cell(a.anchor, a.cost == 'x5', spec, a.quick)
     os.makedirs(OUT, exist_ok=True)
-    tag = f"a{a.anchor}_{a.cost}" + (f"_s{a.shift}" if a.shift else "")
+    tag = f"a{a.anchor}_{a.cost}"
     np.savez_compressed(os.path.join(OUT, f"grid_{tag}.npz"), **acc)
     with open(os.path.join(OUT, f"grid_{tag}.json"), "w") as f:
         json.dump(meta, f, ensure_ascii=False, indent=1)
