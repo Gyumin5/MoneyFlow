@@ -142,8 +142,16 @@ def event_matrix(E, axis):
 
 # ────────────────────────────────────────────────────────────── 시뮬레이터
 def simulate_ledger(R, is_bd, gate, EV, spec, tab, lag_bd=LAG_BD, fric=FRIC,
-                    month_id=None):
+                    month_id=None, accept_bd=0, miss=None):
     """팔(후보) 축으로 벡터화한 사건 장부 시뮬.
+
+    실행 검증 스트레스용 손잡이 둘 (사전등록 research/alloc_stress_prereg.md):
+      accept_bd  발화에서 수락까지 영업일을 더 둔다. 0 이면 발화일에 바로 수락한다.
+                 대기(W)가 끝나 나오는 요청에도 똑같이 더 붙는다.
+      miss       길이 n 의 불리언. 참인 날은 사람이 알림을 못 봤다고 보고 그날의
+                 새 발화를 통째로 버린다 — 미루는 게 아니라 버린다. 이미 수락한
+                 요청의 도착과 대기 만기는 그대로 간다(알림이 아니라 진행 중인 일이다).
+    둘 다 기본값이면 본 채점과 같은 값이 나와야 한다.
 
     spec 축 (각각 길이 A 의 정수 배열):
       e_idx       전이 신호 번호, -1 이면 E 를 안 쓴다
@@ -180,11 +188,13 @@ def simulate_ledger(R, is_bd, gate, EV, spec, tab, lag_bd=LAG_BD, fric=FRIC,
     w_on = spec['w_key'].astype(np.int64) != 0
     r_on = spec['r_key'].astype(np.int64) != 0
     lag_tab = tab[lag_bd]
+    acc_tab = tab[accept_bd] if accept_bd else None
 
     v = np.repeat(TGT[None, :], A, axis=0).copy()
     transit = np.zeros((A, 3))
     arrive = np.full(A, -1, dtype=np.int64)
     wait_due = np.full(A, -1, dtype=np.int64)
+    acc_due = np.full(A, -1, dtype=np.int64)
     pend_e = np.zeros(A, dtype=bool)       # 대기 중인 요청이 전이 때문에 났나
     block_until = np.zeros(A, dtype=np.int64)
 
@@ -272,15 +282,27 @@ def simulate_ledger(R, is_bd, gate, EV, spec, tab, lag_bd=LAG_BD, fric=FRIC,
         ht_hist[i] = ht
         max_ht = np.maximum(max_ht, ht)
 
+        def release(sel):
+            """대기가 끝났거나 수락 시점이 된 팔을 지금 값으로 다시 재서 집행한다."""
+            under_r = (TGT[None, :] - w) / TGT[None, :]
+            u_r = (under_r >= T3U) & gate[i][None, :]
+            rel_r = (u_r | pend_e[:, None]) & (under_r > 0)
+            do_request(sel, i, rel_r, partial & sel)
+
         due = wait_due == i
         if due.any():
-            under = (TGT[None, :] - w) / TGT[None, :]
-            u_s = (under >= T3U) & gate[i][None, :]
-            rel = (u_s | pend_e[:, None]) & (under > 0)
-            do_request(due, i, rel, partial & due)
+            if acc_tab is None:
+                release(due)
+            else:                      # 수락까지 추가 지연 — 만기에도 바로 안 보낸다
+                acc_due[due] = acc_tab[i]
             wait_due[due] = -1
 
-        free = (wait_due < 0) & (arrive < 0)
+        acc = acc_due == i
+        if acc.any():
+            release(acc)
+            acc_due[acc] = -1
+
+        free = (wait_due < 0) & (arrive < 0) & (acc_due < 0)
         if not free.any():
             continue
 
@@ -322,6 +344,9 @@ def simulate_ledger(R, is_bd, gate, EV, spec, tab, lag_bd=LAG_BD, fric=FRIC,
                 if sel.any():
                     block_until[sel] = r_tab[i][sel]
 
+        if miss is not None and bool(miss[i]):
+            continue               # 알림을 못 봤다 — 이 날 난 발화는 미루지 않고 버린다
+
         if fire.any():
             fires += fire
             delay = fire & w_on & (w_all | dep_e)
@@ -330,9 +355,12 @@ def simulate_ledger(R, is_bd, gate, EV, spec, tab, lag_bd=LAG_BD, fric=FRIC,
                 wait_due[delay] = w_tab[i][delay]
                 pend_e[delay] = dep_e[delay]
             if now.any():
-                rel = (u_s | (dep_e[:, None] & (under > 0))) & (under > 0)
-                do_request(now, i, rel, partial & now)
                 pend_e[now] = dep_e[now]
+                if acc_tab is None:
+                    rel = (u_s | (dep_e[:, None] & (under > 0))) & (under > 0)
+                    do_request(now, i, rel, partial & now)
+                else:
+                    acc_due[now] = acc_tab[i]
             opened = fire & r_on & ~r_done & (r_all | dep_e)
             if opened.any():
                 block_until[opened] = r_tab[i][opened]
