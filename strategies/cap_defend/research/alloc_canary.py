@@ -5,14 +5,22 @@
 "카나리가 꺼지는 순간·켜지는 순간" 자체를 트리거로 쓰는 후보를 재려면 근사로는 못 한다 —
 재려는 사건이 바로 그 계열의 전이점이기 때문이다.
 
-정의는 라이브 그대로다.
-  코인 현물·선물 = BTC 종가 대 SMA42, 히스테리시스 ±1.5%. 판정은 전 거래일 종가로.
-    (unified_backtest.py 873-881 줄과 backtest_futures_v25.py 의 같은 블록이 정본)
-  주식 = EEM 종가 대 SMA200, 히스테리시스 ±0.5%.
-    (bt_stock_coin_v3.precompute 가 이미 그 계열을 돌려주므로 다시 안 짠다)
+계열이 두 종류다. 섞으면 안 된다.
 
-현물과 선물은 같은 BTC SMA42 규칙이라 계열이 하나다. 둘을 따로 받는 자리를 남겨 둔 것은
-앞으로 갈릴 수 있어서가 아니라, 부르는 쪽이 슬리브 이름으로 집게 하려는 것뿐이다.
+  ① 슬리브 카나리 — 그 슬리브가 위험자산을 드느냐 현금으로 빠지느냐.
+     코인 현물·선물 = BTC 종가 대 SMA42, 히스테리시스 ±1.5%, 전 거래일 종가로 판정.
+     (unified_backtest.py 873-881 줄과 backtest_futures_v25.py 의 같은 블록이 정본)
+     → coin_canary()
+
+  ② 자산배분 게이트 — T3U_can 이 그 슬리브로 송금을 걸어도 되느냐.
+     주식 = ①의 주식 카나리 그대로(is_stock_risk_on). EEM 대 SMA200, 히스테리시스 ±0.5%.
+     선물 = binance_state.json 의 strat.canary_on, 즉 ①의 선물 슬리브 카나리 그대로.
+     현물 = 다르다. 띠 하나짜리 단순 문턱이고 히스테리시스가 없다.
+     (recommend_personal.py 2748-2762 줄이 정본)
+     → spot_alloc_gate() / stock_canary() / 선물은 coin_canary()
+
+셋 중 현물만 ①과 ②가 갈린다. 자산간 리밸런싱 조건을 재려면 ②를 써야 한다 —
+①을 대신 넣으면 두 띠 사이 구간에서 라이브가 안 하는 발화를 만든다.
 
 스스로 돌리면 자기검사를 한다 — 만든 코인 계열을 정본 엔진 trace 와 맞대 본다.
 카나리가 꺼진 날은 엔진의 합성 목표가 전액 현금이므로 그 두 집합이 같아야 한다.
@@ -56,6 +64,33 @@ def coin_canary(bars: dict, sma_period: int = COIN_SMA,
         px, s = float(btc.iloc[i - 1]), float(sma.iloc[i - 1])
         state = (not (px < s * (1 - hyst))) if state else (px > s * (1 + hyst))
         out.append(state)
+        idx.append(d)
+    return pd.Series(out, index=pd.DatetimeIndex(idx), dtype=bool)
+
+
+def spot_alloc_gate(bars: dict, sma_period: int = COIN_SMA,
+                    hyst: float = COIN_HYST) -> pd.Series:
+    """현물의 '자산배분' 게이트. 슬리브 카나리와 다른 계열이다 — 섞어 쓰면 안 된다.
+
+    라이브 정본은 recommend_personal.py 2752 줄이다.
+        _spot_canary_on = (btc_ratio is not None and btc_ratio > 1.0 + COIN_CANARY_HYST)
+    띠가 하나뿐이고 직전 상태를 안 본다. 즉 히스테리시스가 없다 — 위 띠(+1.5%)를 넘으면
+    켜짐, 그 아래면 전부 꺼짐이다. 슬리브 카나리(coin_canary)는 켜진 뒤 아래 띠(-1.5%)를
+    깨야 꺼지므로, 두 띠 사이 구간에서 둘이 갈린다.
+
+    라이브와 다른 점 하나를 밝혀 둔다. 라이브는 그 시각 받아온 BTC 자료의 마지막 칸
+    (iloc[-1], 09:15 조회라 당일 진행 중 봉일 수 있다)으로 비율을 낸다. 여기서는 미래를
+    안 보려고 전 거래일 완료 종가로 판정한다. 경계일 하루가 밀릴 수 있고, 그게 재구성의
+    한계다 — 라이브 장부로 맞댈 수 있게 되면 그때 다시 잰다.
+    """
+    btc = bars['BTC']['Close'] if isinstance(bars['BTC'], pd.DataFrame) else bars['BTC']
+    btc = btc.dropna()
+    sma = btc.rolling(sma_period).mean()
+    out, idx = [], []
+    for i, d in enumerate(btc.index):
+        if i == 0 or np.isnan(sma.iloc[i - 1]) or sma.iloc[i - 1] <= 0:
+            continue
+        out.append(float(btc.iloc[i - 1]) > float(sma.iloc[i - 1]) * (1 + hyst))
         idx.append(d)
     return pd.Series(out, index=pd.DatetimeIndex(idx), dtype=bool)
 
@@ -128,6 +163,16 @@ def _selfcheck() -> int:
           f"   (건강한 코인이 없으면 켜져 있어도 현금이라 0 이 아니어도 된다)")
     print(f"  전이 횟수 — 코인 {int(flips(can).sum())}")
     print(f"  코인 계열 범위 {can.index[0].date()} ~ {can.index[-1].date()} ({len(can)}일)")
+
+    gate = spot_alloc_gate(bars)
+    both = can.index.intersection(gate.index)
+    a, b = can.loc[both], gate.loc[both]
+    diff = int((a != b).sum())
+    print(f"현물 — 슬리브 카나리 대 배분 게이트: 대조 {len(both)}일 중 어긋남 {diff}일"
+          f" ({diff / len(both) * 100:.1f}%)")
+    print(f"  전이 횟수 — 슬리브 {int(flips(a).sum())} · 배분 게이트 {int(flips(b).sum())}")
+    print(f"  게이트만 꺼진 날 {int((a & ~b).sum())} · 게이트만 켜진 날 {int((~a & b).sum())}"
+          f"   (뒤가 0 이어야 한다 — 단순 문턱은 히스테리시스보다 켜지기 어렵다)")
 
     st = stock_canary()
     print(f"주식 계열 범위 {st.index[0].date()} ~ {st.index[-1].date()} ({len(st)}일)"
