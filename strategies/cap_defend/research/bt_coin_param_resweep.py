@@ -208,10 +208,18 @@ def run_stock(anchor: int, stress: bool) -> pd.Series:
     pdf = pdf[~pdf.index.duplicated(keep="first")].sort_index()
     pdf = pdf[pdf.index.normalize() == pdf.index]
     ranked, mom_off, mom_def, canary = precompute(pdf, [30, 72, 230], [42, 63, 126])
-    return run_multi_3mom(pdf, ranked, mom_off, mom_def, canary,
-                          pd.Timestamp(START), pd.Timestamp(END), anchor=anchor,
-                          drift_thr=0.05, cash_buf=0.07, ms=30, mid=72, ml=230,
-                          snap_int=69, n_snaps=3)
+    # 비용 배수는 bt_stock_mom3 가 읽는 이름에 건다 — 그쪽은 from ... import TX 로
+    # 들여와서 자기 namespace 의 TX 를 쓴다. bt_stock_param_resweep.run_stock 과 같은 모양.
+    import bt_stock_mom3 as m3
+    import bt_stock_coin_v3 as bcv3
+    m3.TX = bcv3.TX * (STRESS if stress else 1.0)
+    try:
+        return run_multi_3mom(pdf, ranked, mom_off, mom_def, canary,
+                              pd.Timestamp(START), pd.Timestamp(END), anchor=anchor,
+                              drift_thr=0.05, cash_buf=0.07, ms=30, mid=72, ml=230,
+                              snap_int=69, n_snaps=3)
+    finally:
+        m3.TX = bcv3.TX
 
 
 def build_alloc(eq_st, eq_sp, eq_fu, w=(0.60, 0.25, 0.15)) -> pd.Series:

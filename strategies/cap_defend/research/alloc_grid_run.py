@@ -97,7 +97,11 @@ def sleeve_curves(anchor: int, stress: bool):
         else:
             s = R.run_fut({}, R.PH_FUT[anchor], stress)
         s = s.dropna()
-        s.rename("eq").to_frame().to_csv(p)
+        # 임시 파일에 쓰고 바꿔 끼운다 — 바로 쓰면 중간에 끊긴 파일이 남고,
+        # 다음 일꾼이 그걸 "길이 100 넘는 캐시" 로 읽어 잘린 곡선으로 돈다.
+        tmp = f"{p}.tmp.{os.getpid()}"
+        s.rename("eq").to_frame().to_csv(tmp)
+        os.replace(tmp, p)
         out[kind] = s
     return out["stock"], out["spot"], out["fut"]
 
