@@ -34,14 +34,20 @@ OUT = RUN.OUT
 TGT = L.TGT
 
 
-def run_one(axis, R, gate, tab, keep_sender: bool):
+def run_one(axis, R, gate, tab, keep_sender: bool, t1=None, t3u=None,
+            month_id=None):
     """현행 조합 한 줄을 돌린다. keep_sender=True 면 뜬 돈을 보내는 쪽 비중에 남긴다.
+
+    t1 / t3u 를 주면 그 문턱으로 돈다(기본은 모듈 상수 = 라이브값). 반환하는 info 에
+    발화일 색인 목록 fire_idx 가 들어 있다 — 공식 시뮬은 날짜를 안 주기 때문이다.
 
     두 규약에서 뜬 돈의 수익 처리는 똑같다 — 요청하는 순간 v 에서 빠져 수익 0 으로
     닷새를 난다. 갈리는 것은 비중 w 의 분자뿐이다. 그래야 "분자를 어디에 두나" 하나만
     재고 수익 차이가 섞이지 않는다.
     """
     n = len(axis)
+    T1 = L.T1 if t1 is None else float(t1)
+    T3U = L.T3U if t3u is None else float(t3u)
     v = TGT.astype(float).copy()
     take = np.zeros(3)                       # 보내는 쪽에서 뺀 금액 (수익 0 으로 뜬다)
     share = np.zeros(3)                      # 마찰 뗀 뒤 받는 쪽에 들어갈 금액
@@ -51,9 +57,17 @@ def run_one(axis, R, gate, tab, keep_sender: bool):
     ht_hist = np.empty(n)
     fires = dones = 0
     max_ht = 0.0
+    fire_idx = []
+    mo_cnt = 0
+    multi_mo = 0
+    cur_mo = int(month_id[0]) if month_id is not None and n else 0
     lag = tab[L.LAG_BD]
 
     for i in range(n):
+        if month_id is not None and int(month_id[i]) != cur_mo:
+            multi_mo += int(mo_cnt >= 2)
+            mo_cnt = 0
+            cur_mo = int(month_id[i])
         v *= (1.0 + R[i])
 
         if arrive == i:
@@ -62,6 +76,7 @@ def run_one(axis, R, gate, tab, keep_sender: bool):
             share = np.zeros(3)
             arrive = -1
             dones += 1
+            mo_cnt += 1
 
         tot = v.sum() + take.sum()
         w = (v + take) / tot if keep_sender else v / tot
@@ -74,12 +89,13 @@ def run_one(axis, R, gate, tab, keep_sender: bool):
             continue
 
         under = (TGT - w) / TGT
-        u = bool(((under >= L.T3U) & gate[i]).any())
-        t1 = bool(ht >= L.T1)
-        if not (t1 or u):
+        u = bool(((under >= T3U) & gate[i]).any())
+        hit_t1 = bool(ht >= T1)
+        if not (hit_t1 or u):
             continue
 
         fires += 1
+        fire_idx.append(i)
         tgt_v = tot * TGT
         over = np.maximum(v - tgt_v, 0.0)
         short = np.maximum(tgt_v - v, 0.0)
@@ -90,8 +106,11 @@ def run_one(axis, R, gate, tab, keep_sender: bool):
         share = short * (amt / max(short.sum(), 1e-12)) * (1.0 - L.FRIC)
         v -= take
         arrive = int(lag[i])
-    return pv, dict(fires=fires, dones=dones,
-                    ht95=float(np.percentile(ht_hist, 95)), maxht=float(max_ht))
+    if month_id is not None:
+        multi_mo += int(mo_cnt >= 2)
+    return pv, dict(fires=fires, dones=dones, multi=multi_mo,
+                    ht95=float(np.percentile(ht_hist, 95)), maxht=float(max_ht),
+                    fire_idx=fire_idx)
 
 
 def main() -> int:
