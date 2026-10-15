@@ -1,0 +1,42 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 13dd1d9..611ab2c 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -48,6 +48,9 @@ BASE_DIR = '/home/gmoh/mon/251229/strategies/cap_defend'
+ CASH_BUFFER = 0.01
+ 
+ # ─── 심볼/슬리피지 ───
++ORDER_PROBE = []  # 주문 인과성 측정용 (ORDER_PROBE_DATE 설정 시에만 채워짐)
++
++
+ def _discover_tickers():
+     """가지고 있는 선물 데이터에서 심볼표를 만든다.
+ 
+@@ -506,6 +509,7 @@ def run(bars, funding, interval='D', leverage=3.0,
+         """Delta 리밸런싱 with 선물 비용. pv_date=None 이면 date 사용 (legacy)."""
+         nonlocal capital, trade_count
+         pv = _port_val(pv_date if pv_date is not None else date)
++        _probe_pre = dict(holdings)
+         if pv <= 0:
+             return
+ 
+@@ -590,6 +594,19 @@ def run(bars, funding, interval='D', leverage=3.0,
+                         margins[coin] += add_margin
+                         trade_count += 1
+ 
++        # 주문 인과성 측정용 probe (ORDER_PROBE_DATE 가 설정된 날만). 상시 off.
++        import os as _os_probe
++        _pd = _os_probe.environ.get('ORDER_PROBE_DATE', '')
++        if _pd and str(date.date()) == _pd:
++            ORDER_PROBE.append({
++                'date': str(date.date()),
++                'pv_used': pv,
++                'holdings_before': _probe_pre,
++                'capital_after': capital,
++                'holdings_after': dict(holdings),
++                'target_qty': dict(target_qty),
++            })
++
+     def _compute_weights(sig_date):
+         """V18 선정 + 비중 계산. sig_date=시그널 기준(t-1)."""
+         mcap_order = get_mcap(sig_date)  # t-1 기준 시총 (look-ahead 방지)
