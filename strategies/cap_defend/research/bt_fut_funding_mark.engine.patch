@@ -1,0 +1,21 @@
+diff --git a/strategies/cap_defend/backtest_futures_v25.py b/strategies/cap_defend/backtest_futures_v25.py
+index 13dd1d9..aab2e0c 100644
+--- a/strategies/cap_defend/backtest_futures_v25.py
++++ b/strategies/cap_defend/backtest_futures_v25.py
+@@ -851,8 +851,14 @@ def run(bars, funding, interval='D', leverage=3.0,
+                 continue
+             fr_sum = float(window.sum())
+             if fr_sum != 0 and not np.isnan(fr_sum):
+-                cur = get_close(bars, coin, btc_idx_map.get(date, -1) if coin == 'BTC' else
+-                                bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1)
++                # 측정용 토글 — FUT_FUNDING_MARK=prev 면 펀딩비 명목을 전 거래일 종가로 잰다.
++                # 기본(same)은 기존 동작(그날 종가). 그날 종가로 재면 그 값이 capital 을
++                # 깎은 뒤 _port_val(prev_date) 에 섞여 시가 주문 크기에 닿는다.
++                import os as _osf
++                _mk_date = prev_date if _osf.environ.get(
++                    'FUT_FUNDING_MARK', 'same') == 'prev' else date
++                cur = get_close(bars, coin, btc_idx_map.get(_mk_date, -1) if coin == 'BTC' else
++                                bars[coin].index.get_indexer([_mk_date], method='ffill')[0] if coin in bars else -1)
+                 if cur > 0:
+                     # 롱: notional × sum(rate)
+                     capital -= holdings[coin] * cur * fr_sum
