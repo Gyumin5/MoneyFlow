@@ -35,11 +35,14 @@ TGT = L.TGT
 
 
 def run_one(axis, R, gate, tab, keep_sender: bool, t1=None, t3u=None,
-            month_id=None):
+            month_id=None, cal_mask=None):
     """현행 조합 한 줄을 돌린다. keep_sender=True 면 뜬 돈을 보내는 쪽 비중에 남긴다.
 
     t1 / t3u 를 주면 그 문턱으로 돈다(기본은 모듈 상수 = 라이브값). 반환하는 info 에
     발화일 색인 목록 fire_idx 가 들어 있다 — 공식 시뮬은 날짜를 안 주기 때문이다.
+
+    cal_mask 를 주면 문턱을 안 보고 그 날에만 쏜다 — 달력 리밸런싱 대조군용이다.
+    편차가 얼마든 정해진 날에 목표로 되돌린다는 규칙이라 게이트도 안 본다.
 
     두 규약에서 뜬 돈의 수익 처리는 똑같다 — 요청하는 순간 v 에서 빠져 수익 0 으로
     닷새를 난다. 갈리는 것은 비중 w 의 분자뿐이다. 그래야 "분자를 어디에 두나" 하나만
@@ -88,11 +91,15 @@ def run_one(axis, R, gate, tab, keep_sender: bool, t1=None, t3u=None,
         if arrive >= 0:                      # 이미 떠 있는 동안은 새로 안 쏜다
             continue
 
-        under = (TGT - w) / TGT
-        u = bool(((under >= T3U) & gate[i]).any())
-        hit_t1 = bool(ht >= T1)
-        if not (hit_t1 or u):
-            continue
+        if cal_mask is not None:
+            if not cal_mask[i]:
+                continue
+        else:
+            under = (TGT - w) / TGT
+            u = bool(((under >= T3U) & gate[i]).any())
+            hit_t1 = bool(ht >= T1)
+            if not (hit_t1 or u):
+                continue
 
         fires += 1
         fire_idx.append(i)
