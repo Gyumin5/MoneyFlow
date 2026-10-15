@@ -70,6 +70,7 @@ def main() -> int:
     per_anchor = np.stack([
         np.mean([cells[(a, c)]['rank'] for c in COSTS if (a, c) in cells], axis=0)
         for a in ANCHORS if any((a, c) in cells for c in COSTS)])
+    n_anchor = per_anchor.shape[0]
     ok &= (per_anchor < 1.5).sum(axis=0) >= 6                         # ⑵
 
     dmdd, dht = [], []
@@ -89,11 +90,16 @@ def main() -> int:
     dmdd = np.mean(dmdd, axis=0); dht = np.mean(dht, axis=0)
     ok &= (dmdd >= 0.005) | (dht >= 0.02)                             # ⑷
 
+    if n_anchor < 7:
+        print(f"\n[경고] 앵커가 {n_anchor}곳만 모였다 — 아래 숫자는 중간값이고 판정이 아니다."
+              f" 기준 ⑵ 는 7곳 중 6곳을 요구하므로 {n_anchor}곳으로는 구조적으로 통과가 0 이다.")
     print(f"\n전 기준 통과 {int(ok.sum()):,}개 / {n:,}")
     if not ok.any():
-        for nm, m in (("⑴ 순위 1.40", np.all([rank_mean[c] <= 1.40 for c in rank_mean], axis=0)),
-                      ("⑵ 앵커 6/7", (per_anchor < 1.5).sum(axis=0) >= 6),
-                      ("⑷ 평균 개선", (dmdd >= 0.005) | (dht >= 0.02))):
+        rows = [("⑴ 순위 1.40", np.all([rank_mean[c] <= 1.40 for c in rank_mean], axis=0)),
+                ("⑷ 평균 개선", (dmdd >= 0.005) | (dht >= 0.02))]
+        if n_anchor >= 7:
+            rows.insert(1, ("⑵ 앵커 6/7", (per_anchor < 1.5).sum(axis=0) >= 6))
+        for nm, m in rows:
             print(f"  {nm} 단독 통과 {int(m.sum()):,}")
         return 0
 
