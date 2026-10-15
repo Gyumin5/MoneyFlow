@@ -101,6 +101,13 @@ def main() -> int:
             rows.insert(1, ("⑵ 앵커 6/7", (per_anchor < 1.5).sum(axis=0) >= 6))
         for nm, m in rows:
             print(f"  {nm} 단독 통과 {int(m.sum()):,}")
+        if missing or n_anchor < 7:
+            print("\n칸이 덜 모였다 — 통과 색인을 쓰지 않는다. 칸이 다 모이면 같은 명령으로 다시 본다.")
+            return 0
+        # 빈 색인을 남긴다 — 안 남기면 아래 단계가 "아직 안 돌렸다" 와 "돌렸는데 0" 을 못 가른다
+        np.save(os.path.join(OUT, "pass_idx.npy"), np.empty(0, dtype=np.int64))
+        print(f"\n통과 색인 저장(빈 것): {OUT}/pass_idx.npy")
+        print("사전등록 기준을 다 넘은 후보가 없다 — 이 연구의 결론은 현행 유지다.")
         return 0
 
     spec, _ = G.build(int(metas[list(metas)[0]]['발화E']), 0)
