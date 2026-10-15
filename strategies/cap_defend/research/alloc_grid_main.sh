@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # 자산간 리밸런싱 조건 연구 — 본 채점 14칸 (앵커 7 × 비용 2).
-# 한 칸이 941,968 후보 × 창 63개. 같은 기계를 다른 세션이 쓰고 있어 일꾼은 4로 묶는다.
+# 한 칸이 941,968 후보 × 창 63개. 같은 기계를 다른 세션이 쓰고 있어 일꾼 수는 밖에서 준다.
+# 이미 결과가 있는 칸은 건너뛴다 — 한 칸이 50분이라 중단되면 이어받아야 한다.
 set -u
 cd /home/gmoh/mon/251229/strategies/cap_defend/research || exit 1
 OUT=/home/gmoh/mon/251229/state/20261015-allocrebal
 mkdir -p "$OUT/log"
 
-JOBS="${JOBS:-4}"
+JOBS="${JOBS:-2}"
 E="${E:-113}"
 
 for a in 0 1 2 3 4 5 6; do
   for c in base x5; do
+    [ -s "$OUT/grid_a${a}_${c}.npz" ] && [ -s "$OUT/grid_a${a}_${c}.json" ] && continue
     echo "$a $c"
   done
 done | xargs -P "$JOBS" -n 2 bash -c '

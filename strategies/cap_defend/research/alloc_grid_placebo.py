@@ -150,6 +150,10 @@ def main() -> int:
     os.makedirs(OUT, exist_ok=True)
     for i in range(a.count):
         seed = a.seed0 + i
+        # 이미 끝난 씨앗은 건너뛴다 — 한 벌이 30분이라 중단되면 이어받아야 한다
+        if os.path.exists(os.path.join(OUT, f"pl_{a.kind}_a{a.anchor}_{a.cost}_s{seed}.json")):
+            print(f"{a.kind}_a{a.anchor}_{a.cost}_s{seed}  이미 있음 건너뜀", flush=True)
+            continue
         t0 = time.time()
         row = one_placebo(a.kind, seed, a.anchor, stress, spec, ctx, a.chunk)
         row['초'] = round(time.time() - t0, 1)
