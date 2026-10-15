@@ -69,7 +69,18 @@ SPOT_BASE = dict(sma_bars=42, mom_short_bars=20, mom_long_bars=127,
                  canary_hyst=0.015, drift_threshold=0.10, universe_size=3, cap=1 / 3)
 FUT_BASE = dict(sma_days=42, mom_short_days=18, mom_long_days=127,
                 vol_threshold=0.05, n_snapshots=5, snap_interval_bars=95,
-                canary_hyst=0.015, drift_threshold=0.03, universe_size=3, cap=1 / 3)
+                canary_hyst=0.015, drift_threshold=0.015, universe_size=3, cap=1 / 3)
+
+
+def _base_tag() -> str:
+    """기준선 지문. 캐시 이름에 넣어 기준선이 바뀌면 옛 곡선을 안 읽게 한다.
+
+    기준선 값을 고치면 '현행' 팔의 곡선이 달라지는데 파일명이 같으면 조용히 섞인다
+    (2026-10-15 history #50 과 같은 기제). 지문이 다르면 파일명이 달라져 새로 계산한다.
+    """
+    import hashlib
+    raw = repr(sorted(SPOT_BASE.items())) + repr(sorted(FUT_BASE.items()))
+    return hashlib.sha1(raw.encode()).hexdigest()[:6]
 
 
 def _topn(n: int) -> tuple[dict, dict]:
@@ -114,9 +125,11 @@ AXES: dict[str, list[tuple[str, dict, dict]]] = {
         (CUR, {}, {}),
         ("현물 0.15", dict(drift_threshold=0.15), {}),
         ("현물 0.20", dict(drift_threshold=0.20), {})],
+    # 현행이 0.015 다. 옛 기준선(0.03)을 이웃 하나로 내려 두고 더 조인 쪽을 하나 넣는다.
     "선물 드리프트 문턱": [
-        ("선물 0.015", {}, dict(drift_threshold=0.015)),
+        ("선물 0.008", {}, dict(drift_threshold=0.008)),
         (CUR, {}, {}),
+        ("선물 0.03", {}, dict(drift_threshold=0.03)),
         ("선물 0.05", {}, dict(drift_threshold=0.05)),
         ("선물 0.08", {}, dict(drift_threshold=0.08))],
     "현물 스냅 간격": [
@@ -138,7 +151,7 @@ _k2 = None
 
 def _key(name: str, anchor: int, stress: bool) -> str:
     safe = name.replace("/", "_").replace(" ", "_").replace("±", "pm")
-    return f"{safe}__a{anchor}{'__s5' if stress else ''}"
+    return f"{safe}__a{anchor}{'__s5' if stress else ''}__b{_base_tag()}"
 
 
 def _save(kind: str, key: str, eq: pd.Series) -> None:
