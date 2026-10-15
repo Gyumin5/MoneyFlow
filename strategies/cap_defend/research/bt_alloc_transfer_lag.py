@@ -168,7 +168,10 @@ def main():
 
     eq_sp = run_spot_live()
     eq_st = run_stock_live()
-    eq_fu = run_fut('margin', 0.03)['_equity']     # 현행 드리프트 정의
+    # 라이브 현행 드리프트 0.015 (2026-09-23 배포). 2026-08-25 측정은 0.03 으로 돌렸으므로
+    # 그 표의 절대 수준은 이 파일로 재현되지 않는다 — 팔 사이 비교는 셋이 같은 선물 슬리브를
+    # 쓰니 그대로 서고, 수준값이 필요하면 다시 돌린다.
+    eq_fu = run_fut('margin', 0.015)['_equity']
     print(f"슬리브 로드 완료 ({time.time()-t0:.0f}s)\n")
 
     print(f"  {'arm':<16s} {'Cal':>6s} {'CAGR':>8s} {'MDD':>8s} {'Sharpe':>7s} "
