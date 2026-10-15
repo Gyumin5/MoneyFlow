@@ -1,0 +1,66 @@
+diff --git a/strategies/cap_defend/research/bt_stock_mom3.py b/strategies/cap_defend/research/bt_stock_mom3.py
+index 9f0aa9a..e96f73f 100644
+--- a/strategies/cap_defend/research/bt_stock_mom3.py
++++ b/strategies/cap_defend/research/bt_stock_mom3.py
+@@ -12,6 +12,7 @@ Grid:
+ 
+ Compare against B (no mom) + top 2-mom (ms=30 ml=84) + top 2-mom (ms=45 ml=210).
+ """
++import os
+ import sys, time
+ import numpy as np
+ import pandas as pd
+@@ -51,6 +52,9 @@ def run_multi_3mom(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+                       'picks': [], 'target': {CASH_KEY: 1.0}})
+     holdings = {CASH_KEY: 1.0}
+     prev_can = canary.iloc[0] if len(canary) > 0 else False
++    # 신호 지연 (2026-10-15 측정용). 0=현행(당일 신호로 당일 체결),
++    # 1=전 거래일 신호로 당일 체결 (라이브 executor_stock 정합).
++    sig_lag = int(os.environ.get('STOCK_SIG_LAG', '0'))
+ 
+     def pick_for_snap(d, can_now):
+         if can_now:
+@@ -76,23 +80,24 @@ def run_multi_3mom(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+                     p_now = pdf.at[d, k] if d in pdf.index else np.nan
+                     if pd.notna(p_prev) and pd.notna(p_now) and p_prev > 0:
+                         holdings[k] = holdings[k] * (p_now / p_prev)
+-        can_now = bool(canary.at[d]) if d in canary.index else prev_can
++        sd = sim_dates[max(0, i - sig_lag)] if sig_lag else d
++        can_now = bool(canary.at[sd]) if sd in canary.index else prev_can
+         for s in snaps:
+             if (i - s['phase']) >= 0 and (i - s['phase']) % snap_int == 0:
+                 if can_now:
+-                    s['picks'] = pick_for_snap(d, can_now)
++                    s['picks'] = pick_for_snap(sd, can_now)
+                     s['target'] = picks_to_target(s['picks'], cash_buf, 'cap')
+                 else:
+                     s['picks'] = []
+-                    s['target'] = select_off(d, mom_def, cash_buf, 'cap')
++                    s['target'] = select_off(sd, mom_def, cash_buf, 'cap')
+         if can_now != prev_can:
+             for s in snaps:
+                 if can_now:
+-                    s['picks'] = pick_for_snap(d, can_now)
++                    s['picks'] = pick_for_snap(sd, can_now)
+                     s['target'] = picks_to_target(s['picks'], cash_buf, 'cap')
+                 else:
+                     s['picks'] = []
+-                    s['target'] = select_off(d, mom_def, cash_buf, 'cap')
++                    s['target'] = select_off(sd, mom_def, cash_buf, 'cap')
+             prev_can = can_now
+         target = merge_targets()
+         total = sum(holdings.values())
+@@ -103,11 +108,11 @@ def run_multi_3mom(pdf, ranked, mom_off, mom_def, canary, start, end, anchor,
+         if ht >= drift_thr:
+             for s in snaps:
+                 if can_now:
+-                    s['picks'] = pick_for_snap(d, can_now)
++                    s['picks'] = pick_for_snap(sd, can_now)
+                     s['target'] = picks_to_target(s['picks'], cash_buf, 'cap')
+                 else:
+                     s['picks'] = []
+-                    s['target'] = select_off(d, mom_def, cash_buf, 'cap')
++                    s['target'] = select_off(sd, mom_def, cash_buf, 'cap')
+             target = merge_targets()
+             pv = total * (1 - TX * ht)
+             holdings = {k: pv * w for k, w in target.items() if w > 0}
