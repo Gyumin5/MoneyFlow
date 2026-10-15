@@ -32,7 +32,7 @@ import time
 import json
 import sqlite3
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Tuple
 import pyupbit
 
@@ -70,20 +70,37 @@ def backup_status_text():
 
 
 def send_telegram(msg, button_text=None, button_url=None):
-    """텔레그램 알림 전송. 실패해도 프로그램은 계속 진행."""
+    """텔레그램 알림 전송. 실패해도 프로그램은 계속 진행하고 결과를 돌려준다.
+
+    반환값 셋.
+      '접수'     — 텔레그램이 200 과 본문 ok 참으로 받았다고 답했다.
+      '실패'     — 텔레그램이 거절했거나 보내기 전에 끊겼다. 안 갔다고 봐도 된다.
+      '확인불가' — 시간 초과다. 이미 접수됐을 수도, 아닐 수도 있다.
+
+    접수는 수신자가 읽었다는 뜻이 아니다 — 텔레그램 서버가 받았다는 뜻이다.
+    """
     try:
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
         if button_text and button_url:
             payload["reply_markup"] = {
                 "inline_keyboard": [[{"text": button_text, "url": button_url}]]
             }
-        requests.post(
+        r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             json=payload,
             timeout=10
         )
+        if r.status_code != 200:
+            return '실패'
+        try:
+            body = r.json()
+        except Exception:
+            return '확인불가'
+        return '접수' if body.get('ok') is True else '실패'
+    except requests.exceptions.Timeout:
+        return '확인불가'
     except Exception:
-        pass
+        return '실패'
 
 # --- Configuration for Auto Turnover ---
 # Try local config.py first (remote server), then ../../config/upbit.py (local dev)
@@ -2762,49 +2779,17 @@ if __name__ == "__main__":
                 t3u_fire = t3u_stock or t3u_spot or t3u_fut
                 fire = t1_fire or t3u_fire
 
-                # ── 자산배분 트리거 (V24 B 안, 2026-05-26) ──
-                # alloc_transit 자동 cap_ratio 시스템 폐지. read-only 평가 + 텔레그램 알림만.
-                # 사용자 수동 송금. 각 executor 는 자기 계좌 안에서만 자동매매 (sleeve 내부).
-                _alloc_transit_active = False  # 항상 False — 자동 cap 실행 X
-                _KST = timezone(timedelta(hours=9))
-
-                def _compute_cap_ratios(_tot, _sk, _spk, _fk):
-                    tgt_stock_krw = _tot * STOCK_RATIO
-                    tgt_spot_krw = _tot * COIN_RATIO
-                    tgt_fut_krw = _tot * FUTURES_RATIO
-                    return {
-                        'stock': min(1.0, tgt_stock_krw / _sk) if _sk > 0 else 1.0,
-                        'spot': min(1.0, tgt_spot_krw / _spk) if _spk > 0 else 1.0,
-                        'fut': min(1.0, tgt_fut_krw / _fk) if _fk > 0 else 1.0,
-                    }
+                # ── 자산배분 트리거 알림 (2026-05-26 수동 송금 모델) ──
+                # 자동 송금·자동 cap 은 폐지됐다. 여기서는 읽기만 하고 트리거가 켜지면
+                # 텔레그램으로 알린다. 송금은 사람이 손으로 한다.
+                # 매매 상태파일(trade_state.json)은 읽지도 쓰지도 않는다 — 현물 실행기가
+                # 같이 쓰는 파일이라, 알림 이력을 여기에 적으면 통째 쓰기가 상대의 갱신을
+                # 덮을 수 있다. 중복 억제도 두지 않는다(2026-10-15 토론 결론).
+                # 크론은 하루 한 번이라 알림도 하루 한 번이고, 사람이 손으로 다시 돌리면
+                # 같은 알림이 한 번 더 온다 — 그게 허용된 동작이다.
                 try:
-                    _ts_path = None
-                    for _p in (os.path.join(APP_HOME, 'trade_state.json'), 'trade_state.json'):
-                        if os.path.exists(_p):
-                            _ts_path = _p
-                            break
-                    _ts_obj = {}
-                    if _ts_path:
-                        with open(_ts_path, 'r') as _f:
-                            _ts_obj = json.load(_f)
-                    _at = _ts_obj.get('alloc_transit') or {}
-                    _was_active = bool(_at.get('active', False))
-                    _now_dt = datetime.now(_KST)
-                    _now_str = _now_dt.strftime('%Y-%m-%d %H:%M KST')
-                    _cap_ratios = _compute_cap_ratios(alloc_total, stock_krw, spot_krw, fut_krw)
-                    # V24 (2026-05-26) B 안: 자동 cap_ratio 폐지. read-only 평가 + 알림만.
-                    # legacy active=True 면 즉시 clear (마이그레이션).
-                    if _was_active:
-                        _ts_obj['alloc_transit'] = {
-                            'active': False,
-                            'cleared_at': _now_str,
-                            'reason': 'V24 B 안 (2026-05-26) — 자동 cap_ratio 폐지, 수동 송금 모델로 전환',
-                        }
-                        _alloc_transit_active = False
-                        alloc_lines.append(f"  🟢 alloc_transit FORCE CLEAR (V24 B 안 — 자동 cap_ratio 시스템 폐지)")
-                    # 트리거 ON 시 텔레그램 알림 (read-only, 수동 송금 권장)
                     if fire:
-                        # suggested_transfer 계산 (어느 sleeve → 어느 sleeve)
+                        # 송금 제안 — 어느 계좌에서 빼서 어느 계좌로 넣나
                         tgt_stock_krw = alloc_total * STOCK_RATIO
                         tgt_spot_krw = alloc_total * COIN_RATIO
                         tgt_fut_krw = alloc_total * FUTURES_RATIO
@@ -2813,56 +2798,34 @@ if __name__ == "__main__":
                             'spot': spot_krw - tgt_spot_krw,
                             'fut': fut_krw - tgt_fut_krw,
                         }
-                        reason = ' | '.join(([f'T1 ht {ht*100:.1f}pp'] if t1_fire else []) +
-                                            ([f'T3U_can ≥ {REBAL_T3U_REL*100:.0f}%'] if t3u_fire else []))
-                        # rate-limit: 같은 reason 24h 내 중복 알림 X
-                        _last_alert = _at.get('last_alert_at', '') if isinstance(_at, dict) else ''
-                        _alert_ok = True
-                        try:
-                            if _last_alert:
-                                _la_dt = datetime.strptime(_last_alert.replace(' KST', ''), '%Y-%m-%d %H:%M').replace(tzinfo=_KST)
-                                if (_now_dt - _la_dt).total_seconds() < 86400:
-                                    _alert_ok = False
-                        except Exception:
-                            pass
-                        if _alert_ok:
-                            try:
-                                _msg_lines = [
-                                    f"⚠️ V24 자산배분 트리거 ON",
-                                    f"트리거: {reason}",
-                                    f"현재 비중: 주식 {p_stock*100:.1f}% / 업비트 {p_spot*100:.1f}% / 바이낸스 {p_fut*100:.1f}%",
-                                    f"목표: 60/25/15 (B 안 + per-sleeve buffer stock 7/spot 1/fut 1)",
-                                    f"현재 KRW: 주식 ₩{stock_krw:,.0f} / 업비트 ₩{spot_krw:,.0f} / 바이낸스 ₩{fut_krw:,.0f}",
-                                    f"목표 KRW: 주식 ₩{tgt_stock_krw:,.0f} / 업비트 ₩{tgt_spot_krw:,.0f} / 바이낸스 ₩{tgt_fut_krw:,.0f}",
-                                    f"송금 제안:",
-                                ]
-                                for _k, _v in diffs.items():
-                                    if abs(_v) > alloc_total * 0.005:  # 0.5% 미만은 무시
-                                        _kname = {'stock': '주식', 'spot': '업비트', 'fut': '바이낸스'}[_k]
-                                        if _v > 0:
-                                            _msg_lines.append(f"  {_kname}: 매도/출금 ₩{_v:,.0f}")
-                                        else:
-                                            _msg_lines.append(f"  {_kname}: 입금 ₩{-_v:,.0f}")
-                                _msg_lines.append(f"※ 자동 rebal X — 수동 송금 필요. sleeve 내부 자동매매는 그대로 진행")
-                                send_telegram('\n'.join(_msg_lines))
-                                _ts_obj['alloc_transit'] = {
-                                    'active': False,
-                                    'last_alert_at': _now_str,
-                                    'last_fire_reason': reason,
-                                    'last_ht': float(ht),
-                                    'last_total_krw': float(alloc_total),
-                                    'target_ratios': {'stock': STOCK_RATIO, 'spot': COIN_RATIO, 'fut': FUTURES_RATIO},
-                                }
-                            except Exception as _ex_tg:
-                                alloc_lines.append(f"  ⚠️ trigger alert 전송 실패: {_ex_tg}")
-                        alloc_lines.append(f"  ⚠️ 트리거 ON ({reason}) — 텔레그램 알림 발송 (수동 송금 권장)")
-                    if _ts_path and (_was_active or _alloc_transit_active):
-                        _tmp = _atomic_tmp(_ts_path)
-                        with open(_tmp, 'w') as _f:
-                            json.dump(_ts_obj, _f, ensure_ascii=False, indent=2)
-                        os.replace(_tmp, _ts_path)
+                        reason = ' | '.join(([f'비중편차 합의 절반 {ht*100:.1f}퍼센트포인트'] if t1_fire else []) +
+                                            ([f'한 계좌가 목표 대비 {REBAL_T3U_REL*100:.0f}퍼센트 이상 모자람 + 카나리 켜짐'] if t3u_fire else []))
+                        _msg_lines = [
+                            f"⚠️ 자산배분 트리거 켜짐",
+                            f"트리거: {reason}",
+                            f"현재 비중: 주식 {p_stock*100:.1f}% / 업비트 {p_spot*100:.1f}% / 바이낸스 {p_fut*100:.1f}%",
+                            f"목표 비중: 주식 {STOCK_RATIO*100:.0f}% / 업비트 {COIN_RATIO*100:.0f}% / 바이낸스 {FUTURES_RATIO*100:.0f}%",
+                            f"현재 금액: 주식 ₩{stock_krw:,.0f} / 업비트 ₩{spot_krw:,.0f} / 바이낸스 ₩{fut_krw:,.0f}",
+                            f"목표 금액: 주식 ₩{tgt_stock_krw:,.0f} / 업비트 ₩{tgt_spot_krw:,.0f} / 바이낸스 ₩{tgt_fut_krw:,.0f}",
+                            f"송금 제안:",
+                        ]
+                        for _k, _v in diffs.items():
+                            if abs(_v) > alloc_total * 0.005:  # 0.5% 미만은 무시
+                                _kname = {'stock': '주식', 'spot': '업비트', 'fut': '바이낸스'}[_k]
+                                if _v > 0:
+                                    _msg_lines.append(f"  {_kname}: 매도/출금 ₩{_v:,.0f}")
+                                else:
+                                    _msg_lines.append(f"  {_kname}: 입금 ₩{-_v:,.0f}")
+                        _msg_lines.append(f"※ 자동 송금은 없다 — 손으로 송금해야 한다. 계좌 안의 자동매매는 그대로 진행된다")
+                        _tg = send_telegram('\n'.join(_msg_lines))
+                        if _tg == '접수':
+                            alloc_lines.append(f"  ⚠️ 트리거 켜짐 ({reason}) — 텔레그램 알림 접수됨 (손으로 송금 필요)")
+                        elif _tg == '확인불가':
+                            alloc_lines.append(f"  ⚠️ 트리거 켜짐 ({reason}) — 텔레그램 알림 접수 확인 불가 (시간 초과)")
+                        else:
+                            alloc_lines.append(f"  ⚠️ 트리거 켜짐 ({reason}) — 텔레그램 알림 전송 실패")
                 except Exception as _ex_at:
-                    alloc_lines.append(f"  ⚠️ alloc_transit 처리 실패: {_ex_at}")
+                    alloc_lines.append(f"  ⚠️ 자산배분 알림 처리 실패: {_ex_at}")
 
                 fire_reason = []
                 if t1_fire: fire_reason.append(f"T1(ht {ht*100:.1f}pp ≥ {REBAL_HT_THRESHOLD*100:.0f}pp)")
@@ -3099,7 +3062,7 @@ if __name__ == "__main__":
         # sleeve 내부 drift 는 executor 자동처리 → 사용자 행동 없음. 헤더 판정도 자산간
         # 이동(T1/T3U)만 반영. 보유/환율/카나리/자산배분만 표시.
         summary = (
-                f"[Daily Report] 📊 V24 신호 ({date_str})\n"
+                f"📊 일간 리포트 ({date_str})\n"
                 f"{_verdict_line}\n"
                 f"{_as_of_line}\n\n"
                 + '\n'.join(holdings_lines) + "\n\n"
@@ -3109,10 +3072,15 @@ if __name__ == "__main__":
                 + '\n'.join(alloc_lines)
             )
         if PORTFOLIO_PUBLIC_URL:
-            send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)
+            _tg_sum = send_telegram(summary, button_text="대시보드 열기", button_url=PORTFOLIO_PUBLIC_URL)
         else:
-            send_telegram(summary)
-        print("✅ 텔레그램 일간 리포트 전송 완료")
+            _tg_sum = send_telegram(summary)
+        if _tg_sum == '접수':
+            print("✅ 텔레그램 일간 리포트 접수됨")
+        elif _tg_sum == '확인불가':
+            print("⚠️ 텔레그램 일간 리포트 접수 확인 불가 (시간 초과)")
+        else:
+            print("🚨 텔레그램 일간 리포트 전송 실패")
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
 
