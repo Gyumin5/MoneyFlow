@@ -31,6 +31,8 @@ portfolio_result*.html
 
 # Runtime state files
 signal_state.json
+alloc_trigger_streak.json
+strategies/cap_defend/alloc_trigger_streak.json
 strategies/cap_defend/signal_state.json
 strategies/cap_defend/coin_trade_state.json
 trade/coin_trade_state.json

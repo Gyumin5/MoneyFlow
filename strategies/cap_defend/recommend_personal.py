@@ -273,6 +273,50 @@ def _save_signal_state(data):
     os.replace(tmp, SIGNAL_STATE_FILE)
 
 
+# ─── 송금 트리거 지속일 ─────────────────────────────────────
+# 트리거가 며칠째 켜진 채인지만 담는다. 이 파일은 recommend_personal 만 쓴다 —
+# 매매 상태파일(trade_state.json)에 적으면 현물 실행기의 통째 쓰기와 겹쳐 서로를
+# 덮는다(2026-10-15 결론).
+ALLOC_TRIGGER_FILE = os.path.join(".", "alloc_trigger_streak.json")
+# 알림 강도를 올리는 지점(영업일). 측정한 착수 지연 팔과 같은 값이다
+# (strategies/cap_defend/research/alloc_insurance_grace.py, 보고서 2026-10-16).
+ALLOC_ESCALATE_BD = (5, 20, 60)
+
+
+def _alloc_streak_update(fire, today):
+    """송금 트리거 연속 지속일을 갱신하고 (지속 영업일, 시작일) 을 돌려준다.
+
+    파일이 없거나 깨졌으면 오늘 처음 켜진 것으로 본다. 알림 자체는 어떤 경우에도
+    막지 않는다 — 지속일은 알림을 더 세게 만들 뿐이고, 못 읽었다고 침묵하면
+    원래 보내던 알림까지 잃는다.
+    """
+    raw = None
+    try:
+        with open(ALLOC_TRIGGER_FILE) as f:
+            raw = (json.load(f) or {}).get('since')
+    except Exception:
+        raw = None
+    if not fire:
+        if raw:
+            try:
+                _save_json_atomic({'since': None, 'updated': today.isoformat()}, ALLOC_TRIGGER_FILE)
+            except Exception:
+                pass
+        return 0, None
+    try:
+        since = datetime.strptime(raw, '%Y-%m-%d').date() if raw else None
+    except Exception:
+        since = None
+    if since is None or since > today:
+        since = today
+    if raw != since.isoformat():
+        try:
+            _save_json_atomic({'since': since.isoformat(), 'updated': today.isoformat()}, ALLOC_TRIGGER_FILE)
+        except Exception:
+            pass
+    return int(np.busday_count(since, today)), since
+
+
 def save_daily_live_snapshot():
     """실계좌 기준 일간 스냅샷 저장. 하루 1건 upsert."""
     api = os.environ.get("TRADE_API_BASE", "http://127.0.0.1:5000")
@@ -2807,6 +2851,12 @@ if __name__ == "__main__":
                 t3u_fire = t3u_stock or t3u_spot or t3u_fut
                 fire = t1_fire or t3u_fire
 
+                # 트리거가 며칠째 켜진 채인가. 알림 문구를 고르는 데만 쓴다.
+                try:
+                    _alloc_bd, _alloc_since = _alloc_streak_update(fire, datetime.now().date())
+                except Exception:
+                    _alloc_bd, _alloc_since = 0, None
+
                 # ── 자산배분 트리거 알림 (2026-05-26 수동 송금 모델) ──
                 # 자동 송금·자동 cap 은 폐지됐다. 여기서는 읽기만 하고 트리거가 켜지면
                 # 텔레그램으로 알린다. 송금은 사람이 손으로 한다.
@@ -2815,6 +2865,8 @@ if __name__ == "__main__":
                 # 덮을 수 있다. 중복 억제도 두지 않는다(2026-10-15 토론 결론).
                 # 크론은 하루 한 번이라 알림도 하루 한 번이고, 사람이 손으로 다시 돌리면
                 # 같은 알림이 한 번 더 온다 — 그게 허용된 동작이다.
+                # 지속일이 길수록 알림 머리말을 세게 쓴다. 매매는 안 바꾼다 — 상한·보험은
+                # 안 올린다(2026-10-16 측정에서 늦게 켜는 규칙 넷 전부 탈락, history #69).
                 try:
                     if fire:
                         # 송금 제안 — 어느 계좌에서 빼서 어느 계좌로 넣나
@@ -2828,8 +2880,17 @@ if __name__ == "__main__":
                         }
                         reason = ' | '.join(([f'비중편차 합의 절반 {ht*100:.1f}퍼센트포인트'] if t1_fire else []) +
                                             ([f'한 계좌가 목표 대비 {REBAL_T3U_REL*100:.0f}퍼센트 이상 모자람 + 카나리 켜짐'] if t3u_fire else []))
+                        _b5, _b20, _b60 = ALLOC_ESCALATE_BD
+                        if _alloc_bd >= _b60:
+                            _head = f"🚨 송금 트리거 {_alloc_bd}영업일째 — 측정상 방어가 무너지는 구간이다"
+                        elif _alloc_bd >= _b20:
+                            _head = f"🚨 송금 트리거 {_alloc_bd}영업일째 — 더 미루지 마라"
+                        elif _alloc_bd >= _b5:
+                            _head = f"⚠️ 송금 트리거 {_alloc_bd}영업일째 — 아직 송금이 안 됐다"
+                        else:
+                            _head = "⚠️ 자산배분 트리거 켜짐"
                         _msg_lines = [
-                            f"⚠️ 자산배분 트리거 켜짐",
+                            _head,
                             f"트리거: {reason}",
                             f"현재 비중: 주식 {p_stock*100:.1f}% / 업비트 {p_spot*100:.1f}% / 바이낸스 {p_fut*100:.1f}%",
                             f"목표 비중: 주식 {STOCK_RATIO*100:.0f}% / 업비트 {COIN_RATIO*100:.0f}% / 바이낸스 {FUTURES_RATIO*100:.0f}%",
@@ -2844,6 +2905,11 @@ if __name__ == "__main__":
                                     _msg_lines.append(f"  {_kname}: 매도/출금 ₩{_v:,.0f}")
                                 else:
                                     _msg_lines.append(f"  {_kname}: 입금 ₩{-_v:,.0f}")
+                        if _alloc_bd >= _b5 and _alloc_since is not None:
+                            _msg_lines.append(f"지속: {_alloc_since.isoformat()} 부터 {_alloc_bd}영업일")
+                        if _alloc_bd >= _b20:
+                            _msg_lines.append("측정(2026-10-16): 착수가 20영업일까지 늦는 것은 잡음 폭 안이고, "
+                                              "60영업일까지 늦으면 최대낙폭 악화가 잡음 폭을 넘었다")
                         _msg_lines.append(f"※ 자동 송금은 없다 — 손으로 송금해야 한다. 계좌 안의 자동매매는 그대로 진행된다")
                         _tg = send_telegram('\n'.join(_msg_lines))
                         if _tg == '접수':
