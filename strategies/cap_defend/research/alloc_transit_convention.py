@@ -117,7 +117,7 @@ def run_one(axis, R, gate, tab, keep_sender: bool, t1=None, t3u=None,
         multi_mo += int(mo_cnt >= 2)
     return pv, dict(fires=fires, dones=dones, multi=multi_mo,
                     ht95=float(np.percentile(ht_hist, 95)), maxht=float(max_ht),
-                    fire_idx=fire_idx)
+                    fire_idx=fire_idx, ht_hist=ht_hist)
 
 
 def main() -> int:
