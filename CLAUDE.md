@@ -224,7 +224,9 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   - 자동 cap_ratio + cap_defend 매도 트리거
 - BT 결과 (5.13yr, V24 sleeve, 알림 시점 100% 송금 가정):
   - alloc 60/20/15 + buffer (6/1/1): CAGR 71.2%, Cal 3.88, MDD -18.4%, 누적 14.99x, fire 16
-  - 라이브 trigger E (T1=13 OR T3U=20% state) 그대로 유지
+  - 라이브 트리거는 T1 ht>=20pp OR T3U_can 20% 다. 정본은 recommend_personal.py 의
+    REBAL_HT_THRESHOLD=0.20 과 REBAL_T3U_REL=0.20 이고, 위 "리밸 트리거" 절과 같은 값이다.
+    (이 자리에 2026-05-23 채택분 T1=13 이 남아 있었다. 2026-10-16 에 코드와 대조해 지웠다.)
   - 트리거 변경 (T3U=25 state) Cal +0.04 향상은 라이브 안정성 손해로 미채택
 
 ## 백테스트 필수 규칙
