@@ -418,6 +418,37 @@ FUT_CASH_BUFFER_DEFAULT = 0.01     # V24 (2026-05-26): Binance 1%
 CASH_BUFFER_PERCENT_DEFAULT = STOCK_CASH_BUFFER_DEFAULT  # backward compat (stock 기준)
 REBAL_BAND_PP = 0.08  # 8pp band — any asset drifts ≥8pp → full rebalance
 
+
+def alloc_acct_errors(accounts: dict) -> list:
+    """세 계좌 잔고 응답에서 '믿을 수 없는 계좌' 목록을 만든다 (2026-10-16).
+
+    자산배분 트리거는 세 계좌 총액의 비율로 발화한다. 그래서 한 계좌를 0 으로 잘못 읽으면
+    그 계좌가 통째로 비었다는 뜻이 되어 이탈이 0.60 까지 찍히고 없는 송금을 제안한다.
+
+    live_overview 는 예외가 났을 때만 error 키를 넣는다. 한투가 200 응답에 rt_cd 오류를
+    실어 보내면 보유 0·총액 0 이 error 없이 그대로 오고, 계좌 키 자체가 빠진 응답도
+    `or {}` 를 거쳐 빈 사전이 된다. 둘 다 여기서 조회 실패로 본다 — 모르면 알리지 않는다.
+
+    반환값이 비어 있지 않으면 호출부는 트리거 평가를 통째로 건너뛴다.
+    """
+    out = []
+    for name, key in (("주식(KIS)", "stock_kis"), ("업비트", "coin_upbit"), ("바이낸스", "coin_binance")):
+        acct = accounts.get(key) or {}
+        if 'error' in acct:
+            out.append(f"{name}: {str(acct['error'])[:100]}")
+            continue
+        if not acct:
+            out.append(f"{name}: 응답에 계좌가 없음")
+            continue
+        try:
+            total = float(acct.get("total_krw", 0) or 0)
+        except (TypeError, ValueError):
+            out.append(f"{name}: 총액을 숫자로 못 읽었다")
+            continue
+        if not (total > 0):
+            out.append(f"{name}: 총액 0 — 조회 실패로 본다")
+    return out
+
 def get_cash_buffer(sleeve: str = 'stock'):
     """sleeve 별 현금 버퍼 비율. V24 trade_state.json 에서 sleeve_cash_buffer 키 우선 읽기.
 
@@ -2720,10 +2751,7 @@ if __name__ == "__main__":
             stock_acct = accts.get("stock_kis") or {}
             spot_acct = accts.get("coin_upbit") or {}
             fut_acct = accts.get("coin_binance") or {}
-            _acct_errors = []
-            if 'error' in stock_acct: _acct_errors.append(f"주식(KIS): {str(stock_acct['error'])[:100]}")
-            if 'error' in spot_acct: _acct_errors.append(f"업비트: {str(spot_acct['error'])[:100]}")
-            if 'error' in fut_acct: _acct_errors.append(f"바이낸스: {str(fut_acct['error'])[:100]}")
+            _acct_errors = alloc_acct_errors(accts)
             stock_krw = float(stock_acct.get("total_krw", 0))
             spot_krw = float(spot_acct.get("total_krw", 0))
             fut_krw = float(fut_acct.get("total_krw", 0))

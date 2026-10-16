@@ -184,6 +184,33 @@ def main():
                  "abs(_v) > alloc_total * 0.005"):
         check(f'T8 송금 금액 계산 보존: {frag[:30]}', frag in blk)
 
+    # T9 — 못 믿을 계좌를 0원으로 받지 않는다 (2026-10-16, ai-debate run-20261016T032730Z)
+    guard_src, _ = grab(PERSONAL, 'alloc_acct_errors')
+    _ns = {}
+    exec(guard_src, _ns)
+    acct_errors = _ns['alloc_acct_errors']
+
+    def _a(v):
+        return {"total_krw": v, "holdings": []}
+
+    t9 = [
+        ('정상 셋', {"stock_kis": _a(6e8), "coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 0),
+        ('error 키', {"stock_kis": {"error": "timeout"}, "coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 1),
+        ('계좌 키 자체가 없음', {"coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 1),
+        ('빈 사전', {"stock_kis": {}, "coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 1),
+        ('총액 0 (error 없음)', {"stock_kis": _a(0), "coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 1),
+        ('총액 None', {"stock_kis": {"total_krw": None}, "coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 1),
+        ('총액이 숫자가 아님', {"stock_kis": {"total_krw": "abc"}, "coin_upbit": _a(2e8), "coin_binance": _a(1e8)}, 1),
+        ('셋 다 0', {"stock_kis": _a(0), "coin_upbit": _a(0), "coin_binance": _a(0)}, 3),
+    ]
+    for label, accounts, want in t9:
+        got = acct_errors(accounts)
+        check(f'T9 {label} → 실패 {want}건', len(got) == want, f"실제 {len(got)}건 {got}")
+
+    check('T9 호출부가 이 함수를 쓴다', '_acct_errors = alloc_acct_errors(accts)' in src)
+    check('T9 실패가 있으면 트리거 평가를 건너뛴다',
+          'if _acct_errors:' in src and '트리거 평가 스킵' in src)
+
     print()
     if FAILED:
         print(f"실패 {len(FAILED)}건: {FAILED}")
