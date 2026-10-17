@@ -51,11 +51,20 @@ def run_spot(pfd: int, scope: str, phase: int, stress: bool) -> dict:
     os.environ["PFD_SCOPE"] = scope
     os.environ["DRIFT_HEALTH_MODE"] = "refill"
     try:
-        return sbt_run(R._bars, R._funding, asset_type="spot", interval="D",
+        # 인자는 bt_coin_param_resweep.run_spot 과 글자까지 같게 둔다 — 캐시된
+        # 비교군이 그걸로 만들어졌다. 2026-10-18 첫 판에서 가드 끄는 인자
+        # (stop/dd/bl/crash)와 leverage·selection 을 빠뜨려 이 팔만 가드가 켜진 채
+        # 돌았고, 그래서 분해 결과가 무효였다. post_flip_delay 만 바꾼다.
+        return sbt_run(R._bars, R._funding, interval="D", asset_type="spot",
+                       leverage=1.0,
                        tx_cost=R.TX_SPOT * (R.STRESS if stress else 1.0),
-                       vol_days=90, vol_mode="daily", post_flip_delay=pfd,
-                       phase_offset_bars=phase, health_mode="mom2vol",
-                       start_date=R.START, end_date=R.END, **R.SPOT_BASE)
+                       start_date=R.START, end_date=R.END,
+                       vol_mode="daily", phase_offset_bars=phase,
+                       post_flip_delay=pfd, selection="greedy",
+                       stop_kind="none", stop_pct=0.0,
+                       dd_lookback=60, dd_threshold=-99.0,
+                       bl_drop=-99.0, bl_days=7, crash_threshold=-99.0,
+                       health_mode="mom2vol", **R.SPOT_BASE)
     finally:
         if old is None:
             os.environ.pop("PFD_SCOPE", None)

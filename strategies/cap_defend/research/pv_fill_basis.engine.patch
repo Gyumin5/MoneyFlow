@@ -1,0 +1,43 @@
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 65dfe39..fe99549 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -460,7 +460,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
+             return None
+         return liq_price
+ 
+-    def _execute_rebalance(target_weights, date):
++    def _execute_rebalance(target_weights, date, pv_date=None):
+         """Delta 리밸런싱 with 선물 비용."""
+         nonlocal capital, trade_count
+         # 체결 밴드 = 각 sleeve 의 라이브 규칙 (2026-08-25 정합).
+@@ -470,7 +470,13 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         #   fut:  trade/auto_trade_binance.py DELTA_THRESHOLD=0.05.
+         # 밴드를 축으로 재실험하려면 research/bt_spot_rebal_band.engine.patch 를 적용한다.
+         _band = 0.0 if asset_type == 'spot' else 0.05
+-        pv = _port_val(date)
++        # 실험 스위치(2026-10-18, 기본 off = 기존 동작). 주문 크기를 정하는 평가액이
++        # 체결봉(t)의 종가를 쓰면 그날 결과를 미리 보는 것이다 — 선물 엔진은 이미
++        # pv_date=prev_date 로 전일 종가를 쓴다(backtest_futures_v25.py:1088).
++        # PV_FILL_BASIS=prev 면 현물도 같은 기준으로 맞춘다.
++        _pv_at = pv_date if (pv_date is not None
++                             and os.environ.get('PV_FILL_BASIS') == 'prev') else date
++        pv = _port_val(_pv_at)
+         if pv <= 0:
+             return
+ 
+@@ -1068,12 +1074,12 @@ def run(bars, funding, interval='1h', leverage=1.0,
+         # ── 리밸런싱 실행 (execution_delay_bars 지원) ──
+         # pending queue: 이전에 예약된 리밸런스가 있으면 due bar 에 실행
+         if pending_rebalance is not None and bar_i >= pending_rebalance['due_i']:
+-            _execute_rebalance(pending_rebalance['target'], date)
++            _execute_rebalance(pending_rebalance['target'], date, pv_date=prev_date)
+             rebal_count += 1
+             pending_rebalance = None
+         if need_rebal:
+             if execution_delay_bars <= 0:
+-                _execute_rebalance(combined, date)
++                _execute_rebalance(combined, date, pv_date=prev_date)
+                 rebal_count += 1
+             else:
+                 # N bar 뒤에 현재 combined target 체결 예약
