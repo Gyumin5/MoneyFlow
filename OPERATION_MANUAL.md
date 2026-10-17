@@ -38,6 +38,7 @@ updated: 2026-08-25
 | 항목 | 값 |
 |---|---|
 | sleeve | D_SMA42 단일, snap_interval=95, n_snapshots=5, drift=0.015 |
+| 전환 후 재평가 | `post_flip_delay=5` — 카나리 ON 봉을 0 으로 세어 다섯 봉 뒤 첫 회차에 전 스냅샷 재선정 |
 | 선정/헬스 | universe 3종 cap 1/3, mom2vol(mom 18/127, vol 90d ≤ 5%), 카나리 BTC SMA42 ±1.5% |
 | 레버리지 | 동적 per-coin `L = min(BTC_cap, K2_per_coin)`, Lmin/Lmid/Lmax = 2/3/4 |
 | 마진모드 | CROSSED (V24 ISOLATED 에서 전환) |
@@ -111,6 +112,7 @@ for coin in selected:                  # 개별 코인 단기 강도
 | 항목 | 값 |
 |---|---|
 | sleeve | D_SMA42 단일, snap_interval=217 (=7×31), n_snapshots=7, drift=0.10 |
+| 전환 후 재평가 | `post_flip_delay=5` — 카나리 ON 봉을 0 으로 세어 다섯 봉 뒤 첫 회차에 전 스냅샷 재선정 |
 | 선정/헬스 | universe 3종 cap 1/3, mom2vol(mom 20/127, vol 90d ≤ 5%), 카나리 BTC SMA42 ±1.5% |
 | 유니버스 | CoinGecko Top40 ∩ Binance spot ∩ Upbit KRW ∩ 253일 이상 ∩ 거래대금 조건 |
 | drift 발화 시 | refill v2 — 모멘텀 둘 다 음수(ms<0 AND ml<0)인 코인만 fresh healthy 로 교체 |
