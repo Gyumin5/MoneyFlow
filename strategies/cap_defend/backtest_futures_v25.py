@@ -1019,8 +1019,38 @@ def run(bars, funding, interval='D', leverage=3.0,
                         ms = calc_mom(c_arr, mom30)
                         ml = calc_mom(c_arr, mom90)
                         return ms < 0 and ml < 0
-                    fresh = _compute_weights(prev_date)
-                    healthy_coins = sorted([c for c in fresh.keys() if c != 'CASH'])
+                    # 리필 후보 풀은 라이브와 같은 모양이어야 한다 (2026-10-18).
+                    # 라이브 auto_trade_binance.apply_refill_v2_fut 는 그날 받아 온
+                    # 유니버스 전체에서 mom_short>0 AND mom_long>0 인 코인을 모아
+                    # 단기 모멘텀 내림차순(동률은 심볼순)으로 세운다. 변동성 상한도
+                    # 상위 선발도 안 건다. 여기서 `_compute_weights` 결과(상위 3개를
+                    # 변동성까지 걸러 고른 것)를 풀로 쓰면 후보가 셋 이하로 줄고
+                    # 순서도 심볼순이라, 리필이 라이브와 다른 코인을 집는다.
+                    # 전환 후 재평가는 바로 이 리필 경로와 자리를 다투므로 양쪽에
+                    # 공통으로 묻히는 오차가 아니다(토론 run-20261017T210537Z).
+                    # BT 쪽 유니버스는 get_mcap(t-1) 이다 — 그 시점 시총 상위 목록이
+                    # 라이브가 그날 받아 온 목록에 해당한다. bars 전체를 쓰면
+                    # 나중에 상위로 올라온 코인이 과거에 섞여 생존편향이 된다.
+                    def _refill_pool(sig_date):
+                        pool = []
+                        for coin in get_mcap(sig_date):
+                            if coin == 'BTC':
+                                continue
+                            df_p = bars.get(coin)
+                            if df_p is None:
+                                continue
+                            ci_p = df_p.index.get_indexer([sig_date], method='ffill')[0]
+                            if ci_p < 0 or ci_p < max(mom30, mom90):
+                                continue
+                            c_p = df_p['Close'].values[:ci_p + 1]
+                            ms_p = calc_mom(c_p, mom30)
+                            ml_p = calc_mom(c_p, mom90)
+                            if ms_p > 0 and ml_p > 0:
+                                pool.append((coin, ms_p))
+                        pool.sort(key=lambda x: (-x[1], x[0]))
+                        return [c for c, _ in pool]
+
+                    healthy_coins = _refill_pool(prev_date)
                     for si in range(n_snapshots):
                         sn = snapshots[si]
                         sn_coins = sorted([c for c in sn.keys() if c != 'CASH'])
