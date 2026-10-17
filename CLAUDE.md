@@ -526,6 +526,20 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
 - 가드 OFF (라이브 무가드 정합): `dd_lookback=0, bl_drop=0, crash_threshold=-10`.
 - 선물 라이브는 `index[-2]`=signal (index[-1]=진행중봉) → bslice 를 d+1 까지 줘 정렬.
 
+체결층 정합 (2026-10-18 운영자 지시로 셋을 맞췄다 — 선정층 패리티와 별개 축이다):
+- 선물 증액 증거금: `backtest_futures_v25.py` 의 add_margin 은 그 시점 목표 레버리지로 나눈다.
+  진입 시점 레버리지로 나누면 L 이 오른 날(2→4) 증거금을 두 배로 잡아 현금이 어중간할 때
+  증액을 통째로 건너뛰고, 라이브(레버리지를 먼저 바꾸고 목표 명목으로 주문)와 포지션이 갈린다.
+- 선물 보유분 증거금 재표시: 리밸런싱 때 보유분 margin 을 `holdings×entry/현재 L` 로 다시 맞추고
+  차액을 capital 과 주고받는다. 크로스에서 L 이 오르면 묶인 개시증거금이 풀려 다른 코인을 살
+  현금이 된다. 지갑(capital + margins 합)은 안 변해서 평가액·청산 모델에 영향이 없다.
+  현금이 모자라 더 묶지 못하는 경우는 가능한 만큼만 묶는다(라이브는 3805 행에서 비율만큼
+  미리 팔아 통과시킨다).
+- 현물 주문 크기 평가액: `unified_backtest._execute_rebalance` 는 `pv_date=prev_date` 로 신호봉
+  종가를 쓴다. 체결가가 t 봉 Open 인데 평가액만 t 봉 Close 로 재면 그날 결과를 미리 본다.
+  선물 엔진은 원래 그렇게 돼 있었고 현물에만 빠져 있었다. 이 셋을 되돌리면 과거 현물 수치가
+  연복리 0.3~0.5%p 높게 나오던 상태로 돌아간다.
+
 남은 구조적 차이 (버그 아님, 의도/미세):
 - 유니버스 소스: 라이브=CoinGecko 실시간 top40, BT=`historical_universe.json` point-in-time(생존편향 방지).
   동일 엔진에서 fixed vs point-in-time mcap 비교 시 picks 가 5.69%(114/2005일) 갈림 = 의도된 BT↔라이브 갭(체결 슬리피지급). 선정 로직이 아닌 입력 차이.

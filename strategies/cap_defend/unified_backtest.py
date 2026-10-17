@@ -460,7 +460,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             return None
         return liq_price
 
-    def _execute_rebalance(target_weights, date):
+    def _execute_rebalance(target_weights, date, pv_date=None):
         """Delta 리밸런싱 with 선물 비용."""
         nonlocal capital, trade_count
         # 체결 밴드 = 각 sleeve 의 라이브 규칙 (2026-08-25 정합).
@@ -470,7 +470,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
         #   fut:  trade/auto_trade_binance.py DELTA_THRESHOLD=0.05.
         # 밴드를 축으로 재실험하려면 research/bt_spot_rebal_band.engine.patch 를 적용한다.
         _band = 0.0 if asset_type == 'spot' else 0.05
-        pv = _port_val(date)
+        # 주문 크기를 정하는 평가액은 신호봉(t-1) 종가로 잰다. 체결가는 t 봉 Open 이라
+        # 같은 t 봉 종가로 크기를 정하면 그날 결과를 미리 보는 것이다(2026-10-18 운영자
+        # 지시). 선물 엔진은 같은 자리에 이미 pv_date=prev_date 가 있다
+        # (backtest_futures_v25.py:1088). 호출부가 pv_date 를 안 주면 종전대로 date.
+        pv = _port_val(pv_date if pv_date is not None else date)
         if pv <= 0:
             return
 
@@ -1068,12 +1072,12 @@ def run(bars, funding, interval='1h', leverage=1.0,
         # ── 리밸런싱 실행 (execution_delay_bars 지원) ──
         # pending queue: 이전에 예약된 리밸런스가 있으면 due bar 에 실행
         if pending_rebalance is not None and bar_i >= pending_rebalance['due_i']:
-            _execute_rebalance(pending_rebalance['target'], date)
+            _execute_rebalance(pending_rebalance['target'], date, pv_date=prev_date)
             rebal_count += 1
             pending_rebalance = None
         if need_rebal:
             if execution_delay_bars <= 0:
-                _execute_rebalance(combined, date)
+                _execute_rebalance(combined, date, pv_date=prev_date)
                 rebal_count += 1
             else:
                 # N bar 뒤에 현재 combined target 체결 예약

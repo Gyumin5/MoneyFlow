@@ -525,6 +525,31 @@ def run(bars, funding, interval='D', leverage=3.0,
             target_qty[coin] = tqty
             target_margin[coin] = tmgn
 
+        # 보유분 증거금 재표시 (2026-10-18 운영자 지시 — 라이브 정합).
+        # 라이브는 매매 전에 심볼 레버리지를 목표값으로 맞춘다
+        # (trade/auto_trade_binance.py 3878 행). 크로스에서 레버리지를 올리면 그
+        # 포지션이 묶고 있던 개시증거금이 풀려 다른 코인을 살 현금이 되고, 내리면
+        # 반대로 더 묶인다. 재표시를 안 하면 BT 는 옛 레버리지로 묶어둔 채라
+        # 살 수 있는 자리에서 못 산다. 지갑(capital + margins 합)은 안 변하므로
+        # 평가액과 청산 모델은 영향이 없다 — 자리만 옮긴다.
+        for coin in list(holdings.keys()):
+            ep = entry_prices.get(coin, 0.0)
+            if ep <= 0 or holdings[coin] <= 0:
+                continue
+            new_L = _cur_lev(date, coin)
+            if new_L <= 0:
+                continue
+            want = holdings[coin] * ep / new_L
+            delta_m = margins[coin] - want          # 양수 = 풀림, 음수 = 더 묶음
+            if delta_m < 0:
+                # 더 묶어야 하는데 현금이 모자라면 라이브도 그만큼만 바꾼다
+                # (바이낸스는 증거금 부족이면 레버리지 인하를 거부하고, 라이브는
+                # 3805 행에서 비율만큼 미리 줄여 통과시킨다).
+                delta_m = -min(capital, -delta_m)
+            capital += delta_m
+            margins[coin] -= delta_m
+            entry_levs[coin] = new_L
+
         # 매도 (보유 중이지만 target에 없거나 줄어야)
         for coin in list(holdings.keys()):
             cur = _get_fill_price(coin, date)
@@ -580,7 +605,14 @@ def run(bars, funding, interval='D', leverage=3.0,
                 if delta > holdings[coin] * 0.05:
                     entry_p = cur * (1 + slip)
                     add_notional = delta * entry_p
-                    add_margin = add_notional / entry_levs.get(coin, _cur_lev(date, coin))
+                    # 증액에 드는 증거금은 그 시점 목표 레버리지로 나눈다 (2026-10-18
+                    # 운영자 지시). 라이브는 trade/auto_trade_binance.py 가 3878 행에서
+                    # 레버리지를 목표값으로 먼저 바꾼 뒤 2028 행에서 목표 명목금액으로
+                    # 주문하므로 필요한 증거금이 목표 L 로 나뉜다. 진입 시점 L 로 나누면
+                    # L 이 오른 날(2→4) 증거금을 두 배로 잡아 현금이 어중간할 때 증액을
+                    # 통째로 건너뛰고, 그 자리에서 BT 와 라이브의 포지션이 갈린다.
+                    add_lev = _cur_lev(date, coin)
+                    add_margin = add_notional / add_lev
                     tx = add_notional * tx_cost
                     if capital >= add_margin + tx:
                         capital -= add_margin + tx
@@ -588,6 +620,10 @@ def run(bars, funding, interval='D', leverage=3.0,
                         entry_prices[coin] = (entry_prices[coin] * holdings[coin] + entry_p * delta) / total
                         holdings[coin] = total
                         margins[coin] += add_margin
+                        # 라이브가 심볼 레버리지를 목표값으로 바꿔 놓았으므로 보유분도
+                        # 그 L 이 된다. entry_levs 는 청산 가능 여부(>1) 판정에만 쓰여
+                        # 수치 영향은 없지만 의미를 어긋나게 두지 않는다.
+                        entry_levs[coin] = add_lev
                         trade_count += 1
 
     def _compute_weights(sig_date):
