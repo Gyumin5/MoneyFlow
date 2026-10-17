@@ -1,0 +1,17 @@
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 65dfe39..6a421e4 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -975,6 +975,12 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 else:
+                     snapshots[si] = {'CASH': 1.0}
+             need_rebal = True
++            # 실험 스위치(2026-10-18, 기본 off = 기존 동작). cashonly 면 전환일에
++            # 전부 현금이 된 전환에만 재평가를 예약하고, 정상 진입한 전환은 그 자리에서
++            # 완료 처리해 5봉 뒤 재평가를 건너뛴다.
++            if (os.environ.get('PFD_SCOPE', 'all') == 'cashonly' and canary_on
++                    and not all(set(s.keys()) == {'CASH'} for s in snapshots)):
++                pfd_done = True
+         elif pfd_bars > 0 and canary_on:
+             if canary_on_bar and not pfd_done and (bar_i - canary_on_bar) >= pfd_bars:
+                 pfd_done = True
