@@ -104,6 +104,10 @@ MEMBER_D_SMA42 = {
     'vol_lookback_days': 90,
     'universe_size': 3,
     'cap': 1.0 / 3.0,
+    # 전환 후 재평가 (2026-10-18). 카나리가 켜진 봉에서 이만큼 봉이 지난 첫 회차에
+    # 전 스냅샷을 한 번 다시 고른다. 채택 BT 둘(unified_backtest.post_flip_delay,
+    # backtest_futures_v25.post_flip_delay)이 쓰던 값과 같다. 0 으로 두면 꺼진다.
+    'post_flip_delay': 5,
 }
 
 MEMBERS = {
@@ -554,6 +558,70 @@ def _bars_per_day(interval: str) -> int:
     return {'D': 1, '4h': 6, '2h': 12, '1h': 24}[interval]
 
 
+def replay_canary_pfd(closes: np.ndarray, bar_ts: List[str], last_bar_ts: Optional[str],
+                      prev_canary: bool, sma_p: int, hyst: float,
+                      flip_bar_ts: Optional[str], pfd_done: bool,
+                      pfd_bars: int, allow_arm: bool
+                      ) -> Tuple[bool, bool, bool, Optional[str], bool, float]:
+    """마지막으로 처리한 봉 다음 봉부터 이번 봉까지 차례로 카나리를 매긴다.
+
+    크론을 걸러 봉이 여러 개 밀렸을 때 중간 봉의 전환(ON→OFF→ON)과 전환 후 재평가
+    예약이 그대로 반영된다. 이번 봉만 보고 경과를 세면 그 사이의 전환이 통째로 사라진다.
+    과거 주문은 내지 않는다 — 밀린 사이에 재평가가 예정돼 있었으면 이번 봉에서 지금
+    자료로 한 번 수행한다.
+
+    closes[i] 와 bar_ts[i] 는 같은 봉이고, 마지막 원소가 이번에 처리할 완성봉이다.
+
+    반환 (canary_on, canary_flipped, pfd_fire, flip_bar_ts, pfd_done, sma_val)
+    - canary_flipped: 재생 구간 어느 봉에서든 전환이 있었나. 밀린 사이에 전환이 끝나
+      저장된 값과 결과가 같아도 스냅샷은 다시 골라야 하므로 '마지막 봉의 전환' 이 아니다.
+    - pfd_fire: 이번 회차에 전 스냅샷 재평가를 수행해야 하나.
+    """
+    n = len(closes)
+    start = n - 1
+    if last_bar_ts is not None and last_bar_ts in bar_ts:
+        start = bar_ts.index(last_bar_ts) + 1
+    else:
+        # 직전 상태를 모르는 회차 — 예약을 걸지 않는다(계약: 최초 초기화·상태 유실은
+        # 전환으로 세지 않는다).
+        allow_arm = False
+    start = min(max(start, sma_p), n - 1)
+
+    canary_on = prev_canary
+    flipped_any = False
+    pfd_fire = False
+    sma_val = 0.0
+    for i in range(start, n):
+        c = closes[:i + 1]
+        sma_val = _calc_sma(c, sma_p)
+        cur = float(c[-1])
+        prev = canary_on
+        if prev:
+            canary_on = not (cur < sma_val * (1 - hyst))
+        else:
+            canary_on = cur > sma_val * (1 + hyst)
+        flipped = canary_on != prev
+        flipped_any = flipped_any or flipped
+        if flipped and canary_on:
+            if allow_arm:
+                flip_bar_ts = bar_ts[i]
+                pfd_done = False
+            else:
+                flip_bar_ts = None
+                pfd_done = True
+        elif flipped and not canary_on:
+            # 꺼지면 예약은 사라진다. 다시 켜지면 새 예약이 0 부터 센다.
+            flip_bar_ts = None
+            pfd_done = True
+        elif pfd_bars > 0 and canary_on and flip_bar_ts is not None and not pfd_done:
+            fi = bar_ts.index(flip_bar_ts) if flip_bar_ts in bar_ts else None
+            if fi is not None and (i - fi) >= pfd_bars:
+                pfd_done = True
+                pfd_fire = True
+
+    return canary_on, flipped_any, pfd_fire, flip_bar_ts, pfd_done, sma_val
+
+
 @dataclass
 class MemberState:
     canary_on: bool = False
@@ -562,6 +630,11 @@ class MemberState:
     bar_counter: int = 0
     last_combined: Dict[str, float] = field(default_factory=lambda: {'CASH': 1.0})
     snap_id: int = 0
+    # 전환 후 재평가 예약 (2026-10-18). flip_bar_ts 는 카나리가 켜진 봉의 타임스탬프,
+    # pfd_done 은 그 예약이 이미 소비됐는지다. 옛 상태파일에는 둘 다 없으므로 기본값이
+    # "예약 없음 + 소비됨" 이고, 그 회차는 발화하지 않는다.
+    flip_bar_ts: Optional[str] = None
+    pfd_done: bool = True
 
     @classmethod
     def from_dict(cls, d: Dict) -> 'MemberState':
@@ -573,6 +646,8 @@ class MemberState:
             ms.bar_counter = int(d.get('bar_counter', 0))
             ms.last_combined = d.get('last_combined', {'CASH': 1.0}) or {'CASH': 1.0}
             ms.snap_id = int(d.get('snap_id', 0))
+            ms.flip_bar_ts = d.get('flip_bar_ts')
+            ms.pfd_done = bool(d.get('pfd_done', True))
         return ms
 
     def to_dict(self) -> Dict:
@@ -583,6 +658,8 @@ class MemberState:
             'bar_counter': self.bar_counter,
             'last_combined': self.last_combined,
             'snap_id': self.snap_id,
+            'flip_bar_ts': self.flip_bar_ts,
+            'pfd_done': self.pfd_done,
         }
 
 
@@ -595,6 +672,7 @@ class MemberComputeResult:
     canary_flipped: bool
     alerts: List[str]                  # 텔레그램 알림용 메시지
     canary_info: Optional[Dict] = None  # {'on', 'ratio', 'cur', 'sma_val', 'sma_p'}
+    pfd_fired: bool = False            # 이번 봉에 전환 후 재평가가 발화했나
 
 
 def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFrame],
@@ -652,16 +730,27 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
                                    canary_flipped=False, alerts=alerts)
 
     # 새 봉 — 재계산
-    # 카나리 (BTC 종가 vs SMA)
+    # 스냅샷 초기화 여부를 먼저 본다 (첫 실행 또는 n_snap 변경 시). 전환 후 재평가
+    # 예약은 직전 상태를 아는 회차에서만 걸기 때문에 카나리 판정보다 앞에 둔다.
+    freshly_initialized = (not state.snapshots or len(state.snapshots) != n_snap)
+    if freshly_initialized:
+        state.snapshots = [{'CASH': 1.0} for _ in range(n_snap)]
+
+    # 카나리 (BTC 종가 vs SMA) — 마지막 처리 봉 다음 봉부터 차례로
     btc_close = btc_df['Close'].values
-    sma_val = _calc_sma(btc_close, sma_p)
     prev_canary = state.canary_on
+    bar_ts_list = [to_utc_iso(ts.to_pydatetime()) for ts in btc_df.index]
+    pfd_bars = int(cfg.get('post_flip_delay', 0)) * bpd
+    (canary_on, canary_flipped, pfd_fire,
+     state.flip_bar_ts, state.pfd_done, sma_val) = replay_canary_pfd(
+        btc_close, bar_ts_list, state.last_bar_ts, prev_canary, sma_p, hyst,
+        state.flip_bar_ts, state.pfd_done, pfd_bars,
+        allow_arm=not freshly_initialized)
+    if pfd_fire and not fresh:
+        # 자료가 밀린 회차에서 예약을 소비하지 않는다 — 다음 정상 회차에 발화한다.
+        pfd_fire = False
+        state.pfd_done = False
     cur = float(btc_close[-1])
-    if prev_canary:
-        canary_on = not (cur < sma_val * (1 - hyst))
-    else:
-        canary_on = cur > sma_val * (1 + hyst)
-    canary_flipped = canary_on != prev_canary
     ratio = cur / sma_val if sma_val > 0 else 0.0
     log.info('%s: BTC=%.2f SMA%d=%.2f ratio=%.4f canary=%s%s',
              member_name, cur, sma_p, sma_val, ratio, 'ON' if canary_on else 'OFF',
@@ -730,17 +819,26 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
             weights['CASH'] = 1.0 - total
         return weights
 
-    # 스냅샷 초기화 (첫 실행 또는 n_snap 변경 시)
-    freshly_initialized = (not state.snapshots or len(state.snapshots) != n_snap)
-    if freshly_initialized:
-        state.snapshots = [{'CASH': 1.0} for _ in range(n_snap)]
-
     # 스냅샷 갱신
+    pfd_fired_now = False
     if canary_flipped or (freshly_initialized and canary_on):
         # 전 스냅샷 즉시 전환 (플립 또는 최초 초기화 시 전체 populate)
         for si in range(n_snap):
             state.snapshots[si] = compute_weights(si)
         state.snap_id += 1
+    elif pfd_fire:
+        # 전환 후 재평가 — 전환 봉에서 pfd_bars 봉이 지난 첫 회차에 한 번.
+        # 전환일에 통과 코인이 0 이면 전 스냅샷이 현금으로 채워져 다음 스태거 자리까지
+        # 슬리브가 잠긴다(최장 31일, history #72). 드리프트는 현금 100%→현금 100% 라
+        # 반회전율이 0 이어서 못 깨운다. 채택 BT 둘의 pfd 분기와 같은 자리다 —
+        # 전환 분기와 배타이고, 앵커보다 앞이다. 앵커를 삼키지는 않는다 — 이 분기가
+        # 돈 봉의 앵커는 같은 자료로 같은 값을 다시 계산해 '변화 없음' 으로 끝난다.
+        for si in range(n_snap):
+            state.snapshots[si] = compute_weights(si)
+        state.snap_id += 1
+        pfd_fired_now = True
+        log.info('%s: 전환 후 %d봉 재평가 발화 (전환봉=%s)', member_name, pfd_bars,
+                 state.flip_bar_ts)
     elif canary_on:
         for si in range(n_snap):
             offset = int(si * snap_iv / n_snap)
@@ -772,6 +870,7 @@ def compute_member_target(member_name: str, cfg: Dict, bars: Dict[str, pd.DataFr
     return MemberComputeResult(target=dict(combined), new_state=state,
                                fresh=fresh, new_bar=True,
                                canary_flipped=canary_flipped, alerts=alerts,
+                               pfd_fired=pfd_fired_now,
                                canary_info={'on': canary_on, 'ratio': ratio,
                                             'cur': cur, 'sma_val': sma_val, 'sma_p': sma_p})
 
@@ -982,6 +1081,7 @@ class EngineResult:
     alerts: List[str]
     # V24 신규: drift 트리거 평가 결과 (cur_w 주어진 경우만)
     drift_fire: bool = False
+    pfd_fire: bool = False   # 전환 후 재평가 발화 (target 불변이어도 리밸 필요)
     drift_half_turnover: float = 0.0
     drift_threshold: float = DRIFT_THRESHOLD_SPOT
     canary_info: Dict[str, Dict] = field(default_factory=dict)  # 멤버별 카나리 상세
@@ -1202,6 +1302,7 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
     new_bar_map: Dict[str, bool] = {}
     flipped_map: Dict[str, bool] = {}
     canary_info_map: Dict[str, Dict] = {}
+    pfd_fired_any = False  # 전환 후 재평가가 이번 봉에 발화했나 (드리프트·리필 중복 방지)
 
     ms_all = state.setdefault('members', {})
     # 가드 제거 (2026-04-21): 기존 state의 excluded_coins는 이후 save 때 자연 소거.
@@ -1248,6 +1349,8 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         fresh_map[mname] = res.fresh
         new_bar_map[mname] = res.new_bar
         flipped_map[mname] = res.canary_flipped
+        if res.pfd_fired:
+            pfd_fired_any = True
         if res.canary_info:
             canary_info_map[mname] = res.canary_info
         ms_all[mname] = res.new_state.to_dict()
@@ -1278,6 +1381,11 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
                  drift_ht, DRIFT_THRESHOLD_SPOT, drift_fire_b, DRIFT_ENABLED)
         if not DRIFT_ENABLED:
             drift_fire_b = False  # snap-only fallback
+        if drift_fire_b and pfd_fired_any:
+            # 전환 후 재평가가 방금 전 스냅샷을 새로 고른 봉이다. 같은 봉에서 리필까지
+            # 돌리면 갓 고른 자리를 다시 갈아끼운다 — 채택 BT 는 그 봉에 재평가 하나만 한다.
+            log.info('전환 후 재평가 발화 봉 → 드리프트·리필 중복 적용 안 함 (ht=%.4f)', drift_ht)
+            drift_fire_b = False
 
     # 6b) V24 refill v2 (drift fire 시점에 mom2 음수 슬롯 교체)
     if drift_fire_b and REFILL_ENABLED:
@@ -1317,6 +1425,7 @@ def compute_live_targets(state: Dict, session: requests.Session, cache_dir: str,
         universe_meta=u_meta,
         alerts=alerts,
         drift_fire=drift_fire_b,
+        pfd_fire=pfd_fired_any,
         drift_half_turnover=drift_ht,
         drift_threshold=DRIFT_THRESHOLD_SPOT,
         canary_info=canary_info_map,

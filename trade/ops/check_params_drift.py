@@ -33,7 +33,8 @@ CANONICAL = {
         'source': 'auto_trade_binance.py::STRATEGIES["D_SMA42"] + module-level V25 상수',
         'params': dict(interval='D', sma_bars=42, mom_short_bars=18, mom_long_bars=127,
                        health_mode='mom2vol', vol_mode='daily', vol_threshold=0.05,
-                       snap_interval_bars=95, canary_hyst=0.015, n_snapshots=5),
+                       snap_interval_bars=95, canary_hyst=0.015, n_snapshots=5,
+                       post_flip_delay=5),
         'extra': dict(
             DRIFT_THRESHOLD_FUT=0.015,
             LEVERAGE_FLOOR=2, LEVERAGE_MID=3, LEVERAGE_CEILING=4,
@@ -48,7 +49,8 @@ CANONICAL = {
         'params': dict(interval='D', sma_bars=42, mom_short_bars=20, mom_long_bars=127,
                        snap_interval_bars=217, n_snapshots=7, canary_hyst=0.015,
                        health_mode='mom2vol', vol_mode='daily', vol_threshold=0.05,
-                       vol_lookback_days=90, universe_size=3, cap=1.0/3.0),
+                       vol_lookback_days=90, universe_size=3, cap=1.0/3.0,
+                       post_flip_delay=5),
     },
     'stock': {
         'source': 'executor_stock.py',

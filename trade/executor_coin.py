@@ -1002,6 +1002,13 @@ def run_once(dry_run: bool = False) -> int:
         state['rebalancing_needed'] = True
         log(f'  🔔 target 변경 감지 → rebalancing_needed=True. prev={prev_combined}, new={result.combined_target}')
 
+    # 전환 후 재평가 — 목표가 그대로여도 리밸을 돌린다. 채택 BT 는 이 봉에서
+    # need_rebal 을 켜고 보유를 목표에 다시 맞춘다. 켜졌다는 사실만 여기서 전달받는다.
+    if getattr(result, 'pfd_fire', False):
+        state['rebalancing_needed'] = True
+        state['last_rebal_reason'] = 'post_flip_delay'
+        log('  🔔 전환 후 재평가 발화 → rebalancing_needed=True')
+
     # cash buffer 반영 — engine 의 combined 은 risky-asset 100% 정규화이므로
     # spot_cash_buffer (실매매가 유지하는 KRW) 만큼 target 스케일 다운 + Cash 추가 후 재평가
     try:

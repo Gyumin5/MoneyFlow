@@ -188,6 +188,10 @@ STRATEGIES = {
         'snap_interval_bars': 95,    # V24 갱신 (05-04): 57 → 95 (5*19, stagger 19 유지)
         'canary_hyst': 0.015,
         'n_snapshots': 5,            # V24 갱신 (05-04): 3 → 5
+        # 전환 후 재평가 (2026-10-18). 카나리가 켜진 봉에서 이만큼 봉이 지난 첫 회차에
+        # 전 스냅샷을 한 번 다시 고른다. 채택 BT(backtest_futures_v25.post_flip_delay)와
+        # 같은 값. 0 으로 두면 꺼진다.
+        'post_flip_delay': 5,
     },
 }
 
@@ -667,6 +671,70 @@ def apply_cash_degrade(lev: int, cash_w: float) -> int:
     return LEVERAGE_FLOOR
 
 
+def replay_canary_pfd(closes, bar_ts: List[str], last_bar_ts: Optional[str],
+                      prev_canary: bool, sma_p: int, hyst: float,
+                      flip_bar_ts: Optional[str], pfd_done: bool,
+                      pfd_bars: int, allow_arm: bool
+                      ) -> Tuple[bool, bool, bool, Optional[str], bool, float]:
+    """마지막으로 처리한 봉 다음 봉부터 이번 봉까지 차례로 카나리를 매긴다.
+
+    현물 엔진 coin_live_engine.replay_canary_pfd 와 같은 판정이다. 두 파일은 서버에
+    각각 독립 배포되므로 공용 모듈로 묶지 않고, 검사 trade/test_post_flip_delay.py 가
+    같은 입력에 두 구현이 같은 답을 내는지 매번 대조한다.
+
+    크론을 걸러 봉이 여러 개 밀렸을 때 중간 봉의 전환(ON→OFF→ON)과 전환 후 재평가
+    예약이 그대로 반영된다. 이번 봉만 보고 경과를 세면 그 사이의 전환이 통째로 사라진다.
+    과거 주문은 내지 않는다 — 밀린 사이에 재평가가 예정돼 있었으면 이번 봉에서 지금
+    자료로 한 번 수행한다.
+
+    closes[i] 와 bar_ts[i] 는 같은 봉이고, 마지막 원소가 이번에 처리할 완성봉이다.
+
+    반환 (canary_on, canary_flipped, pfd_fire, flip_bar_ts, pfd_done, sma_val)
+    """
+    n = len(closes)
+    start = n - 1
+    if last_bar_ts is not None and last_bar_ts in bar_ts:
+        start = bar_ts.index(last_bar_ts) + 1
+    else:
+        # 직전 상태를 모르는 회차 — 예약을 걸지 않는다(최초 초기화·상태 유실은 전환이 아니다).
+        allow_arm = False
+    start = min(max(start, sma_p), n - 1)
+
+    canary_on = prev_canary
+    flipped_any = False
+    pfd_fire = False
+    sma_val = 0.0
+    for i in range(start, n):
+        c = closes[:i + 1]
+        sma_val = calc_sma(c, sma_p)
+        cur = float(c[-1])
+        prev = canary_on
+        if prev:
+            canary_on = not (cur < sma_val * (1 - hyst))
+        else:
+            canary_on = cur > sma_val * (1 + hyst)
+        flipped = canary_on != prev
+        flipped_any = flipped_any or flipped
+        if flipped and canary_on:
+            if allow_arm:
+                flip_bar_ts = bar_ts[i]
+                pfd_done = False
+            else:
+                flip_bar_ts = None
+                pfd_done = True
+        elif flipped and not canary_on:
+            # 꺼지면 예약은 사라진다. 다시 켜지면 새 예약이 0 부터 센다.
+            flip_bar_ts = None
+            pfd_done = True
+        elif pfd_bars > 0 and canary_on and flip_bar_ts is not None and not pfd_done:
+            fi = bar_ts.index(flip_bar_ts) if flip_bar_ts in bar_ts else None
+            if fi is not None and (i - fi) >= pfd_bars:
+                pfd_done = True
+                pfd_fire = True
+
+    return canary_on, flipped_any, pfd_fire, flip_bar_ts, pfd_done, sma_val
+
+
 class StaleBarError(Exception):
     """V25 cycle 7: 마지막 완성봉이 누락된 stale 상태. 신호 계산 불가 → ABORT 경로."""
     pass
@@ -709,6 +777,25 @@ def _finalize_daily_bar_for_signal(df: pd.DataFrame, now_utc=None) -> pd.DataFra
     if last_open < completed_open_utc:
         raise StaleBarError(f"stale: last_open={last_open} < completed={completed_open_utc}")
     raise StaleBarError(f"future: last_open={last_open} > current={current_open_utc}")
+
+
+def _is_completed_bar_fresh(df: pd.DataFrame, now_utc=None) -> bool:
+    """df 의 마지막 완성봉(index[-2])이 어제 00:00 UTC 봉인가.
+
+    _finalize_daily_bar_for_signal 과 같은 기준인데 예외를 안 던진다. 전환 후 재평가
+    예약을 밀린 자료로 소비하지 않으려고 쓴다 — 봉 정합성 ABORT 는 시그널 계산보다
+    뒤에서 걸리기 때문에 그때는 이미 상태가 바뀌어 있다.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    if df is None or len(df) < 2:
+        return False
+    if now_utc is None:
+        now_utc = _dt.now(_tz.utc).replace(tzinfo=None)
+    completed_open_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) - _td(days=1)
+    last_completed = df.index[-2]
+    if hasattr(last_completed, 'to_pydatetime'):
+        last_completed = last_completed.to_pydatetime()
+    return last_completed == completed_open_utc
 
 
 def _calc_btc_cap_lev(data_d: Dict[str, pd.DataFrame]) -> int:
@@ -835,17 +922,26 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
         combined = ss.get('last_combined', {'CASH': 1.0})
         return combined
 
-    # 카나리 (t-1 기준: 마지막 완성봉)
+    # 카나리 (t-1 기준: 마지막 완성봉) — 마지막 처리 봉 다음 봉부터 차례로
     c_prev = btc_close[:-1]  # 진행중 봉 제외
-    sma_val = calc_sma(c_prev, sma_p)
     hyst = strat_params['canary_hyst']
-
-    if prev_canary:
-        canary_on = not (c_prev[-1] < sma_val * (1 - hyst))
-    else:
-        canary_on = c_prev[-1] > sma_val * (1 + hyst)
-
-    canary_flipped = canary_on != prev_canary
+    bar_ts_list = [str(ts) for ts in btc_df.index[:-1]]
+    pfd_bars = int(strat_params.get('post_flip_delay', 0)) * bpd
+    flip_bar_ts = ss.get('flip_bar_ts')
+    pfd_done = _as_bool(ss.get('pfd_done', True))
+    (canary_on, canary_flipped, pfd_fire,
+     flip_bar_ts, pfd_done, sma_val) = replay_canary_pfd(
+        c_prev, bar_ts_list, last_bar_ts, prev_canary, sma_p, hyst,
+        flip_bar_ts, pfd_done, pfd_bars,
+        allow_arm=len(snapshots) == strat_params['n_snapshots'])
+    if pfd_fire and not _is_completed_bar_fresh(btc_df):
+        # 자료가 밀린 회차에서 예약을 소비하지 않는다 — 다음 정상 회차에 발화한다.
+        # (봉 정합성 ABORT 는 이 함수 뒤에서 걸리므로 여기서 따로 본다.)
+        pfd_fire = False
+        pfd_done = False
+    if canary_flipped:
+        # 전환 분기가 이번 봉에 전 스냅샷을 이미 다시 고른다 — 재평가를 따로 세지 않는다.
+        pfd_fire = False
 
     # 카나리 상세 로깅
     ratio = c_prev[-1] / sma_val if sma_val > 0 else 0
@@ -957,6 +1053,18 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
             snapshots[si] = compute_weights()
         need_update = True
         log.info(f"  {strat_name} EVENT: canary_flipped -> rebalancing_needed=true")
+    elif pfd_fire:
+        # 전환 후 재평가 — 전환 봉에서 pfd_bars 봉이 지난 첫 회차에 한 번.
+        # 전환일에 통과 코인이 0 이면 전 스냅샷이 현금으로 채워져 다음 스태거 자리까지
+        # 슬리브가 잠긴다(선물 최장 19일, history #72). 드리프트는 현금 100%→현금 100% 라
+        # 반회전율이 0 이어서 못 깨운다. 채택 BT 의 pfd 분기와 같은 자리다 — 전환 분기와
+        # 배타이고 앵커보다 앞이다. 앵커를 삼키지는 않는다 — 이 분기가 돈 봉의 앵커는
+        # 같은 자료로 같은 값을 다시 계산해 '변화 없음' 으로 끝난다.
+        for si in range(n_snap):
+            snapshots[si] = compute_weights()
+        need_update = True
+        log.info(f"  {strat_name} EVENT: post_flip_delay({pfd_bars}봉) 재평가"
+                 f" (전환봉={flip_bar_ts}) -> rebalancing_needed=true")
     elif canary_on:
         for si in range(n_snap):
             offset = int(si * snap_iv / n_snap)
@@ -984,6 +1092,9 @@ def compute_strategy_target(strat_name: str, strat_params: dict,
         'last_bar_ts': latest_bar_ts,
         'snapshots': snapshots,
         'last_combined': combined,
+        'flip_bar_ts': flip_bar_ts,
+        'pfd_done': pfd_done,
+        'pfd_fired': pfd_fire,
         'canary_info': {
             'on': canary_on,
             'flipped': canary_flipped,
@@ -3635,6 +3746,14 @@ def main():
         drift_fire_fut = ht_fut >= DRIFT_THRESHOLD_FUT and _drift_data_ok
         if not DRIFT_ENABLED_FUT:
             drift_fire_fut = False  # snap-only fallback
+        _pfd_fired_fut = any(
+            _as_bool(((state.get('strategies') or {}).get(s) or {}).get('pfd_fired', False))
+            for s in STRATEGIES)
+        if drift_fire_fut and _pfd_fired_fut:
+            # 전환 후 재평가가 방금 전 스냅샷을 새로 고른 봉이다. 같은 봉에서 리필까지
+            # 돌리면 갓 고른 자리를 다시 갈아끼운다 — 채택 BT 는 그 봉에 재평가 하나만 한다.
+            log.info(f"전환 후 재평가 발화 봉 → 드리프트·리필 중복 적용 안 함 (ht={ht_fut:.4f})")
+            drift_fire_fut = False
         if not _drift_data_ok:
             log.warning("drift: 포지션 데이터 이상으로 발화 차단(fail-closed) — 이번 cron 드리프트 리밸 skip")
         log.info(f"V24 drift eval: ht={ht_fut:.4f} threshold={DRIFT_THRESHOLD_FUT:.3f} fire={drift_fire_fut} enabled={DRIFT_ENABLED_FUT} data_ok={_drift_data_ok}")

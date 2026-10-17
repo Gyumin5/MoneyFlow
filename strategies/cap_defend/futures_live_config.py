@@ -41,6 +41,8 @@ CURRENT_STRATEGIES = {
         vol_threshold=0.05,
         n_snapshots=5,
         snap_interval_bars=95,
+        # 전환 후 재평가 (2026-10-18) — 라이브 auto_trade_binance.STRATEGIES 와 같은 값.
+        post_flip_delay=5,
     ),
 }
 

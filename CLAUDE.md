@@ -61,6 +61,15 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - canary_hyst=0.015, universe_size=3, cap=1/3, health=mom2vol (vol_cap 5%, vol_lookback 90d)
 - drift_threshold=0.10 (자본금 기준 half-turnover)
 - drift 발화 시 refill v2 (라이브 `_apply_refill_v2_to_state`): mom2 음수(ms<0&ml<0) 코인 → fresh healthy 교체. BT 정합 = `unified_backtest.py` DRIFT_HEALTH_MODE='refill' (v24_shadow_today.py 가 설정). 검증(2026-06-06, strategies/cap_defend/research/bt_spot_refill_vs_anchor.py): drift=0.10 에서 refill ≡ anchor-only (5.4yr 종목교체 0일, CAGR/MDD/Cal 동일) — 발화일 보유코인이 항상 모멘텀 양수. 즉 현물 종목교체는 사실상 앵커(217)에서만. refill 은 미래 모멘텀급락+drift 동시 발생 대비 dormant 방어.
+- 전환 후 재평가 post_flip_delay=5 (2026-10-18 도입). 카나리가 켜진 봉을 0 으로 세어 다섯 봉이
+  지난 첫 회차에 전 스냅샷을 한 번 다시 고른다. 전환 봉에 헬스 통과 코인이 0 이면 전 스냅샷이
+  현금으로 채워져 다음 스태거 자리까지 슬리브가 잠기는데(최장 31일), 드리프트는 현금 100%→현금
+  100% 라 반회전율이 0 이어서 못 깨운다. 채택 BT(unified_backtest.post_flip_delay)에는 원래
+  있었고 라이브에만 없었다. 전환 분기와 배타이고 앵커보다 앞이며, 앵커 위상(bar_counter)은
+  건드리지 않는다. 중간에 카나리가 꺼지면 예약이 사라지고 다시 켜지면 0 부터 센다. 자료가 밀린
+  회차(freshness 미달)에서는 예약을 소비하지 않는다. 발화 봉에는 드리프트·리필을 겹쳐 돌리지
+  않는다. 끄는 법은 `post_flip_delay=0` 하나다 — 그러면 새 예약·발화만 멈추고 이미 체결된
+  보유와 갱신된 스냅샷·앵커 위상은 그대로 둔다.
 - 전략 가드 없음. Upbit warning/delisting 코인은 universe 에서 즉시 제외.
 - 데이터 가드 하나 (2026-09-30, 토론 run-20260930T002529Z): 시총 목록은 마지막 유효 조회로부터
   `MARKET_META_MAX_AGE_H`=36시간까지만 쓴다(선물과 같은 값). 만료되면 일반 매매를 멈추고 경보한다.
