@@ -525,31 +525,6 @@ def run(bars, funding, interval='D', leverage=3.0,
             target_qty[coin] = tqty
             target_margin[coin] = tmgn
 
-        # 보유분 증거금 재표시 (2026-10-18 운영자 지시 — 라이브 정합).
-        # 라이브는 매매 전에 심볼 레버리지를 목표값으로 맞춘다
-        # (trade/auto_trade_binance.py 3878 행). 크로스에서 레버리지를 올리면 그
-        # 포지션이 묶고 있던 개시증거금이 풀려 다른 코인을 살 현금이 되고, 내리면
-        # 반대로 더 묶인다. 재표시를 안 하면 BT 는 옛 레버리지로 묶어둔 채라
-        # 살 수 있는 자리에서 못 산다. 지갑(capital + margins 합)은 안 변하므로
-        # 평가액과 청산 모델은 영향이 없다 — 자리만 옮긴다.
-        for coin in list(holdings.keys()):
-            ep = entry_prices.get(coin, 0.0)
-            if ep <= 0 or holdings[coin] <= 0:
-                continue
-            new_L = _cur_lev(date, coin)
-            if new_L <= 0:
-                continue
-            want = holdings[coin] * ep / new_L
-            delta_m = margins[coin] - want          # 양수 = 풀림, 음수 = 더 묶음
-            if delta_m < 0:
-                # 더 묶어야 하는데 현금이 모자라면 라이브도 그만큼만 바꾼다
-                # (바이낸스는 증거금 부족이면 레버리지 인하를 거부하고, 라이브는
-                # 3805 행에서 비율만큼 미리 줄여 통과시킨다).
-                delta_m = -min(capital, -delta_m)
-            capital += delta_m
-            margins[coin] -= delta_m
-            entry_levs[coin] = new_L
-
         # 매도 (보유 중이지만 target에 없거나 줄어야)
         for coin in list(holdings.keys()):
             cur = _get_fill_price(coin, date)
@@ -578,6 +553,36 @@ def run(bars, funding, interval='D', leverage=3.0,
                     holdings[coin] -= sell_qty
                     margins[coin] -= sell_margin
                     trade_count += 1
+
+        # 보유분 증거금 재표시 (2026-10-18 운영자 지시 — 라이브 정합).
+        # 자리는 매도와 매수 사이다. 라이브 순서가 그렇다 — 레버리지를 내릴 때
+        # 비율만큼 먼저 reduceOnly 로 팔고(trade/auto_trade_binance.py 3805 행),
+        # 그 다음 심볼 레버리지를 목표값으로 바꾸고(3878 행), 남은 차이를
+        # execute_rebalance 가 메운다. 매도보다 먼저 재표시하면 현금이 모자라
+        # 덜 묶인 상태에서 매도가 또 비례 차감해, 매도 뒤 남는 증거금이 필요한 양에
+        # 못 미친다(토론 run-20261017T204756Z 반례: 4→3배에서 수량 2.475 인데
+        # 증거금 63.75, 라이브는 82.5).
+        # 크로스에서 레버리지를 올리면 그 포지션이 묶고 있던 개시증거금이 풀려
+        # 다른 코인을 살 현금이 되고, 내리면 반대로 더 묶인다. 재표시를 안 하면
+        # BT 는 옛 레버리지로 묶어둔 채라 살 수 있는 자리에서 못 산다.
+        # 지갑(capital + margins 합)은 안 변하므로 평가액과 청산 모델은 영향이
+        # 없다 — 자리만 옮긴다.
+        for coin in list(holdings.keys()):
+            ep = entry_prices.get(coin, 0.0)
+            if ep <= 0 or holdings[coin] <= 0:
+                continue
+            new_L = _cur_lev(date, coin)
+            if new_L <= 0:
+                continue
+            want = holdings[coin] * ep / new_L
+            delta_m = margins[coin] - want          # 양수 = 풀림, 음수 = 더 묶음
+            if delta_m < 0:
+                # 더 묶어야 하는데 현금이 모자라면 그만큼만 바꾼다. 바이낸스는
+                # 증거금이 모자라면 레버리지 인하를 -4131 로 거부한다.
+                delta_m = -min(capital, -delta_m)
+            capital += delta_m
+            margins[coin] -= delta_m
+            entry_levs[coin] = new_L
 
         # 매수 (target에 있지만 미보유거나 늘어야)
         for coin, tqty in target_qty.items():

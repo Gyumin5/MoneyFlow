@@ -11,6 +11,10 @@
      살 수 있는 현금만 움직인다.
   ③ 현물 주문 크기 평가액 — unified_backtest.py 가 체결봉(t) 종가로 크기를
      정하던 것을 신호봉(t-1) 종가로 바꿨다. 체결가는 t 봉 시가다.
+  ④ ②의 자리 — 재표시를 매도보다 먼저 돌리면 현금이 모자라 덜 묶인 상태에서
+     매도가 또 비례 차감해 매도 뒤 증거금이 라이브보다 적게 남는다. 자리를
+     매도와 매수 사이로 옮겼다(토론 run-20261017T204756Z 반례, 검사
+     trade/test_fut_margin_order.py). 그래서 곡선 폴더를 aligned2 로 다시 뗀다.
 
 조합은 전과 같다.
   A 둘 다 켬 / B 둘 다 끔(지금 라이브) / C 선물만 켬 / D 현물만 켬
@@ -37,7 +41,7 @@ sys.path.insert(0, HERE)
 
 import bt_coin_param_resweep as R  # noqa: E402
 
-OUT = "/home/gmoh/mon/251229/state/20261018-aligned"
+OUT = "/home/gmoh/mon/251229/state/20261018-aligned2"
 EQDIR = os.path.join(OUT, "eq")
 STOCK_CACHE = "/home/gmoh/mon/251229/state/20260922-resweep/eq"
 
