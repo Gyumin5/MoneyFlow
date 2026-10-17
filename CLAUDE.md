@@ -549,9 +549,13 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
   심볼순)으로 세운다. 변동성 상한도 상위 선발도 안 건다. BT 가 `_compute_weights` 결과(변동성까지
   걸러 고른 상위 3개)를 심볼순으로 쓰면 후보가 셋 이하로 줄고 순서도 달라 리필이 다른 코인을
   집는다. BT 쪽 유니버스는 `get_mcap(t-1)` 이다 — `bars` 전체를 쓰면 나중에 상위로 올라온 코인이
-  과거에 섞여 생존편향이 된다. 현물(`unified_backtest._refill_v2_snapshots`)은 이미 넓은 풀을
-  모멘텀순으로 쓰고 있었다. 검사 `trade/test_fut_refill_pool.py`(엔진에서 `_refill_pool` 을
+  과거에 섞여 생존편향이 된다. 검사 `trade/test_fut_refill_pool.py`(엔진에서 `_refill_pool` 을
   떼어내 돌린다).
+- 현물 리필 풀도 같은 기준이다. `unified_backtest._refill_v2_snapshots` 는 넓은 풀을 모멘텀순으로
+  쓰고 있었지만 대상을 `bars` 전체로 잡고 있어서 `get_mcap(t-1)` 로 좁혔다. 역사 구간 곡선은
+  안 바뀐다 — 앵커 셋 × pfd 둘을 바꾸기 전후로 재니 최대 상대차 2.2e-16(부동소수점 1 ulp)다
+  (`research/spot_refill_pool_delta.py`, 로그 `state/20261018-aligned3/spot_pool_delta.log`).
+  현물 리필이 역사에서 한 번도 종목을 안 바꿨다는 2026-06-06 확인과 같은 얘기다.
 
 남은 구조적 차이 (버그 아님, 의도/미세):
 - 유니버스 소스: 라이브=CoinGecko 실시간 top40, BT=`historical_universe.json` point-in-time(생존편향 방지).

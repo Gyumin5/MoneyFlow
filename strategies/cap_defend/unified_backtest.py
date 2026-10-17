@@ -741,7 +741,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
         (mom_short>0 AND mom_long>0, -mom_short then symbol) EW 충당. vol 미포함.
         sig_date=t-1 (look-ahead 방지). snapshots in-place 수정."""
         healthy = []
-        for coin in bars.keys():
+        # 후보 풀은 그 시점 유니버스다 — 라이브는 그날 받아 온 종목만 본다.
+        # bars 전체를 쓰면 나중에 상위로 올라온 코인이 과거에 섞여 생존편향이 된다.
+        # (선물 엔진과 같은 기준. 2026-10-18)
+        for coin in get_mcap(sig_date):
             if coin == 'BTC' or coin in blacklist:
                 continue
             m = _coin_mom2(coin, sig_date)
