@@ -1,0 +1,37 @@
+diff --git a/strategies/cap_defend/unified_backtest.py b/strategies/cap_defend/unified_backtest.py
+index 65dfe39..9041343 100644
+--- a/strategies/cap_defend/unified_backtest.py
++++ b/strategies/cap_defend/unified_backtest.py
+@@ -337,6 +337,13 @@ def run(bars, funding, interval='1h', leverage=1.0,
+     prev_canary = False
+     canary_on_bar = None
+     pfd_done = True
++    # 실험 스위치(2026-10-18, 기본 off = 기존 동작). 전환일에 통과 코인이 0 이라
++    # 스냅샷이 전부 현금으로 채워진 경우에만 발동한다.
++    #   off   = 기존 동작 (다음 앵커 차례까지 잠김)
++    #   next  = 바로 다음 봉에서 한 번만 다시 본다
++    #   until = 통과 코인이 처음 생기는 봉까지 매 봉 다시 본다
++    _flip_retry = os.environ.get('FLIP_ALL_CASH_RETRY', 'off')
++    flip_retry_pending = False
+     crash_cooldown = 0
+     rebal_count = 0
+     pending_rebalance = None  # execution_delay_bars 용 (signal bar 에서 N bar 뒤 체결)
+@@ -975,6 +982,18 @@ def run(bars, funding, interval='1h', leverage=1.0,
+                 else:
+                     snapshots[si] = {'CASH': 1.0}
+             need_rebal = True
++            if _flip_retry != 'off':
++                flip_retry_pending = bool(canary_on) and all(
++                    set(s.keys()) == {'CASH'} for s in snapshots)
++        elif _flip_retry != 'off' and canary_on and flip_retry_pending:
++            _retry_w = _compute_weights(prev_date)
++            if set(_retry_w.keys()) != {'CASH'}:
++                for si in range(n_snapshots):
++                    snapshots[si] = dict(_retry_w)
++                need_rebal = True
++                flip_retry_pending = False
++            elif _flip_retry == 'next':
++                flip_retry_pending = False
+         elif pfd_bars > 0 and canary_on:
+             if canary_on_bar and not pfd_done and (bar_i - canary_on_bar) >= pfd_bars:
+                 pfd_done = True
