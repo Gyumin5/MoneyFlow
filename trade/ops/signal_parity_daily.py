@@ -602,6 +602,13 @@ def server_stock_signal(timeout_sec: int = 30):
         raise ParityDataStale(f'서버 주식 신호가 JSON 이 아니다: {exc}') from exc
     stock = data.get('stock') or {}
     meta = data.get('meta') or {}
+    # 서버가 그날 주식 전략 계산에 실패하면 목표를 새로 쓰지 않고 직전 값을 보존한다
+    # (recommend_personal.build_stock_signal_block). 그런 회차에는 비교할 오늘 값이
+    # 아예 없으므로, 판본이 낡았다거나 신호가 깨졌다고 적지 않고 사유를 그대로 옮긴다.
+    if stock.get('compute_failed'):
+        raise ParityDataStale(
+            f"서버 주식 전략 계산이 실패한 회차다 (사유 {stock.get('fail_reason')!r}, "
+            f"{stock.get('failed_at')}). 목표는 직전 값이라 비교하지 않는다.")
     for key in ('risk_on', 'offense_weights', 'defense_weights'):
         if key not in stock:
             raise ParityDataStale(f'서버 주식 신호에 {key} 가 없다')

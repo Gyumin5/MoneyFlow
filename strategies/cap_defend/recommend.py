@@ -531,7 +531,10 @@ def run_stock_strategy_v15(log, all_prices):
             import json as _json
             _state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'signal_state.json')
             with open(_state_path, 'r') as _sf:
-                prev_stock_risk_on = _json.load(_sf).get('risk_on')
+                # 카나리 값은 주식 칸 안에 있다. 최상위에서 찾으면 언제나 비고,
+                # 그러면 히스테리시스 죽은 구간에서 이전 상태 대신 단순 비교로
+                # 떨어진다 — 전 구간 2,514 세션 중 29일이 그 자리였다.
+                prev_stock_risk_on = _json.load(_sf).get('stock', {}).get('risk_on')
         except Exception:
             pass
 

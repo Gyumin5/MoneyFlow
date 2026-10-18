@@ -273,6 +273,102 @@ def _save_signal_state(data):
     os.replace(tmp, SIGNAL_STATE_FILE)
 
 
+# 실행용 기준일 칸. 실패 회차에는 이 중 하나도 붙이지 않는다.
+STOCK_BASIS_KEYS = ('basis_date', 'basis_oldest', 'basis_mixed',
+                    'basis_lag_bd', 'basis_per_ticker')
+
+
+def build_stock_signal_block(prev_stock, s_meta, s_picks, s_weights_all, now_str):
+    """signal_state.json 의 주식 칸 하나를 만든다. 파일을 읽지도 쓰지도 않는다.
+
+    성공 회차는 지금까지와 같다 — 오늘 계산한 쪽을 그 자리에 넣고 반대편은 직전 값을
+    옮긴다. 달라지는 것은 실패 회차다.
+
+    전에는 전략 함수가 실패를 알리는 길이 모드 이름 문자열뿐이었고, 저장 자리는
+    "수비로 시작하지 않으면 공격" 으로 되짚었다. 그래서 모듈을 못 불러 돌아온 "Error" 가
+    공격 국면으로 읽혀, 계산 실패가 risk_on=true · 전량 현금 목표라는 정상 신호와 똑같은
+    모양으로 발행됐다. 실매매 쪽 검증은 picks=[] · {'Cash': 1.0} 을 "모멘텀 전멸" 로 보고
+    통과시키므로, 그 신호가 대체 경로로 넘어가면 주식 슬리브 전량 매도 목표가 된다.
+
+    그래서 실패 회차에는 오늘 값을 한 칸도 쓰지 않는다. 직전 목표 넷만 그대로 보존하고
+    실패를 적는다. 직전 값이 없으면 빈 목표를 둔다 — 전량 현금 목표를 지어내지 않는다.
+
+    핵심은 기준일 칸이다. 실패 블록에는 basis_* 를 하나도 붙이지 않는다(직전 것이든
+    오늘 계산한 것이든, null 대입도 안 된다). 읽는 쪽 검증(executor_stock._signal_state_fresh)
+    은 저장된 basis_lag_bd 를 오늘 날짜로 다시 계산하지 않고 그대로 믿기 때문에, 기준일을
+    붙이면 파일 갱신 시각만 새것인 낡은 목표가 통과한다. 기준일이 아예 없으면 그 검증의
+    "주식 기준일이 기록돼 있지 않다 → 차단" 이 그대로 차단 장치가 된다. 그래서 실매매
+    파일은 안 고친다(2026-10-18 토론 run-20261018T060335Z, 1라운드 합의).
+    """
+    prev_stock = prev_stock if isinstance(prev_stock, dict) else {}
+    s_meta = s_meta if isinstance(s_meta, dict) else {}
+    risk_on = s_meta.get('risk_on')
+    compute_ok = bool(s_meta.get('compute_ok', True)) and risk_on is not None
+    fail_reason = s_meta.get('fail_reason') or ('canary_unknown' if risk_on is None else None)
+
+    if not compute_ok:
+        prev_risk_on = prev_stock.get('risk_on')
+        if risk_on is not None:
+            risk_on_src = 'today'          # 카나리는 멀쩡했고 목표 계산만 실패했다
+        elif prev_risk_on is not None:
+            risk_on_src = 'prev'           # 카나리도 못 쟀다 — 직전 값을 재사용한다
+            risk_on = prev_risk_on
+        else:
+            risk_on_src = 'none'           # 지어내지 않는다 (null)
+        return {
+            'offense_picks': prev_stock.get('offense_picks', []),
+            'offense_weights': prev_stock.get('offense_weights', {}),
+            'defense_picks': prev_stock.get('defense_picks', []),
+            'defense_weights': prev_stock.get('defense_weights', {}),
+            'risk_on': risk_on,
+            'risk_on_source': risk_on_src,
+            'computed_side': None,
+            'stale_side': 'both',
+            'compute_failed': True,
+            'fail_reason': fail_reason or 'unknown',
+            'failed_at': now_str,
+            # 마지막으로 실제 계산에 성공한 시각. 모르면 모른다고 둔다.
+            'last_success_at': prev_stock.get('last_success_at'),
+        }
+
+    risk_on = bool(risk_on)
+    if risk_on:
+        offense_picks, offense_weights = s_picks, s_weights_all
+        defense_picks = prev_stock.get('defense_picks', ['IEF', 'GLD', 'PDBC'])
+        defense_weights = prev_stock.get('defense_weights', {})
+        if not defense_weights and defense_picks:
+            dw = (1.0 - 0.02) / len(defense_picks)
+            defense_weights = {t: round(dw, 4) for t in defense_picks}
+            defense_weights['Cash'] = 0.02
+    else:
+        defense_picks, defense_weights = s_picks, s_weights_all
+        offense_picks = prev_stock.get('offense_picks', [])
+        offense_weights = prev_stock.get('offense_weights', {})
+
+    blk = {
+        'offense_picks': offense_picks,
+        'offense_weights': offense_weights,
+        'defense_picks': defense_picks,
+        'defense_weights': defense_weights,
+        'risk_on': risk_on,
+        'risk_on_source': 'today',
+        'computed_side': 'offense' if risk_on else 'defense',
+        'stale_side': 'defense' if risk_on else 'offense',
+        'compute_failed': False,
+        'last_success_at': now_str,
+    }
+    # 주식 기준일은 오늘 계산한 쪽에만 해당한다. meta.signal_date 는 비트코인 날짜라
+    # 주식 기준일로 쓰면 안 된다(2026-09-30 토론 run-20260930T045429Z).
+    sb = s_meta.get('basis')
+    if sb:
+        blk['basis_date'] = str(sb['basis']) if sb['basis'] else None
+        blk['basis_oldest'] = str(sb['oldest'])
+        blk['basis_mixed'] = bool(sb['mixed'])
+        blk['basis_lag_bd'] = sb['lag_bd']
+        blk['basis_per_ticker'] = sb['per_ticker']
+    return blk
+
+
 # ─── 송금 트리거 지속일 ─────────────────────────────────────
 # 트리거가 며칠째 켜진 채인지만 담는다. 이 파일은 recommend_personal 만 쓴다 —
 # 매매 상태파일(trade_state.json)에 적으면 현물 실행기의 통째 쓰기와 겹쳐 서로를
@@ -904,7 +1000,12 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     """V24 Stock Strategy: R7B universe (SPY/QQQ/VEA/EEM/EWJ/GLD/PDBC) + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top2. 가드 없음 (앙상블 분산 단독 방어)."""
     log.append("<h2>📈 주식 포트폴리오 분석 (V24: R7B + EEM SMA300 hyst2% + Zscore3 Sh126d, 가드 없음)</h2>")
     eem = all_prices.get('EEM')
-    meta = {'signal_dist': {}, 'next_candidates': []}
+    # 계산 성공 여부를 meta 에 명시한다. 모드 이름 문자열로 되짚지 않는다 — 그 되짚기가
+    # 계산 실패를 공격 국면의 전량 현금 목표로 둔갑시켰다(build_stock_signal_block 참조).
+    # risk_on 은 카나리를 실제로 재서 나온 값이고, 못 쟀으면 None 으로 둔다.
+    meta = {'signal_dist': {}, 'next_candidates': [],
+            'compute_ok': True, 'fail_reason': None,
+            'canary_ok': False, 'risk_on': None}
 
     # 이 신호가 실제로 쓴 종가의 날짜. 09:15 KST 에는 야후 수정종가가 직전 세션을
     # 아직 안 채운 날이 있어, 아침에 보는 종목이 그날 밤 체결 종목과 다를 수 있다.
@@ -925,13 +1026,14 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     except Exception as _e:
         meta['basis'] = None
         log.append(f"<p class='error'>주식 종가 기준일 확인 불가: {_e}</p>")
-    # 이전 추천 종목 (HTML 리포트 비교 표시용)
-    stock_holdings: list = []
+    # 직전 회차의 공격 목표. 보유 종목이 아니라 목표다 — 앵커가 아직 안 왔거나 부분
+    # 체결로 남은 자리는 이 목록과 실제 계좌가 다르다. 표시 문구도 그렇게 적는다.
+    prev_offense_picks: list = []
     signal_flipped = False
     try:
         with open(SIGNAL_STATE_FILE, 'r') as _sf:
             _prev = json.load(_sf)
-        stock_holdings = _prev.get('stock', {}).get('offense_picks', [])
+        prev_offense_picks = _prev.get('stock', {}).get('offense_picks', [])
     except Exception:
         pass
 
@@ -964,12 +1066,19 @@ def run_stock_strategy_v15(log, all_prices, target_date):
             risk_on = prev_risk_on
         signal_flipped = (prev_risk_on is not None and prev_risk_on != risk_on)
 
+        meta['canary_ok'] = True
+        meta['risk_on'] = bool(risk_on)
+
         log.append(f"<p><b>[Canary]</b> EEM: ${eem_cur:.2f} (MA{STOCK_CANARY_MA_PERIOD} ${eem_sma:.2f}, dist {dist:+.2%}, hyst ±{STOCK_CANARY_HYST:.1%})</p>")
         flip_info = " \U0001f504 <b>SIGNAL FLIP</b>" if signal_flipped else ""
         if risk_on: log.append(f"<p>\u2705 <b>Risk-On</b>{flip_info}</p>")
         else: log.append(f"<p>\U0001f6a8 <b>Risk-Off</b>{flip_info}</p>")
     else:
+        # 카나리를 못 쟀다. 표시는 수비로 내려가되 신호 발행에는 실패로 보낸다 —
+        # 국면을 모르는 채로 만든 목표를 오늘 신호라고 적으면 안 된다.
         risk_on = False
+        meta['compute_ok'] = False
+        meta['fail_reason'] = 'canary_no_data'
         log.append("<p class='error'>Canary Data Missing (EEM)</p>")
 
     if risk_on:
@@ -980,9 +1089,23 @@ def run_stock_strategy_v15(log, all_prices, target_date):
             _ss25 = None
         if _ss25 is None:
             log.append("<p class='error'>V25 strategy 모듈 로드 실패</p>")
+            meta['compute_ok'] = False
+            meta['fail_reason'] = 'module_load_failed'
             return {CASH_ASSET: 1.0}, "Error", meta
         log.append("<h4>🚀 공격 모드 (V25: Z-score 랭킹 + 3-mom (30/72/230) 필터 + cap=1/3+Cash)</h4>")
-        picks, weights, off_meta = _ss25.compute_offense(all_prices)
+        try:
+            picks, weights, off_meta = _ss25.compute_offense(all_prices)
+        except Exception as _oe:
+            log.append(f"<p class='error'>공격 계산 실패: {type(_oe).__name__}</p>")
+            meta['compute_ok'] = False
+            meta['fail_reason'] = 'offense_exception'
+            return {CASH_ASSET: 1.0}, "Error", meta
+        if off_meta.get('reason') == 'no_data':
+            # 입력이 모자라 못 고른 것이다. 모멘텀 전멸과 다르다 — 전량 현금은 그쪽만이다.
+            log.append("<p class='error'>공격 계산 입력 부족 (no_data)</p>")
+            meta['compute_ok'] = False
+            meta['fail_reason'] = 'offense_no_data'
+            return {CASH_ASSET: 1.0}, "Error", meta
         df = off_meta.get('df')
         if df is not None:
             try:
@@ -1001,16 +1124,18 @@ def run_stock_strategy_v15(log, all_prices, target_date):
             except Exception:
                 pass
 
-        # Trigger detection
-        if stock_holdings:
-            new_picks = sorted(set(picks) - set(stock_holdings))
+        # 직전 목표와 오늘 목표의 차이. 실제 보유와의 차이가 아니다 — 매매 발화는
+        # executor 가 계좌를 보고 정하고, 여기 줄은 사람이 눈으로 보는 알림이다.
+        if prev_offense_picks:
+            new_picks = sorted(set(picks) - set(prev_offense_picks))
             n_changed = len(new_picks)
             is_monthly = (target_date.day <= 5)
             trigger_rebal = (n_changed >= 2 and not is_monthly)
             if trigger_rebal:
-                log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 TRIGGER REBALANCE: {n_changed}종목 변경</b></p>")
+                log.append(f"<p style='color:#d93025;font-size:1.1em'><b>🔄 직전 추천 대비 "
+                           f"{n_changed}종목 변경 ({', '.join(new_picks)})</b></p>")
         else:
-            log.append(f"<p style='color:#e37400'>⚠️ 보유종목 미설정</p>")
+            log.append(f"<p style='color:#e37400'>⚠️ 직전 추천 종목이 기록돼 있지 않다</p>")
 
         cash_slot = off_meta.get('cash_slot', 0.0)
         mode_lbl = f"공격 모드 (3-mom 통과 {len(picks)}/3, Cash slot {cash_slot:.0%})"
@@ -1030,11 +1155,17 @@ def run_stock_strategy_v15(log, all_prices, target_date):
     except: pass
 
     if not res:
+        # 앞에서 이미 실패를 적었으면(예: 카나리 결측) 그 사유를 덮지 않는다 — 먼저 난
+        # 쪽이 원인이다.
+        if meta['compute_ok']:
+            meta['fail_reason'] = 'defense_no_data'
+        meta['compute_ok'] = False
         return {CASH_ASSET: 1.0}, "수비 (데이터 없음)", meta
 
     res.sort(key=lambda x: x['6m Ret'], reverse=True)
     top3 = [r for r in res[:3] if r['6m Ret'] > 0]
     if not top3:
+        # 자료는 충분한데 전부 음수다. 이건 정상 결과이므로 전량 현금을 그대로 발행한다.
         return {CASH_ASSET: 1.0}, "수비 (전부 음수)", meta
     picks = [r['Ticker'] for r in top3]
     log.append(f"<p>Defense Picks: <b>{picks}</b> (Equal Weight)</p>")
@@ -1194,17 +1325,19 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
     # Read signal state for UI
     signal_flipped = False
     current_risk_on = True
-    saved_stock_holdings = []
+    # 서버가 마지막으로 낸 공격 목표. 보유 종목이 아니다 — 입력칸을 채울 때도
+    # 그렇게 밝힌다. 사람이 저장한 값(localStorage)이 있으면 그쪽이 먼저다.
+    server_offense_picks = []
     try:
         with open(SIGNAL_STATE_FILE, 'r') as _sf:
             _state = json.load(_sf)
             signal_flipped = False  # 플립 감지는 executor가 담당
             current_risk_on = _state.get('stock', {}).get('risk_on', True)
-            saved_stock_holdings = _state.get('stock', {}).get('offense_picks', [])
+            server_offense_picks = _state.get('stock', {}).get('offense_picks', [])
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
-    saved_holdings_json = json.dumps(saved_stock_holdings)
+    saved_holdings_json = json.dumps(server_offense_picks)
     coin_total_krw_val = int(coin_total_krw)
     stock_holdings_js = """
             <script>
@@ -1218,7 +1351,7 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REBAL_T3U_REL = 0.20;      // V25 (2026-05-28): T3U_can ≥ 20% (25% → 20%, BT 기준 V25 K2 우위 Cal +0.59)
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
-            const SAVED_STOCK_HOLDINGS = """ + saved_holdings_json + """;  // signal_state.json에서 로드
+            const SERVER_OFFENSE_PICKS = """ + saved_holdings_json + """;  // 서버 공격 목표(보유 아님)
 
             function calcTrigger(myTickers, recTickers) {
                 if (!myTickers.length || !recTickers.length) return null;
@@ -1290,12 +1423,16 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                             return;
                         }
                     }
-                    // Fallback: signal_state.json에서 가져온 값
-                    if (SAVED_STOCK_HOLDINGS && SAVED_STOCK_HOLDINGS.length > 0) {
-                        document.getElementById('stockInput').value = SAVED_STOCK_HOLDINGS.join(' ');
+                    // 저장한 보유가 없을 때만 서버의 공격 목표로 칸을 채운다. 그건
+                    // 보유가 아니라 목표다 — 문구로 그렇게 밝힌다.
+                    if (SERVER_OFFENSE_PICKS && SERVER_OFFENSE_PICKS.length > 0) {
+                        document.getElementById('stockInput').value = SERVER_OFFENSE_PICKS.join(' ');
                         document.getElementById('holdingsStatus').innerHTML =
-                            '\u2705 \uc11c\ubc84 \uc800\uc7a5\uac12: ' + SAVED_STOCK_HOLDINGS.join(', ');
-                        renderTrigger(SAVED_STOCK_HOLDINGS);
+                            '\u26a0\ufe0f \uc11c\ubc84 \ucd94\ucc9c \uc885\ubaa9\uc73c\ub85c '
+                            + '\ucc44\uc6e0\ub2e4(\uc2e4\uc81c \ubcf4\uc720 \uc544\ub2d8): '
+                            + SERVER_OFFENSE_PICKS.join(', ')
+                            + ' \u2014 \ub2e4\ub974\uba74 \uace0\uccd0\uc11c \uc800\uc7a5\ud574\ub77c';
+                        renderTrigger(SERVER_OFFENSE_PICKS);
                     }
                 } catch(e) {}
             })();
@@ -2474,38 +2611,21 @@ if __name__ == "__main__":
         s_picks = sorted([t for t in s_port.keys() if t != 'Cash'])
         s_weights_all = {t: w for t, w in s_port.items()}
 
-        is_stock_risk_on = not s_stat.startswith('수비')
-        if is_stock_risk_on:
-            offense_picks = s_picks
-            offense_weights = s_weights_all
-            # 방어 종목은 이전 signal에서 가져오거나 기본값
-            try:
-                with open(SIGNAL_STATE_FILE, 'r') as _pf:
-                    _ps = json.load(_pf)
-                defense_picks = _ps.get('stock', {}).get('defense_picks', ['IEF', 'GLD', 'PDBC'])
-                defense_weights = _ps.get('stock', {}).get('defense_weights', {})
-                # 빈 경우 기본값 생성
-                if not defense_weights and defense_picks:
-                    dw = (1.0 - 0.02) / len(defense_picks)
-                    defense_weights = {t: round(dw, 4) for t in defense_picks}
-                    defense_weights['Cash'] = 0.02
-            except Exception:
-                defense_picks = ['IEF', 'GLD', 'PDBC']
-                dw = (1.0 - 0.02) / 3
-                defense_weights = {t: round(dw, 4) for t in defense_picks}
-                defense_weights['Cash'] = 0.02
-        else:
-            defense_picks = s_picks
-            defense_weights = s_weights_all
-            # 공격 종목은 이전 signal에서 가져오거나 기본값
-            try:
-                with open(SIGNAL_STATE_FILE, 'r') as _pf:
-                    _ps = json.load(_pf)
-                offense_picks = _ps.get('stock', {}).get('offense_picks', [])
-                offense_weights = _ps.get('stock', {}).get('offense_weights', {})
-            except Exception:
-                offense_picks = []
-                offense_weights = {'Cash': 1.0}
+        # 주식 칸은 조립 함수 하나가 만든다. 성공·실패 계약이 거기 한 자리에 있다.
+        try:
+            with open(SIGNAL_STATE_FILE, 'r') as _pf:
+                _prev_stock = (json.load(_pf) or {}).get('stock', {}) or {}
+        except Exception:
+            _prev_stock = {}
+        _stock_block = build_stock_signal_block(
+            _prev_stock, s_meta, s_picks, s_weights_all,
+            datetime.now().strftime('%Y-%m-%d %H:%M'))
+        # 자산배분 T3U 게이트가 쓰는 주식 카나리. 모드 이름이 아니라 실제 값이다.
+        is_stock_risk_on = bool(_stock_block.get('risk_on'))
+        if _stock_block.get('compute_failed'):
+            print(f"⚠️ 주식 전략 계산 실패({_stock_block.get('fail_reason')}) — "
+                  f"신호 파일의 주식 목표는 직전 값을 그대로 두고 기준일을 뺐다 "
+                  f"(실매매 대체 경로 차단).")
 
         # 코인: guard_refs 계산 (KRW 기준 — executor가 KRW 현재가와 비교)
         # 보유 중인 코인 + 추천 코인 모두 포함 (보유중이지만 추천에서 빠진 종목도 가드 필요)
@@ -2531,28 +2651,6 @@ if __name__ == "__main__":
                 except Exception:
                     pass
 
-        # 주식 기준일은 따로 적는다. meta.signal_date 는 비트코인 시계열의 마지막
-        # 날짜라 주식이 쓴 종가의 날짜가 아니다 — 그걸 주식 기준일로 읽으면 executor 의
-        # 대체 신호 검증이 틀린 날짜를 보고 통과시킨다.
-        # 이번에 새로 계산한 쪽만 이 기준일에 해당한다. 반대편(위에서 이전 신호를 그대로
-        # 복사해 온 공격 또는 방어 목표)은 오늘 값이 아니므로 stale 로 표시한다.
-        _sb_meta = (s_meta or {}).get('basis') if isinstance(s_meta, dict) else None
-        _stock_block = {
-            'offense_picks': offense_picks,
-            'offense_weights': offense_weights,
-            'defense_picks': defense_picks,
-            'defense_weights': defense_weights,
-            'risk_on': is_stock_risk_on,
-            'computed_side': 'offense' if is_stock_risk_on else 'defense',
-            'stale_side': 'defense' if is_stock_risk_on else 'offense',
-        }
-        if _sb_meta:
-            _stock_block['basis_date'] = (str(_sb_meta['basis']) if _sb_meta['basis']
-                                          else None)
-            _stock_block['basis_oldest'] = str(_sb_meta['oldest'])
-            _stock_block['basis_mixed'] = bool(_sb_meta['mixed'])
-            _stock_block['basis_lag_bd'] = _sb_meta['lag_bd']
-            _stock_block['basis_per_ticker'] = _sb_meta['per_ticker']
         new_signal = {
             'stock': _stock_block,
             'coin': {
