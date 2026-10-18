@@ -560,6 +560,15 @@ def _norm_risky(weights: dict) -> dict:
 
 STOCK_TICKERS = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ', 'IEF', 'BIL', 'BNDX']
 
+# 검사가 "무엇을 보고 무엇을 뺐나" 를 적어 두는 자리. 영수증에 그대로 실린다 —
+# rc 0 하나만 남기면 비교 범위가 조용히 줄어든 날과 멀쩡한 날이 구분되지 않는다.
+SCOPE_NOTES: dict = {}
+
+# 서버 주식 가격 파일의 최소 줄 수. 전략이 보는 가장 긴 창은 카나리 SMA200 과 12개월
+# 모멘텀(252일)이라 그 둘을 채우고도 남아야 한다. 잘린 파일로 계산된 신호는 조용히
+# 다른 답을 내므로 비교하지 않고 멈춘다. 현재 서버 파일은 2018-01-02 부터 2,211줄이다.
+STOCK_MIN_CSV_ROWS = 400
+
 
 def server_stock_signal(timeout_sec: int = 30):
     """서버가 그날 실제로 낸 주식 신호와 그 신호를 만든 가격 기준일을 읽어 온다. 읽기 전용.
@@ -576,8 +585,10 @@ def server_stock_signal(timeout_sec: int = 30):
     """
     import json
 
-    probe = '; '.join(f'printf "%s %s\\n" {t} "$(tail -1 /home/ubuntu/data/{t}.csv | cut -d, -f1)"'
-                      for t in STOCK_TICKERS)
+    probe = '; '.join(
+        f'printf "%s %s %s\\n" {t} "$(tail -1 /home/ubuntu/data/{t}.csv)" '
+        f'"$(wc -l < /home/ubuntu/data/{t}.csv)"'
+        for t in STOCK_TICKERS)
     out, why = _ssh_text(f'cat /home/ubuntu/signal_state.json; echo "@@@"; {probe}', timeout_sec)
     if out is None:
         raise ParityDataStale(f'서버 주식 신호를 못 읽었다: {why}')
@@ -594,30 +605,103 @@ def server_stock_signal(timeout_sec: int = 30):
     for key in ('risk_on', 'offense_weights', 'defense_weights'):
         if key not in stock:
             raise ParityDataStale(f'서버 주식 신호에 {key} 가 없다')
+    # 카나리는 참·거짓이어야 한다. 문자열 "False" 나 0/1 이 들어오면 bool() 로 감싸는
+    # 순간 뜻이 바뀌어(빈 문자열이 아닌 모든 문자열은 참) 양쪽이 다른 국면을 보면서도
+    # 같다고 찍힌다. 값을 고쳐 쓰지 말고 그 자리에서 멈춘다.
+    if not isinstance(stock['risk_on'], bool):
+        raise ParityDataStale(
+            f"서버 주식 카나리가 참·거짓이 아니다 ({stock['risk_on']!r})")
     if not meta.get('signal_date') or not meta.get('updated_at'):
         raise ParityDataStale('서버 주식 신호에 신호일·갱신시각이 없다')
 
-    basis = {}
+    # 비중은 정규화하기 전에 본다. _norm_risky 는 0 과 현금 칸을 지우고 반올림하므로
+    # 음수·NaN·터무니없는 값이 섞여 있어도 지나간 뒤에는 흔적이 남지 않는다.
+    for name, key in (('공격', 'offense_weights'), ('방어', 'defense_weights')):
+        raw = stock[key]
+        if not isinstance(raw, dict) or not raw:
+            raise ParityDataStale(f'서버 주식 {name} 비중이 비어 있거나 딕셔너리가 아니다')
+        total = 0.0
+        for tkr, val in raw.items():
+            if isinstance(val, bool) or not isinstance(val, (int, float)) \
+                    or not math.isfinite(val):
+                raise ParityDataStale(f'서버 주식 {name} 비중 {tkr} 이 수가 아니다 ({val!r})')
+            if val < -1e-9 or val > 1 + 1e-9:
+                raise ParityDataStale(f'서버 주식 {name} 비중 {tkr} 이 0~1 밖이다 ({val})')
+            total += float(val)
+        if total > 1 + 1e-6:
+            raise ParityDataStale(f'서버 주식 {name} 비중 합이 {total:.6f} 로 1 을 넘는다')
+
+    # 라이브는 그날의 국면 한 쪽만 새로 계산하고 반대편은 직전 파일의 값을 그대로
+    # 복사한다(recommend_personal.py). 어느 쪽이 새 값인지는 파일에 적혀 있다.
+    # 이 둘이 없거나 어긋나면 어느 쪽이 오늘 값인지 알 수 없으므로 그 자리에서 멈춘다 —
+    # 모르는 채로 건너뛰면 이 감시가 조용히 아무것도 안 보는 상태가 된다.
+    computed = stock.get('computed_side')
+    stale = stock.get('stale_side')
+    if computed not in ('offense', 'defense') or stale not in ('offense', 'defense'):
+        raise ParityDataStale(
+            f'서버 주식 신호에 계산된 쪽·낡은 쪽 표시가 없다 (computed_side={computed!r} '
+            f'stale_side={stale!r}). 리포트 판본이 낡았다.')
+    if computed == stale:
+        raise ParityDataStale(f'계산된 쪽과 낡은 쪽이 같다고 적혀 있다 ({computed})')
+    want = 'offense' if stock['risk_on'] else 'defense'
+    if computed != want:
+        raise ParityDataStale(
+            f'카나리({stock["risk_on"]})와 계산된 쪽({computed})이 안 맞는다 — '
+            f'{want} 가 새로 계산된 쪽이어야 한다')
+
+    # 기준일은 신호 파일에 적힌 값이 정본이다. 조회 시점(10:00)의 CSV 꼬리로 대신하면
+    # 09:15 신호가 난 뒤에 가격이 한 세션 더 받아진 날 엉뚱한 날짜로 대조해 거짓
+    # 불일치가 난다. CSV 는 그 값을 교차확인하고 서버 가격 자체가 성한지 보는 데만 쓴다.
+    if stock.get('basis_mixed'):
+        raise ParityDataStale(
+            f"서버 주식 신호가 섞인 날짜로 계산됐다 (가장 오래된 종가 "
+            f"{stock.get('basis_oldest')}). 라이브도 같은 조건을 경고로 적는다.")
+    if not stock.get('basis_date'):
+        raise ParityDataStale(
+            '서버 주식 신호에 가격 기준일(basis_date)이 없다. 리포트 판본이 낡았다.')
+    basis_date = str(stock['basis_date'])[:10]
+
+    csv_meta = {}
     for line in tail.strip().split('\n'):
         parts = line.split()
-        if len(parts) == 2:
-            basis[parts[0]] = parts[1][:10]
-    missing = [t for t in STOCK_TICKERS if t not in basis]
+        if len(parts) == 3 and ',' in parts[1]:
+            day, close = parts[1].split(',', 1)
+            csv_meta[parts[0]] = (day[:10], close, parts[2])
+    missing = [t for t in STOCK_TICKERS if t not in csv_meta]
     if missing:
-        raise ParityDataStale(f'서버 가격 기준일을 못 읽었다: {", ".join(missing)}')
-    # 종목마다 기준일이 다르면 그 신호는 섞인 날짜로 계산된 것이다. 라이브도 같은 조건을
-    # 검사해 건너뛰게 되어 있으니, 여기서도 대조하지 않는다.
-    dates = sorted(set(basis.values()))
-    if len(dates) != 1:
-        raise ParityDataStale(f'서버 주식 가격 기준일이 종목마다 다르다: {basis}')
+        raise ParityDataStale(f'서버 가격 파일을 못 읽었다: {", ".join(missing)}')
+    sick = []
+    for tkr in STOCK_TICKERS:
+        day, close, rows = csv_meta[tkr]
+        try:
+            px, nrows = float(close), int(rows)
+        except ValueError:
+            sick.append(f'{tkr} 마지막 줄이 숫자가 아니다 ({close!r} {rows!r})')
+            continue
+        if not math.isfinite(px) or px <= 0:
+            sick.append(f'{tkr} 마지막 종가가 {px}')
+        if nrows < STOCK_MIN_CSV_ROWS:
+            sick.append(f'{tkr} 가격이 {nrows}줄뿐이다 (최소 {STOCK_MIN_CSV_ROWS})')
+    if sick:
+        raise ParityDataStale('서버 주식 가격이 성하지 않다: ' + ' · '.join(sick))
+
+    csv_days = sorted({v[0] for v in csv_meta.values()})
+    if basis_date > csv_days[-1]:
+        raise ParityDataStale(
+            f'신호가 적은 기준일 {basis_date} 이 서버 가격 마지막 날 {csv_days[-1]} 보다 '
+            '뒤다 — 신호와 가격이 안 맞는다')
 
     return {
-        'risk_on': bool(stock['risk_on']),
+        'risk_on': stock['risk_on'],
         'off_w': _norm_risky(stock['offense_weights']),
         'def_w': _norm_risky(stock['defense_weights']),
         'signal_date': str(meta['signal_date'])[:10],
         'updated_at': str(meta['updated_at']),
-        'basis_date': dates[0],
+        'basis_date': basis_date,
+        'csv_last': csv_days[-1],
+        'csv_mixed': len(csv_days) != 1,
+        'computed_side': computed,
+        'stale_side': stale,
     }
 
 
@@ -651,12 +735,16 @@ def _stock_bt(pdf, sig_ts, mom=None):
 
     ranked, mom_off, mom_def, canary = precompute(pdf, [ms, mid, ml], [126])
     on = bool(canary.at[sig_ts])
+    pos = canary.index.get_loc(sig_ts)
     off_picks = fresh_pick_3mom(ranked.at[sig_ts],
                                 mom_off[ms].loc[sig_ts],
                                 mom_off[mid].loc[sig_ts],
                                 mom_off[ml].loc[sig_ts])
     return {
         'risk_on': on,
+        # 직전 세션의 카나리. 라이브 모듈은 히스테리시스 죽은 구간에서 이전 상태를
+        # 그대로 쓰므로, 집 대조에서 같은 조건을 만들려면 이 값이 필요하다.
+        'canary_prev': bool(canary.iloc[pos - 1]) if pos > 0 else on,
         'off_w': _norm_risky(picks_to_target(off_picks, 0.0, 'cap')),
         'def_w': _norm_risky(select_off(sig_ts, mom_def, 0.0, BT_STOCK_DEF_MODE)),
     }
@@ -665,41 +753,113 @@ def _stock_bt(pdf, sig_ts, mom=None):
 def decide_stock(live: dict, bt: dict):
     """주식 대조 판정. 순수 함수 — 시험에서 그대로 부른다.
 
-    반환 (rc, 어긋난 항목들). rc 0 = 셋 다 같다, 1 = 하나라도 다르다.
-    셋을 다 본다 — 카나리(공격·방어 국면 판정), 공격 국면 목표, 방어 국면 목표.
-    지금 쓰지 않는 국면도 같이 보는 이유는 국면이 바뀌는 날 처음 어긋남을 보게 되면
-    그날 바로 매매가 갈리기 때문이다.
+    반환 (rc, 어긋난 항목들, 안 본 항목들). rc 0 = 본 것이 다 같다, 1 = 하나라도 다르다.
+
+    보는 것은 카나리와 그날 라이브가 실제로 계산한 국면 목표 둘이다. 반대편 국면은
+    라이브가 직전 파일에서 복사해 온 값이라 오늘 가격으로 계산한 백테스트와 비교할
+    대상이 아니다 — 비교하면 국면이 바뀐 다음 날부터 매일 거짓 불일치가 난다
+    (2026-10-18 실측: 카나리가 꺼진 날 공격 목표가 전날 기준일 값이라 어긋났고,
+    그날 밤 executor 는 공격·방어를 둘 다 새로 계산해 매매는 안 갈렸다).
+
+    복사된 쪽을 안 봐도 매매는 덮인다. executor_stock 은 신호 파일을 쓰지 않고 매
+    실행마다 compute_offense·compute_defense 를 둘 다 그 자리에서 계산하고, 국면이
+    바뀌면 그 다음 09:15 에 그 쪽이 새로 계산돼 여기서 비교 대상이 된다.
     """
-    bad = []
+    fresh = live['computed_side']
+    bad, skipped = [], []
     if live['risk_on'] != bt['risk_on']:
         bad.append(f"카나리: 라이브 {live['risk_on']} · 백테스트 {bt['risk_on']}")
-    if live['off_w'] != bt['off_w']:
-        bad.append(f"공격 목표: 라이브 {live['off_w']} · 백테스트 {bt['off_w']}")
-    if live['def_w'] != bt['def_w']:
-        bad.append(f"방어 목표: 라이브 {live['def_w']} · 백테스트 {bt['def_w']}")
+    for side, name, key in (('offense', '공격', 'off_w'), ('defense', '방어', 'def_w')):
+        if side != fresh:
+            skipped.append(f'{name} 목표: 라이브가 낡은 쪽으로 표시했다(직전 신호의 복사본)')
+            continue
+        if live[key] != bt[key]:
+            bad.append(f"{name} 목표: 라이브 {live[key]} · 백테스트 {bt[key]}")
+    return (1 if bad else 0), bad, skipped
+
+
+def local_stock_check(pdf, sig_ts, bt: dict):
+    """집 라이브 전략 모듈과 채택 백테스트를 그 날짜로 양쪽 국면 다 대조한다.
+
+    서버 대조는 그날 라이브가 실제로 계산한 한 쪽만 본다 — 반대편은 직전 신호의
+    복사본이라 오늘 가격으로 잰 백테스트와 비교할 대상이 아니다. 그러면 지금 안 쓰이는
+    쪽 코드가 갈라져도 국면이 바뀌기 전까지 아무도 모른다. 이 검사가 그 구멍을 덮는다:
+    서버에 깔린 것과 같은 모듈(stock_strategy_v25)을 집 가격으로 두 쪽 다 돌려 본다.
+    서버 배포본이 집 사본과 같은 판본인지는 server_build_matches 가 따로 본다.
+
+    카나리는 직전 세션의 백테스트 값을 이전 상태로 넣어 라이브와 같은 조건을 만든다
+    (히스테리시스 죽은 구간에서는 이전 상태가 답을 가른다).
+
+    반환 (rc, 어긋난 항목들).
+    """
+    import stock_strategy_v25 as sv
+
+    cut = {t: pdf[t].loc[:sig_ts].dropna() for t in pdf.columns}
+    _, off_w, _ = sv.compute_offense(cut)
+    _, def_w, _ = sv.compute_defense(cut)
+    prev_on = bool(bt['canary_prev'])
+    on, _meta = sv.eem_canary(cut.get('EEM'), prev_on)
+    bad = local_stock_diffs(on, off_w, def_w, bt)
     return (1 if bad else 0), bad
 
 
-def self_check_stock(pdf, live: dict, sig_ts):
+def local_stock_diffs(on: bool, off_w: dict, def_w: dict, bt: dict):
+    """집 라이브 모듈의 답과 백테스트의 답을 줄로 만든다. 순수 함수 — 시험에서 그대로 부른다."""
+    bad = []
+    if bool(on) != bt['risk_on']:
+        bad.append(f"카나리: 집 라이브 {bool(on)} · 백테스트 {bt['risk_on']} "
+                   f"(이전 상태 {bt['canary_prev']})")
+    for name, got, want in (('공격', _norm_risky(off_w), bt['off_w']),
+                            ('방어', _norm_risky(def_w), bt['def_w'])):
+        if got != want:
+            bad.append(f'{name} 목표: 집 라이브 {got} · 백테스트 {want}')
+    return bad
+
+
+def stock_victims(pool, held, available):
+    """양성 대조에서 부풀릴 종목 순서. 순수 함수 — 시험에서 그대로 부른다.
+
+    EEM 은 뺀다. 카나리 종목이라 흔들면 국면 자체가 뒤집혀서, 불일치가 나도 그건 목표가
+    달라져서가 아니다. 국채·단기채(IEF·BIL·BNDX)를 앞에 세우는 것은 GLD·PDBC 가
+    공격·방어 유니버스에 둘 다 들어 있어 흔들면 두 국면이 같이 움직이기 때문이다.
+    """
+    first = ('IEF', 'BIL', 'BNDX')
+    cand = [t for t in pool if t not in held and t in available and t != 'EEM']
+    return [t for t in first if t in cand] + [t for t in cand if t not in first]
+
+
+def self_check_stock(pdf, live: dict, sig_ts, bt: dict):
     """주식 양성 대조 — 백테스트 쪽 입력을 일부러 틀리게 해서 불일치가 잡히는지 본다.
 
-    고르는 방식이 중요하다. 라이브가 안 고른 공격 종목 하나의 최근 1년 가격을 하루 2%씩
-    복리로 밀어 올린다 — 그 종목은 Z랭킹 1위가 되고 3-모멘텀(30·72·230일) 필터도 전부
-    통과하므로 어떤 시장 국면에서도 반드시 공격 목표가 달라진다. 기간 파라미터를 흔드는
+    흔드는 자리는 그날 실제로 비교하는 국면이어야 한다. 비교하지 않는 쪽을 흔들면
+    판정이 안 바뀌는 게 당연한데 그게 "감시가 불일치를 못 잡는다" 로 읽힌다.
+
+    고르는 방식이 중요하다. 라이브가 안 고른 종목 하나의 최근 1년 가격을 하루 2%씩
+    복리로 밀어 올린다 — 공격 국면이면 그 종목이 Z랭킹 1위가 되고 3-모멘텀(30·72·230일)
+    필터도 전부 통과하고, 방어 국면이면 6개월 수익률 1위가 되어 상위 셋에 반드시 든다.
+    그래서 어떤 시장 국면에서도 그날의 목표가 달라진다. 기간 파라미터를 흔드는
     방식은 못 쓴다: 그날 상위 종목이 그대로면 안 잡혀도 감시 고장이 아니라 그날의
     둔감함이 되어 판정이 흐려진다(선물 쪽에서 2026-09-29 실측). 12년에 걸친 직선 기울기도
     못 쓴다 — 하루치 기울기가 0.02% 라 30일 모멘텀 부호를 못 뒤집는다(같은 날 실측).
+
+    흔든 뒤에 "불일치가 났다" 만 보지 않는다. 그 불일치가 목표가 달라져서 난 것인지를
+    같이 본다 — 카나리가 같이 뒤집히면 목표 비교가 죽어 있어도 불일치는 나므로, 그걸
+    통과로 읽으면 양성 대조가 자기 자신을 속인다. 그래서 EEM(카나리 종목)은 흔들지 않고,
+    흔든 뒤 카나리가 그대로이고 그 종목이 실제로 그날 목표에 들어왔을 때만 센다.
 
     반환 (통과했나, 설명).
     """
     import numpy as np
 
-    from bt_stock_coin_v3 import OFF_R7
+    from bt_stock_coin_v3 import DEF_TICKERS, OFF_R7
 
-    held = set(live['off_w'])
-    cand = [t for t in OFF_R7 if t not in held and t in pdf.columns]
+    if live['computed_side'] == 'offense':
+        pool, held, what, key = OFF_R7, set(live['off_w']), '공격', 'off_w'
+    else:
+        pool, held, what, key = DEF_TICKERS, set(live['def_w']), '방어', 'def_w'
+    cand = stock_victims(pool, held, pdf.columns)
     if not cand:
-        return False, '부풀릴 공격 종목이 없다 — 양성 대조를 만들 수 없다'
+        return False, f'부풀릴 {what} 종목이 없다 — 양성 대조를 만들 수 없다'
 
     tried = []
     for victim in cand:
@@ -708,12 +868,20 @@ def self_check_stock(pdf, live: dict, sig_ts):
         ramp[-tail:] = 1.02 ** np.arange(1, tail + 1)
         fake = pdf.copy()
         fake[victim] = fake[victim] * ramp
-        rc, _bad = decide_stock(live, _stock_bt(fake, sig_ts))
-        if rc == 1:
-            return True, f'백테스트 쪽 {victim} 가격을 부풀리자 불일치로 잡혔다'
+        fbt = _stock_bt(fake, sig_ts)
+        if fbt['risk_on'] != bt['risk_on']:
+            tried.append(f'{victim}(카나리가 같이 뒤집혀 못 씀)')
+            continue
+        if victim not in fbt[key]:
+            tried.append(f'{victim}(부풀려도 {what} 목표에 안 들어옴)')
+            continue
+        rc, bad, _skip = decide_stock(live, fbt)
+        if rc == 1 and any(line.startswith(what) for line in bad):
+            return True, (f'백테스트 쪽 {victim} 가격을 부풀리자 {what} 목표가 '
+                          '달라져 불일치로 잡혔다')
         tried.append(victim)
-    return False, (f'백테스트 쪽 {", ".join(tried)} 가격을 차례로 부풀렸는데 전부 '
-                   '같다고 나왔다 — 이 감시는 불일치를 못 잡는다')
+    return False, (f'백테스트 쪽 {", ".join(tried)} 가격을 차례로 부풀렸는데 '
+                   f'{what} 목표 불일치가 안 났다 — 이 감시는 불일치를 못 잡는다')
 
 
 def expected_stock_signal_day(now: datetime):
@@ -783,21 +951,49 @@ def check_stock(check_server: bool = True, self_test: bool = True) -> int:
             f"서버 주식 가격이 {gap}세션 밀렸다 (기준일 {live['basis_date']}, "
             f'집 마지막 {str(pdf.index[-1])[:10]}). 서버 쪽 다운로드를 봐라.')
 
-    if self_test:
-        passed, why = self_check_stock(pdf, live, sig_ts)
-        print(f'양성 대조: {why}')
-        if not passed:
-            raise ParityDataStale(why)
+    if live['csv_mixed'] or live['basis_date'] != live['csv_last']:
+        print(f"  참고: 서버 가격 파일의 마지막 날은 {live['csv_last']} 다 "
+              f"(신호가 쓴 기준일 {live['basis_date']}). 대조는 신호가 적은 날짜로 한다.")
 
     bt = _stock_bt(pdf, sig_ts)
-    rc, bad = decide_stock(live, bt)
+    rc, bad, skipped = decide_stock(live, bt)
+    print(f"계산된 쪽 {live['computed_side']} · 낡은 쪽 {live['stale_side']} "
+          '(라이브는 그날의 국면 한 쪽만 새로 계산한다)')
     print(f"  카나리   라이브 {live['risk_on']} · 백테스트 {bt['risk_on']}")
     print(f"  공격     라이브 {live['off_w']}")
     print(f"           백테스트 {bt['off_w']}")
     print(f"  방어     라이브 {live['def_w']}")
     print(f"           백테스트 {bt['def_w']}")
-    if rc == 1:
-        for line in bad:
+    for line in skipped:
+        print(f'  비교 안 함 — {line}')
+
+    # 서버 대조에서 뺀 쪽을 여기서 덮는다. 집 라이브 모듈로 두 국면을 다 돌려 백테스트와
+    # 맞춘다 — 지금 안 쓰이는 쪽 코드가 갈라지면 국면이 바뀌기 전에 여기서 걸린다.
+    lrc, lbad = local_stock_check(pdf, sig_ts, bt)
+    if lrc == 0:
+        print('  집 라이브 모듈 대조: 공격·방어·카나리 셋 다 백테스트와 같다')
+    else:
+        for line in lbad:
+            print(f'  집 라이브 모듈이 다름 — {line}')
+
+    # 양성 대조는 기준선이 깨끗할 때만 뜻이 있다. 이미 불일치가 난 날에 흔들어 봐야
+    # 무엇 때문에 잡혔는지 못 가른다.
+    if self_test and rc == 0 and lrc == 0:
+        passed, why = self_check_stock(pdf, live, sig_ts, bt)
+        print(f'양성 대조: {why}')
+        if not passed:
+            raise ParityDataStale(why)
+    elif self_test:
+        print('양성 대조: 기준선이 이미 불일치라 건너뛴다')
+
+    scope = (f"기준일 {live['basis_date']} · 비교한 쪽 {live['computed_side']}"
+             + (f" · 뺀 쪽 {live['stale_side']}(직전 신호의 복사본)" if skipped else '')
+             + ' · 집 라이브 모듈은 양쪽 다 대조')
+    SCOPE_NOTES['주식'] = scope
+    print(f'  대조 범위: {scope}')
+
+    if rc == 1 or lrc == 1:
+        for line in bad + lbad:
             print(f'  다름 — {line}')
         print('판정: 불일치 — 라이브 신호와 채택 백테스트가 갈렸다. 사람이 봐야 한다.')
         return 1
@@ -1577,6 +1773,7 @@ def write_receipt(path: str, mode: str, checks: dict, worst: int):
         'run_id': os.environ.get('PARITY_RUN_ID')
                   or f"{mode}-{now.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}",
         'checks': checks,
+        'scope': dict(SCOPE_NOTES),
         'worst': worst,
         'finished_at': now.strftime('%Y-%m-%d %H:%M:%S KST'),
         'host': os.uname().nodename,

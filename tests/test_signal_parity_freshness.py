@@ -180,35 +180,76 @@ check("시간 초과는 막힌다", not ok and 'TimeoutExpired' in why, why)
 ok, why = with_fake_ssh(lambda *a, **k: _Proc(0, ''))
 check("빈 응답은 막힌다", not ok, why)
 
-print("\n[12] 주식 판정 — 카나리·공격·방어 셋 중 하나라도 다르면 잡는다")
-L = {'risk_on': True,
+print("\n[12] 주식 판정 — 카나리와 그날 계산된 국면을 본다 (복사된 쪽은 안 본다)")
+L = {'risk_on': True, 'computed_side': 'offense', 'stale_side': 'defense',
      'off_w': {'QQQ': 0.333333, 'PDBC': 0.333333, 'EEM': 0.333333},
      'def_w': {'PDBC': 0.5, 'BIL': 0.5}}
 
 
-def stock_case(**over):
-    b = {'risk_on': L['risk_on'], 'off_w': dict(L['off_w']), 'def_w': dict(L['def_w'])}
+def stock_case(_live=None, **over):
+    live = _live or L
+    b = {'risk_on': live['risk_on'], 'off_w': dict(live['off_w']),
+         'def_w': dict(live['def_w'])}
     b.update(over)
-    return sp.decide_stock(L, b)
+    return sp.decide_stock(live, b)
 
 
-rc, bad = stock_case()
-check("셋 다 같으면 rc 0", (rc, bad) == (0, []), (rc, bad))
+rc, bad, skip = stock_case()
+check("본 것이 다 같으면 rc 0", (rc, bad) == (0, []), (rc, bad))
+check("복사된 쪽은 안 본 것으로 적는다", len(skip) == 1 and '방어' in skip[0], skip)
 
-rc, bad = stock_case(risk_on=False)
+rc, bad, _ = stock_case(risk_on=False)
 check("카나리가 다르면 rc 1", rc == 1 and any('카나리' in b for b in bad), bad)
 
-rc, bad = stock_case(off_w={'QQQ': 0.333333, 'PDBC': 0.333333, 'SPY': 0.333333})
-check("공격 종목이 다르면 rc 1", rc == 1 and any('공격' in b for b in bad), bad)
+rc, bad, _ = stock_case(off_w={'QQQ': 0.333333, 'PDBC': 0.333333, 'SPY': 0.333333})
+check("계산된 공격 종목이 다르면 rc 1", rc == 1 and any('공격' in b for b in bad), bad)
 
-rc, bad = stock_case(off_w={'QQQ': 0.5, 'PDBC': 0.25, 'EEM': 0.25})
-check("공격 비중만 달라도 rc 1", rc == 1 and any('공격' in b for b in bad), bad)
+rc, bad, _ = stock_case(off_w={'QQQ': 0.5, 'PDBC': 0.25, 'EEM': 0.25})
+check("계산된 공격 비중만 달라도 rc 1", rc == 1 and any('공격' in b for b in bad), bad)
 
-rc, bad = stock_case(def_w={'PDBC': 0.333333, 'BIL': 0.333333, 'IEF': 0.333333})
-check("지금 안 쓰는 방어 국면이 달라도 rc 1", rc == 1 and any('방어' in b for b in bad), bad)
+rc, bad, skip = stock_case(def_w={'PDBC': 0.333333, 'BIL': 0.333333, 'IEF': 0.333333})
+check("복사된 방어 국면이 달라도 rc 0", (rc, bad) == (0, []), (rc, bad))
+check("그때도 안 본 것으로 적힌다", len(skip) == 1 and '방어' in skip[0], skip)
 
-rc, bad = stock_case(risk_on=False, off_w={'SPY': 1.0}, def_w={'BIL': 1.0})
-check("셋 다 다르면 셋 다 적는다", rc == 1 and len(bad) == 3, bad)
+# 카나리가 꺼진 날 — 2026-10-18 에 거짓 불일치를 냈던 바로 그 모양이다.
+LOFF = {'risk_on': False, 'computed_side': 'defense', 'stale_side': 'offense',
+        'off_w': {'PDBC': 0.333333, 'SPY': 0.333333, 'QQQ': 0.333333},
+        'def_w': {'PDBC': 0.5, 'BIL': 0.5}}
+rc, bad, skip = stock_case(LOFF, off_w={'PDBC': 0.333333})
+check("방어 국면 날 복사된 공격이 달라도 rc 0", (rc, bad) == (0, []), (rc, bad))
+check("그때 안 본 쪽은 공격이다", len(skip) == 1 and '공격' in skip[0], skip)
+
+rc, bad, _ = stock_case(LOFF, def_w={'BIL': 1.0})
+check("방어 국면 날 계산된 방어가 다르면 rc 1",
+      rc == 1 and any('방어' in b for b in bad), bad)
+
+rc, bad, _ = stock_case(LOFF, risk_on=True, def_w={'BIL': 1.0})
+check("카나리와 계산된 쪽 둘 다 다르면 둘 다 적는다", rc == 1 and len(bad) == 2, bad)
+
+print("\n[12b] 집 라이브 모듈 대조 — 서버 대조에서 뺀 쪽을 여기서 덮는다")
+BT = {'risk_on': False, 'canary_prev': True,
+      'off_w': {'PDBC': 0.333333}, 'def_w': {'PDBC': 0.5, 'BIL': 0.5}}
+check("양쪽이 같으면 어긋남이 없다",
+      sp.local_stock_diffs(False, {'PDBC': 1 / 3, 'Cash': 2 / 3},
+                           {'PDBC': 0.5, 'BIL': 0.5}, BT) == [],
+      sp.local_stock_diffs(False, {'PDBC': 1 / 3}, {'PDBC': 0.5, 'BIL': 0.5}, BT))
+d = sp.local_stock_diffs(False, {'PDBC': 1 / 3, 'SPY': 1 / 3, 'QQQ': 1 / 3},
+                         {'PDBC': 0.5, 'BIL': 0.5}, BT)
+check("안 쓰이는 쪽(공격)이 갈라져도 잡는다", len(d) == 1 and '공격' in d[0], d)
+d = sp.local_stock_diffs(True, {'PDBC': 1 / 3}, {'PDBC': 0.5, 'BIL': 0.5}, BT)
+check("카나리가 갈라지면 이전 상태까지 적는다",
+      len(d) == 1 and '카나리' in d[0] and '이전 상태' in d[0], d)
+
+print("\n[12c] 양성 대조에서 부풀릴 종목 — 카나리 종목은 흔들지 않는다")
+_av = ['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ', 'IEF', 'BIL', 'BNDX']
+v = sp.stock_victims(['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC'], {'PDBC', 'BIL'}, _av)
+check("들고 있는 종목은 빠진다", 'PDBC' not in v and 'BIL' not in v, v)
+check("국채·단기채가 앞에 온다", v[0] in ('IEF', 'BNDX'), v)
+v = sp.stock_victims(['SPY', 'QQQ', 'VEA', 'EEM', 'GLD', 'PDBC', 'VNQ'], {'PDBC'}, _av)
+check("EEM 은 후보에서 빠진다", 'EEM' not in v, v)
+check("가격이 없는 종목도 빠진다",
+      sp.stock_victims(['IEF', 'BIL'], set(), ['IEF']) == ['IEF'],
+      sp.stock_victims(['IEF', 'BIL'], set(), ['IEF']))
 
 print("\n[13] 주식 위험자산 비중 정규화 — 현금 칸은 빼고 본다")
 check("Cash 가 빠진다", sp._norm_risky({'Cash': 0.07, 'QQQ': 0.31}) == {'QQQ': 0.31})
@@ -233,12 +274,17 @@ check("비교하는 종목이 정본 유니버스와 같다",
 
 print("\n[15] 서버 주식 신호 읽기 — 못 믿을 응답은 전부 비교불능으로 돌린다")
 _GOOD_JSON = ('{"stock": {"risk_on": true, "offense_weights": {"QQQ": 0.31, "Cash": 0.07}, '
-              '"defense_weights": {"BIL": 0.5, "PDBC": 0.5}}, '
+              '"defense_weights": {"BIL": 0.5, "PDBC": 0.5}, '
+              '"computed_side": "offense", "stale_side": "defense", '
+              '"basis_date": "2026-09-25", "basis_oldest": "2026-09-25", '
+              '"basis_mixed": false}, '
               '"meta": {"signal_date": "2026-09-28", "updated_at": "2026-09-29 09:15"}}')
 
 
-def _basis(date_by_ticker):
-    return '\n'.join(f'{t} {date_by_ticker.get(t, "2026-09-25")}' for t in sp.STOCK_TICKERS)
+def _basis(date_by_ticker, close='101.5', rows='2211'):
+    """서버 탐침이 돌려주는 줄 모양: 티커 날짜,종가 줄수."""
+    return '\n'.join(f'{t} {date_by_ticker.get(t, "2026-09-25")},{close} {rows}'
+                     for t in sp.STOCK_TICKERS)
 
 
 def read_stock(stdout, rc=0):
@@ -255,11 +301,71 @@ got, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({})}\n')
 check("정상 응답은 읽힌다", got is not None, why)
 if got:
     check("현금 칸을 뺀 공격 비중", got['off_w'] == {'QQQ': 0.31}, got['off_w'])
-    check("가격 기준일은 CSV 마지막 날짜", got['basis_date'] == '2026-09-25', got['basis_date'])
+    check("가격 기준일은 신호 파일에 적힌 값", got['basis_date'] == '2026-09-25',
+          got['basis_date'])
     check("표기 신호일은 따로 들고 있다", got['signal_date'] == '2026-09-28', got['signal_date'])
+    check("계산된 쪽·낡은 쪽을 들고 온다",
+          (got['computed_side'], got['stale_side']) == ('offense', 'defense'),
+          (got.get('computed_side'), got.get('stale_side')))
 
-_, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({"SPY": "2026-09-24"})}\n')
-check("종목마다 기준일이 다르면 막힌다", why and '기준일이 종목마다 다르다' in why, why)
+_NOSIDE = _GOOD_JSON.replace(', "computed_side": "offense", "stale_side": "defense"', '')
+_, why = read_stock(f'{_NOSIDE}\n@@@\n{_basis({})}\n')
+check("계산된 쪽 표시가 없으면 막힌다", why and '계산된 쪽' in why, why)
+
+_SAME = _GOOD_JSON.replace('"stale_side": "defense"', '"stale_side": "offense"')
+_, why = read_stock(f'{_SAME}\n@@@\n{_basis({})}\n')
+check("계산된 쪽과 낡은 쪽이 같으면 막힌다", why and '같다고 적혀' in why, why)
+
+_MISMATCH = _GOOD_JSON.replace('"computed_side": "offense", "stale_side": "defense"',
+                               '"computed_side": "defense", "stale_side": "offense"')
+_, why = read_stock(f'{_MISMATCH}\n@@@\n{_basis({})}\n')
+check("카나리와 계산된 쪽이 어긋나면 막힌다", why and '안 맞는다' in why, why)
+
+_BOOLSTR = _GOOD_JSON.replace('"risk_on": true', '"risk_on": "False"')
+_, why = read_stock(f'{_BOOLSTR}\n@@@\n{_basis({})}\n')
+check("카나리가 참·거짓이 아니면 막힌다", why and '참·거짓' in why, why)
+
+_NOBASIS = _GOOD_JSON.replace(', "basis_date": "2026-09-25"', '')
+_, why = read_stock(f'{_NOBASIS}\n@@@\n{_basis({})}\n')
+check("신호에 기준일이 없으면 막힌다", why and 'basis_date' in why, why)
+
+_MIXED = _GOOD_JSON.replace('"basis_mixed": false', '"basis_mixed": true')
+_, why = read_stock(f'{_MIXED}\n@@@\n{_basis({})}\n')
+check("신호가 섞인 날짜로 계산됐으면 막힌다", why and '섞인 날짜' in why, why)
+
+# 조회 시점에 서버 CSV 가 한 세션 더 받아져 있어도, 신호가 적은 기준일로 대조한다.
+got2, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({t: "2026-09-26" for t in sp.STOCK_TICKERS})}\n')
+check("CSV 가 더 최신이어도 신호 기준일을 쓴다",
+      got2 and got2['basis_date'] == '2026-09-25' and got2['csv_last'] == '2026-09-26',
+      (got2 or {}).get('basis_date'))
+
+_AHEAD = _GOOD_JSON.replace('"basis_date": "2026-09-25"', '"basis_date": "2026-09-30"')
+_, why = read_stock(f'{_AHEAD}\n@@@\n{_basis({})}\n')
+check("기준일이 서버 가격보다 뒤면 막힌다", why and '가격 마지막 날' in why, why)
+
+_, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({}, rows="120")}\n')
+check("서버 가격이 너무 짧으면 막힌다", why and '줄뿐이다' in why, why)
+
+_, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({}, close="0")}\n')
+check("서버 마지막 종가가 0 이면 막힌다", why and '마지막 종가' in why, why)
+
+_, why = read_stock(f'{_GOOD_JSON}\n@@@\n{_basis({}, close="nan")}\n')
+check("서버 마지막 종가가 NaN 이면 막힌다", why and '마지막 종가' in why, why)
+
+_NEG = _GOOD_JSON.replace('"defense_weights": {"BIL": 0.5, "PDBC": 0.5}',
+                          '"defense_weights": {"BIL": -0.5, "PDBC": 0.5}')
+_, why = read_stock(f'{_NEG}\n@@@\n{_basis({})}\n')
+check("비중이 0~1 밖이면 막힌다", why and '0~1 밖' in why, why)
+
+_SUM = _GOOD_JSON.replace('"offense_weights": {"QQQ": 0.31, "Cash": 0.07}',
+                          '"offense_weights": {"QQQ": 0.6, "SPY": 0.6}')
+_, why = read_stock(f'{_SUM}\n@@@\n{_basis({})}\n')
+check("비중 합이 1 을 넘으면 막힌다", why and '1 을 넘는다' in why, why)
+
+_STR = _GOOD_JSON.replace('"defense_weights": {"BIL": 0.5, "PDBC": 0.5}',
+                          '"defense_weights": {"BIL": "0.5"}')
+_, why = read_stock(f'{_STR}\n@@@\n{_basis({})}\n')
+check("비중이 수가 아니면 막힌다", why and '수가 아니다' in why, why)
 
 _, why = read_stock(f'{_GOOD_JSON}\n')
 check("기준일 부분이 없으면 막힌다", why and '잘렸다' in why, why)
