@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""계좌 조회가 비었을 때 주식 집행기가 매매를 멈추는지, 총자산을 빠짐없이 더하는지 본다.
+
+계기 (2026-10-12·10-21 실사고). 집행기는 환율을 못 받으면 현금을 0 으로 읽었다. 그러면
+보유 합이 100% 로 보여서 드리프트가 정확히 현금버퍼 크기(7.00pp)로 발화하고, V25 주식은
+발화일에 종목까지 새로 고른다. 두 회차에 체결액 약 <금액> (슬리브의 63%) 이 돌았고
+그날 계좌에는 현금이 각각 <금액>·<금액> 멀쩡히 있었다.
+
+둘째 결함 (2026-10-23 실측). 총자산을 "결제기준 주식 + 예수금 − 미결제 순액" 으로 만들고
+있었다. 미결제 매수 구간에서는 산 주식이 아직 결제기준 평가에 없는데 그 대금은 이미
+현금에서 빠져서, 총자산이 미결제 매수대금만큼 작아진다 — 그날 <금액>원, 계좌의 5.9%.
+앱의 계좌 총자산은 <금액>원인데 집행기는 <금액>원으로 봤다.
+
+여기서 고정하는 계약:
+  · 조회가 비면 BalanceUnavailable 을 올린다. 0 이나 빈 보유로 바꿔 돌려주지 않는다.
+  · 총자산 = 투자계좌자산현황(CTRP6548R)의 tot_asst_amt. 주식·원화예수금·외화예수금·
+    외화RP 가 다 들어 있는 한 칸이고 앱 화면과 같은 값이다.
+  · 환율은 두 조회원 중 하나만 멀쩡해도 쓴다. 한쪽 실패로 다른 쪽을 버리지 않는다.
+  · 실제 현금 0, 정상적인 빈 보유는 결측이 아니다.
+  · 조회 불가 회차는 주문 0건이고 상태파일을 안 바꾼다.
+
+실행: python3 tests/test_stock_balance_guard.py  (bash run_tests.sh 에 자동 포함)
+"""
+import datetime as _dt
+import json
+import os
+import sys
+import tempfile
+import types
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'trade'))
+import executor_stock as ex  # noqa: E402
+
+FAILED = []
+
+# 2026-10-23 10:00 KST 실측 (읽기 전용 조회). 숫자를 그대로 쓴다.
+FX = 1324.6
+TOT_KRW = 402880633.0        # 앱 "계좌 총자산"
+STOCK_KRW = 349298529.0      # 결제기준 해외주식 평가
+KRW_CASH = 27462767.0        # 원화 예수금(출금가능)
+FRCR_CASH = 26119337.0       # 외화 예수금 KRW 환산 (<금액>)
+USTL_BUY = 23567892.0        # 미결제 매수대금 (어제 산 541주)
+LIVE_BIL, LIVE_PDBC = 140514.40, 140960.82   # live 평가 (USD)
+
+
+def check(name, cond, detail=''):
+    print(f"  {'PASS' if cond else 'FAIL'}  {name}" + (f"  {detail}" if not cond else ''))
+    if not cond:
+        FAILED.append(name)
+
+
+# ─── 가짜 KIS 응답 ───
+
+def ok_balance():
+    return {'rt_cd': '0', 'output1': [
+        {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': '1534', 'ovrs_stck_evlu_amt': str(LIVE_BIL),
+         'now_pric2': '91.60'},
+        {'ovrs_pdno': 'PDBC', 'ovrs_cblc_qty': '7041', 'ovrs_stck_evlu_amt': str(LIVE_PDBC),
+         'now_pric2': '20.02'},
+    ]}
+
+
+def ok_present(exrt=FX, krw_cash=KRW_CASH, frcr_cash=FRCR_CASH, ustl_buy=USTL_BUY,
+               rows=None):
+    o2 = rows if rows is not None else [
+        {'crcy_cd': 'USD', 'frst_bltn_exrt': str(exrt), 'frcr_dncl_amt_2': '19718.66'},
+    ]
+    return {'rt_cd': '0', 'output2': o2, 'output3': {
+        'tot_dncl_amt': str(krw_cash), 'frcr_evlu_tota': str(frcr_cash),
+        'ustl_sll_amt_smtl': '0', 'ustl_buy_amt_smtl': str(ustl_buy),
+        'tot_asst_amt': str(TOT_KRW),
+    }}
+
+
+def ok_account(tot=TOT_KRW):
+    return {'rt_cd': '0', 'output2': {
+        'tot_asst_amt': str(tot), 'ovrs_stck_evlu_amt1': str(STOCK_KRW),
+        'tot_dncl_amt': str(KRW_CASH), 'frcr_evlu_tota': str(FRCR_CASH),
+    }}
+
+
+def ok_margin(exrt=FX):  # exrt 는 문자열도 받는다 (망가진 값 재현용)
+    return {'rt_cd': '0', 'output': [
+        {'natn_name': '미국', 'crcy_cd': 'USD', 'bass_exrt': str(exrt)},
+        {'natn_name': '영국', 'crcy_cd': 'GBP', 'bass_exrt': '0.00'},
+    ]}
+
+
+def fake_get(table):
+    """tr_id → 응답. 표에 없으면 빈 dict(조회 실패)."""
+    def _g(path, tr_id, params, retries=3):
+        v = table.get(tr_id, {})
+        return v() if callable(v) else v
+    return _g
+
+
+def with_api(table, fn):
+    old_get, old_log = ex._get, ex.log
+    try:
+        ex._get = fake_get(table)
+        ex.log = lambda *a, **k: None
+        return fn(ex.KISAPI(dry_run=True))
+    finally:
+        ex._get, ex.log = old_get, old_log
+
+
+def raises_unavailable(table):
+    def _run(api):
+        try:
+            api.get_balance()
+        except ex.BalanceUnavailable as e:
+            return str(e)
+        return None
+    return with_api(table, _run)
+
+
+FULL = {'TTTS3012R': ok_balance(), 'CTRP6504R': ok_present(),
+        'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()}
+
+
+print("[1] 정상 응답 — 총자산이 앱의 계좌 총자산과 같다 (미결제 매수만큼 깎이지 않는다)")
+holdings, total_usd, exrt = with_api(FULL, lambda api: api.get_balance())
+check("보유 수량", holdings == {'BIL': 1534, 'PDBC': 7041}, str(holdings))
+check("환율 1324.6", abs(exrt - FX) < 1e-9, str(exrt))
+check("총자산 = tot_asst_amt / 환율", abs(total_usd - TOT_KRW / FX) < 1e-6,
+      f'{total_usd:,.2f} vs {TOT_KRW / FX:,.2f}')
+check("미결제 매수를 또 빼지 않는다",
+      abs(total_usd - (TOT_KRW - USTL_BUY) / FX) > 17000,
+      f'{total_usd:,.0f} vs 옛 식 {(TOT_KRW - USTL_BUY) / FX:,.0f}')
+check("옛 식과의 차이가 실측 <금액>원과 같다",
+      abs((total_usd - (TOT_KRW - USTL_BUY) / FX) * FX - USTL_BUY) < 1.0,
+      f'{(total_usd - (TOT_KRW - USTL_BUY) / FX) * FX:,.0f}')
+
+print("\n[2] 2026-10-21 재현 — 환율 두 곳 다 없으면 멈춘다")
+msg = raises_unavailable({'TTTS3012R': ok_balance(),
+                          'CTRP6504R': ok_present(rows=[]),
+                          'CTRP6548R': ok_account(), 'TTTC2101R': {}})
+check("BalanceUnavailable", msg is not None and '환율' in msg, str(msg))
+
+print("\n[3] 체결기준현재잔고가 통째로 비면 멈춘다 (현금 0 으로 읽지 않는다)")
+msg = raises_unavailable({'TTTS3012R': ok_balance(), 'CTRP6504R': {},
+                          'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()})
+check("BalanceUnavailable", msg is not None, str(msg))
+
+print("\n[4] 환율은 멀쩡한데 예수금 칸이 없으면 멈춘다")
+bad = ok_present()
+del bad['output3']['tot_dncl_amt']
+msg = raises_unavailable({'TTTS3012R': ok_balance(), 'CTRP6504R': bad,
+                          'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()})
+check("BalanceUnavailable", msg is not None and '예수금' in msg, str(msg))
+
+print("\n[5] 해외주식 잔고 조회가 실패하면 멈춘다 (빈 보유로 바꾸지 않는다)")
+msg = raises_unavailable({'TTTS3012R': {}, 'CTRP6504R': ok_present(),
+                          'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()})
+check("BalanceUnavailable", msg is not None, str(msg))
+
+print("\n[6] 투자계좌자산현황이 실패하면 멈춘다 (live 평가로 조용히 대체하지 않는다)")
+msg = raises_unavailable({'TTTS3012R': ok_balance(), 'CTRP6504R': ok_present(),
+                          'CTRP6548R': {}, 'TTTC2101R': ok_margin()})
+check("BalanceUnavailable", msg is not None, str(msg))
+
+print("\n[7] 한쪽 환율만 멀쩡하면 그걸 쓴다 — 다른 쪽 실패로 버리지 않는다")
+h, t, e = with_api({'TTTS3012R': ok_balance(), 'CTRP6504R': ok_present(rows=[]),
+                    'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()},
+                   lambda api: api.get_balance())
+check("해외증거금의 환율을 쓴다", abs(e - FX) < 1e-9, str(e))
+check("총자산 정상", abs(t - TOT_KRW / FX) < 1e-6, str(t))
+
+print("\n[8] 환율이 NaN·무한대·문자열이면 멈춘다")
+for label, v in (('NaN', 'nan'), ('inf', 'inf'), ('문자열', 'x'), ('0', '0'), ('음수', '-1')):
+    msg = raises_unavailable({'TTTS3012R': ok_balance(),
+                              'CTRP6504R': ok_present(rows=[{'crcy_cd': 'USD',
+                                                             'frst_bltn_exrt': v}]),
+                              'CTRP6548R': ok_account(),
+                              'TTTC2101R': ok_margin(exrt=v)})
+    check(f"BalanceUnavailable ({label})", msg is not None, str(msg))
+
+print("\n[9] 달러가 첫 행이 아니어도 달러 행을 고른다")
+h, t, e = with_api({'TTTS3012R': ok_balance(),
+                    'CTRP6504R': ok_present(rows=[{'crcy_cd': 'HKD', 'frst_bltn_exrt': '169.02'},
+                                                  {'crcy_cd': 'USD', 'frst_bltn_exrt': str(FX)}]),
+                    'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()},
+                   lambda api: api.get_balance())
+check("환율 1324.6", abs(e - FX) < 1e-9, str(e))
+
+print("\n[10] 실제 현금 0, 정상적인 빈 보유는 결측이 아니다")
+h, t, e = with_api({'TTTS3012R': {'rt_cd': '0', 'output1': []},
+                    'CTRP6504R': ok_present(krw_cash=0, frcr_cash=0, ustl_buy=0),
+                    'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()},
+                   lambda api: api.get_balance())
+check("빈 보유 통과", h == {}, str(h))
+check("총자산 정상", abs(t - TOT_KRW / FX) < 1e-6, str(t))
+h2, t2, _ = with_api({'TTTS3012R': ok_balance(),
+                      'CTRP6504R': ok_present(krw_cash=0, frcr_cash=0, ustl_buy=0),
+                      'CTRP6548R': ok_account(tot=STOCK_KRW), 'TTTC2101R': ok_margin()},
+                     lambda api: api.get_balance())
+check("현금 0 계좌 통과", abs(t2 - STOCK_KRW / FX) < 1e-6, str(t2))
+
+print("\n[11] 외화RP 스윕분이 있어도 총자산에 들어온다")
+_rp = 50000000.0
+h3, t3, _ = with_api({'TTTS3012R': ok_balance(), 'CTRP6504R': ok_present(),
+                      'CTRP6548R': ok_account(tot=TOT_KRW + _rp), 'TTTC2101R': ok_margin()},
+                     lambda api: api.get_balance())
+check("RP 포함", abs(t3 - (TOT_KRW + _rp) / FX) < 1e-6, str(t3))
+
+
+# ─── 회차 수준: 조회 불가면 주문 0건, 상태 안 바꿈 ───
+
+class _FrozenDatetime(_dt.datetime):
+    _today = _dt.date(2026, 10, 21)
+
+    @classmethod
+    def now(cls, tz=None):
+        return _dt.datetime.combine(cls._today, _dt.time(23, 35))
+
+
+class RealBalanceAPI(ex.KISAPI):
+    """get_balance 는 진짜를 쓰고 주문만 가로챈다."""
+
+    def __init__(self, *a, **k):
+        super().__init__(dry_run=False)
+        self.orders = []
+        RealBalanceAPI.last = self
+
+    def cancel_all_pending(self):
+        return True
+
+    def get_current_price(self, ticker):
+        return {'BIL': 91.60, 'PDBC': 20.02}.get(ticker, 100.0)
+
+    def get_max_buy_qty(self, ticker, price):
+        return 999999
+
+    def place_order(self, ticker, qty, price, side='buy'):
+        self.orders.append((side, ticker, qty))
+        return True
+
+
+def run_cycle(table, state_obj, signal):
+    alerts, saved = [], {}
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, 'kis_trade_state.json')
+    with open(path, 'w') as f:
+        json.dump(state_obj, f)
+    keys = ('datetime', 'KISAPI', '_compute_signal_v25', 'send_telegram', 'save_json',
+            'TRADE_STATE_FILE', 'time', '_read_alloc_transit_cap_ratio', '_get', 'log')
+    old = {k: getattr(ex, k) for k in keys}
+    try:
+        ex.datetime = _FrozenDatetime
+        ex.KISAPI = RealBalanceAPI
+        ex._compute_signal_v25 = lambda st: signal
+        ex.send_telegram = lambda m: alerts.append(m)
+        ex.save_json = lambda p, d, default=None: saved.update({'state': d})
+        ex.TRADE_STATE_FILE = path
+        ex.time = types.SimpleNamespace(sleep=lambda s: None, time=lambda: 0.0)
+        ex._read_alloc_transit_cap_ratio = lambda sleeve: None
+        ex._get = fake_get(table)
+        ex.log = lambda *a, **k: None
+        RealBalanceAPI.last = None
+        try:
+            ex.run_once(dry_run=False)
+        except ex.BalanceUnavailable as e:
+            alerts.append(f'raised:{e}')
+    finally:
+        for k, v in old.items():
+            setattr(ex, k, v)
+    api = getattr(RealBalanceAPI, 'last', None)
+    return (api.orders if api else []), alerts, saved.get('state')
+
+
+def _signal():
+    stamp = _FrozenDatetime.now().strftime('%Y-%m-%d %H:%M')
+    return {'stock': {'risk_on': False,
+                      'offense_picks': ['SPY', 'QQQ', 'VEA'],
+                      'offense_weights': {'SPY': 1 / 3, 'QQQ': 1 / 3, 'VEA': 1 / 3},
+                      'defense_picks': ['BIL', 'PDBC'],
+                      'defense_weights': {'BIL': 0.5, 'PDBC': 0.5}},
+            'meta': {'strategy_version': 'V25', 'updated_at': stamp, 'canary': {}}}
+
+
+def _state(today=_dt.date(2026, 10, 21)):
+    G, P = ex.SNAP_STAGGER_DAYS, ex.SNAP_PERIOD_DAYS
+    return {'prev_risk_on': False,
+            'snapshots': {str(i): {'picks': ['BIL', 'PDBC'],
+                                   'weights': {'BIL': 0.5, 'PDBC': 0.5},
+                                   'last_rebal_date': (today - _dt.timedelta(days=P)).isoformat(),
+                                   'next_rebal_date': (today + _dt.timedelta(days=30 + i * G)).isoformat()}
+                          for i in range(ex.N_SNAPS)}}
+
+
+print("\n[12] 양성 대조 — 정상 조회면 회차가 돈다 (드리프트는 안 터진다)")
+orders, alerts, saved = run_cycle(FULL, _state(), _signal())
+check("환율 실패 알림 없음", not any('조회가 안 돼' in a for a in alerts), str(alerts))
+check("헛매도 없음", [o for o in orders if o[0] == 'sell'] == [], str(orders))
+
+print("\n[13] 2026-10-21 재현 — 환율이 비면 주문 0건, 상태를 안 바꾼다")
+broken = {'TTTS3012R': ok_balance(), 'CTRP6504R': ok_present(rows=[]),
+          'CTRP6548R': ok_account(), 'TTTC2101R': {}}
+orders, alerts, saved = run_cycle(broken, _state(), _signal())
+check("주문 0건", orders == [], str(orders))
+check("쉰다고 알린다", any('이번 회차를 쉰다' in a for a in alerts), str(alerts))
+check("상태파일을 안 바꾼다", saved is None, str(saved))
+
+print("\n[14] 체결기준현재잔고가 통째로 빈 회차 — 주문 0건")
+orders, alerts, saved = run_cycle({'TTTS3012R': ok_balance(), 'CTRP6504R': {},
+                                   'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()},
+                                  _state(), _signal())
+check("주문 0건", orders == [], str(orders))
+check("상태파일을 안 바꾼다", saved is None, str(saved))
+
+print("\n[15] 조회가 비어도 드리프트를 '0' 으로 읽어 발화시키지 않는다")
+st = _state()
+st['rebalancing_needed'] = False
+orders, alerts, saved = run_cycle(broken, st, _signal())
+check("리필·매도 없음", orders == [], str(orders))
+
+print()
+if FAILED:
+    print(f"❌ {len(FAILED)}건 실패: {FAILED}")
+    sys.exit(1)
+print("✅ 전부 통과")

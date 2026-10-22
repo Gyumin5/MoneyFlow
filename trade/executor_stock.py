@@ -231,18 +231,39 @@ def _headers(tr_id: str) -> dict:
 
 
 def _get(path: str, tr_id: str, params: dict, retries=3) -> dict:
+    """성공({'rt_cd': '0', ...}) 또는 {} 를 돌려준다. 실패 사유는 로그에 남긴다.
+
+    빈 dict 는 "조회가 안 됐다"는 뜻이지 "값이 0"이라는 뜻이 아니다. 둘을 같게 읽으면
+    현금이 사라진 채로 매매가 돈다(2026-10-12·10-21 헛매매).
+    """
+    last = ''
     for i in range(retries):
         try:
             resp = requests.get(f'{BASE_URL}{path}', headers=_headers(tr_id), params=params, timeout=15)
             data = resp.json()
             if data.get('rt_cd') == '0':
                 return data
-            if i < retries - 1:
-                time.sleep(1)
+            last = (f"rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} "
+                    f"msg={(data.get('msg1') or '').strip()[:80]}")
         except Exception as e:
-            if i < retries - 1:
-                time.sleep(1)
+            last = f'{type(e).__name__}: {str(e)[:80]}'
+        if i < retries - 1:
+            time.sleep(1)
+    log(f'  ⚠️ 조회 실패 {tr_id} ({retries}회): {last}')
     return {}
+
+
+class BalanceUnavailable(RuntimeError):
+    """계좌 조회가 불완전하다. 없는 값을 0 으로 읽지 않고 그 회차를 멈추기 위한 신호."""
+
+
+def _finite(v) -> float:
+    """숫자로 못 읽거나 유한하지 않으면 nan. 정상적인 0 과 결측을 섞지 않으려는 것."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return float('nan')
+    return f if math.isfinite(f) else float('nan')
 
 
 def _post(path: str, tr_id: str, body: dict, retries=2) -> dict:
@@ -276,12 +297,22 @@ class KISAPI:
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
         self._balance_price_cache: Dict[str, float] = {}
-        # 결제기준(앱/CTRP6548R) 주식평가 / live 주식평가 비율. get_balance 에서 갱신.
-        # 평가·드리프트·목표 사이징을 결제기준(전일종가, HTML/앱 일치)으로 통일하는 데 사용.
-        self._settle_scale: float = 1.0
+        # 마지막으로 성공한 계좌 조회의 자산 구성(원화). 로그·보고용이고 매매 판단에 안 쓴다.
+        self._last_asset: Dict[str, float] = {}
 
     def get_balance(self) -> Tuple[Dict[str, int], float, float]:
-        """잔고 → (holdings {ticker: qty}, total_usd, exchange_rate)."""
+        """잔고 → (holdings {ticker: qty}, total_usd, exchange_rate).
+
+        총자산은 투자계좌자산현황(CTRP6548R)의 tot_asst_amt 다 — 앱의 "계좌 총자산"과
+        같은 값이고, 해외주식 평가 + 원화 예수금 + 외화 예수금 + 외화RP 를 모두 담는다.
+        보유평가(해외주식 잔고)와 예수금을 따로 더해 만들지 않는다. 그렇게 만들면
+        미결제 구간에서 한쪽은 아직 주식에 없고 한쪽은 이미 현금에서 빠져 총자산이
+        미결제 매수대금만큼 작아진다(2026-10-23 실측 <금액>원, 계좌의 5.9%).
+
+        조회가 하나라도 비면 BalanceUnavailable 을 올린다. 없는 값을 0 으로 읽으면
+        현금이 사라져 드리프트가 현금버퍼 크기만큼 발화하고 멀쩡한 주식을 판다
+        (2026-10-12·10-21, 체결액 약 <금액>).
+        """
         data = _get('/uapi/overseas-stock/v1/trading/inquire-balance', 'TTTS3012R', {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
             'AFHR_FLPR_YN': 'N', 'OFL_YN': '', 'INQR_DVSN': '01',
@@ -289,9 +320,11 @@ class KISAPI:
             'FNCG_AMT_AUTO_RDPT_YN': 'N', 'OVRS_EXCG_CD': 'NASD', 'TR_CRCY_CD': 'USD',
             'CTX_AREA_FK200': '', 'CTX_AREA_NK200': '',
         })
+        if data.get('rt_cd') != '0':
+            raise BalanceUnavailable('해외주식 잔고(TTTS3012R) 조회 실패')
         holdings = {}
         holdings_usd = 0.0
-        for item in data.get('output1', []):
+        for item in data.get('output1', []) or []:
             ticker = item.get('ovrs_pdno', '')
             qty = int(float(item.get('ovrs_cblc_qty', 0)))
             eval_amt = float(item.get('ovrs_stck_evlu_amt', 0))
@@ -305,115 +338,81 @@ class KISAPI:
                 except Exception:
                     pass
 
-        # 환율 — API에서 조회, 실패 시 state 캐시 사용, 캐시도 없으면 None
-        exrt = 0.0
-        fm_data = _get('/uapi/overseas-stock/v1/trading/foreign-margin', 'TTTC2101R', {
-            'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-            'OVRS_EXCG_CD': 'NASD', 'CRCY_CD': 'USD',
-        })
-        if fm_data.get('output'):
-            try:
-                exrt = float(fm_data['output'].get('bass_exrt', 0))
-            except Exception:
-                pass
-
-        # 계좌 전체 자산(KRW 기준) + USD 예수금 fallback
-        total_usd = 0.0
-        cash_usd = 0.0
+        # 체결기준현재잔고 — 환율과 예수금·미결제의 출처. 비면 그 회차를 멈춘다.
         bp_data = _get('/uapi/overseas-stock/v1/trading/inquire-present-balance', 'CTRP6504R', {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
             'WCRC_FRCR_DVSN_CD': '02', 'NATN_CD': '840',
             'TR_MKET_CD': '00', 'INQR_DVSN_CD': '00',
         })
-        try:
-            output2 = bp_data.get('output2', [])
-            if output2 and isinstance(output2[0], dict):
-                exrt2 = float(output2[0].get('frst_bltn_exrt', 0))
-                if exrt2 > 0:
-                    exrt = exrt2
-        except Exception:
-            pass
-        output2 = bp_data.get('output2', [])
-        for item in output2:
+        if bp_data.get('rt_cd') != '0':
+            raise BalanceUnavailable('체결기준현재잔고(CTRP6504R) 조회 실패')
+
+        # 환율 — 달러 행에서 먼저 찾고, 없으면 해외증거금에서 찾는다. 한쪽 실패로
+        # 다른 쪽의 멀쩡한 값을 버리지 않는다. 둘 다 없으면 멈춘다.
+        exrt = float('nan')
+        for item in bp_data.get('output2') or []:
             if isinstance(item, dict) and item.get('crcy_cd') == 'USD':
-                try:
-                    cash_usd = float(item.get('frcr_evlu_amt2', 0)) / exrt if exrt > 0 else 0.0
-                except Exception:
-                    pass
-
-        # 실예수금(외화예수금 + 원화예수금) — present-balance output3.
-        # 외화RP 자동매매 해지 상태 가정. (RP 재활성화 시 RP 스윕분 누락 →
-        #  CTRP6548R(투자계좌자산현황) tot_asst_amt 기반으로 전환 필요)
-        real_cash_krw = 0.0
-        _o3 = {}
-        try:
-            _o3 = bp_data.get('output3', {}) or {}
-            real_cash_krw = (float(_o3.get('frcr_evlu_tota', 0) or 0)
-                             + float(_o3.get('tot_dncl_amt', 0) or 0))
-        except Exception:
-            real_cash_krw = 0.0
-        if real_cash_krw > 0 and exrt > 0:
-            cash_usd = real_cash_krw / exrt
-
-        # 미결제 매도/매수 순대금 합산 (T+1 결제 전 in-flight 현금).
-        # BT 는 매도대금 즉시 재사용 가정 → 사이징 현금도 실효 현금 기준이어야 정합.
-        # (2026-06-12 도입. 06-11 이중 트림 사고: 미결제 $10.3k 를 현금에서 빼고 봐서
-        #  7% 버퍼 매도를 이틀 연속 반복 → 현금 ~10.5% 과적. 미결제 0 이면 동작 불변.)
-        try:
-            _ustl_net_krw = (float(_o3.get('ustl_sll_amt_smtl', 0) or 0)
-                             - float(_o3.get('ustl_buy_amt_smtl', 0) or 0))
-        except Exception:
-            _ustl_net_krw = 0.0
-        if exrt > 0 and _ustl_net_krw != 0:
-            cash_usd += _ustl_net_krw / exrt
-
-        # 결제기준(앱/CTRP6548R) 주식 평가 — 표시(HTML/리포트)·백테스트(전일종가 사이징)와
-        # 동일 기준으로 통일(2026-06-04). 주문 수량 산정엔 현재가를 쓰되, 총자산/드리프트/
-        # 목표 사이징은 결제기준. _settle_scale = 결제기준주식 / live주식 (per-ticker 환산용).
-        settle_stock_usd = 0.0
-        self._settle_scale = 1.0
-        try:
-            _ab = _get('/uapi/domestic-stock/v1/trading/inquire-account-balance', 'CTRP6548R', {
+                exrt = _finite(item.get('frst_bltn_exrt'))
+                break
+        if not (exrt > 0):
+            fm_data = _get('/uapi/overseas-stock/v1/trading/foreign-margin', 'TTTC2101R', {
                 'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-                'INQR_DVSN_1': '', 'BSPR_BF_DT_APLY_YN': '',
+                'OVRS_EXCG_CD': 'NASD', 'CRCY_CD': 'USD',
             })
-            _o2 = _ab.get('output2', {})
-            if isinstance(_o2, list):
-                _o2 = _o2[0] if _o2 else {}
-            _settle_stock_krw = float(_o2.get('ovrs_stck_evlu_amt1', 0) or 0)
-            if _settle_stock_krw > 0 and exrt > 0:
-                settle_stock_usd = _settle_stock_krw / exrt
-                if holdings_usd > 0:
-                    self._settle_scale = settle_stock_usd / holdings_usd
-        except Exception:
-            settle_stock_usd = 0.0
+            _fm_out = fm_data.get('output')
+            _fm_rows = _fm_out if isinstance(_fm_out, list) else [_fm_out] if isinstance(_fm_out, dict) else []
+            for item in _fm_rows:
+                if isinstance(item, dict) and item.get('crcy_cd') == 'USD':
+                    exrt = _finite(item.get('bass_exrt'))
+                    if exrt > 0:
+                        break
+        if not (exrt > 0):
+            raise BalanceUnavailable('환율을 체결기준현재잔고·해외증거금 어느 쪽에서도 못 받았다')
 
-        # 총자산 = 결제기준 주식 + 실예수금 (= 앱 계좌총자산). CTRP6548R 실패 시 live fallback.
-        if settle_stock_usd > 0:
-            total_usd = settle_stock_usd + cash_usd
-        else:
-            total_usd = holdings_usd + cash_usd
-        if total_usd <= 0:
-            try:
-                total_krw = float(bp_data.get('output3', {}).get('tot_asst_amt', 0))
-                if total_krw > 0 and exrt > 0:
-                    total_usd = total_krw / exrt
-            except Exception:
-                total_usd = 0.0
+        # 예수금·미결제 — 보고용. 칸이 통째로 없으면 조회가 빈 것이므로 멈춘다.
+        _o3 = bp_data.get('output3')
+        if not isinstance(_o3, dict) or 'tot_dncl_amt' not in _o3 or 'frcr_evlu_tota' not in _o3:
+            raise BalanceUnavailable('예수금 칸(CTRP6504R output3)이 없다')
+        _krw_cash = _finite(_o3.get('tot_dncl_amt'))
+        _frcr_cash = _finite(_o3.get('frcr_evlu_tota'))
+        _ustl_sll = _finite(_o3.get('ustl_sll_amt_smtl'))
+        _ustl_buy = _finite(_o3.get('ustl_buy_amt_smtl'))
+        if math.isnan(_krw_cash) or math.isnan(_frcr_cash):
+            raise BalanceUnavailable('예수금 값을 숫자로 못 읽었다')
 
-        # 환율 캐싱: 유효한 환율이면 state에 저장, 없으면 캐시에서 복원
-        if exrt > 0:
-            _state = load_json(TRADE_STATE_FILE)
-            _state['last_exchange_rate'] = exrt
-            save_json(TRADE_STATE_FILE, _state)
-        elif exrt <= 0:
-            _state = load_json(TRADE_STATE_FILE)
-            cached = _state.get('last_exchange_rate', 0)
-            if cached > 0:
-                exrt = cached
-                log(f'  ⚠️ 환율 API 실패 — 캐시 사용: {exrt}')
-            else:
-                log('  ⚠️ 환율 API 실패 + 캐시 없음')
+        # 계좌 총자산 — 앱의 "계좌 총자산"과 같은 값. 외화RP 스윕분도 이 칸에만 들어온다.
+        _ab = _get('/uapi/domestic-stock/v1/trading/inquire-account-balance', 'CTRP6548R', {
+            'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
+            'INQR_DVSN_1': '', 'BSPR_BF_DT_APLY_YN': '',
+        })
+        if _ab.get('rt_cd') != '0':
+            raise BalanceUnavailable('투자계좌자산현황(CTRP6548R) 조회 실패')
+        _o2 = _ab.get('output2', {})
+        if isinstance(_o2, list):
+            _o2 = _o2[0] if _o2 else {}
+        if not isinstance(_o2, dict):
+            raise BalanceUnavailable('투자계좌자산현황 output2 가 없다')
+        _tot_krw = _finite(_o2.get('tot_asst_amt'))
+        if not (_tot_krw > 0):
+            raise BalanceUnavailable('계좌 총자산(tot_asst_amt)을 못 읽었다')
+        _stock_krw = _finite(_o2.get('ovrs_stck_evlu_amt1'))
+        total_usd = _tot_krw / exrt
+
+        # 외화RP 등 기타 = 총자산 − 주식 − 예수금. 이름 있는 칸으로만 도출한다.
+        _rp_krw = _tot_krw - _stock_krw - _frcr_cash - _krw_cash if not math.isnan(_stock_krw) else float('nan')
+        self._last_asset = {
+            'exrt': exrt,
+            'total_krw': _tot_krw,
+            'settle_stock_krw': _stock_krw,
+            'krw_cash_krw': _krw_cash,
+            'frcr_cash_krw': _frcr_cash,
+            'rp_krw': _rp_krw,
+            'ustl_sll_krw': _ustl_sll,
+            'ustl_buy_krw': _ustl_buy,
+            'live_stock_usd': holdings_usd,
+        }
+        log(f'  계좌 총자산 {_tot_krw:,.0f}원 = 주식 {_stock_krw:,.0f} + 원화예수금 {_krw_cash:,.0f}'
+            f' + 외화예수금 {_frcr_cash:,.0f} + 기타 {_rp_krw:,.0f} (환율 {exrt:,.2f}, ${total_usd:,.0f})')
 
         return holdings, total_usd, exrt
 
@@ -438,17 +437,9 @@ class KISAPI:
             log(f'  {ticker}: 잔고 캐시 가격 사용 ${cached:.2f}')
             return cached
 
-        # 3차: 잔고 재조회로 캐시 갱신
-        try:
-            self.get_balance()
-            cached = self._balance_price_cache.get(ticker, 0)
-            if cached > 0:
-                log(f'  {ticker}: 잔고 재조회 가격 사용 ${cached:.2f}')
-                return cached
-        except Exception:
-            pass
-
-        # 4차: KIS 기간별시세 종가
+        # 3차: KIS 기간별시세 종가
+        # (잔고 재조회 단계는 뺐다 — 주문 루프 도중 계좌 조회가 실패하면 그 자리에서
+        #  멈춰 이미 낸 주문의 뒤처리를 못 하고, 성공해도 평가 기준이 루프 중간에 바뀐다.)
         try:
             bymd = datetime.now().strftime('%Y%m%d')
             data = _get('/uapi/overseas-price/v1/quotations/dailyprice', 'HHDFS76240000', {
@@ -1100,28 +1091,15 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     if cash_buffer is None:
         cash_buffer = CASH_BUFFER_DEFAULT
     holdings, total_usd, exrt = api.get_balance()
-    if total_usd <= 0:
-        log('  잔고 없음')
-        send_telegram('⚠️ V25 stock: KIS 잔고조회 실패(또는 0) — 오늘 매매 SKIP. 다음 주기에 재시도됩니다.')
-        return {
-            'holdings': {},
-            'total_usd': 0.0,
-            'exchange_rate': exrt,
-            'sells': [],
-            'buys': [],
-            'max_diff': None,
-            'completed': False,
-        }
 
     # alloc_transit cap 적용
     pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
 
-    # 현재 비중 계산 — 결제기준 평가(_settle_scale)로 total_usd(결제기준)와 일관.
-    _scale = getattr(api, '_settle_scale', 1.0) or 1.0
+    # 현재 비중 계산 — 보유 수량 × 현재가. 총자산도 같은 시점 기준이라 둘이 일관된다.
     current_values = {}
     for ticker, qty in holdings.items():
         price = api.get_current_price(ticker)
-        current_values[ticker] = (qty * price * _scale) if price else 0
+        current_values[ticker] = (qty * price) if price else 0
         log(f'    현재 {ticker}: ${current_values[ticker]:,.0f} ({(current_values[ticker] / total_usd):.1%})')
 
     # 매도/매수 리스트
@@ -1201,22 +1179,28 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         time.sleep(ORDER_WAIT_SEC)
         api.cancel_all_pending()
 
-    # 목표 달성 확인
-    holdings2, total2, _ = api.get_balance()
+    # 목표 달성 확인 — 여기서 계좌 조회가 실패하면 주문은 이미 나갔다. 되돌리거나
+    # 다시 내지 않고 "완료 판정 불가"로 남긴다(rebalancing_needed 유지 → 다음 회차가
+    # 그때의 실제 잔고로 델타를 다시 계산한다).
+    try:
+        holdings2, total2, _ = api.get_balance()
+    except BalanceUnavailable as _e:
+        log(f'  ⚠️ 주문 후 잔고 조회 실패 — 체결 확인 불가: {_e}')
+        send_telegram(f'⚠️ 주식: 주문은 냈는데 잔고 조회가 안 된다 — 체결 확인 불가 ({_e})')
+        holdings2, total2 = {}, 0.0
     if total2 > 0:
         max_diff = 0
         # alloc_transit cap 적용 시 denom 도 capped 기준
         denom_for_diff = min(total2, effective_pv_usd) if effective_pv_usd is not None else total2
-        _scale2 = getattr(api, '_settle_scale', 1.0) or 1.0
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
             price = api.get_current_price(ticker)
-            # 결제기준 평가(_scale2) + cash buffer 반영 목표로 비교.
+            # cash buffer 반영 목표로 비교.
             # merge_tranches target 은 risky 합=1.0(버퍼 전)이라 실효 목표는 ×(1-buffer).
             # (미반영 시 현금이 정상적으로 buffer% 여도 max_diff 가 buffer 만큼 떠서
             #  rebalancing_needed 가 영구히 안 꺼지는 latch 버그 발생 — 2026-06-05 수정)
-            current_w = (holdings2.get(ticker, 0) * price * _scale2 / denom_for_diff) if price > 0 else 0
+            current_w = (holdings2.get(ticker, 0) * price / denom_for_diff) if price > 0 else 0
             target_eff = target_w * (1 - cash_buffer)
             max_diff = max(max_diff, abs(target_eff - current_w))
         if max_diff < REBALANCE_TOLERANCE and not failed_orders:
@@ -1250,6 +1234,29 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 
 
 # ═══ run_once ═══
+
+BALANCE_RETRY_ATTEMPTS = 3   # 계좌 조회를 몇 번까지 다시 볼까
+BALANCE_RETRY_WAIT_SEC = 30  # 다시 보기 전에 쉬는 시간
+
+
+def _read_balance_or_skip(api: 'KISAPI'):
+    """계좌 조회를 몇 번 다시 본 뒤에도 안 되면 BalanceUnavailable 을 그대로 올린다.
+
+    실패가 일시적인 것이 실측됐다 — 2026-10-21 23:35 회차는 두 번 실패하고 18초 뒤
+    세 번째에 성공했다. 그 회차는 실패한 값으로 매매를 해버렸다.
+    """
+    last = None
+    for attempt in range(BALANCE_RETRY_ATTEMPTS):
+        try:
+            return api.get_balance()
+        except BalanceUnavailable as e:
+            last = e
+            if attempt < BALANCE_RETRY_ATTEMPTS - 1:
+                log(f'  ⏳ 계좌 조회 실패({attempt + 1}/{BALANCE_RETRY_ATTEMPTS}) — '
+                    f'{BALANCE_RETRY_WAIT_SEC}초 쉬고 다시 본다: {e}')
+                time.sleep(BALANCE_RETRY_WAIT_SEC)
+    raise last if last else BalanceUnavailable('계좌 조회 실패')
+
 
 DATE_ALIGN_TOLERANCE_BD = 3  # 종목별 yfinance 지연 시 공통 기준일이 T-1 대비 최대 이만큼 과거여도 진행
 KIS_FILL_ENABLED = True      # 야후 지연 종목을 KIS 해외 일봉 종가로 채워 진짜 T-1 정렬 (False 면 공통일자 가드만)
@@ -1618,6 +1625,17 @@ def run_once(dry_run=False):
         log('주식 executor 완료 (stale signal)')
         return
 
+    # 2.5 계좌 조회 사전 확인 — 카나리 소비·앵커 전진·드리프트·리필보다 앞이다.
+    # 조회가 비면 그 회차는 쉰다. 상태를 저장하지 않으므로 다음 회차가 같은 자리에서 잇는다.
+    # 일시적 실패가 실측돼서(2026-10-21 두 번 실패하고 세 번째 성공) 조금 쉬었다 다시 본다.
+    try:
+        _ = _read_balance_or_skip(api)
+    except BalanceUnavailable as _e:
+        log(f'  ⛔ 계좌 조회 불가 — 이번 회차 매매를 건너뛴다: {_e}')
+        send_telegram(f'⛔ 주식: 계좌 조회가 안 돼 이번 회차를 쉰다 ({_e}). 다음 회차에 다시 본다.')
+        log('주식 executor 완료 (잔고 조회 불가)')
+        return
+
     # 3. 카나리 플립
     _flipped = check_canary_flip(signal, state)
 
@@ -1659,13 +1677,12 @@ def run_once(dry_run=False):
                     _pv_basis = _total_usd if _stock_cap_usd is None else _stock_cap_usd
                     if _stock_cap_usd is not None:
                         log(f'  🔴 alloc_transit cap_ratio={_stock_cap_ratio:.3f} → pv ${_total_usd:,.0f} → ${_pv_basis:,.0f}')
-                    # 결제기준 평가(_settle_scale)로 cur_w 계산 — HTML/리포트 drift 와 동일 기준.
-                    _scale = getattr(api, '_settle_scale', 1.0) or 1.0
+                    # 보유 수량 × 현재가 / 총자산. 총자산도 같은 시점 기준이다.
                     _cur_w = {}
                     for _tk, _qty in _holdings.items():
                         _px = api.get_current_price(_tk)
                         if _px and _qty > 0:
-                            _cur_w[_tk] = (_qty * _px * _scale) / _pv_basis
+                            _cur_w[_tk] = (_qty * _px) / _pv_basis
                     _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
                     if _cash_w > 0:
                         _cur_w['Cash'] = _cash_w
@@ -1693,6 +1710,8 @@ def run_once(dry_run=False):
                             if _swapped:
                                 _new_t = merge_tranches(state)
                                 log(f'  🔄 V25 drift-refill: snap picks → 그날 fresh 3-mom 으로 교체 (new target={_new_t})')
+        except BalanceUnavailable:
+            raise  # 계좌 조회 실패를 "드리프트 없음"으로 삼키지 않는다
         except Exception as _ex:
             log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
 
@@ -1701,6 +1720,8 @@ def run_once(dry_run=False):
         try:
             _, _t2, _ = api.get_balance()
             _stock_cap_usd = _t2 * _stock_cap_ratio
+        except BalanceUnavailable:
+            raise  # 조회 실패를 "상한 없음"으로 바꾸지 않는다
         except Exception:
             _stock_cap_usd = None
 
@@ -1728,7 +1749,11 @@ def run_once(dry_run=False):
         from datetime import timezone, timedelta
         kst_now = datetime.now(timezone(timedelta(hours=9)))
 
-        _bal_after = api.get_balance() if hasattr(api, 'get_balance') else None
+        try:
+            _bal_after = api.get_balance()
+        except BalanceUnavailable as _e:
+            log(f'  ⚠️ 보고용 잔고 조회 실패: {_e}')
+            _bal_after = None
         if isinstance(_bal_after, tuple) and len(_bal_after) >= 2:
             holdings_q, total_usd, fx = _bal_after[0], _bal_after[1], (_bal_after[2] if len(_bal_after) > 2 else 1.0)
         else:
@@ -1802,6 +1827,11 @@ if __name__ == '__main__':
         run_once(dry_run=args.dry_run)
         if not args.dry_run:
             hg.record_success()
+    except BalanceUnavailable as e:
+        # 조회 불능은 고장이 아니라 쉬는 것이다 — health streak 을 올리지 않는다.
+        log(f'⛔ 계좌 조회 불가로 이번 회차 종료: {e}')
+        send_telegram(f'⛔ 주식: 계좌 조회가 안 돼 이번 회차를 쉰다 ({e}). 다음 회차에 다시 본다.')
+        sys.exit(0)
     except UnknownExecutionError as e:
         import traceback
         log(f'⚠️ UNKNOWN_EXECUTION: {e}\n{traceback.format_exc()}')
