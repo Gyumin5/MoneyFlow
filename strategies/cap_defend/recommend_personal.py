@@ -249,6 +249,36 @@ def require_stock_prices(prices):
             f"{t}={d}" for t, d in sorted(basis.items()))
     return None
 
+
+def expire_stock_cache(reason):
+    """주식 입력이 불량한 회차가 남긴 가격 캐시를 '오늘 받은 것' 으로 두지 않는다.
+
+    Fresh Cache Check 는 파일을 받은 날이 오늘이면 내용이 며칠 전 것이어도 다시 안
+    받는다. 그래서 원천이 한때 낡은 값을 주고 몇 분 뒤 제대로 주더라도, 같은 날의
+    재시도가 그 낡은 파일을 그대로 다시 읽어 똑같이 멈춘다 — 2026-10-23 09:15 회차가
+    그랬고(일부 10-21, 일부 10-20) 5분 뒤 재시도도 같은 사유로 멈춰 사람이 손으로
+    시각을 되돌려야 풀렸다. 받은 날짜 표시만 하루 뒤로 미뤄 두면 재시도가 스스로
+    다시 받는다.
+
+    파일은 지우지 않는다. 다시 받는 것마저 실패하면 Final Safety Net 이 그 값을
+    낡은 자료로라도 쓸 수 있어야 한다.
+    """
+    need = sorted(set(OFFENSIVE_STOCK_UNIVERSE + DEFENSIVE_STOCK_UNIVERSE + CANARY_ASSETS))
+    stale = time.time() - 86400
+    done = []
+    for t in need:
+        fp = os.path.join(DATA_DIR, f"{t}.csv")
+        if not os.path.exists(fp):
+            continue
+        try:
+            os.utime(fp, (stale, stale))
+            done.append(t)
+        except Exception as e:
+            print(f"  ⚠️ {t}: 캐시 받은 날짜를 못 되돌렸다 ({type(e).__name__}: {e})")
+    print(f"  ↻ 주식 캐시 {len(done)}개의 받은 날짜를 하루 뒤로 미뤘다 — "
+          f"다음 회차가 원천에서 다시 받는다 ({reason})")
+    return done
+
 SIGNAL_STATE_FILE = os.path.join(".", "signal_state.json")
 APP_HOME = os.environ.get("MONEYFLOW_APP_HOME", os.getcwd())
 ASSETS_DB = os.environ.get("ASSETS_DB", os.path.join(APP_HOME, "assets.db"))
@@ -2438,6 +2468,7 @@ if __name__ == "__main__":
     stock_bad = require_stock_prices(prices)
     if stock_bad:
         print(f"\n🛑 주식 입력 불량으로 리포트를 중단한다 — {stock_bad}")
+        expire_stock_cache(stock_bad)
         try:
             send_telegram(f"🛑 개인 리포트 중단: 주식 입력 불량 — {stock_bad}")
         except Exception as _e:
