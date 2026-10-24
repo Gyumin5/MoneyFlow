@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timedelta
 
 _root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, os.path.join(_root, 'trade'))
@@ -44,16 +45,31 @@ class _FakeAPI:
 OK = ({'BIL': 1534, 'PDBC': 7041}, 304152.0, 1324.6)
 
 
-def run(seq):
-    """회차를 차례로 돌리고 (반환코드 목록, 보낸 알림 목록) 을 준다."""
-    tmp = tempfile.mkdtemp()
-    streak_path = os.path.join(tmp, 'streak.json')
+def run(seq, send_fails=0, streak_path=None, pre_state=None):
+    """회차를 차례로 돌리고 (반환코드 목록, 보낸 알림 목록) 을 준다.
+
+    send_fails: 앞에서 몇 번의 알림 전송을 실패시킬까 (전송 자체가 터지는 상황).
+    streak_path: 상태 파일 경로를 지정한다 (못 쓰는 경로를 주면 기록 실패가 된다).
+    pre_state: 회차 전에 상태 파일에 미리 적어 둘 내용.
+    """
+    if streak_path is None:
+        streak_path = os.path.join(tempfile.mkdtemp(), 'streak.json')
+    if pre_state is not None:
+        with open(streak_path, 'w') as f:
+            json.dump(pre_state, f)
     old = (w.STREAK_FILE, ex.KISAPI, ex.send_telegram, ex.log)
-    alerts, rcs = [], []
+    alerts, rcs, left = [], [], [send_fails]
+
+    def _send(m):
+        if left[0] > 0:
+            left[0] -= 1
+            raise RuntimeError('텔레그램 전송 실패')
+        alerts.append(m)
+
     try:
         w.STREAK_FILE = streak_path
         ex.KISAPI = _FakeAPI
-        ex.send_telegram = lambda m: alerts.append(m)
+        ex.send_telegram = _send
         _FakeAPI.seq = list(seq)
         for _ in seq:
             rcs.append(w.main())
@@ -110,6 +126,40 @@ print("\n[9] 조회 실패가 아닌 예외도 같은 규칙으로 센다")
 rcs, alerts, _ = run([RuntimeError('연결 끊김'), RuntimeError('연결 끊김')])
 check("알림 한 건", len(alerts) == 1, str(alerts))
 check("반환코드 1", rcs == [1, 1], str(rcs))
+
+print("\n[10] 알림 전송이 실패하면 알린 것으로 안 센다 — 다음 회차에 다시 보낸다")
+rcs, alerts, path = run([BAD, BAD, BAD], send_fails=1)
+check("알림 한 건이 뒤늦게 나간다", len(alerts) == 1, f'{len(alerts)}건 {alerts}')
+check("나간 알림은 3회 연속분", '3회 연속' in alerts[0] if alerts else False, str(alerts))
+with open(path) as f:
+    saved = json.load(f)
+check("보낸 뒤에야 alerted 가 선다", saved.get('alerted') is True, str(saved))
+
+print("\n[11] 못 보낸 장애는 해소도 안 알린다 — 사람이 그 장애를 모른다")
+rcs, alerts, _ = run([BAD, BAD, OK], send_fails=99)
+check("알림 없음", alerts == [], str(alerts))
+
+print("\n[12] 상태를 못 적으면 그 회차를 정상으로 보고하지 않는다")
+bad_path = os.path.join(tempfile.mkdtemp(), '없는폴더', 'streak.json')
+rcs, alerts, _ = run([BAD], streak_path=bad_path)
+check("반환코드 2", rcs == [2], str(rcs))
+
+print("\n[13] 관측이 오래 끊겼으면 옛 실패를 이어 세지 않는다")
+stale = {'fail_streak': 1, 'alerted': False,
+         'updated_at': (datetime.now() - timedelta(hours=w.GAP_RESET_H + 1)).strftime(w.TIME_FMT)}
+path = os.path.join(tempfile.mkdtemp(), 'streak.json')
+rcs, alerts, _ = run([BAD], streak_path=path, pre_state=stale)
+check("알림 없음 (이어 셌으면 2회째가 되어 알렸을 것)", alerts == [], str(alerts))
+with open(path) as f:
+    saved = json.load(f)
+check("연속 1부터 다시 센다", saved.get('fail_streak') == 1, str(saved))
+
+print("\n[14] 간격이 평소대로면 그대로 이어 센다")
+fresh = {'fail_streak': 1, 'alerted': False,
+         'updated_at': (datetime.now() - timedelta(hours=1)).strftime(w.TIME_FMT)}
+path = os.path.join(tempfile.mkdtemp(), 'streak.json')
+rcs, alerts, _ = run([BAD], streak_path=path, pre_state=fresh)
+check("알림 한 건", len(alerts) == 1, str(alerts))
 
 print()
 if FAILED:

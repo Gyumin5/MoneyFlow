@@ -196,6 +196,36 @@ h2, t2, _ = with_api({'TTTS3012R': ok_balance(),
                      lambda api: api.get_balance())
 check("현금 0 계좌 통과", abs(t2 - STOCK_KRW / FX) < 1e-6, str(t2))
 
+print("\n[10-1] 보유 목록 칸이 통째로 빠지면 빈 계좌로 읽지 않는다 (또 사면 안 된다)")
+for label, bal in (("키 자체가 없다", {'rt_cd': '0'}),
+                   ("null 로 왔다", {'rt_cd': '0', 'output1': None}),
+                   ("목록이 아니다", {'rt_cd': '0', 'output1': {'ovrs_pdno': 'BIL'}})):
+    why = raises_unavailable({'TTTS3012R': bal, 'CTRP6504R': ok_present(),
+                              'CTRP6548R': ok_account(), 'TTTC2101R': ok_margin()})
+    check(f"멈춘다 — {label}", why is not None and 'output1' in why, str(why))
+
+print("\n[10-2] 보유 행의 종목·수량이 비면 0 으로 메우지 않고 멈춘다")
+for label, row in (("종목이 없다", {'ovrs_cblc_qty': '1534', 'ovrs_stck_evlu_amt': '1000'}),
+                   ("수량 칸이 없다", {'ovrs_pdno': 'BIL', 'ovrs_stck_evlu_amt': '1000'}),
+                   ("수량이 빈 문자열", {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': '',
+                                   'ovrs_stck_evlu_amt': '1000'}),
+                   ("수량이 숫자가 아니다", {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': '-',
+                                      'ovrs_stck_evlu_amt': '1000'})):
+    why = raises_unavailable({'TTTS3012R': {'rt_cd': '0', 'output1': [row]},
+                              'CTRP6504R': ok_present(), 'CTRP6548R': ok_account(),
+                              'TTTC2101R': ok_margin()})
+    check(f"멈춘다 — {label}", why is not None, str(why))
+
+print("\n[10-3] 평가금액만 망가진 행은 멈추지 않는다 — 그 값은 보고용이고 매매 판단에 안 들어간다")
+h4, t4, _ = with_api({'TTTS3012R': {'rt_cd': '0', 'output1': [
+                          {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': '1534',
+                           'ovrs_stck_evlu_amt': ''}]},
+                      'CTRP6504R': ok_present(), 'CTRP6548R': ok_account(),
+                      'TTTC2101R': ok_margin()},
+                     lambda api: api.get_balance())
+check("보유 수량은 그대로 읽는다", h4 == {'BIL': 1534}, str(h4))
+check("총자산은 계좌 총자산 그대로", abs(t4 - TOT_KRW / FX) < 1e-6, str(t4))
+
 print("\n[11] 외화RP 스윕분이 있어도 총자산에 들어온다")
 _rp = 50000000.0
 h3, t3, _ = with_api({'TTTS3012R': ok_balance(), 'CTRP6504R': ok_present(),
@@ -313,6 +343,71 @@ st = _state()
 st['rebalancing_needed'] = False
 orders, alerts, saved = run_cycle(broken, st, _signal())
 check("리필·매도 없음", orders == [], str(orders))
+
+
+# ─── 토큰 캐시: 집행기와 밤 조회 감시가 같은 파일을 쓴다 ───
+
+class _FakeResp:
+    def __init__(self, token):
+        self._token = token
+
+    def json(self):
+        return {'access_token': self._token}
+
+
+def with_token_file(content, fn):
+    """토큰 캐시 파일을 주어진 내용으로 두고 돌린다. (결과, 발급 횟수, 파일내용)"""
+    import tempfile as _tf
+    d = _tf.mkdtemp()
+    path = os.path.join(d, '.kis_token.json')
+    if content is not None:
+        with open(path, 'w') as f:
+            f.write(content)
+    issued = []
+    old_file, old_post = ex.TOKEN_FILE, ex.requests.post
+
+    def _post(url, json=None, timeout=None):
+        issued.append(url)
+        return _FakeResp(f'새토큰{len(issued)}')
+
+    try:
+        ex.TOKEN_FILE = path
+        ex.requests.post = _post
+        out = fn()
+    finally:
+        ex.TOKEN_FILE, ex.requests.post = old_file, old_post
+    saved = open(path).read() if os.path.exists(path) else None
+    leftovers = [n for n in os.listdir(d) if '.tmp' in n]
+    return out, len(issued), saved, leftovers
+
+
+_future = (_dt.datetime.now() + _dt.timedelta(hours=10)).isoformat()
+_past = (_dt.datetime.now() - _dt.timedelta(hours=1)).isoformat()
+
+print("\n[16] 살아 있는 캐시는 다시 안 받는다 — 발급 한도를 괜히 쓰지 않는다")
+tok, n, _, _ = with_token_file(json.dumps({'token': '옛토큰', 'expires': _future}), ex._get_token)
+check("캐시 토큰을 쓴다", tok == '옛토큰', str(tok))
+check("발급 0회", n == 0, str(n))
+
+print("\n[17] 만료된 캐시는 새로 받는다")
+tok, n, saved, _ = with_token_file(json.dumps({'token': '옛토큰', 'expires': _past}), ex._get_token)
+check("새 토큰", tok == '새토큰1', str(tok))
+check("발급 1회", n == 1, str(n))
+check("캐시에 새 토큰이 적힌다",
+      saved is not None and json.loads(saved).get('token') == '새토큰1', str(saved))
+
+print("\n[18] 깨진 캐시 하나가 회차를 통째로 막지 않는다 (감시와 집행기가 같은 파일을 쓴다)")
+for label, body in (("쓰다 만 파일", '{"token": "반쪽'),
+                    ("빈 파일", ''),
+                    ("칸이 빠졌다", '{"token": "옛토큰"}'),
+                    ("시각이 망가졌다", json.dumps({'token': 'x', 'expires': '어제'}))):
+    tok, n, saved, _ = with_token_file(body, ex._get_token)
+    check(f"새로 받아 넘어간다 — {label}", tok == '새토큰1' and n == 1, f'{tok!r} 발급{n}')
+
+print("\n[19] 캐시는 원자적으로 쓴다 — 쓰다 만 파일이 남지 않는다")
+tok, n, saved, leftovers = with_token_file(None, ex._get_token)
+check("임시파일이 안 남는다", leftovers == [], str(leftovers))
+check("내용이 온전하다", json.loads(saved).get('token') == '새토큰1', str(saved))
 
 print()
 if FAILED:

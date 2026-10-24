@@ -17,7 +17,7 @@ Usage:
   python3 executor_stock.py --dry-run     # 주문 없이 로그만
 """
 
-import json, os, sys, time, argparse, logging, uuid, math
+import json, os, sys, time, argparse, logging, uuid, math, fcntl
 from datetime import datetime, timedelta
 from typing import Dict, Tuple
 
@@ -201,25 +201,69 @@ def send_telegram(msg: str):
 
 # ═══ KIS API (기존 auto_trade_kis.py에서 가져옴) ═══
 
-def _get_token() -> str:
-    """OAuth 토큰 (캐시 사용)."""
-    if os.path.exists(TOKEN_FILE):
+def _read_token_cache():
+    """캐시에 살아 있는 토큰이 있으면 그 문자열, 없거나 깨졌으면 None.
+
+    깨진 파일을 예외로 올리지 않는다 — 쓰다 만 캐시 하나가 그 뒤의 모든 회차를
+    통째로 막으면 안 된다. 못 읽으면 없는 것으로 보고 새로 받는다.
+    """
+    try:
         with open(TOKEN_FILE) as f:
             cached = json.load(f)
-        expires = datetime.fromisoformat(cached.get('expires', '2000-01-01'))
-        if datetime.now() < expires:
-            return cached['token']
+        token = cached['token']
+        expires = datetime.fromisoformat(cached['expires'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return token if (token and datetime.now() < expires) else None
 
-    resp = requests.post(f'{BASE_URL}/oauth2/tokenP', json={
-        'grant_type': 'client_credentials',
-        'appkey': KIS_APP_KEY, 'appsecret': KIS_APP_SECRET,
-    }, timeout=10)
-    data = resp.json()
-    token = data['access_token']
-    expires = datetime.now() + timedelta(hours=23)
-    with open(TOKEN_FILE, 'w') as f:
-        json.dump({'token': token, 'expires': expires.isoformat()}, f)
-    return token
+
+def _get_token() -> str:
+    """OAuth 토큰 (캐시 사용).
+
+    이 파일은 집행기와 밤 조회 감시가 같이 쓴다. 그래서 셋을 지킨다 —
+    ⑴ 잠금 안에서 캐시를 다시 본다(앞사람이 방금 받아 뒀으면 또 안 받는다),
+    ⑵ 임시파일에 쓰고 rename 한다(쓰다 만 파일이 안 남는다),
+    ⑶ 깨진 캐시는 없는 것으로 보고 다시 받는다.
+    잠금을 못 잡는 환경이면 잠금 없이 같은 순서로 진행한다 — 토큰을 한 번 더
+    받는 것이 회차를 못 도는 것보다 낫다.
+    """
+    token = _read_token_cache()
+    if token:
+        return token
+
+    lock_fd = None
+    try:
+        lock_fd = os.open(TOKEN_FILE + '.lock', os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except OSError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        lock_fd = None
+
+    try:
+        # 잠금을 기다리는 동안 다른 쪽이 받아 뒀을 수 있다.
+        token = _read_token_cache()
+        if token:
+            return token
+
+        resp = requests.post(f'{BASE_URL}/oauth2/tokenP', json={
+            'grant_type': 'client_credentials',
+            'appkey': KIS_APP_KEY, 'appsecret': KIS_APP_SECRET,
+        }, timeout=10)
+        data = resp.json()
+        token = data['access_token']
+        expires = datetime.now() + timedelta(hours=23)
+        tmp = f'{TOKEN_FILE}.tmp{os.getpid()}'
+        with open(tmp, 'w') as f:
+            json.dump({'token': token, 'expires': expires.isoformat()}, f)
+        os.replace(tmp, TOKEN_FILE)
+        return token
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
 
 
 def _headers(tr_id: str) -> dict:
@@ -322,12 +366,30 @@ class KISAPI:
         })
         if data.get('rt_cd') != '0':
             raise BalanceUnavailable('해외주식 잔고(TTTS3012R) 조회 실패')
+        # 보유 목록이 통째로 빠진 응답을 "들고 있는 게 없다" 로 읽으면 안 된다 — 그러면
+        # 이미 들고 있는 종목을 또 산다. 빈 계좌는 output1 이 빈 목록([])으로 온다.
+        _o1 = data.get('output1')
+        if not isinstance(_o1, list):
+            raise BalanceUnavailable(
+                f'해외주식 잔고(TTTS3012R) 보유 목록(output1)이 없다 (type={type(_o1).__name__})')
         holdings = {}
         holdings_usd = 0.0
-        for item in data.get('output1', []) or []:
-            ticker = item.get('ovrs_pdno', '')
-            qty = int(float(item.get('ovrs_cblc_qty', 0)))
-            eval_amt = float(item.get('ovrs_stck_evlu_amt', 0))
+        for item in _o1:
+            if not isinstance(item, dict):
+                raise BalanceUnavailable(f'보유 행이 딕셔너리가 아니다 ({type(item).__name__})')
+            ticker = str(item.get('ovrs_pdno') or '').strip()
+            raw_qty = item.get('ovrs_cblc_qty')
+            # 종목이나 수량이 빠진 행은 0 으로 메우지 않는다. 그 한 줄이 비면 그 종목을
+            # 안 들고 있는 것처럼 보여서 같은 종목을 또 사게 된다.
+            if not ticker:
+                raise BalanceUnavailable('보유 행에 종목(ovrs_pdno)이 없다')
+            qty_f = _finite(raw_qty)
+            if math.isnan(qty_f):
+                raise BalanceUnavailable(f'{ticker} 보유 수량(ovrs_cblc_qty)을 숫자로 못 읽었다 ({raw_qty!r})')
+            qty = int(qty_f)
+            eval_amt = _finite(item.get('ovrs_stck_evlu_amt'))
+            if math.isnan(eval_amt):
+                eval_amt = 0.0   # 보고용 합계에만 쓴다 — 매매 판단에 안 들어간다
             if qty > 0 and ticker:
                 holdings[ticker] = qty
                 holdings_usd += eval_amt
