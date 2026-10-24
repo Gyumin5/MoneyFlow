@@ -23,6 +23,10 @@
 # 코인현물 V24 — 매일 09:05 KST 1회 (선물과 동시, D봉 닫힘 직후)
 5 9 * * * /home/ubuntu/run_executor.sh coin > /dev/null 2>&1
 
+# 밤 계좌 조회 감시 — 매시 정각, 20시~다음날 6시 (2026-10-24 설치)
+# 집행기가 쓰는 get_balance 를 그대로 불러 조회가 살아 있는지만 본다. 주문·전략 상태 쓰기 없음.
+0 20-23,0-6 * * * cd /home/ubuntu && python3 balance_read_watch.py >> /home/ubuntu/balance_watch.log 2>&1
+
 # params drift check 는 Daily Report(recommend_personal 09:15) 안에 통합 — 별도 cron 없음.
 #
 # 2026-08-25 폐기: 월 1회 BT replay (30 9 1 * * bt_replay_monthly.py).

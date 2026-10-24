@@ -15,6 +15,7 @@
 | 코인 executor | `trade/executor_coin.py` | `~/executor_coin.py` |
 | 코인 live engine | `trade/coin_live_engine.py` | `~/coin_live_engine.py` |
 | 주식 executor | `trade/executor_stock.py` | `~/executor_stock.py` |
+| 밤 조회 감시 (읽기 전용) | `trade/ops/balance_read_watch.py` | `~/balance_read_watch.py` |
 | 선물 자동매매 | `trade/auto_trade_binance.py` | `~/auto_trade_binance.py` |
 | 추천 (general) | `strategies/cap_defend/recommend.py` | `~/recommend.py` |
 | 추천 (personal) | `strategies/cap_defend/recommend_personal.py` | `~/recommend_personal.py` |
@@ -49,7 +50,13 @@ state 백업 (2026-08-25 전면 수정)
 35 23 * * 1-5                  ~/run_executor.sh stock                # 주식 V25, 평일 23:35 1회
 5 9 * * *                      ~/run_executor.sh coin                 # 코인현물 V24, 매일 09:05 1회
 5 9 * * *                      python3 ~/auto_trade_binance.py --trade # 선물 V25, 매일 09:05 1회
+0 20-23,0-6 * * *              python3 ~/balance_read_watch.py        # 밤 계좌 조회 감시, 매시 정각
 ```
+
+밤 조회 감시(2026-10-24 설치)는 집행기가 쓰는 `get_balance` 를 그대로 불러 조회가 살아 있는지만
+본다. 주문·전략 상태 쓰기가 없고, 연속 2회 실패에서 한 번만 알리고 회복 때 해소를 한 번 알린다.
+기록은 `~/balance_watch_streak.json`(연속 실패 횟수와 알림 전송 여부), 로그는 `~/balance_watch.log`.
+토큰 캐시 `~/.kis_token.json` 은 집행기와 공유한다 — 쓰기는 잠금 + 임시파일 rename 이다.
 
 인증 env 는 crontab 이 아니라 `start_trade_api.sh` 가 단일 출처로 읽는다(2026-07-21 TRADE_PIN 폐지,
 DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 않는다.
