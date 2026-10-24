@@ -426,6 +426,17 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
 - `trade/ops/parity_watch.py` → `~/parity_watch.py` (집 감시의 침묵을 서버에서 잡는다. 매매 경로 아님)
 - `trade/ops/crontab.txt` → `crontab -l` 사본
 
+### 신호 대조를 손으로 다시 돌릴 때는 껍데기로 돌린다
+
+`trade/ops/signal_parity_daily.py` 를 맨손으로 부르지 않는다. 반드시
+`./trade/ops/run_signal_parity.sh parity` 로 부른다. 맨손 실행은 세 가지를 안 한다 —
+그날 로그(`logs/signal_parity_<날짜>.log`)를 안 쓰고, 서버에 영수증
+(`/home/ubuntu/parity-receipts/<날짜>.parity.json`)을 안 올리고, 판정이 나쁠 때 이 세션에
+주입을 안 한다. 그래서 집에서 원인을 고쳐 깨끗해져도 서버의 `parity_watch.py` 는 옛 영수증을
+그대로 읽고, 11:40 에 운영자에게 "주식 비교 못 함" 경보를 쏜다(2026-10-24 실제 발생).
+확인은 서버 `python3 ~/parity_watch.py --dry-run` 이 "판정: 정상" 을 찍는 것이다 —
+그 명령은 디스크 상태를 안 바꾸고 알림도 안 보낸다.
+
 ## 데이터 품질
 
 - `historical_universe.json` 류의 월초 시점 시총 데이터는 생존편향 방지에 필수다.
