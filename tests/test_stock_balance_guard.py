@@ -296,7 +296,7 @@ def step_clock(jump_after, jump_to):
     return t
 
 
-def run_cycle(table, state_obj, signal, clock=None):
+def run_cycle(table, state_obj, signal, clock=None, dry=False):
     COUNTS.clear()
     alerts, saved = [], {}
     tmp = tempfile.mkdtemp()
@@ -321,7 +321,7 @@ def run_cycle(table, state_obj, signal, clock=None):
         ex.log = lambda *a, **k: None
         RealBalanceAPI.last = None
         try:
-            ex.run_once(dry_run=False)
+            ex.run_once(dry_run=dry)
         except ex.BalanceUnavailable as e:
             alerts.append(f'raised:{e}')
     finally:
@@ -457,12 +457,12 @@ _reads = COUNTS.get('get_balance', 0)
 check("계좌 조회 2회", _reads == 2, f'{_reads}회')
 
 
-def _with_api(cls, table, state_obj, signal, clock=None):
+def _with_api(cls, table, state_obj, signal, clock=None, dry=False):
     """RealBalanceAPI 자리를 cls 로 바꿔 한 회차 돌린다."""
     old = globals()['RealBalanceAPI']
     try:
         globals()['RealBalanceAPI'] = cls
-        return run_cycle(table, state_obj, signal, clock=clock)
+        return run_cycle(table, state_obj, signal, clock=clock, dry=dry)
     finally:
         globals()['RealBalanceAPI'] = old
 
@@ -605,12 +605,18 @@ check("일부만 나간 회차는 미완료로 남는다",
 print("\n[27] 취소 응답은 성공 표식으로 판정한다 — 진짜 cancel_all_pending 을 돌린다")
 
 
-def _nccs(rows, nk=''):
-    return {'rt_cd': '0', 'output': rows, 'ctx_area_nk200': nk}
+def _nccs(rows, nk='', fk='', tr_cont=''):
+    """미체결 조회 응답 한 쪽. tr_cont 는 응답 헤더(F·M=더 있다, D·E=마지막)."""
+    d = {'rt_cd': '0', 'output': rows, 'ctx_area_nk200': nk, 'ctx_area_fk200': fk}
+    d['_hdr_tr_cont'] = tr_cont
+    return d
 
 
 def _row(odno='0001', pdno='BIL', qty='10', side='01'):
     return {'odno': odno, 'pdno': pdno, 'nccs_qty': qty, 'sll_buy_dvsn_cd': side}
+
+
+_CANCEL_REQUESTS = []
 
 
 def run_cancel(nccs_by_excg, post_result):
@@ -620,15 +626,21 @@ def run_cancel(nccs_by_excg, post_result):
     """
     posts = []
     pages = {k: 0 for k in nccs_by_excg}
+    reqs = _CANCEL_REQUESTS
+    reqs.clear()
     old_get, old_post, old_log = ex._get, ex._post, ex.log
 
-    def _g(path, tr_id, params, retries=3):
+    def _g(path, tr_id, params, retries=3, tr_cont='', cont=None):
         excg = params.get('OVRS_EXCG_CD')
+        reqs.append({'excg': excg, 'tr_cont': tr_cont,
+                     'fk': params.get('CTX_AREA_FK200'), 'nk': params.get('CTX_AREA_NK200')})
         resp = nccs_by_excg.get(excg, {})
         if isinstance(resp, list):
             i = pages.get(excg, 0)
             pages[excg] = i + 1
-            return resp[i] if i < len(resp) else {}
+            resp = resp[i] if i < len(resp) else {}
+        if cont is not None and isinstance(resp, dict):
+            cont['tr_cont'] = resp.get('_hdr_tr_cont', '')
         return resp
 
     def _p(path, tr_id, body, retries=2):
@@ -710,7 +722,7 @@ print("\n[27-1] 거래소를 셋 다 묻는다 — 한 코드만 물으면 다�
 asked = []
 
 
-def _collect_get(path, tr_id, params, retries=3):
+def _collect_get(path, tr_id, params, retries=3, tr_cont='', cont=None):
     asked.append(params.get('OVRS_EXCG_CD'))
     return _nccs([])
 
@@ -937,6 +949,146 @@ check("모의 한도는 -1 이 아니다", _cap > 0, str(_cap))
 check("모의 주문은 통신 없이 ok", _dry.place_order('BIL', 1, 91.60, 'buy') == 'ok')
 check("모의 취소는 조회했다고 돌려준다",
       ex.KISAPI(dry_run=True).cancel_all_pending().get('queried') is not None)
+
+print("\n[36] 매도가 잔고에 비치면 매수가 나간다 — 양성 대조")
+
+_CLOCK = {'t': 0.0}
+
+
+class _SellsSettle(RealBalanceAPI):
+    """매도가 잔고에 바로 비치는 계좌. 매도 뒤 재조회가 줄어든 수량을 돌려준다."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._sold = {}
+
+    def place_order(self, ticker, qty, price, side='buy') -> str:
+        res = super().place_order(ticker, qty, price, side)
+        if side == 'sell':
+            self._sold[ticker] = self._sold.get(ticker, 0) + qty
+        return res
+
+    def get_balance(self):
+        h, t, x = super().get_balance()
+        for tk, q in self._sold.items():
+            h[tk] = max(0, h.get(tk, 0) - q)
+        return h, t, x
+
+
+_st = _state_bil_only()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SellsSettle, FULL, _st, _signal())
+_buys36 = [o for o in orders if o[0] == 'buy']
+check("매도가 나간다", [o for o in orders if o[0] == 'sell'] != [], str(orders))
+check("매수도 나간다", _buys36 != [], str(orders))
+check("잔고 미반영 알림은 없다",
+      not any('잔고에 반영되지 않아' in a for a in alerts), str(alerts))
+
+print("\n[37] 매도 뒤 잔고 조회가 오래 걸리면 그 값으로 사지 않는다")
+# 나이를 조회가 끝난 시각으로 재면 90초 걸린 조회가 나이 0 으로 찍혀 허용 60초를
+# 그냥 통과한다. 시작 시각으로 재야 낡은 값이 낡은 것으로 보인다.
+
+
+class _SlowSecondBalance(_SellsSettle):
+    def get_balance(self):
+        res = super().get_balance()
+        if COUNTS.get('get_balance', 0) == 2:
+            _CLOCK['t'] += 90.0
+        return res
+
+
+_CLOCK['t'] = 0.0
+_st = _state_bil_only()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SlowSecondBalance, FULL, _st, _signal(),
+                                  clock=lambda: _CLOCK['t'])
+check("매도는 나갔다", [o for o in orders if o[0] == 'sell'] != [], str(orders))
+check("90초 걸린 조회로 사지 않는다", [o for o in orders if o[0] == 'buy'] == [], str(orders))
+check("낡았다고 알린다", any('계좌값이 90초' in a for a in alerts), str(alerts))
+check("완료로 안 닫는다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+print("\n[38] 매도 직후 총자산이 부풀어도 매수 예산이 매도 전 상한을 안 넘는다")
+# 매도대금이 결제 전 단계에서 예수금과 주식평가에 겹쳐 잡히면 총자산이 잠깐 커 보인다.
+# 그 값을 그대로 예산으로 쓰면 현금버퍼를 침범한다.
+
+
+class _InflatedAfterSell(_SellsSettle):
+    def get_balance(self):
+        h, t, x = super().get_balance()
+        if COUNTS.get('get_balance', 0) >= 2:
+            t *= 1.5
+        return h, t, x
+
+
+_st = _state_bil_only()
+_st['rebalancing_needed'] = True
+_st_norm = _state_bil_only()
+_st_norm['rebalancing_needed'] = True
+_orders_norm, _, _ = _with_api(_SellsSettle, FULL, _st_norm, _signal())
+_orders_inf, _, _saved_inf = _with_api(_InflatedAfterSell, FULL, _st, _signal())
+_qty_norm = sum(q for s, _t, q in _orders_norm if s == 'buy')
+_qty_inf = sum(q for s, _t, q in _orders_inf if s == 'buy')
+check("양쪽 다 매수가 있었다 — 빈 비교가 아니다", _qty_norm > 0, str(_orders_norm))
+check("부풀린 총자산이 매수를 키우지 않는다", _qty_inf == _qty_norm, f'{_qty_inf} vs {_qty_norm}')
+
+print("\n[39] 모의 회차는 매도 다음 매수까지 간다 — 통신은 한 번도 안 한다")
+
+
+class _DryAPI(_SellsSettle):
+    """모의 실행. place_order 는 통신 없이 ok 를 돌려주고 잔고는 안 줄어든다."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.dry_run = True
+
+    def place_order(self, ticker, qty, price, side='buy') -> str:
+        self.orders.append((side, ticker, qty))
+        return 'ok'      # 모의 — 체결도 잔고 반영도 없다
+
+
+_old_post = ex._post
+try:
+    def _boom(*a, **k):
+        raise AssertionError('모의 실행이 실제 주문 통신을 했다')
+    ex._post = _boom
+    _st = _state_bil_only()
+    _st['rebalancing_needed'] = True
+    orders, alerts, saved = _with_api(_DryAPI, FULL, _st, _signal(), dry=True)
+finally:
+    ex._post = _old_post
+check("모의에서 매도가 보인다", [o for o in orders if o[0] == 'sell'] != [], str(orders))
+check("모의에서 매수도 보인다", [o for o in orders if o[0] == 'buy'] != [], str(orders))
+check("모의는 상태파일을 안 쓴다", saved is None, str(saved))
+
+print("\n[40] 연속조회 요청이 계약대로 나간다 — tr_cont 와 커서 둘")
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='P1')], nk='NK1', fk='FK1'),
+                                               _nccs([_row(odno='P2')], nk='')]),
+                        {'rt_cd': '0'})
+_nasd = [r for r in _CANCEL_REQUESTS if r['excg'] == 'NASD']
+check("첫 요청은 커서가 비고 tr_cont 도 없다",
+      _nasd and _nasd[0] == {'excg': 'NASD', 'tr_cont': '', 'fk': '', 'nk': ''}, str(_nasd[:1]))
+check("둘째 요청은 tr_cont=N 과 직전 커서 둘을 싣는다",
+      len(_nasd) > 1 and _nasd[1] == {'excg': 'NASD', 'tr_cont': 'N', 'fk': 'FK1', 'nk': 'NK1'},
+      str(_nasd[1:2]))
+check("둘 다 취소한다", sorted(posts) == ['P1', 'P2'], str(posts))
+
+# 마지막 쪽이 커서를 남겨도 종료 헤더가 있으면 끝이다.
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='L1')], nk='STILL', tr_cont='D')]),
+                        {'rt_cd': '0'})
+check("종료 헤더면 커서가 남아도 끝낸다", res.get('queried') is True and res.get('found') == 1, str(res))
+
+# 행이 비었는데 "더 있다" 면 다음 쪽을 읽는다.
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([], nk='NK1', tr_cont='M'),
+                                               _nccs([_row(odno='N2')], nk='', tr_cont='D')]),
+                        {'rt_cd': '0'})
+check("빈 쪽 뒤의 미체결을 읽는다", res.get('found') == 1, str(res))
+check("그 주문을 취소한다", posts == ['N2'], str(posts))
+
+# "더 있다" 면서 커서를 안 주면 모순이다 — 전부 읽었다고 말하지 않는다.
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='C1')], nk='', tr_cont='F')]),
+                        {'rt_cd': '0'})
+check("계속 표시와 커서가 모순이면 중단한다", res.get('queried') is False, str(res))
+check("그 상태로 취소를 쏘지 않는다 — 모순", posts == [], str(posts))
 
 print()
 if FAILED:

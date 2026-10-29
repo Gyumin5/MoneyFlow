@@ -19,7 +19,7 @@ Usage:
 
 import json, os, sys, time, argparse, logging, uuid, math, fcntl
 from datetime import datetime, timedelta
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -281,18 +281,30 @@ def _headers(tr_id: str) -> dict:
     }
 
 
-def _get(path: str, tr_id: str, params: dict, retries=3) -> dict:
+def _get(path: str, tr_id: str, params: dict, retries=3, tr_cont: str = '', cont=None) -> dict:
     """성공({'rt_cd': '0', ...}) 또는 {} 를 돌려준다. 실패 사유는 로그에 남긴다.
 
     빈 dict 는 "조회가 안 됐다"는 뜻이지 "값이 0"이라는 뜻이 아니다. 둘을 같게 읽으면
     현금이 사라진 채로 매매가 돈다(2026-10-12·10-21 헛매매).
+
+    연속조회용 둘을 더 받는다. `tr_cont` 는 요청 헤더에 실어 보내는 값('N' = 다음 쪽),
+    `cont` 는 응답 헤더의 `tr_cont` 를 받아 갈 dict 다. 반환 dict 에는 안 섞는다 —
+    업무 칸과 전송 칸이 한 사전에 들어가면 부르는 쪽이 둘을 구분 못 한다.
     """
     last = ''
     for i in range(retries):
         try:
-            resp = requests.get(f'{BASE_URL}{path}', headers=_headers(tr_id), params=params, timeout=15)
+            _hdr = _headers(tr_id)
+            if tr_cont:
+                _hdr['tr_cont'] = tr_cont
+            resp = requests.get(f'{BASE_URL}{path}', headers=_hdr, params=params, timeout=15)
             data = resp.json()
             if data.get('rt_cd') == '0':
+                if cont is not None:
+                    try:
+                        cont['tr_cont'] = (resp.headers.get('tr_cont') or '').strip()
+                    except Exception:
+                        cont['tr_cont'] = ''
                 return data
             last = (f"rt_cd={data.get('rt_cd')} msg_cd={data.get('msg_cd')} "
                     f"msg={(data.get('msg1') or '').strip()[:80]}")
@@ -557,13 +569,16 @@ class KISAPI:
         조회 실패, output 칸 자체가 없는 응답, 못 읽는 행, 다음 쪽이 남은 응답이 전부
         여기에 들어간다 — 셋 다 빈 목록으로 읽으면 "미체결 없음"과 구분이 안 된다.
         """
-        out, seen, nk = {}, set(), ''
+        out, seen, fk, nk = {}, set(), '', ''
         for page in range(PENDING_PAGE_MAX):
+            cont: Dict[str, str] = {}
             data = _get('/uapi/overseas-stock/v1/trading/inquire-nccs', 'TTTS3018R', {
                 'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
                 'OVRS_EXCG_CD': excg, 'SORT_SQN': 'DS',
-                'CTX_AREA_FK200': '', 'CTX_AREA_NK200': nk,
-            })
+                # 연속조회는 커서 둘을 같이 돌려줘야 한다. FK200 을 빈 값으로 보내면
+                # 서버가 첫 쪽으로 되감아 같은 쪽을 영원히 준다.
+                'CTX_AREA_FK200': fk, 'CTX_AREA_NK200': nk,
+            }, tr_cont=('N' if page else ''), cont=cont)
             if not data:
                 log(f'  ⚠️ 미체결 조회 실패({excg} {page + 1}쪽) — 미체결 없음과 구분할 수 없다')
                 return False, []
@@ -598,11 +613,20 @@ class KISAPI:
                     'odno': order_no, 'ticker': ticker, 'qty': qty, 'excg': excg,
                     'side': 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell',
                 }
+            # 쪽을 넘길지는 활성 행 수와 무관하게 정한다. 행이 비어 있어도 다음 쪽에
+            # 미체결이 있을 수 있어서, "이 쪽이 비었으니 끝" 으로 읽으면 뒤쪽을 통째로
+            # 놓친 채 "미체결 없음" 이라고 말하게 된다.
+            _flag = (cont.get('tr_cont') or '').strip().upper()
+            fk = (data.get('ctx_area_fk200') or '').strip()
             prev_nk, nk = nk, (data.get('ctx_area_nk200') or '').strip()
-            # 쪽을 넘길지는 활성 행 수와 무관하게 정한다. 수량 0 인 행만 담긴 쪽 뒤에도
-            # 미체결이 더 있을 수 있어서, "새 행이 안 늘었으니 끝" 으로 읽으면 뒤쪽을
-            # 통째로 놓친 채 "미체결 없음" 이라고 말하게 된다.
-            if not nk or not rows:
+            if _flag in ('D', 'E'):
+                # 서버가 마지막 쪽이라고 말했다 — 커서가 남아 있어도 끝이다.
+                return True, list(out.values())
+            if _flag in ('F', 'M') and not nk:
+                log(f'  ⚠️ 미체결 응답이 "더 있다"면서 커서를 안 줬다({excg}) — 중단한다')
+                return False, []
+            if _flag not in ('F', 'M') and not nk:
+                # 헤더가 없거나 뜻을 모르겠고 커서도 비었다 — 더 볼 데가 없다.
                 return True, list(out.values())
             if nk == prev_nk:
                 # 커서가 안 움직였다 — 다음 쪽을 봤는지 같은 쪽을 다시 봤는지 가를 수 없다.
@@ -1477,23 +1501,43 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     # 체결됐다는 뜻이 아니다 — 접수 뒤 거절되거나 취소돼도 사라지고, 그때 보유는 그대로다.
     # 그 상태에서 매도 전에 계산해 둔 수량으로 사면 목표를 넘긴다. 못 읽으면 안 산다.
     if sells and buys:
-        try:
-            _h2, _t2, _x2 = api.get_balance()
-        except BalanceUnavailable as _e:
-            log(f'  ⛔ 매도 뒤 잔고를 못 읽었다 — 매수 {len(buys)}건을 내지 않는다: {_e}')
-            send_telegram(f'⛔ 주식: 매도 뒤 잔고 조회가 안 돼 매수 {len(buys)}건을 내지 않았다. '
-                          f'다음 회차에 다시 계산한다.')
-            for ticker, qty, _price in buys:
-                failed_orders.append(('buy', ticker, qty))
-            buys = []
+        _ok2 = True
+        _h2: Dict[str, int] = {}
+        _t2 = 0.0
+        _unsold: List[str] = []
+        if getattr(api, 'dry_run', False):
+            # 모의 실행은 실제로 안 팔았으니 잔고가 안 줄어든다. 그 값으로 "안 팔렸다" 를
+            # 판정하면 모의 회차의 매수가 통째로 사라져 무엇을 살지 못 보여준다. 체결을
+            # 가정한 잔고로 수량만 다시 센다 — 이건 검증이 아니라 모의다.
+            _h2 = dict(holdings)
+            for _t, _q, _p in sells:
+                _h2[_t] = max(0, _h2.get(_t, 0) - _q)
+            _t2 = total_usd
+            log('  [DRY] 매도 체결을 가정한 잔고로 매수 수량을 다시 센다')
         else:
-            # 나이 기준도 이 조회 시점으로 옮긴다 — 이제 매수 수량의 근거가 이 값이다.
-            _bal_at = time.monotonic()
-            # 판 만큼 실제로 줄었나. 안 줄었으면 그 매도는 접수만 되고 거절·취소된 것이다.
-            # 그 현금을 쓸 작정으로 사면 노출이 목표를 넘는다 — 이건 총자산 기준 재계산으로
-            # 안 잡힌다(안 팔린 종목이 여전히 자산에 들어 있어서 목표 금액이 그대로다).
-            _unsold = [t for t, q, _p in sells
-                       if _h2.get(t, 0) > max(0, holdings.get(t, 0) - q)]
+            # 나이는 조회를 시작한 시각으로 잰다. 끝난 시각으로 재면 90초 걸린 조회가
+            # 나이 0 으로 찍혀 허용치 60초를 그냥 통과한다 — 이미 낡은 값인데 갓 읽은
+            # 값으로 보인다.
+            _bal_at2 = time.monotonic()
+            try:
+                _h2, _t2, _x2 = api.get_balance()
+            except BalanceUnavailable as _e:
+                log(f'  ⛔ 매도 뒤 잔고를 못 읽었다 — 매수 {len(buys)}건을 내지 않는다: {_e}')
+                send_telegram(f'⛔ 주식: 매도 뒤 잔고 조회가 안 돼 매수 {len(buys)}건을 내지 않았다. '
+                              f'다음 회차에 다시 계산한다.')
+                for ticker, qty, _price in buys:
+                    failed_orders.append(('buy', ticker, qty))
+                buys = []
+                _ok2 = False
+            else:
+                _bal_at = _bal_at2
+                # 판 만큼 실제로 줄었나. 안 줄었으면 그 매도는 접수만 되고 거절·취소된
+                # 것이다. 그 현금을 쓸 작정으로 사면 노출이 목표를 넘는다 — 이건 총자산
+                # 기준 재계산으로 안 잡힌다(안 팔린 종목이 여전히 자산에 들어 있어서
+                # 목표 금액이 그대로다).
+                _unsold = [t for t, q, _p in sells
+                           if _h2.get(t, 0) > max(0, holdings.get(t, 0) - q)]
+        if _ok2:
             if _unsold:
                 log(f"  ⛔ 매도가 잔고에 안 비쳤다({', '.join(_unsold)}) — 매수 {len(buys)}건을 내지 않는다")
                 send_telegram(f"⛔ 주식: 매도 {', '.join(_unsold)} 이 잔고에 반영되지 않아 매수 "
@@ -1502,7 +1546,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 for ticker, qty, _price in buys:
                     failed_orders.append(('buy', ticker, qty))
                 buys = []
-            _pv2 = _t2 if effective_pv_usd is None else min(_t2, effective_pv_usd)
+            # 예산 상한에 매도 전 총자산도 넣는다. 매도대금이 결제 전 단계에서 예수금과
+            # 주식평가에 겹쳐 잡히면 총자산이 잠깐 부풀어 보이는데, 그 값을 그대로 쓰면
+            # 매수 예산이 매도 전 상한을 넘어 현금버퍼를 침범한다.
+            _pv2 = min(_t2, total_usd)
+            if effective_pv_usd is not None:
+                _pv2 = min(_pv2, effective_pv_usd)
             _target_usd2 = _pv2 * (1 - cash_buffer)
             _rebuilt = []
             for ticker, _old_qty, price in buys:
@@ -1512,8 +1561,10 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                     continue
                 _delta = int((_target_usd2 * target.get(ticker, 0) - _h2.get(ticker, 0) * px) / px)
                 if _delta <= 0:
+                    # 살 것이 없는 것은 실패가 아니다. 이미 목표만큼 들고 있다는 뜻이라
+                    # 실패로 세면 달성한 회차가 영원히 미완료로 남는다. 완료 여부는
+                    # 마지막 비중 검사가 정한다.
                     log(f'  매수 취소: {ticker} — 매도 뒤 실제 잔고로 다시 세니 살 것이 없다')
-                    failed_orders.append(('buy', ticker, _old_qty))
                     continue
                 if _delta != _old_qty:
                     log(f'  매수 재계산: {ticker} {_old_qty}→{_delta}주 (매도 뒤 실제 잔고 기준)')
@@ -1565,8 +1616,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         holdings2, total2 = {}, 0.0
     if total2 > 0:
         max_diff = 0
-        # alloc_transit cap 적용 시 denom 도 capped 기준
-        denom_for_diff = min(total2, effective_pv_usd) if effective_pv_usd is not None else total2
+        # alloc_transit cap 적용 시 denom 도 capped 기준.
+        # 주문 전 총자산도 상한으로 넣는다 — 매도대금이 결제 전 단계에서 겹쳐 잡혀
+        # 총자산이 부풀면 분모가 커져 현재 비중이 작아지고, 그만큼 목표에 가까워 보인다.
+        denom_for_diff = min(total2, total_usd) if total_usd > 0 else total2
+        if effective_pv_usd is not None:
+            denom_for_diff = min(denom_for_diff, effective_pv_usd)
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
