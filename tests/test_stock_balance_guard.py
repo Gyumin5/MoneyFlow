@@ -93,10 +93,27 @@ COUNTS = {}   # tr_id → 부른 횟수. 한 회차가 계좌를 몇 번 묻는�
 
 def fake_get(table):
     """tr_id → 응답. 표에 없으면 빈 dict(조회 실패)."""
-    def _g(path, tr_id, params, retries=3):
+    def _g(path, tr_id, params, retries=3, tr_cont='', cont=None):
         COUNTS[tr_id] = COUNTS.get(tr_id, 0) + 1
         v = table.get(tr_id, {})
-        return v() if callable(v) else v
+        # 표 값이 목록이면 연속조회의 쪽들이다. 몇 번째인지는 부른 횟수가 아니라 보낸
+        # 커서로 고른다 — 한 회차가 계좌를 여러 번 묻기 때문에 횟수로 세면 두 번째
+        # 조회가 첫 쪽을 못 받는다.
+        if isinstance(v, list):
+            _nk_in = (params.get('CTX_AREA_NK200') or '').strip()
+            if not _nk_in:
+                idx = 0
+            else:
+                idx = next((j + 1 for j, p in enumerate(v)
+                            if isinstance(p, dict)
+                            and (p.get('ctx_area_nk200') or '').strip() == _nk_in), len(v))
+            v = v[idx] if idx < len(v) else {}
+        v = v() if callable(v) else v
+        if cont is not None:
+            # 응답 헤더 tr_cont. 안 적은 고정값은 "마지막 쪽"(D)으로 본다 — 실계좌가
+            # 그렇게 온다(2026-10-29 실측: 보유 2종목 계좌에서 헤더 D).
+            cont['tr_cont'] = v.get('_hdr_tr_cont', 'D') if isinstance(v, dict) else ''
+        return v
     return _g
 
 
@@ -605,10 +622,14 @@ check("일부만 나간 회차는 미완료로 남는다",
 print("\n[27] 취소 응답은 성공 표식으로 판정한다 — 진짜 cancel_all_pending 을 돌린다")
 
 
-def _nccs(rows, nk='', fk='', tr_cont=''):
-    """미체결 조회 응답 한 쪽. tr_cont 는 응답 헤더(F·M=더 있다, D·E=마지막)."""
+def _nccs(rows, nk='', fk='', tr_cont=None):
+    """미체결 조회 응답 한 쪽. tr_cont 는 응답 헤더(F·M=더 있다, D·E=마지막).
+
+    안 적으면 커서에서 끌어온다 — 다음 커서가 있으면 F, 없으면 D. 실계좌가 그 짝으로
+    오기 때문이고(2026-10-29 실측), 헤더와 커서를 일부러 어긋나게 둔 칸만 직접 적는다.
+    """
     d = {'rt_cd': '0', 'output': rows, 'ctx_area_nk200': nk, 'ctx_area_fk200': fk}
-    d['_hdr_tr_cont'] = tr_cont
+    d['_hdr_tr_cont'] = tr_cont if tr_cont is not None else ('F' if nk.strip() else 'D')
     return d
 
 
@@ -724,7 +745,10 @@ asked = []
 
 def _collect_get(path, tr_id, params, retries=3, tr_cont='', cont=None):
     asked.append(params.get('OVRS_EXCG_CD'))
-    return _nccs([])
+    resp = _nccs([])
+    if cont is not None:
+        cont['tr_cont'] = resp['_hdr_tr_cont']
+    return resp
 
 
 _old_get, _old_log = ex._get, ex.log
@@ -1030,6 +1054,11 @@ _qty_norm = sum(q for s, _t, q in _orders_norm if s == 'buy')
 _qty_inf = sum(q for s, _t, q in _orders_inf if s == 'buy')
 check("양쪽 다 매수가 있었다 — 빈 비교가 아니다", _qty_norm > 0, str(_orders_norm))
 check("부풀린 총자산이 매수를 키우지 않는다", _qty_inf == _qty_norm, f'{_qty_inf} vs {_qty_norm}')
+# 예산 상한과 완료 판정은 다른 방향이다. 예산은 덜 쓰는 쪽이 안전하니 매도 전 총자산을
+# 상한으로 걸지만, 완료 판정의 분모까지 깎으면 현재 비중이 커 보여 목표에 못 미치는
+# 보유가 달성으로 읽힌다. 분모는 주문 뒤 총자산 하나로 간다.
+check("부풀린 총자산에서는 완료로 안 닫는다",
+      _saved_inf is not None and _saved_inf.get('rebalancing_needed') is True, str(_saved_inf))
 
 print("\n[39] 모의 회차는 매도 다음 매수까지 간다 — 통신은 한 번도 안 한다")
 
@@ -1094,6 +1123,119 @@ res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='C1')], nk='', t
                         {'rt_cd': '0'})
 check("계속 표시와 커서가 모순이면 중단한다", res.get('queried') is False, str(res))
 check("그 상태로 취소를 쏘지 않는다 — 모순", posts == [], str(posts))
+
+print("\n[41] 보유 잔고가 여러 쪽이면 다 읽는다 — 첫 쪽만 보면 뒤쪽 종목을 또 산다")
+# 실계좌 관측(2026-10-29): 보유 2종목 계좌의 TTTS3012R 는 응답 헤더 tr_cont='D' 와
+# 200칸 공백 커서를 같이 돌려줬다. 그래서 끝 판정은 헤더가 먼저고, 커서는 받은 원문을
+# 그대로 되돌려준다.
+
+
+def _bal_page(rows, nk='', fk='', tr_cont=None):
+    d = {'rt_cd': '0', 'output1': rows, 'ctx_area_nk200': nk, 'ctx_area_fk200': fk}
+    d['_hdr_tr_cont'] = tr_cont if tr_cont is not None else ('F' if nk.strip() else 'D')
+    return d
+
+
+_ROW_BIL = {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': '1534',
+            'ovrs_stck_evlu_amt': str(LIVE_BIL), 'now_pric2': '91.60'}
+_ROW_PDBC = {'ovrs_pdno': 'PDBC', 'ovrs_cblc_qty': '7041',
+             'ovrs_stck_evlu_amt': str(LIVE_PDBC), 'now_pric2': '20.02'}
+_TWO_PAGE = [_bal_page([_ROW_BIL], nk='BALNK1', fk='BALFK1'), _bal_page([_ROW_PDBC])]
+
+holdings, _t41, _x41 = with_api(dict(FULL, TTTS3012R=_TWO_PAGE), lambda api: api.get_balance())
+check("둘째 쪽 보유도 읽는다", holdings == {'BIL': 1534, 'PDBC': 7041}, str(holdings))
+
+_asked41 = []
+
+
+def _watch_cursor(path, tr_id, params, retries=3, tr_cont='', cont=None):
+    if tr_id == 'TTTS3012R':
+        _asked41.append((tr_cont, params.get('CTX_AREA_FK200'), params.get('CTX_AREA_NK200')))
+    return fake_get(dict(FULL, TTTS3012R=_TWO_PAGE))(path, tr_id, params, retries, tr_cont, cont)
+
+
+_old41, _oldlog41 = ex._get, ex.log
+try:
+    ex._get, ex.log = _watch_cursor, lambda *a, **k: None
+    ex.KISAPI(dry_run=False).get_balance()
+finally:
+    ex._get, ex.log = _old41, _oldlog41
+check("첫 요청은 커서가 비고 tr_cont 도 없다",
+      len(_asked41) >= 1 and _asked41[0] == ('', '', ''), str(_asked41))
+check("둘째 요청은 tr_cont=N 과 직전 커서 둘을 싣는다",
+      len(_asked41) >= 2 and _asked41[1] == ('N', 'BALFK1', 'BALNK1'), str(_asked41))
+
+# 보유 한 종목이 둘째 쪽에 있는데 첫 쪽만 읽으면 "안 들고 있다" 가 돼서 또 산다.
+# 전량 읽으면 목표와 같아 주문이 없다.
+orders41, _a41, _s41 = _with_api(RealBalanceAPI, dict(FULL, TTTS3012R=_TWO_PAGE),
+                                 _state(), _signal())
+check("다 읽으면 이미 들고 있는 종목을 또 사지 않는다", orders41 == [], str(orders41))
+
+for _name, _pages in (
+        ('"더 있다" 면서 커서가 없다', [_bal_page([_ROW_BIL], nk='', tr_cont='F')]),
+        ('연속 표시를 모르겠다', [_bal_page([_ROW_BIL], nk='', tr_cont='')]),
+        ('커서가 그대로다', [_bal_page([_ROW_BIL], nk='SAME'), _bal_page([_ROW_PDBC], nk='SAME')]),
+        ('둘째 쪽 조회가 실패한다', [_bal_page([_ROW_BIL], nk='NK1'), {}]),
+        ('수량이 음수다', [_bal_page([dict(_ROW_BIL, ovrs_cblc_qty='-5')])]),
+        ('수량이 소수다', [_bal_page([dict(_ROW_BIL, ovrs_cblc_qty='2.5')])])):
+    check(f"'전부 읽었다' 로 통과하지 않는다 — {_name}",
+          raises_unavailable(dict(FULL, TTTS3012R=_pages)))
+
+print("\n[42] 인증 준비가 오래 걸리면 그 계좌값으로 주문하지 않는다")
+# 나이를 재고 나서 토큰을 받으면 그 대기가 검사 뒤에 들어가 만료된 값으로 주문이 나간다.
+# 느린 쪽(인증)이 검사 앞에 와야 한다.
+
+
+class _SlowAuth(RealBalanceAPI):
+    def ensure_auth(self):
+        _CLOCK['t'] += 90.0
+
+
+_CLOCK['t'] = 0.0
+_st42 = _state_bil_only()
+_st42['rebalancing_needed'] = True
+orders42, alerts42, saved42 = _with_api(_SlowAuth, FULL, _st42, _signal(),
+                                        clock=lambda: _CLOCK['t'])
+check("인증에 90초가 걸리면 주문을 안 낸다", orders42 == [], str(orders42))
+check("낡았다고 알린다", any('계좌값이 90초' in a for a in alerts42), str(alerts42))
+check("완료로 안 닫는다",
+      saved42 is not None and saved42.get('rebalancing_needed') is True, str(saved42))
+
+print("\n[43] 값을 매길 수 없으면 완료로 닫지 않는다")
+# 가격이 없는 종목을 편차 0 으로 세면, 안 산 종목도 "목표 달성" 으로 읽힌다.
+
+
+class _UnpricedExtra(RealBalanceAPI):
+    """목표에도 없고 값도 안 매겨지는 보유가 남은 계좌 — 상장폐지·호가 없음 같은 자리.
+
+    목표 안쪽 종목은 평소대로 값이 매겨져서, 그 한 종목만 아니면 이 회차는 완료로 닫힌다.
+    """
+
+    def get_balance(self):
+        h, t, x = super().get_balance()
+        # 주문 뒤 조회에서만 보인다. 주문 전부터 보이면 가격 결측 가드가 그 회차를 먼저
+        # 멈춰서, 완료 판정이 그 보유를 어떻게 세는지가 안 드러난다.
+        if COUNTS.get('get_balance', 0) >= 2:
+            h['XYZ'] = 5
+        return h, t, x
+
+    def get_current_price(self, ticker: str) -> float:
+        return 0.0 if ticker == 'XYZ' else super().get_current_price(ticker)
+
+
+_st43 = _state()
+_st43['rebalancing_needed'] = True
+orders43, alerts43, saved43 = _with_api(_UnpricedExtra, FULL, _st43, _signal())
+check("값 못 매기는 보유가 남으면 완료로 안 닫는다",
+      saved43 is not None and saved43.get('rebalancing_needed') is True, str(saved43))
+
+# 그 보유가 없으면 같은 회차가 완료로 닫힌다 — 빈 비교가 아니다.
+_st43b = _state()
+_st43b['rebalancing_needed'] = True
+_o43b, _a43b, saved43b = _with_api(RealBalanceAPI, FULL, _st43b, _signal())
+check("그 보유가 없으면 완료로 닫는다",
+      saved43b is not None and saved43b.get('rebalancing_needed') is False, str(saved43b))
+
 
 print()
 if FAILED:

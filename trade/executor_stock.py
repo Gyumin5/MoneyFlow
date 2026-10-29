@@ -169,6 +169,7 @@ EXCHANGE_MAP = {
 PENDING_EXCHANGES = ('NASD', 'NYSE', 'AMEX')
 # 미체결 연속조회를 몇 쪽까지 따라갈까. 넘기면 "전부 읽었다" 고 말하지 않는다.
 PENDING_PAGE_MAX = 5
+BALANCE_PAGE_MAX = 10
 
 # KIS 시세 API(price-detail/dailyprice)는 주문용 EXCHANGE_MAP과 달리
 # 실제 상장 거래소 코드(NAS/NYS/AMS)가 정확해야 종목별 가격이 정상 응답된다.
@@ -380,48 +381,81 @@ class KISAPI:
         현금이 사라져 드리프트가 현금버퍼 크기만큼 발화하고 멀쩡한 주식을 판다
         (2026-10-12·10-21, 체결액 약 <금액>).
         """
-        data = _get('/uapi/overseas-stock/v1/trading/inquire-balance', 'TTTS3012R', {
-            'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-            'AFHR_FLPR_YN': 'N', 'OFL_YN': '', 'INQR_DVSN': '01',
-            'UNPR_DVSN': '01', 'FUND_STTL_ICLD_YN': 'N',
-            'FNCG_AMT_AUTO_RDPT_YN': 'N', 'OVRS_EXCG_CD': 'NASD', 'TR_CRCY_CD': 'USD',
-            'CTX_AREA_FK200': '', 'CTX_AREA_NK200': '',
-        })
-        if data.get('rt_cd') != '0':
-            raise BalanceUnavailable('해외주식 잔고(TTTS3012R) 조회 실패')
-        # 보유 목록이 통째로 빠진 응답을 "들고 있는 게 없다" 로 읽으면 안 된다 — 그러면
-        # 이미 들고 있는 종목을 또 산다. 빈 계좌는 output1 이 빈 목록([])으로 온다.
-        _o1 = data.get('output1')
-        if not isinstance(_o1, list):
-            raise BalanceUnavailable(
-                f'해외주식 잔고(TTTS3012R) 보유 목록(output1)이 없다 (type={type(_o1).__name__})')
         holdings = {}
         holdings_usd = 0.0
-        for item in _o1:
-            if not isinstance(item, dict):
-                raise BalanceUnavailable(f'보유 행이 딕셔너리가 아니다 ({type(item).__name__})')
-            ticker = str(item.get('ovrs_pdno') or '').strip()
-            raw_qty = item.get('ovrs_cblc_qty')
-            # 종목이나 수량이 빠진 행은 0 으로 메우지 않는다. 그 한 줄이 비면 그 종목을
-            # 안 들고 있는 것처럼 보여서 같은 종목을 또 사게 된다.
-            if not ticker:
-                raise BalanceUnavailable('보유 행에 종목(ovrs_pdno)이 없다')
-            qty_f = _finite(raw_qty)
-            if math.isnan(qty_f):
-                raise BalanceUnavailable(f'{ticker} 보유 수량(ovrs_cblc_qty)을 숫자로 못 읽었다 ({raw_qty!r})')
-            qty = int(qty_f)
-            eval_amt = _finite(item.get('ovrs_stck_evlu_amt'))
-            if math.isnan(eval_amt):
-                eval_amt = 0.0   # 보고용 합계에만 쓴다 — 매매 판단에 안 들어간다
-            if qty > 0 and ticker:
-                holdings[ticker] = qty
-                holdings_usd += eval_amt
-                try:
-                    cur_price = float(item.get('now_pric2', 0) or item.get('ovrs_now_pric1', 0) or 0)
-                    if cur_price > 0:
-                        self._balance_price_cache[ticker] = cur_price
-                except Exception:
-                    pass
+        _fk, _nk = '', ''
+        for _page in range(BALANCE_PAGE_MAX):
+            _cont: Dict[str, str] = {}
+            data = _get('/uapi/overseas-stock/v1/trading/inquire-balance', 'TTTS3012R', {
+                'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
+                'AFHR_FLPR_YN': 'N', 'OFL_YN': '', 'INQR_DVSN': '01',
+                'UNPR_DVSN': '01', 'FUND_STTL_ICLD_YN': 'N',
+                'FNCG_AMT_AUTO_RDPT_YN': 'N', 'OVRS_EXCG_CD': 'NASD', 'TR_CRCY_CD': 'USD',
+                # 커서는 받은 원문 그대로 돌려준다. 공백은 빈 값인지 가릴 때만 떼어 본다 —
+                # 서버가 200칸을 공백으로 채워 주므로(2026-10-29 실측) 떼고 보내면 우리가
+                # 보낸 값이 받은 값과 달라진다.
+                'CTX_AREA_FK200': _fk, 'CTX_AREA_NK200': _nk,
+            }, tr_cont=('N' if _page else ''), cont=_cont)
+            if data.get('rt_cd') != '0':
+                raise BalanceUnavailable('해외주식 잔고(TTTS3012R) 조회 실패')
+            # 보유 목록이 통째로 빠진 응답을 "들고 있는 게 없다" 로 읽으면 안 된다 — 그러면
+            # 이미 들고 있는 종목을 또 산다. 빈 계좌는 output1 이 빈 목록([])으로 온다.
+            _o1 = data.get('output1')
+            if not isinstance(_o1, list):
+                raise BalanceUnavailable(
+                    f'해외주식 잔고(TTTS3012R) 보유 목록(output1)이 없다 (type={type(_o1).__name__})')
+            for item in _o1:
+                if not isinstance(item, dict):
+                    raise BalanceUnavailable(f'보유 행이 딕셔너리가 아니다 ({type(item).__name__})')
+                ticker = str(item.get('ovrs_pdno') or '').strip()
+                raw_qty = item.get('ovrs_cblc_qty')
+                # 종목이나 수량이 빠진 행은 0 으로 메우지 않는다. 그 한 줄이 비면 그 종목을
+                # 안 들고 있는 것처럼 보여서 같은 종목을 또 사게 된다.
+                if not ticker:
+                    raise BalanceUnavailable('보유 행에 종목(ovrs_pdno)이 없다')
+                qty_f = _finite(raw_qty)
+                # 음수·소수를 그냥 int() 로 자르면 조용히 다른 수량이 된다. 보유 수량에
+                # 그런 값이 올 계약이 없으므로, 왔다면 응답을 못 믿는 것이다.
+                if math.isnan(qty_f) or qty_f < 0 or qty_f != int(qty_f):
+                    raise BalanceUnavailable(
+                        f'{ticker} 보유 수량(ovrs_cblc_qty)을 숫자로 못 읽었다 ({raw_qty!r})')
+                qty = int(qty_f)
+                eval_amt = _finite(item.get('ovrs_stck_evlu_amt'))
+                if math.isnan(eval_amt):
+                    eval_amt = 0.0   # 보고용 합계에만 쓴다 — 매매 판단에 안 들어간다
+                if qty > 0 and ticker:
+                    holdings[ticker] = qty
+                    holdings_usd += eval_amt
+                    try:
+                        cur_price = float(item.get('now_pric2', 0) or item.get('ovrs_now_pric1', 0) or 0)
+                        if cur_price > 0:
+                            self._balance_price_cache[ticker] = cur_price
+                    except Exception:
+                        pass
+            # 보유 목록도 쪽이 나뉜다. 첫 쪽만 읽고 전체로 쓰면 뒤쪽 종목이 "안 들고 있는
+            # 것" 이 돼서 같은 종목을 또 사고, 판 종목이 사라진 것으로 보여 매도 확인도
+            # 통과한다. 끝 판정은 응답 헤더가 먼저다 — 마지막 쪽에도 커서가 남아서 온다
+            # (2026-10-29 실측: 헤더 'D' + 커서 200칸 공백).
+            _flag = (_cont.get('tr_cont') or '').strip().upper()
+            _raw_fk = data.get('ctx_area_fk200')
+            _raw_nk = data.get('ctx_area_nk200')
+            _next_fk = _raw_fk if isinstance(_raw_fk, str) else ''
+            _next_nk = _raw_nk if isinstance(_raw_nk, str) else ''
+            if _flag in ('D', 'E'):
+                break
+            if _flag in ('F', 'M'):
+                if not _next_nk.strip():
+                    raise BalanceUnavailable('보유 잔고가 "더 있다"면서 커서를 안 줬다')
+                if _next_nk.strip() == _nk.strip():
+                    raise BalanceUnavailable('보유 잔고 연속조회 커서가 그대로다')
+                _fk, _nk = _next_fk, _next_nk
+                continue
+            # 아는 조합이 아니다. 더 있는지 없는지를 못 가르는 채로 "이게 전부" 라고
+            # 말하지 않는다 — 그 거짓이 바로 위의 중복 매수로 이어진다.
+            raise BalanceUnavailable(
+                f'보유 잔고 응답의 연속 표시를 모르겠다 (tr_cont={_flag!r})')
+        else:
+            raise BalanceUnavailable(f'보유 잔고가 {BALANCE_PAGE_MAX}쪽을 넘었다')
 
         # 체결기준현재잔고 — 환율과 예수금·미결제의 출처. 비면 그 회차를 멈춘다.
         bp_data = _get('/uapi/overseas-stock/v1/trading/inquire-present-balance', 'CTRP6504R', {
@@ -616,19 +650,25 @@ class KISAPI:
             # 쪽을 넘길지는 활성 행 수와 무관하게 정한다. 행이 비어 있어도 다음 쪽에
             # 미체결이 있을 수 있어서, "이 쪽이 비었으니 끝" 으로 읽으면 뒤쪽을 통째로
             # 놓친 채 "미체결 없음" 이라고 말하게 된다.
+            # 커서는 받은 원문 그대로 돌려준다. 공백은 빈 값인지 가릴 때만 떼어 본다.
             _flag = (cont.get('tr_cont') or '').strip().upper()
-            fk = (data.get('ctx_area_fk200') or '').strip()
-            prev_nk, nk = nk, (data.get('ctx_area_nk200') or '').strip()
+            _raw_fk = data.get('ctx_area_fk200')
+            _raw_nk = data.get('ctx_area_nk200')
+            fk = _raw_fk if isinstance(_raw_fk, str) else ''
+            prev_nk, nk = nk, (_raw_nk if isinstance(_raw_nk, str) else '')
             if _flag in ('D', 'E'):
                 # 서버가 마지막 쪽이라고 말했다 — 커서가 남아 있어도 끝이다.
                 return True, list(out.values())
-            if _flag in ('F', 'M') and not nk:
+            if _flag in ('F', 'M') and not nk.strip():
                 log(f'  ⚠️ 미체결 응답이 "더 있다"면서 커서를 안 줬다({excg}) — 중단한다')
                 return False, []
-            if _flag not in ('F', 'M') and not nk:
-                # 헤더가 없거나 뜻을 모르겠고 커서도 비었다 — 더 볼 데가 없다.
-                return True, list(out.values())
-            if nk == prev_nk:
+            if _flag not in ('F', 'M'):
+                # 아는 조합이 아니다. 끝났는지 더 있는지를 못 가르는 채로 "미체결 없음"
+                # 이라고 말하지 않는다 — 그 거짓이 잔존 주문 위에 새 주문을 얹는다.
+                # 실측(2026-10-29)에서는 세 거래소 모두 헤더가 왔다.
+                log(f'  ⚠️ 미체결 응답의 연속 표시를 모르겠다({excg} tr_cont={_flag!r}) — 중단한다')
+                return False, []
+            if nk.strip() == prev_nk.strip():
                 # 커서가 안 움직였다 — 다음 쪽을 봤는지 같은 쪽을 다시 봤는지 가를 수 없다.
                 log(f'  ⚠️ 미체결 연속조회 커서가 그대로다({excg}) — 전부 읽었다고 말하지 않는다')
                 return False, []
@@ -651,7 +691,10 @@ class KISAPI:
             if not ok:
                 return {'queried': False, 'found': 0, 'failed': 0}
             for row in rows:
-                found_rows[row['odno']] = row
+                # 같은 주문번호가 두 거래소 응답에 다 보이면 먼저 본 쪽을 남긴다. 덮어쓰면
+                # 취소 요청이 원주문과 다른 거래소 코드로 나간다.
+                if row['odno'] not in found_rows:
+                    found_rows[row['odno']] = row
         failed = 0
         for row in found_rows.values():
             ticker, qty, side = row['ticker'], row['qty'], row['side']
@@ -736,6 +779,15 @@ class KISAPI:
             return 'unknown'
         log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f} (주문번호 {odno})')
         return 'ok'
+
+    def ensure_auth(self) -> None:
+        """토큰을 미리 받아 둔다. 주문 전송 직전의 나이 검사와 실제 전송 사이에 인증
+        갱신이 끼면 그 시간만큼 낡은 계좌값으로 주문이 나간다 — 느린 쪽을 검사 앞으로
+        옮긴다. 발급은 파일 잠금을 기다릴 수 있어 분 단위로 길어질 수 있다.
+        """
+        if self.dry_run:
+            return
+        _get_token()
 
     def get_max_buy_qty(self, ticker: str, price: float) -> int:
         """매수 가능 수량 조회 (psamount API). -1이면 조회 실패.
@@ -1442,6 +1494,14 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     def _send(side: str, ticker: str, qty: int, price: float) -> bool:
         """한 종목 주문. 돌려주는 것은 접수됐나다. 'unknown' 이면 재전송하지 않는다."""
         for attempt in range(MAX_ORDER_ATTEMPTS):
+            # 인증을 먼저 끝낸다. 나이를 재고 나서 토큰을 받으면 그 대기가 검사 뒤에
+            # 들어가 만료된 계좌값으로 주문이 나간다 — 느린 쪽이 검사 앞에 와야 한다.
+            _fn = getattr(api, 'ensure_auth', None)
+            if callable(_fn):
+                try:
+                    _fn()
+                except Exception as _e:
+                    log(f'  ⚠️ 인증 준비 실패 {side} {ticker}: {str(_e)[:80]}')
             # 실제 전송 직전마다 다시 잰다 — 거절 뒤 대기와 인증 갱신이 그 사이에 든다.
             if _too_old(f'{side} {ticker}' + (' 재시도' if attempt else '')):
                 return False
@@ -1617,15 +1677,22 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     if total2 > 0:
         max_diff = 0
         # alloc_transit cap 적용 시 denom 도 capped 기준.
-        # 주문 전 총자산도 상한으로 넣는다 — 매도대금이 결제 전 단계에서 겹쳐 잡혀
-        # 총자산이 부풀면 분모가 커져 현재 비중이 작아지고, 그만큼 목표에 가까워 보인다.
-        denom_for_diff = min(total2, total_usd) if total_usd > 0 else total2
+        # 분모는 주문 뒤 총자산 하나로 간다 — 보유 수량도 주문 뒤 값이라 같은 시점이어야
+        # 비중이 맞는다. 매수 예산 쪽에 건 min(주문 전 총자산) 을 여기에 같이 걸면 분모가
+        # 작아져 현재 비중이 커 보이고, 목표에 못 미치는 보유가 달성으로 읽힌다. 예산
+        # 상한은 덜 쓰는 쪽이라 안전하지만 완료 판정은 반대 방향이다.
+        denom_for_diff = total2
         if effective_pv_usd is not None:
             denom_for_diff = min(denom_for_diff, effective_pv_usd)
+        # 값을 매길 수 없는 종목이 하나라도 있으면 그 회차를 완료로 닫지 않는다. 가격이
+        # 없는 종목을 편차 0 으로 세면 안 산 종목도 달성으로 읽힌다.
+        eval_blocked = []
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
             price = _px(ticker)
+            if price <= 0 and (target_w > 0 or holdings2.get(ticker, 0) > 0):
+                eval_blocked.append(ticker)
             # cash buffer 반영 목표로 비교.
             # merge_tranches target 은 risky 합=1.0(버퍼 전)이라 실효 목표는 ×(1-buffer).
             # (미반영 시 현금이 정상적으로 buffer% 여도 max_diff 가 buffer 만큼 떠서
@@ -1643,8 +1710,13 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 _left = qty * price / denom_for_diff
                 max_diff = max(max_diff, _left)
                 log(f'  ⏳ 목표 밖 보유가 남았다: {ticker} {qty}주 ({_left:.1%})')
+            else:
+                eval_blocked.append(ticker)
+        if eval_blocked:
+            log(f'  ⏳ 값을 매길 수 없는 보유가 있다: {", ".join(sorted(set(eval_blocked)))} '
+                f'— 완료로 안 본다')
         done = (max_diff < REBALANCE_TOLERANCE and not failed_orders
-                and not mid_uncertain and not unknown_send['hit'])
+                and not mid_uncertain and not unknown_send['hit'] and not eval_blocked)
         if done:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
