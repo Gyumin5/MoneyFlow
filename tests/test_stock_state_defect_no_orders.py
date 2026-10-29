@@ -61,8 +61,10 @@ class FakeAPI:
         return 999
 
     def place_order(self, ticker, qty, price, side='buy'):
+        # 집행기 계약: 'ok' / 'rejected' / 'unknown'. 참거짓이 아니다 — 접수 여부를
+        # 모르는 것과 확정 거절을 가르지 않으면 중복 전송이 섞인다.
         self.orders.append((side, ticker, qty))
-        return True
+        return 'ok'
 
 
 def make_signal(picks=('QQQ', 'SPY', 'EEM'), weights=None, risk_on=True):

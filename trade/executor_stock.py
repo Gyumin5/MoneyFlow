@@ -167,6 +167,8 @@ EXCHANGE_MAP = {
 # 물으면 다른 쪽이 안 보인다. NYSE 는 지금 쓰는 종목이 없지만 같이 묻는다 — 빠뜨리는 쪽의
 # 대가(안 보이는 미체결)가 한 번 더 묻는 값보다 크다.
 PENDING_EXCHANGES = ('NASD', 'NYSE', 'AMEX')
+# 미체결 연속조회를 몇 쪽까지 따라갈까. 넘기면 "전부 읽었다" 고 말하지 않는다.
+PENDING_PAGE_MAX = 5
 
 # KIS 시세 API(price-detail/dailyprice)는 주문용 EXCHANGE_MAP과 달리
 # 실제 상장 거래소 코드(NAS/NYS/AMS)가 정확해야 종목별 가격이 정상 응답된다.
@@ -304,6 +306,10 @@ def _get(path: str, tr_id: str, params: dict, retries=3) -> dict:
 
 class BalanceUnavailable(RuntimeError):
     """계좌 조회가 불완전하다. 없는 값을 0 으로 읽지 않고 그 회차를 멈추기 위한 신호."""
+
+
+class _StockDriftSkip(RuntimeError):
+    """드리프트 판정을 쉰다. 보유 종목 현재가를 못 구했을 때만 쓴다 — 사유는 이미 알렸다."""
 
 
 def _finite(v) -> float:
@@ -551,44 +557,56 @@ class KISAPI:
         조회 실패, output 칸 자체가 없는 응답, 못 읽는 행, 다음 쪽이 남은 응답이 전부
         여기에 들어간다 — 셋 다 빈 목록으로 읽으면 "미체결 없음"과 구분이 안 된다.
         """
-        data = _get('/uapi/overseas-stock/v1/trading/inquire-nccs', 'TTTS3018R', {
-            'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-            'OVRS_EXCG_CD': excg, 'SORT_SQN': 'DS',
-            'CTX_AREA_FK200': '', 'CTX_AREA_NK200': '',
-        })
-        if not data:
-            log(f'  ⚠️ 미체결 조회 실패({excg}) — 미체결 없음과 구분할 수 없다')
-            return False, []
-        rows = data.get('output')
-        if not isinstance(rows, list):
-            log(f'  ⚠️ 미체결 응답에 목록이 없다({excg}): keys={sorted(data)[:8]}')
-            return False, []
-        nxt = (data.get('ctx_area_nk200') or '').strip()
-        if nxt:
-            log(f'  ⚠️ 미체결 목록에 다음 쪽이 남았다({excg}) — 한 쪽만 보고 없다고 말하지 않는다')
-            return False, []
-        out = []
-        for item in rows:
-            if not isinstance(item, dict):
-                log(f'  ⚠️ 미체결 행을 못 읽었다({excg}): {str(item)[:60]}')
-                return False, []
-            order_no = str(item.get('odno') or '').strip()
-            ticker = str(item.get('pdno') or '').strip()
-            try:
-                qty = int(float(item.get('nccs_qty')))
-            except (TypeError, ValueError):
-                log(f"  ⚠️ 미체결 수량을 못 읽었다({excg}): {item.get('nccs_qty')!r}")
-                return False, []
-            if qty <= 0:
-                continue
-            if not order_no or not ticker:
-                log(f'  ⚠️ 미체결 행에 주문번호·종목이 없다({excg}): {str(item)[:60]}')
-                return False, []
-            out.append({
-                'odno': order_no, 'ticker': ticker, 'qty': qty,
-                'side': 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell',
+        out, seen, nk = {}, set(), ''
+        for page in range(PENDING_PAGE_MAX):
+            data = _get('/uapi/overseas-stock/v1/trading/inquire-nccs', 'TTTS3018R', {
+                'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
+                'OVRS_EXCG_CD': excg, 'SORT_SQN': 'DS',
+                'CTX_AREA_FK200': '', 'CTX_AREA_NK200': nk,
             })
-        return True, out
+            if not data:
+                log(f'  ⚠️ 미체결 조회 실패({excg} {page + 1}쪽) — 미체결 없음과 구분할 수 없다')
+                return False, []
+            rows = data.get('output')
+            if not isinstance(rows, list):
+                log(f'  ⚠️ 미체결 응답에 목록이 없다({excg}): keys={sorted(data)[:8]}')
+                return False, []
+            fresh = 0
+            for item in rows:
+                if not isinstance(item, dict):
+                    log(f'  ⚠️ 미체결 행을 못 읽었다({excg}): {str(item)[:60]}')
+                    return False, []
+                order_no = str(item.get('odno') or '').strip()
+                ticker = str(item.get('pdno') or '').strip()
+                raw = item.get('nccs_qty')
+                num = _finite(raw)
+                # 유한한 비음수 정수만 받는다. int(float('inf')) 는 OverflowError 라
+                # TypeError/ValueError 로는 안 잡히고, 음수·소수는 조용히 잘려서 다른
+                # 수량으로 취소가 나간다.
+                if math.isnan(num) or num < 0 or num != int(num):
+                    log(f'  ⚠️ 미체결 수량을 못 읽었다({excg}): {raw!r}')
+                    return False, []
+                qty = int(num)
+                if qty == 0:
+                    continue
+                if not order_no or not ticker:
+                    log(f'  ⚠️ 미체결 행에 주문번호·종목이 없다({excg}): {str(item)[:60]}')
+                    return False, []
+                if order_no in seen:
+                    continue
+                seen.add(order_no)
+                fresh += 1
+                out[order_no] = {
+                    'odno': order_no, 'ticker': ticker, 'qty': qty, 'excg': excg,
+                    'side': 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell',
+                }
+            nk = (data.get('ctx_area_nk200') or '').strip()
+            # 마지막 쪽에서도 연속조회 키를 되돌려주는 응답이 있어, 키가 비었는지만 보면
+            # 영원히 돌거나 영원히 막힌다. 새 행이 안 늘어난 쪽에서 끝낸다.
+            if not nk or not rows or fresh == 0:
+                return True, list(out.values())
+        log(f'  ⚠️ 미체결 목록이 {PENDING_PAGE_MAX}쪽을 넘었다({excg}) — 전부 읽었다고 말하지 않는다')
+        return False, []
 
     def cancel_all_pending(self) -> dict:
         """미체결 전량 취소. 결과를 돌려준다 — {'queried', 'found', 'failed'}.
@@ -615,7 +633,9 @@ class KISAPI:
                 continue
             res = _post('/uapi/overseas-stock/v1/trading/order-rvsecncl', 'TTTT1004U', {
                 'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-                'OVRS_EXCG_CD': EXCHANGE_MAP.get(ticker, 'NASD'),
+                # 원주문이 실제로 보인 거래소 코드를 쓴다. EXCHANGE_MAP 은 우리가 주문을
+                # 보낼 때 쓰는 표라 그 표가 틀리면 취소가 다른 거래소로 나간다.
+                'OVRS_EXCG_CD': row.get('excg') or EXCHANGE_MAP.get(ticker, 'NASD'),
                 'PDNO': ticker, 'ORGN_ODNO': row['odno'],
                 'RVSE_CNCL_DVSN_CD': '02',
                 'ORD_QTY': str(qty), 'OVRS_ORD_UNPR': '0',
@@ -629,11 +649,20 @@ class KISAPI:
                 log(f'  ⚠️ 미체결 취소 실패: {ticker} {side} {qty}주 — {str(res)[:120]}')
         return {'queried': True, 'found': len(found_rows), 'failed': failed}
 
-    def place_order(self, ticker: str, qty: int, price: float, side: str = 'buy') -> bool:
-        """지정가 주문."""
+    def place_order(self, ticker: str, qty: int, price: float, side: str = 'buy') -> str:
+        """지정가 주문. 결과를 셋으로 갈라 돌려준다 — 'ok' / 'rejected' / 'unknown'.
+
+        'unknown' 은 접수됐는지 안 됐는지 모른다는 뜻이다. 통신이 끊기거나 시간이 넘으면
+        서버는 받아놓고 우리만 응답을 못 받을 수 있다. 그때 같은 주문을 다시 보내면 두 번
+        체결된다 — 그래서 이 함수는 재전송을 자기 안에서 하지 않고(retries=1), 부르는 쪽도
+        'unknown' 에서는 다시 보내지 않고 그 회차의 신규 주문을 통째로 멈춘다.
+
+        'rejected' 는 서버가 받아서 거절한 것이다(rt_cd != '0'). 접수되지 않았음이 확정이라
+        같은 주문을 다시 내도 두 번 체결되지 않는다.
+        """
         if self.dry_run:
             log(f'  [DRY] {side} {ticker} {qty}주 @ ${price:.2f}')
-            return True
+            return 'ok'
         tr_id = 'TTTT1002U' if side == 'buy' else 'TTTT1006U'
         result = _post('/uapi/overseas-stock/v1/trading/order', tr_id, {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
@@ -644,13 +673,34 @@ class KISAPI:
             'CTAC_TLNO': '', 'MGCO_APTM_ODNO': '',
             'ORD_SVR_DVSN_CD': '0',
             'ORD_DVSN': '00',
-        })
-        success = bool(result.get('output', {}).get('ODNO'))
-        if success:
-            log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f}')
-        else:
-            log(f'  주문 실패 {side} {ticker}: {result}')
-        return success
+        }, retries=1)
+        if not isinstance(result, dict):
+            log(f'  ⚠️ 주문 응답을 못 읽었다 {side} {ticker}: {str(result)[:120]}')
+            return 'unknown'
+        err = result.get('_error')
+        if err is not None:
+            # 서버가 본문으로 거절한 것만 확정 거절이다. 예외(시간 초과·연결 끊김)는
+            # 접수 여부를 모른다.
+            if isinstance(err, dict) and err.get('body') is not None:
+                log(f'  주문 거절 {side} {ticker}: {str(err)[:160]}')
+                return 'rejected'
+            log(f'  ⚠️ 주문 접수 여부 불명 {side} {ticker}: {str(err)[:160]}')
+            return 'unknown'
+        if not result:
+            log(f'  ⚠️ 주문 응답이 비었다 {side} {ticker} — 접수 여부 불명')
+            return 'unknown'
+        # output 이 아예 없거나 dict 가 아니면 주문번호를 확인할 길이 없다. rt_cd 가 '0'
+        # 이어도 접수됐다고 단정하지 않는다.
+        output = result.get('output')
+        if not isinstance(output, dict):
+            log(f'  ⚠️ 주문 응답에 output 이 없다 {side} {ticker}: {str(result)[:120]}')
+            return 'unknown'
+        odno = str(output.get('ODNO') or '').strip()
+        if not odno:
+            log(f'  ⚠️ 주문 응답에 주문번호가 없다 {side} {ticker}: {str(result)[:120]}')
+            return 'unknown'
+        log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f} (주문번호 {odno})')
+        return 'ok'
 
     def get_max_buy_qty(self, ticker: str, price: float) -> int:
         """매수 가능 수량 조회 (psamount API). -1이면 조회 실패.
@@ -1254,12 +1304,34 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     # alloc_transit cap 적용
     pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
 
+    # 현재가는 종목마다 한 번만 묻고 그 값을 회차 끝까지 쓴다. 같은 종목을 두 번 물으면
+    # 한 번은 실패하고 한 번은 성공할 수 있고, 그때 보유가치 0 과 양수 가격이 짝지어
+    # "안 들고 있는데 목표만큼 사라" 가 된다(이미 들고 있는데 또 산다).
+    _px_cache: Dict[str, float] = {}
+
+    def _px(ticker: str) -> float:
+        if ticker not in _px_cache:
+            _px_cache[ticker] = api.get_current_price(ticker)
+        return _px_cache[ticker]
+
     # 현재 비중 계산 — 보유 수량 × 현재가. 총자산도 같은 시점 기준이라 둘이 일관된다.
     current_values = {}
+    _px_missing = []
     for ticker, qty in holdings.items():
-        price = api.get_current_price(ticker)
-        current_values[ticker] = (qty * price) if price else 0
+        price = _px(ticker)
+        if not price or price <= 0:
+            _px_missing.append(ticker)
+            continue
+        current_values[ticker] = qty * price
         log(f'    현재 {ticker}: ${current_values[ticker]:,.0f} ({(current_values[ticker] / total_usd):.1%})')
+
+    # 보유 종목의 현재가를 못 구하면 그 보유를 0 으로 세지 않고 회차를 쉰다. 0 으로 세면
+    # 목표 전액을 새로 사는 주문이 나간다.
+    if _px_missing:
+        log(f"    ⛔ 보유 종목 현재가를 못 구했다({', '.join(_px_missing)}) — 주문 없이 돌아간다")
+        send_telegram(f"⛔ 주식: 보유 {', '.join(_px_missing)} 의 현재가를 못 구해 주문을 내지 않았다. "
+                      f'다음 회차에 다시 계산한다.')
+        return _stale_result(holdings, total_usd, exrt)
 
     # 매도/매수 리스트
     sells = []
@@ -1275,7 +1347,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             continue
         target_val = target_usd * target_w
         current_val = current_values.get(ticker, 0)
-        price = api.get_current_price(ticker)
+        price = _px(ticker)
         if price <= 0:
             continue
 
@@ -1290,7 +1362,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     # 보유 중이지만 target에 없는 종목 → 전량 매도
     for ticker, qty in holdings.items():
         if ticker not in target:  # target_w=0은 위 루프에서 이미 처리
-            price = api.get_current_price(ticker)
+            price = _px(ticker)
             if price > 0 and qty > 0:
                 sells.append((ticker, qty, price))
 
@@ -1322,24 +1394,41 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                           f'({where}). 다음 회차에 다시 계산한다.')
         return expired['hit']
 
+    # 접수 여부를 모르는 주문이 한 번이라도 나오면 그 회차의 신규 주문을 통째로 멈춘다.
+    # 서버가 받아놓고 우리만 응답을 못 받은 경우가 섞여 있어서, 다시 보내면 두 번 체결된다.
+    unknown_send = {'hit': False}
+
+    def _send(side: str, ticker: str, qty: int, price: float) -> bool:
+        """한 종목 주문. 돌려주는 것은 접수됐나다. 'unknown' 이면 재전송하지 않는다."""
+        for attempt in range(MAX_ORDER_ATTEMPTS):
+            # 실제 전송 직전마다 다시 잰다 — 거절 뒤 대기와 인증 갱신이 그 사이에 든다.
+            if _too_old(f'{side} {ticker}' + (' 재시도' if attempt else '')):
+                return False
+            res = api.place_order(ticker, qty, price, side)
+            if res == 'ok':
+                return True
+            if res != 'rejected':
+                unknown_send['hit'] = True
+                log(f'  ⛔ {side} {ticker} 접수 여부 불명 — 재전송하지 않고 신규 주문을 멈춘다')
+                send_telegram(f'⛔ 주식: {side} {ticker} {qty}주의 접수 여부를 모른다. 중복 체결을 '
+                              f'막으려고 다시 보내지 않고 남은 주문도 멈췄다. 미체결·체결 내역을 '
+                              f'직접 확인해야 한다.')
+                return False
+            if attempt < MAX_ORDER_ATTEMPTS - 1:
+                time.sleep(ORDER_WAIT_SEC)
+        return False
+
     # 매도 먼저 (delta 주수만큼만, target=0이면 전량)
     for ticker, qty, price in sells:
-        if _too_old(f'매도 {ticker}'):
+        if unknown_send['hit']:
             failed_orders.append(('sell', ticker, qty))
             continue
         sell_price = price * (1 - LIMIT_PRICE_SLIP)
         log(f'  매도: {ticker} {qty}주 @ ${sell_price:.2f}')
-        success = False
-        for attempt in range(MAX_ORDER_ATTEMPTS):
-            if attempt and _too_old(f'매도 {ticker} 재시도'):
-                break
-            success = api.place_order(ticker, qty, sell_price, 'sell')
-            if success:
-                break
-            time.sleep(ORDER_WAIT_SEC)
-        if not success:
+        if not _send('sell', ticker, qty, sell_price):
             failed_orders.append(('sell', ticker, qty))
-            send_telegram(f'⚠️ 주문 실패: sell {ticker} {qty}주')
+            if not unknown_send['hit'] and not expired['hit']:
+                send_telegram(f'⚠️ 주문 실패: sell {ticker} {qty}주')
 
     # 주문 뒤의 취소 결과도 확인한다. 불명확하면 아래 완료 판정을 막는다 — 잔존 주문이
     # 뒤늦게 체결되면 그 직후에 읽는 잔고가 목표와 같아 보여도 실제는 다르다.
@@ -1351,36 +1440,46 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             mid_uncertain = True
             log(f'  ⚠️ 매도 뒤 미체결 상태를 확정 못 했다: {_mid}')
 
+    # 매도가 다 안 됐거나 매도 뒤 미체결 상태가 불확실하면 매수로 넘어가지 않는다.
+    # 현금이 얼마 생겼는지 모르는 상태에서 사면 초과 배분이 되고, 잔존 매도 주문이
+    # 뒤늦게 체결되면 그 매수가 목표를 넘긴다. 다음 회차가 실제 잔고로 다시 계산한다.
+    _sell_failed = [t for s, t, _q in failed_orders if s == 'sell']
+    _block_buys = bool(_sell_failed) or mid_uncertain or unknown_send['hit']
+    if buys and _block_buys:
+        _why = ('접수 여부 불명' if unknown_send['hit']
+                else ('매도 실패 ' + ', '.join(_sell_failed)) if _sell_failed
+                else '매도 뒤 미체결 상태 미확정')
+        log(f'  ⛔ {_why} — 매수 {len(buys)}건을 내지 않는다')
+        send_telegram(f'⛔ 주식: {_why} 때문에 매수 {len(buys)}건을 내지 않았다. '
+                      f'다음 회차에 실제 잔고로 다시 계산한다.')
+        for ticker, qty, _price in buys:
+            failed_orders.append(('buy', ticker, qty))
+        buys = []
+
     # 매수 (psamount로 가능 수량 확인 후 실행)
     for ticker, qty, price in buys:
-        if _too_old(f'매수 {ticker}'):
+        if unknown_send['hit']:
             failed_orders.append(('buy', ticker, qty))
             continue
         buy_price = price * (1 + LIMIT_PRICE_SLIP)
         max_qty = api.get_max_buy_qty(ticker, buy_price)
+        if max_qty < 0:
+            # 조회가 안 된 것을 "한도 없음" 으로 읽지 않는다. 그 종목은 다음 회차로 넘긴다.
+            log(f'  ⚠️ {ticker} 매수가능수량 조회 실패 → 이 회차엔 안 산다')
+            failed_orders.append(('buy', ticker, qty))
+            continue
         if max_qty == 0:
             log(f'  ⚠️ {ticker} 매수 불가 (주문가능금액 0) → 다음 실행에서 재시도')
             failed_orders.append(('buy', ticker, qty))
             continue
-        actual_qty = min(qty, max_qty) if max_qty > 0 else qty
-        if 0 < max_qty < qty:
+        actual_qty = min(qty, max_qty)
+        if max_qty < qty:
             log(f'  ⚠️ {ticker} 매수 축소: {qty}→{actual_qty}주 (주문가능금액 제한)')
-        # 매수 가능수량 조회는 자금 한도만 봐준다. 목표 비중이 선 시점의 신선도는 못 봐준다.
-        if _too_old(f'매수 {ticker} 가능수량 조회 뒤'):
-            failed_orders.append(('buy', ticker, actual_qty))
-            continue
         log(f'  매수: {ticker} {actual_qty}주 @ ${buy_price:.2f}')
-        success = False
-        for attempt in range(MAX_ORDER_ATTEMPTS):
-            if attempt and _too_old(f'매수 {ticker} 재시도'):
-                break
-            success = api.place_order(ticker, actual_qty, buy_price, 'buy')
-            if success:
-                break
-            time.sleep(ORDER_WAIT_SEC)
-        if not success:
+        if not _send('buy', ticker, actual_qty, buy_price):
             failed_orders.append(('buy', ticker, actual_qty))
-            send_telegram(f'⚠️ 주문 실패: buy {ticker} {actual_qty}주')
+            if not unknown_send['hit'] and not expired['hit']:
+                send_telegram(f'⚠️ 주문 실패: buy {ticker} {actual_qty}주')
 
     if buys:
         time.sleep(ORDER_WAIT_SEC)
@@ -1407,7 +1506,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
-            price = api.get_current_price(ticker)
+            price = _px(ticker)
             # cash buffer 반영 목표로 비교.
             # merge_tranches target 은 risky 합=1.0(버퍼 전)이라 실효 목표는 ×(1-buffer).
             # (미반영 시 현금이 정상적으로 buffer% 여도 max_diff 가 buffer 만큼 떠서
@@ -1415,11 +1514,15 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             current_w = (holdings2.get(ticker, 0) * price / denom_for_diff) if price > 0 else 0
             target_eff = target_w * (1 - cash_buffer)
             max_diff = max(max_diff, abs(target_eff - current_w))
-        done = max_diff < REBALANCE_TOLERANCE and not failed_orders and not mid_uncertain
+        done = (max_diff < REBALANCE_TOLERANCE and not failed_orders
+                and not mid_uncertain and not unknown_send['hit'])
         if done:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
             log('✅ 리밸런싱 완료 (silent)')
+        elif unknown_send['hit']:
+            state['rebalancing_needed'] = True
+            log(f'  ⏳ 주문 접수 여부를 몰라 완료로 안 본다 (max diff={max_diff:.1%})')
         elif mid_uncertain:
             state['rebalancing_needed'] = True
             log(f'  ⏳ 미체결 상태를 확정 못 해 완료로 안 본다 (max diff={max_diff:.1%})')
@@ -1435,7 +1538,8 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             'failed_orders': failed_orders,
             'max_diff': max_diff,
             'completed': done,
-            'pending_uncertain': mid_uncertain,
+            'pending_uncertain': mid_uncertain or unknown_send['hit'],
+            'send_unknown': unknown_send['hit'],
             'post_balance': post_balance,
         }
 
@@ -1448,7 +1552,8 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         'failed_orders': failed_orders,
         'max_diff': None,
         'completed': False,
-        'pending_uncertain': mid_uncertain,
+        'pending_uncertain': mid_uncertain or unknown_send['hit'],
+        'send_unknown': unknown_send['hit'],
         'post_balance': post_balance,
     }
 
@@ -1952,10 +2057,22 @@ def run_once(dry_run=False):
                         log(f'  🔴 alloc_transit cap_ratio={_stock_cap_ratio:.3f} → pv ${_total_usd:,.0f} → ${_pv_basis:,.0f}')
                     # 보유 수량 × 현재가 / 총자산. 총자산도 같은 시점 기준이다.
                     _cur_w = {}
+                    _miss = []
                     for _tk, _qty in _holdings.items():
-                        _px = api.get_current_price(_tk)
-                        if _px and _qty > 0:
-                            _cur_w[_tk] = (_qty * _px) / _pv_basis
+                        if _qty <= 0:
+                            continue
+                        _p = api.get_current_price(_tk)
+                        if not _p or _p <= 0:
+                            _miss.append(_tk)
+                            continue
+                        _cur_w[_tk] = (_qty * _p) / _pv_basis
+                    # 현재가를 못 구한 보유를 빼면 그 몫이 현금으로 세어져 드리프트가 부풀고,
+                    # 발화하면 drift-refill 이 스냅 종목까지 갈아버린다. 판정을 쉰다.
+                    if _miss:
+                        log(f"  ⛔ 보유 {', '.join(_miss)} 의 현재가를 못 구했다 — 드리프트 판정을 쉰다")
+                        send_telegram(f"⛔ 주식: 보유 {', '.join(_miss)} 의 현재가를 못 구해 드리프트 "
+                                      f'판정을 건너뛴다. 종목 교체와 발화는 없다.')
+                        raise _StockDriftSkip()
                     _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
                     if _cash_w > 0:
                         _cur_w['Cash'] = _cash_w
@@ -1985,6 +2102,8 @@ def run_once(dry_run=False):
                                 log(f'  🔄 V25 drift-refill: snap picks → 그날 fresh 3-mom 으로 교체 (new target={_new_t})')
         except BalanceUnavailable:
             raise  # 계좌 조회 실패를 "드리프트 없음"으로 삼키지 않는다
+        except _StockDriftSkip:
+            pass   # 사유를 이미 적고 알렸다. 발화도 종목 교체도 없이 넘어간다
         except Exception as _ex:
             log(f'  ⚠️ drift trigger 체크 실패: {_ex}')
 
@@ -2003,6 +2122,7 @@ def run_once(dry_run=False):
     _bal_after = None   # 주문 뒤 조회값. 리밸 분기를 안 타면 그대로 None 이다.
     _stale_abort = False  # 계좌값이 낡아 주문을 보류한 회차인가
     _pending_uncertain = False  # 주문 뒤 미체결 상태를 확정 못 한 회차인가
+    _send_unknown = False  # 주문 접수 여부를 모르는 주문이 있었나
     _rebal_ran = bool(state.get('rebalancing_needed', False))
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
@@ -2035,6 +2155,7 @@ def run_once(dry_run=False):
         _bal_after = result.get('post_balance')
         _stale_abort = bool(result.get('stale_abort'))
         _pending_uncertain = bool(result.get('pending_uncertain'))
+        _send_unknown = bool(result.get('send_unknown'))
         if _bal_after is None and not _stale_abort:
             log('  ⚠️ 보고용 잔고 없음 — 주문 뒤 조회가 실패한 회차다(체결 확인 불가)')
         if isinstance(_bal_after, tuple) and len(_bal_after) >= 2:
@@ -2106,7 +2227,9 @@ def run_once(dry_run=False):
             _h, _t, _e = _bal_pre
             _tag = (' | 계좌값 만료로 주문 보류(아래 잔고는 사전 조회값)' if _stale_abort
                     else ' | 잔고 출처: 회차 시작 사전 조회')
-        if _pending_uncertain:
+        if _send_unknown:
+            _tag += ' · 주문 접수 여부 불명'
+        elif _pending_uncertain:
             _tag += ' · 미체결 상태 미확정'
         _elapsed = time.time() - _t0
         log(f'주식 executor 완료 ({_elapsed:.1f}s){_tag} | 총자산: ${_t:,.0f} (환율 {_e:,.0f}) | 잔고: {_h}')

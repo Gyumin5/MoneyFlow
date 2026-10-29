@@ -272,12 +272,14 @@ class RealBalanceAPI(ex.KISAPI):
     def get_current_price(self, ticker):
         return {'BIL': 91.60, 'PDBC': 20.02}.get(ticker, 100.0)
 
-    def get_max_buy_qty(self, ticker, price):
+    def get_max_buy_qty(self, ticker, price) -> int:
         return 999999
 
-    def place_order(self, ticker, qty, price, side='buy'):
+    def place_order(self, ticker, qty, price, side='buy') -> str:
+        # 집행기 계약: 'ok' / 'rejected' / 'unknown'. 참거짓이 아니다 — 접수 여부를
+        # 모르는 것과 확정 거절을 가르지 않으면 중복 전송이 섞인다.
         self.orders.append((side, ticker, qty))
-        return True
+        return 'ok'
 
 
 def step_clock(jump_after, jump_to):
@@ -593,8 +595,8 @@ check("완료로 안 본다", saved is not None and saved.get('rebalancing_neede
 
 _st = _state()
 _st['rebalancing_needed'] = True
-# 6번째 호출부터 늙는다 — 첫 매수(BIL)는 나가고 둘째(PDBC)는 막힌다.
-orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(5, 100.0))
+# 5번째 호출부터 늙는다 — 첫 매수(BIL)는 나가고 둘째(PDBC)는 막힌다.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(4, 100.0))
 _buys = [o for o in orders if o[0] == 'buy']
 check("첫 주문만 나간다", len(_buys) == 1, str(orders))
 check("일부만 나간 회차는 미완료로 남는다",
@@ -612,12 +614,22 @@ def _row(odno='0001', pdno='BIL', qty='10', side='01'):
 
 
 def run_cancel(nccs_by_excg, post_result):
-    """진짜 KISAPI.cancel_all_pending 을 통신만 가짜로 돌린다. (결과, POST 횟수)"""
+    """진짜 KISAPI.cancel_all_pending 을 통신만 가짜로 돌린다. (결과, 취소한 주문번호들)
+
+    값을 목록으로 주면 그 거래소의 연속조회 쪽들이다 — 쪽마다 하나씩 돌려준다.
+    """
     posts = []
+    pages = {k: 0 for k in nccs_by_excg}
     old_get, old_post, old_log = ex._get, ex._post, ex.log
 
     def _g(path, tr_id, params, retries=3):
-        return nccs_by_excg.get(params.get('OVRS_EXCG_CD'), {})
+        excg = params.get('OVRS_EXCG_CD')
+        resp = nccs_by_excg.get(excg, {})
+        if isinstance(resp, list):
+            i = pages.get(excg, 0)
+            pages[excg] = i + 1
+            return resp[i] if i < len(resp) else {}
+        return resp
 
     def _p(path, tr_id, body, retries=2):
         posts.append(body.get('ORGN_ODNO'))
@@ -656,13 +668,35 @@ for label, bad in (("output 칸이 없다", {'rt_cd': '0'}),
                    ("수량이 숫자가 아니다", _nccs([_row(qty='-')])),
                    ("수량 칸이 없다", _nccs([{'odno': '1', 'pdno': 'BIL'}])),
                    ("주문번호가 없다", _nccs([_row(odno='')])),
-                   ("다음 쪽이 남았다", _nccs([_row()], nk='NEXTKEY'))):
+                   ("수량이 무한대다", _nccs([_row(qty='inf')])),
+                   ("수량이 음수다", _nccs([_row(qty='-3')])),
+                   ("수량이 소수다", _nccs([_row(qty='2.5')])),
+                   ("둘째 쪽 조회가 실패한다", [_nccs([_row()], nk='NK'), {}])):
     res, posts = run_cancel(dict(_ALL_EMPTY, NASD=bad), {'rt_cd': '0'})
     check(f"'없음' 으로 통과하지 않는다 — {label}", res.get('queried') is False, f'{label}: {res}')
     check(f"그 상태로 취소를 쏘지 않는다 — {label}", posts == [], str(posts))
 
 res, posts = run_cancel(dict(_ALL_EMPTY, NASD=_nccs([_row(qty='0')])), {'rt_cd': '0'})
 check("수량 0 행은 미체결이 아니다", res == {'queried': True, 'found': 0, 'failed': 0}, str(res))
+
+print("\n[27-2] 연속조회는 끝까지 따라간다 — 한 쪽만 보고 없다고 말하지 않는다")
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='P1')], nk='NK'),
+                                               _nccs([_row(odno='P2')], nk='')]),
+                        {'rt_cd': '0'})
+check("둘째 쪽 미체결도 잡는다", res.get('found') == 2, str(res))
+check("둘 다 취소한다", sorted(posts) == ['P1', 'P2'], str(posts))
+
+# 마지막 쪽에서도 연속조회 키를 되돌려주는 응답이 있다. 새 행이 안 늘어난 쪽에서 끝낸다 —
+# 키만 보면 영원히 돌거나 영원히 막힌다.
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='Q1')], nk='NK'),
+                                               _nccs([_row(odno='Q1')], nk='NK')]),
+                        {'rt_cd': '0'})
+check("같은 행만 되돌아오면 거기서 끝낸다", res == {'queried': True, 'found': 1, 'failed': 0}, str(res))
+
+_endless = [_nccs([_row(odno=f'E{i}')], nk='NK') for i in range(ex.PENDING_PAGE_MAX + 2)]
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=_endless), {'rt_cd': '0'})
+check("쪽이 끝없이 오면 전부 읽었다고 말하지 않는다", res.get('queried') is False, str(res))
+check("그 상태로 취소를 쏘지 않는다", posts == [], str(posts))
 
 print("\n[27-1] 거래소를 셋 다 묻는다 — 한 코드만 물으면 다른 쪽 미체결이 안 보인다")
 asked = []
@@ -717,6 +751,135 @@ _st['rebalancing_needed'] = True
 orders, alerts, saved = _with_api(_PendingBreaksAfterOrders, FULL, _st, _signal())
 check("주문은 나간다", len(orders) > 0, str(orders))
 check("완료로 안 닫는다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+print("\n[29] 접수 여부를 모르면 다시 보내지 않고 그 회차의 신규 주문을 멈춘다")
+
+
+class _SendUnknown(RealBalanceAPI):
+    """응답이 유실된 모양 — 서버가 받아놨는지 우리만 모른다."""
+
+    def place_order(self, ticker, qty, price, side='buy') -> str:
+        self.orders.append((side, ticker, qty))
+        return 'unknown'
+
+
+class _SendRejected(RealBalanceAPI):
+    """서버가 본문으로 거절했다 — 접수되지 않았음이 확정이라 다시 내도 안전하다."""
+
+    def place_order(self, ticker, qty, price, side='buy') -> str:
+        self.orders.append((side, ticker, qty))
+        return 'rejected'
+
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SendUnknown, FULL, _st, _signal())
+check("재전송하지 않는다 — 주문은 한 번만 나간다", len(orders) == 1, str(orders))
+check("접수 여부 불명을 알린다", any('접수 여부' in a for a in alerts), str(alerts))
+check("완료로 안 닫는다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SendRejected, FULL, _st, _signal())
+check("확정 거절은 재시도 대상이다", len(orders) == ex.MAX_ORDER_ATTEMPTS * 2, str(len(orders)))
+check("거절은 '접수 여부 불명' 으로 알리지 않는다",
+      not any('접수 여부' in a for a in alerts), str(alerts))
+
+print("\n[30] 주문 응답을 셋으로 가른다 — 확정 거절과 '모름' 을 섞지 않는다")
+_retries_seen = []
+
+
+def run_place(post_result):
+    old_post, old_log = ex._post, ex.log
+
+    def _p(path, tr_id, body, retries=3):
+        _retries_seen.append(retries)
+        return post_result
+
+    try:
+        ex._post, ex.log = _p, lambda *a, **k: None
+        return _KISAPI_REAL(dry_run=False).place_order('BIL', 10, 91.60, 'buy')
+    finally:
+        ex._post, ex.log = old_post, old_log
+
+
+check("정상 접수 → ok", run_place({'rt_cd': '0', 'output': {'ODNO': '123'}}) == 'ok')
+check("서버가 본문으로 거절 → rejected",
+      run_place({'_error': {'status_code': 400, 'body': {'rt_cd': '1'}}}) == 'rejected')
+check("예외(시간 초과·연결 끊김) → unknown",
+      run_place({'_error': {'exception': 'timeout'}}) == 'unknown')
+check("응답이 비면 unknown", run_place({}) == 'unknown')
+check("output 칸이 없으면 unknown", run_place({'rt_cd': '0'}) == 'unknown')
+check("output 이 dict 가 아니면 unknown", run_place({'rt_cd': '0', 'output': []}) == 'unknown')
+check("주문번호가 비면 unknown", run_place({'rt_cd': '0', 'output': {'ODNO': ''}}) == 'unknown')
+# 전송 계층이 스스로 재전송하면 중복 체결이 난다. 재시도는 부르는 쪽이 'rejected' 에서만 한다.
+check("전송 계층은 스스로 다시 보내지 않는다", set(_retries_seen) == {1}, str(_retries_seen))
+
+print("\n[31] 매도가 안 끝났거나 살 수 있는 양을 모르면 사지 않는다")
+
+
+def _state_bil_only():
+    """목표가 BIL 하나인 상태 — 보유 PDBC 는 전량매도, BIL 은 매수가 된다.
+
+    목표는 신호가 아니라 스냅샷에서 나온다. 신호만 바꾸면 앵커일이 아닌 회차에서는
+    목표가 그대로라 매도가 안 생긴다.
+    """
+    st = _state()
+    for snap in st['snapshots'].values():
+        snap['picks'] = ['BIL']
+        snap['weights'] = {'BIL': 1.0}
+    return st
+
+
+class _SellRejected(RealBalanceAPI):
+    """매도만 거절당한다 — 현금이 얼마 생겼는지 모르는 상태."""
+
+    def place_order(self, ticker, qty, price, side='buy') -> str:
+        self.orders.append((side, ticker, qty))
+        return 'rejected' if side == 'sell' else 'ok'
+
+
+class _MaxQtyFails(RealBalanceAPI):
+    def get_max_buy_qty(self, ticker, price) -> int:
+        return -1
+
+
+_st = _state_bil_only()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SellRejected, FULL, _st, _signal())
+check("매도 시도는 있었다", [o for o in orders if o[0] == 'sell'] != [], str(orders))
+check("매수는 한 건도 안 낸다", [o for o in orders if o[0] == 'buy'] == [], str(orders))
+check("매수를 멈췄다고 알린다",
+      any('매수' in a and '내지 않았다' in a for a in alerts), str(alerts))
+check("완료로 안 닫는다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_MaxQtyFails, FULL, _st, _signal())
+check("매수가능수량 조회 실패를 '한도 없음' 으로 읽지 않는다", orders == [], str(orders))
+check("그 회차는 완료가 아니다",
+      saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+print("\n[32] 보유 종목의 현재가를 못 구하면 그 보유를 0 으로 세지 않는다")
+
+
+class _PriceMissing(RealBalanceAPI):
+    def get_current_price(self, ticker) -> float:
+        return 0.0 if ticker == 'BIL' else 20.02
+
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_PriceMissing, FULL, _st, _signal())
+check("주문 0건 — 목표 전액을 새로 사지 않는다", orders == [], str(orders))
+check("현재가를 못 구했다고 알린다", any('현재가' in a for a in alerts), str(alerts))
+check("다음 회차로 넘긴다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+_st = _state()
+_st['rebalancing_needed'] = False
+orders, alerts, saved = _with_api(_PriceMissing, FULL, _st, _signal())
+check("드리프트 판정도 쉰다 — 주문 0건", orders == [], str(orders))
+check("판정을 쉰다고 알린다", any('드리프트' in a for a in alerts), str(alerts))
 
 print()
 if FAILED:
