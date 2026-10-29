@@ -928,6 +928,16 @@ orders, alerts, saved = _with_api(_SellVanishes, FULL, _st, _signal())
 check("목표 밖 보유를 이탈로 센다",
       saved is not None and saved.get('rebalancing_needed') is True, str(saved))
 
+print("\n[35] 모의 실행은 조회 실패로 읽히지 않는다")
+# get_max_buy_qty 는 실패를 -1 로 알린다. 모의 실행이 그 값을 돌려주면 부르는 쪽이
+# 한도 조회 실패로 읽어 모의 매수가 통째로 사라진다 — 둘은 다른 뜻이다.
+_dry = ex.KISAPI(dry_run=True)
+_cap = _dry.get_max_buy_qty('BIL', 91.60)
+check("모의 한도는 -1 이 아니다", _cap > 0, str(_cap))
+check("모의 주문은 통신 없이 ok", _dry.place_order('BIL', 1, 91.60, 'buy') == 'ok')
+check("모의 취소는 조회했다고 돌려준다",
+      ex.KISAPI(dry_run=True).cancel_all_pending().get('queried') is not None)
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)}건 실패: {FAILED}")
