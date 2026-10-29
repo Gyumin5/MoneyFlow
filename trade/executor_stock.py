@@ -1144,15 +1144,22 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
     return changed
 
 
-def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None, effective_pv_usd: float = None):
+def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None,
+                  effective_pv_usd: float = None, prefetched_balance=None):
     """target vs 현재 잔고 → Delta 매매 (정수 주 단위).
 
     effective_pv_usd: alloc_transit cap 시 effective_pv (= min(actual, target_ratio×total)).
                      None 이면 actual total_usd 사용.
+    prefetched_balance: 같은 회차에서 이미 읽은 (보유, 총자산USD, 환율). 주문을 내기 전이라
+                     값이 같으므로 그대로 쓴다. None 이면 여기서 직접 읽는다.
+                     주문 뒤 체결 확인은 이 값을 안 쓰고 항상 새로 묻는다.
     """
     if cash_buffer is None:
         cash_buffer = CASH_BUFFER_DEFAULT
-    holdings, total_usd, exrt = api.get_balance()
+    if prefetched_balance is not None:
+        holdings, total_usd, exrt = prefetched_balance
+    else:
+        holdings, total_usd, exrt = api.get_balance()
 
     # alloc_transit cap 적용
     pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
@@ -1244,8 +1251,10 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     # 목표 달성 확인 — 여기서 계좌 조회가 실패하면 주문은 이미 나갔다. 되돌리거나
     # 다시 내지 않고 "완료 판정 불가"로 남긴다(rebalancing_needed 유지 → 다음 회차가
     # 그때의 실제 잔고로 델타를 다시 계산한다).
+    post_balance = None   # 체결 확인에 쓴 값. 보고도 이걸 쓴다 — 같은 시점을 두 번 묻지 않는다.
     try:
-        holdings2, total2, _ = api.get_balance()
+        holdings2, total2, exrt2 = api.get_balance()
+        post_balance = (holdings2, total2, exrt2)
     except BalanceUnavailable as _e:
         log(f'  ⚠️ 주문 후 잔고 조회 실패 — 체결 확인 불가: {_e}')
         send_telegram(f'⚠️ 주식: 주문은 냈는데 잔고 조회가 안 된다 — 체결 확인 불가 ({_e})')
@@ -1281,6 +1290,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             'failed_orders': failed_orders,
             'max_diff': max_diff,
             'completed': max_diff < REBALANCE_TOLERANCE and not failed_orders,
+            'post_balance': post_balance,
         }
 
     return {
@@ -1292,6 +1302,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         'failed_orders': failed_orders,
         'max_diff': None,
         'completed': False,
+        'post_balance': post_balance,
     }
 
 
@@ -1690,8 +1701,11 @@ def run_once(dry_run=False):
     # 2.5 계좌 조회 사전 확인 — 카나리 소비·앵커 전진·드리프트·리필보다 앞이다.
     # 조회가 비면 그 회차는 쉰다. 상태를 저장하지 않으므로 다음 회차가 같은 자리에서 잇는다.
     # 일시적 실패가 실측돼서(2026-10-21 두 번 실패하고 세 번째 성공) 조금 쉬었다 다시 본다.
+    # 여기서 읽은 값은 주문을 내기 전의 판단(드리프트·상한·델타 산출)에 그대로 재사용한다 —
+    # 이 사이에 주문이 안 나가므로 다시 물어도 같은 값이고, 조회마다 다른 값이 오면 오히려
+    # 한 회차의 판단이 서로 다른 시점을 섞는다. 체결 확인만 주문 뒤에 새로 묻는다.
     try:
-        _ = _read_balance_or_skip(api)
+        _bal_pre = _read_balance_or_skip(api)
     except BalanceUnavailable as _e:
         log(f'  ⛔ 계좌 조회 불가 — 이번 회차 매매를 건너뛴다: {_e}')
         send_telegram(f'⛔ 주식: 계좌 조회가 안 돼 이번 회차를 쉰다 ({_e}). 다음 회차에 다시 본다.')
@@ -1732,7 +1746,7 @@ def run_once(dry_run=False):
         try:
             _merged_target = merge_tranches(state)
             if _merged_target:
-                _holdings, _total_usd, _exrt = api.get_balance()
+                _holdings, _total_usd, _exrt = _bal_pre  # 2.5 의 사전 조회 재사용
                 if _total_usd > 0:
                     if _stock_cap_ratio is not None and _stock_cap_ratio < 1.0:
                         _stock_cap_usd = _total_usd * _stock_cap_ratio
@@ -1779,13 +1793,8 @@ def run_once(dry_run=False):
 
     # alloc_transit cap (drift 체크 외에서도 execute_delta 에 적용)
     if _stock_cap_usd is None and _stock_cap_ratio is not None and _stock_cap_ratio < 1.0:
-        try:
-            _, _t2, _ = api.get_balance()
-            _stock_cap_usd = _t2 * _stock_cap_ratio
-        except BalanceUnavailable:
-            raise  # 조회 실패를 "상한 없음"으로 바꾸지 않는다
-        except Exception:
-            _stock_cap_usd = None
+        _t2 = _bal_pre[1]  # 2.5 의 사전 조회 재사용
+        _stock_cap_usd = (_t2 * _stock_cap_ratio) if _t2 > 0 else None
 
     # 옵션 Z: cap_defend trigger — cap_ratio < (1 - MIN_EXCESS) 면 rebal 강제 (drift 와 별개)
     if _stock_cap_ratio is not None and _stock_cap_ratio < (1.0 - CAP_DEFEND_MIN_EXCESS):
@@ -1794,11 +1803,14 @@ def run_once(dry_run=False):
             log(f'  🛡️ cap_defend trigger: cap_ratio={_stock_cap_ratio:.4f} < {1.0-CAP_DEFEND_MIN_EXCESS:.2f} (excess≥{CAP_DEFEND_MIN_EXCESS*100:.0f}%) → rebal 강제')
 
     # 5. Merge + Delta 매매
+    _bal_after = None   # 주문 뒤 조회값. 리밸 분기를 안 타면 그대로 None 이다.
+    _rebal_ran = bool(state.get('rebalancing_needed', False))
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
         log(f'  Target: {target}')
         mode = 'DRY-RUN' if dry_run else 'LIVE'
-        result = execute_delta(target, api, state, cash_buffer=cash_buffer, effective_pv_usd=_stock_cap_usd)
+        result = execute_delta(target, api, state, cash_buffer=cash_buffer,
+                               effective_pv_usd=_stock_cap_usd, prefetched_balance=_bal_pre)
         sells = result.get('sells', [])
         buys = result.get('buys', [])
         max_diff = result.get('max_diff')
@@ -1811,11 +1823,10 @@ def run_once(dry_run=False):
         from datetime import timezone, timedelta
         kst_now = datetime.now(timezone(timedelta(hours=9)))
 
-        try:
-            _bal_after = api.get_balance()
-        except BalanceUnavailable as _e:
-            log(f'  ⚠️ 보고용 잔고 조회 실패: {_e}')
-            _bal_after = None
+        # 보고용 잔고는 execute_delta 가 체결 확인에 쓴 그 값이다. 같은 시점을 두 번 묻지 않는다.
+        _bal_after = result.get('post_balance')
+        if _bal_after is None:
+            log('  ⚠️ 보고용 잔고 없음 — 주문 뒤 조회가 실패한 회차다')
         if isinstance(_bal_after, tuple) and len(_bal_after) >= 2:
             holdings_q, total_usd, fx = _bal_after[0], _bal_after[1], (_bal_after[2] if len(_bal_after) > 2 else 1.0)
         else:
@@ -1866,8 +1877,15 @@ def run_once(dry_run=False):
     state['last_trade_date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
     if not dry_run:
         save_json(TRADE_STATE_FILE, state)
+    # 마무리 한 줄 — 이미 읽은 값을 쓴다. 매매가 없었으면 2.5 의 사전 조회가 지금 값이고,
+    # 매매가 있었으면 주문 뒤에 읽은 값이 지금 값이다. 그 둘이 다 없을 때만 새로 묻는다.
     try:
-        _h, _t, _e = api.get_balance()
+        if isinstance(_bal_after, tuple) and len(_bal_after) >= 3:
+            _h, _t, _e = _bal_after[0], _bal_after[1], _bal_after[2]
+        elif _rebal_ran:
+            _h, _t, _e = api.get_balance()
+        else:
+            _h, _t, _e = _bal_pre
         _elapsed = time.time() - _t0
         log(f'주식 executor 완료 ({_elapsed:.1f}s) | 총자산: ${_t:,.0f} (환율 {_e:,.0f}) | 잔고: {_h}')
     except Exception:

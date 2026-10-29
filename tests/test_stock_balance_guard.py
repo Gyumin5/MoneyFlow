@@ -86,9 +86,13 @@ def ok_margin(exrt=FX):  # exrt 는 문자열도 받는다 (망가진 값 재현
     ]}
 
 
+COUNTS = {}   # tr_id → 부른 횟수. 한 회차가 계좌를 몇 번 묻는지 세는 데 쓴다.
+
+
 def fake_get(table):
     """tr_id → 응답. 표에 없으면 빈 dict(조회 실패)."""
     def _g(path, tr_id, params, retries=3):
+        COUNTS[tr_id] = COUNTS.get(tr_id, 0) + 1
         v = table.get(tr_id, {})
         return v() if callable(v) else v
     return _g
@@ -267,6 +271,7 @@ class RealBalanceAPI(ex.KISAPI):
 
 
 def run_cycle(table, state_obj, signal):
+    COUNTS.clear()
     alerts, saved = [], {}
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, 'kis_trade_state.json')
@@ -408,6 +413,46 @@ print("\n[19] 캐시는 원자적으로 쓴다 — 쓰다 만 파일이 남지 �
 tok, n, saved, leftovers = with_token_file(None, ex._get_token)
 check("임시파일이 안 남는다", leftovers == [], str(leftovers))
 check("내용이 온전하다", json.loads(saved).get('token') == '새토큰1', str(saved))
+
+print("\n[20] 매매 없는 회차는 계좌를 한 번만 묻는다 (사전 조회를 판단에 재사용)")
+orders, alerts, saved = run_cycle(FULL, _state(), _signal())
+_reads = COUNTS.get('TTTS3012R', 0)
+check("계좌 조회 1회", _reads == 1, f'{_reads}회')
+check("주문 0건", orders == [], str(orders))
+
+print("\n[21] 리밸 회차는 두 번 — 주문 전 판단 한 번, 주문 뒤 체결 확인 한 번")
+st = _state()
+st['rebalancing_needed'] = True
+orders, alerts, saved = run_cycle(FULL, st, _signal())
+_reads = COUNTS.get('TTTS3012R', 0)
+check("계좌 조회 2회", _reads == 2, f'{_reads}회')
+
+print("\n[22] 주문 뒤 조회가 실패하면 체결 확인 불가로 남고 보고용으로 또 묻지 않는다")
+
+
+class _FailAfterOrders(RealBalanceAPI):
+    """첫 조회는 되고 그 다음부터 실패한다 — 주문 뒤 조회가 깨진 회차."""
+
+    def get_balance(self):
+        n = getattr(self, '_n', 0) + 1
+        self._n = n
+        if n == 1:
+            return super().get_balance()
+        raise ex.BalanceUnavailable('주문 뒤 조회 실패(시험)')
+
+
+_old_cls = RealBalanceAPI
+try:
+    _state_obj = _state()
+    _state_obj['rebalancing_needed'] = True
+    globals()['RealBalanceAPI'] = _FailAfterOrders
+    orders, alerts, saved = run_cycle(FULL, _state_obj, _signal())
+finally:
+    globals()['RealBalanceAPI'] = _old_cls
+check("체결 확인 불가를 알린다",
+      any('체결 확인 불가' in a for a in alerts), str(alerts))
+check("완료 판정을 안 내린다",
+      saved is None or saved.get('rebalancing_needed') is True, str(saved))
 
 print()
 if FAILED:
