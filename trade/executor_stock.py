@@ -355,11 +355,18 @@ def _post(path: str, tr_id: str, body: dict, retries=2, pre_send=None) -> dict:
     것도 같은 이유다(한 번 통과한 뒤 1초 대기와 재발급이 또 끼어든다).
     """
     last_error = None
+    # 요청이 한 번이라도 선 위에 올라갔나. 토큰 발급(_headers)과 전송 직전 검사(pre_send)
+    # 에서 터진 예외는 요청이 안 나갔음이 확정인데, 표시가 없으면 부르는 쪽이 통신 끊김과
+    # 구분을 못 해 "접수 여부 불명" 으로 올리고 회차의 신규 주문을 통째로 멈춘다.
+    # 한 번 참이 되면 다시 거짓으로 안 내린다 — 재시도 첫 회에 나간 요청을 서버가 이미
+    # 받아놨을 수 있어서, 둘째 회의 토큰 실패를 미전송으로 읽으면 중복 체결을 연다.
+    ever_sent = False
     for i in range(retries):
         try:
             _hdr = _headers(tr_id)
             if pre_send is not None and not pre_send():
                 return {'_stale': True}
+            ever_sent = True
             resp = requests.post(f'{BASE_URL}{path}', headers=_hdr, json=body, timeout=15)
             data = resp.json()
             if data.get('rt_cd') == '0':
@@ -369,6 +376,7 @@ def _post(path: str, tr_id: str, body: dict, retries=2, pre_send=None) -> dict:
                 'body': data,
                 'path': path,
                 'tr_id': tr_id,
+                'sent': True,
             }
             if i < retries - 1:
                 time.sleep(1)
@@ -377,6 +385,7 @@ def _post(path: str, tr_id: str, body: dict, retries=2, pre_send=None) -> dict:
                 'exception': repr(e),
                 'path': path,
                 'tr_id': tr_id,
+                'sent': ever_sent,
             }
             if i < retries - 1:
                 time.sleep(1)
@@ -897,6 +906,13 @@ class KISAPI:
             if _confirmed:
                 log(f'  주문 거절 {side} {ticker}: {str(err)[:160]}')
                 return 'rejected'
+            # 요청이 선 위에 올라가기 전에 터진 것은 미전송이 확정이다 — 토큰 발급 실패,
+            # 전송 직전 검사 자체의 예외. 이걸 불명으로 올리면 아무것도 안 나간 회차가
+            # 통째로 멈춘다. `_post` 가 `sent` 로 표시한 그 자리만 미전송으로 받는다.
+            if (isinstance(err, dict) and err.get('exception') is not None
+                    and err.get('sent') is False):
+                log(f'  ⚠️ 주문 전송 전 실패 {side} {ticker}: {str(err)[:160]}')
+                return 'stale'
             log(f'  ⚠️ 주문 접수 여부 불명 {side} {ticker}: {str(err)[:160]}')
             return 'unknown'
         if not result:

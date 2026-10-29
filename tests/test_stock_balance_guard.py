@@ -2158,6 +2158,96 @@ _o52ok, _a52ok, _s52ok = _with_api(_DriftBal, FULL, _st52ok, _signal())
 check("[양성] 정상 버퍼면 회차가 돈다", _o52ok != [] and _s52ok is not None,
       f'{_o52ok} {_s52ok is not None}')
 
+print("\n[54] 전송 전에 터진 실패는 접수 여부 불명이 아니다")
+
+# 여덟째 토론(run-20261029T0*)이 risks 로 남긴 자리다. 토큰 발급(_headers)과 전송 직전
+# 검사(pre_send) 자체가 예외를 던지면 요청은 선 위에 안 올라간다 — 미전송이 확정이다.
+# 그걸 'unknown' 으로 올리면 아무것도 안 나간 회차가 통째로 멈춘다(그 회차 신규 주문
+# 전면 중단 + 드리프트 자격 박탈). _post 가 'sent' 로 그 자리를 표시하고 place_order 가
+# 그 표시만 'stale'(미전송 확정)로 받는다.
+
+
+def post_raw(hdr_exc=None, pre=None, post_fn=None, retries=1):
+    """진짜 _post 를 통신만 가짜로 돌린다."""
+    old_h, old_p, old_sleep = ex._headers, ex.requests.post, ex.time.sleep
+
+    def _h(tr_id):
+        if hdr_exc is not None:
+            raise hdr_exc
+        return {}
+
+    try:
+        ex._headers = _h
+        ex.requests.post = post_fn or (lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError('연결 끊김')))
+        ex.time.sleep = lambda *a: None
+        return ex._post('/p', 'TR', {}, retries=retries, pre_send=pre)
+    finally:
+        ex._headers, ex.requests.post, ex.time.sleep = old_h, old_p, old_sleep
+
+
+_r54a = post_raw(hdr_exc=RuntimeError('토큰 잠금 시간 초과'))
+check("토큰 발급 실패는 미전송으로 표시된다",
+      _r54a.get('_error', {}).get('sent') is False, str(_r54a))
+
+_r54b = post_raw(pre=lambda: (_ for _ in ()).throw(RuntimeError('조회 터짐')))
+check("전송 직전 검사의 예외도 미전송이다",
+      _r54b.get('_error', {}).get('sent') is False, str(_r54b))
+
+_r54c = post_raw()        # _headers 통과 뒤 post 가 터진다
+check("[양성] 통신 중 끊김은 전송됐을 수 있다고 표시된다",
+      _r54c.get('_error', {}).get('sent') is True, str(_r54c))
+
+
+class _Resp:
+    status_code = 200
+
+    def json(self):
+        return {'rt_cd': '1', 'msg1': '거절'}
+
+
+_r54d = post_raw(post_fn=lambda *a, **k: _Resp())
+check("응답을 받은 실패는 전송됐다고 표시된다",
+      _r54d.get('_error', {}).get('sent') is True, str(_r54d))
+
+# 재시도에서 한 번이라도 나갔으면 그 뒤 토큰 실패를 미전송으로 내리지 않는다 —
+# 첫 회 요청을 서버가 이미 받아놨을 수 있어서, 내리면 중복 체결을 연다.
+_calls54 = {'n': 0}
+
+
+def _h_flaky(tr_id):
+    _calls54['n'] += 1
+    if _calls54['n'] >= 2:
+        raise RuntimeError('두 번째 회차 토큰 실패')
+    return {}
+
+
+_old_h54, _old_p54, _old_s54 = ex._headers, ex.requests.post, ex.time.sleep
+try:
+    ex._headers = _h_flaky
+    ex.requests.post = lambda *a, **k: (_ for _ in ()).throw(RuntimeError('끊김'))
+    ex.time.sleep = lambda *a: None
+    _r54e = ex._post('/p', 'TR', {}, retries=2)
+finally:
+    ex._headers, ex.requests.post, ex.time.sleep = _old_h54, _old_p54, _old_s54
+check("한 번이라도 나갔으면 뒤의 토큰 실패도 전송됨으로 남는다",
+      _r54e.get('_error', {}).get('sent') is True, str(_r54e))
+
+# place_order 가 그 표시를 어떻게 받는가.
+for _label, _err, _want in (
+        ('토큰 발급 실패', {'exception': "RuntimeError('x')", 'sent': False}, 'stale'),
+        ('통신 끊김', {'exception': "RuntimeError('x')", 'sent': True}, 'unknown'),
+        ('표시 없는 옛 모양', {'exception': "RuntimeError('x')"}, 'unknown'),
+        ('게이트웨이 502', {'status_code': 502, 'body': {'rt_cd': '1'}, 'sent': True}, 'unknown'),
+        ('업무 거절', {'status_code': 200, 'body': {'rt_cd': '1'}, 'sent': True}, 'rejected')):
+    _got54, _ = run_place_api(ex.KISAPI(dry_run=False), 'SPY', {'_error': _err})
+    check(f"{_label} → {_want}", _got54 == _want, f'got={_got54}')
+
+# 미전송 확정은 주문번호를 안 남긴다 — 취소가 쏠 대상이 없다.
+_api54 = ex.KISAPI(dry_run=False)
+run_place_api(_api54, 'SPY', {'_error': {'exception': "RuntimeError('x')", 'sent': False}})
+check("미전송은 거래소 기록을 안 남긴다", _api54._order_excg == {}, str(_api54._order_excg))
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)}건 실패: {FAILED}")
