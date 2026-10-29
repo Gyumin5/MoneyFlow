@@ -99,7 +99,10 @@ def run(state_obj, signal, today=_dt.date(2026, 8, 28), raw_state=None):
         ex.send_telegram = lambda m: alerts.append(m)
         ex.save_json = lambda p, d, default=None: saved.update({'state': d})
         ex.TRADE_STATE_FILE = path
-        ex.time = types.SimpleNamespace(sleep=lambda s: None, time=lambda: 0.0)
+        # monotonic 은 계좌값 나이 측정용. 여기선 늙지 않게 고정해 둔다 — 나이 판정 자체는
+        # tests/test_stock_balance_guard.py 의 [26] 이 가짜 시계로 본다.
+        ex.time = types.SimpleNamespace(sleep=lambda s: None, time=lambda: 0.0,
+                                        monotonic=lambda: 0.0)
         ex._read_alloc_transit_cap_ratio = lambda sleeve: None
         FakeAPI.last = None
         ex.run_once(dry_run=False)

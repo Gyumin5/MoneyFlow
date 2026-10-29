@@ -281,7 +281,11 @@ class RealBalanceAPI(ex.KISAPI):
 
 
 def step_clock(jump_after, jump_to):
-    """부른 횟수가 jump_after 를 넘으면 jump_to 를 돌려주는 시계. 계좌값 나이 시험용."""
+    """부른 횟수가 jump_after 를 넘으면 jump_to 를 돌려주는 단조 시계. 계좌값 나이 시험용.
+
+    집행기가 monotonic 을 부르는 순서 — ①계좌 조회 시작 ②execute_delta 진입(재사용 나이)
+    ③주문 직전 ④이후 주문·재시도마다 하나씩. jump_after 로 어느 지점부터 늙게 할지 고른다.
+    """
     box = {'n': 0}
 
     def t():
@@ -307,8 +311,9 @@ def run_cycle(table, state_obj, signal, clock=None):
         ex.send_telegram = lambda m: alerts.append(m)
         ex.save_json = lambda p, d, default=None: saved.update({'state': d})
         ex.TRADE_STATE_FILE = path
-        ex.time = types.SimpleNamespace(sleep=lambda s: None,
-                                        time=clock if clock else (lambda: 0.0))
+        # 나이는 monotonic 으로 잰다. 벽시계(time)는 경과시간 로그에만 쓴다.
+        ex.time = types.SimpleNamespace(sleep=lambda s: None, time=lambda: 0.0,
+                                        monotonic=clock if clock else (lambda: 0.0))
         ex._read_alloc_transit_cap_ratio = lambda sleeve: None
         ex._get = fake_get(table)
         ex.log = lambda *a, **k: None
@@ -560,18 +565,158 @@ check("쉰다는 알림 없음", not any('미체결 주문 상태를 확인하�
 print("\n[26] 계좌값이 허용 나이를 넘기면 그 값으로 주문하지 않는다")
 _st = _state()
 _st['rebalancing_needed'] = True
-# 시계 4번째 호출(주문 직전 나이 측정)부터 뛴다 — 들어올 때는 신선, 수량 산출 중 만료.
-orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(3, 100.0))
-check("주문 0건", orders == [], str(orders))
+# 3번째 호출(주문 직전 나이 측정)부터 뛴다 — 들어올 때는 신선, 수량 산출 중 만료.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(2, 100.0))
+check("주문 직전 만료 → 주문 0건", orders == [], str(orders))
 check("보류를 알린다", any('주문을 내지 않았다' in a for a in alerts), str(alerts))
 check("다음 회차로 넘긴다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
 check("체결 확인 조회 안 함", COUNTS.get('get_balance', 0) == 1, str(COUNTS.get('get_balance')))
 
 _st = _state()
 _st['rebalancing_needed'] = True
-# 시계 3번째 호출(execute_delta 진입)부터 뛴다 — 들어올 때 이미 만료라 새로 읽는다.
-orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(2, 100.0))
-check("만료면 새로 읽고 진행한다", COUNTS.get('get_balance', 0) == 3, str(COUNTS.get('get_balance')))
+# 2번째 호출(execute_delta 진입)부터 뛴다 — 들어올 때 이미 만료.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(1, 100.0))
+check("진입부 만료 → 주문 0건", orders == [], str(orders))
+check("진입부 만료 → 다시 읽지 않는다 (상한과 짝이 안 맞는다)",
+      COUNTS.get('get_balance', 0) == 1, str(COUNTS.get('get_balance')))
+check("진입부 만료 → 다음 회차로 넘긴다",
+      saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+print("\n[26-1] 주문 묶음이 시작된 뒤에 만료되면 남은 주문을 멈춘다")
+_st = _state()
+_st['rebalancing_needed'] = True
+# 4번째 호출 = 첫 매수 직전. 여기서부터 늙으면 주문이 하나도 안 나간다.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(3, 100.0))
+check("주문 0건", orders == [], str(orders))
+check("주문 도중 멈췄다고 알린다", any('주문 도중' in a for a in alerts), str(alerts))
+check("완료로 안 본다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+_st = _state()
+_st['rebalancing_needed'] = True
+# 6번째 호출부터 늙는다 — 첫 매수(BIL)는 나가고 둘째(PDBC)는 막힌다.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(5, 100.0))
+_buys = [o for o in orders if o[0] == 'buy']
+check("첫 주문만 나간다", len(_buys) == 1, str(orders))
+check("일부만 나간 회차는 미완료로 남는다",
+      saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+print("\n[27] 취소 응답은 성공 표식으로 판정한다 — 진짜 cancel_all_pending 을 돌린다")
+
+
+def _nccs(rows, nk=''):
+    return {'rt_cd': '0', 'output': rows, 'ctx_area_nk200': nk}
+
+
+def _row(odno='0001', pdno='BIL', qty='10', side='01'):
+    return {'odno': odno, 'pdno': pdno, 'nccs_qty': qty, 'sll_buy_dvsn_cd': side}
+
+
+def run_cancel(nccs_by_excg, post_result):
+    """진짜 KISAPI.cancel_all_pending 을 통신만 가짜로 돌린다. (결과, POST 횟수)"""
+    posts = []
+    old_get, old_post, old_log = ex._get, ex._post, ex.log
+
+    def _g(path, tr_id, params, retries=3):
+        return nccs_by_excg.get(params.get('OVRS_EXCG_CD'), {})
+
+    def _p(path, tr_id, body, retries=2):
+        posts.append(body.get('ORGN_ODNO'))
+        return post_result() if callable(post_result) else post_result
+
+    try:
+        ex._get, ex._post, ex.log = _g, _p, lambda *a, **k: None
+        return _KISAPI_REAL(dry_run=False).cancel_all_pending(), posts
+    finally:
+        ex._get, ex._post, ex.log = old_get, old_post, old_log
+
+
+_ALL_EMPTY = {e: _nccs([]) for e in ex.PENDING_EXCHANGES}
+
+res, posts = run_cancel(_ALL_EMPTY, {'rt_cd': '0'})
+check("미체결 없음", res == {'queried': True, 'found': 0, 'failed': 0}, str(res))
+check("취소 주문도 없다", posts == [], str(posts))
+
+_one = dict(_ALL_EMPTY, NASD=_nccs([_row()]))
+res, posts = run_cancel(_one, {'rt_cd': '0', 'output': {'ODNO': '9'}})
+check("취소 성공은 실패로 안 센다", res == {'queried': True, 'found': 1, 'failed': 0}, str(res))
+
+res, posts = run_cancel(_one, {'_error': {'status_code': 500, 'body': {'rt_cd': '1'}}})
+check("취소 거부를 실패로 센다 (_error 는 참값이다)",
+      res == {'queried': True, 'found': 1, 'failed': 1}, str(res))
+
+res, posts = run_cancel(_one, {})
+check("응답이 통째로 비면 실패로 센다", res.get('failed') == 1, str(res))
+
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD={}), {'rt_cd': '0'})
+check("조회 실패는 '없음' 과 구분한다", res == {'queried': False, 'found': 0, 'failed': 0}, str(res))
+
+for label, bad in (("output 칸이 없다", {'rt_cd': '0'}),
+                   ("목록이 아니다", {'rt_cd': '0', 'output': {'odno': '1'}}),
+                   ("행이 dict 가 아니다", _nccs(['x'])),
+                   ("수량이 숫자가 아니다", _nccs([_row(qty='-')])),
+                   ("수량 칸이 없다", _nccs([{'odno': '1', 'pdno': 'BIL'}])),
+                   ("주문번호가 없다", _nccs([_row(odno='')])),
+                   ("다음 쪽이 남았다", _nccs([_row()], nk='NEXTKEY'))):
+    res, posts = run_cancel(dict(_ALL_EMPTY, NASD=bad), {'rt_cd': '0'})
+    check(f"'없음' 으로 통과하지 않는다 — {label}", res.get('queried') is False, f'{label}: {res}')
+    check(f"그 상태로 취소를 쏘지 않는다 — {label}", posts == [], str(posts))
+
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=_nccs([_row(qty='0')])), {'rt_cd': '0'})
+check("수량 0 행은 미체결이 아니다", res == {'queried': True, 'found': 0, 'failed': 0}, str(res))
+
+print("\n[27-1] 거래소를 셋 다 묻는다 — 한 코드만 물으면 다른 쪽 미체결이 안 보인다")
+asked = []
+
+
+def _collect_get(path, tr_id, params, retries=3):
+    asked.append(params.get('OVRS_EXCG_CD'))
+    return _nccs([])
+
+
+_old_get, _old_log = ex._get, ex.log
+try:
+    ex._get, ex.log = _collect_get, lambda *a, **k: None
+    _KISAPI_REAL(dry_run=False).cancel_all_pending()
+finally:
+    ex._get, ex.log = _old_get, _old_log
+check("NASD·NYSE·AMEX 를 다 묻는다", sorted(asked) == sorted(ex.PENDING_EXCHANGES), str(asked))
+
+res, posts = run_cancel(dict(_ALL_EMPTY, AMEX=_nccs([_row(odno='A1', pdno='GLD')])),
+                        {'rt_cd': '0'})
+check("AMEX 미체결도 잡는다", res.get('found') == 1, str(res))
+check("그 주문을 취소한다", posts == ['A1'], str(posts))
+
+res, posts = run_cancel({e: _nccs([_row(odno='SAME')]) for e in ex.PENDING_EXCHANGES},
+                        {'rt_cd': '0'})
+check("같은 주문이 여러 코드에 보이면 한 번만 센다", res.get('found') == 1, str(res))
+check("취소도 한 번만 쏜다", posts == ['SAME'], str(posts))
+
+print("\n[28] 주문 뒤 미체결 상태를 확정 못 하면 완료로 안 본다")
+
+
+class _PendingBreaksAfterOrders(RealBalanceAPI):
+    """회차 시작은 깨끗하고, 주문 뒤 확인에서 조회가 깨진다."""
+    _seq = 0
+
+    def cancel_all_pending(self):
+        type(self)._seq += 1
+        if type(self)._seq == 1:
+            return {'queried': True, 'found': 0, 'failed': 0}
+        return {'queried': False, 'found': 0, 'failed': 0}
+
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(RealBalanceAPI, FULL, _st, _signal())
+check("양성 대조 — 깨끗하면 완료로 닫힌다",
+      saved is not None and saved.get('rebalancing_needed') is False, str(saved))
+
+_PendingBreaksAfterOrders._seq = 0
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_PendingBreaksAfterOrders, FULL, _st, _signal())
+check("주문은 나간다", len(orders) > 0, str(orders))
+check("완료로 안 닫는다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
 
 print()
 if FAILED:
