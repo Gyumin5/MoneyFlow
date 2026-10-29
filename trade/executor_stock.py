@@ -375,6 +375,12 @@ class KISAPI:
     def __init__(self, dry_run=False):
         self.dry_run = dry_run
         self._balance_price_cache: Dict[str, float] = {}
+        # 그 캐시 값이 몇 번째 계좌 조회에서 온 것인가. 완료 평가는 보유 수량·총자산과
+        # 같은 조회에서 온 가격만 받는다 — 주문 전 조회에서 남은 값이나 과거 종가를
+        # 쓰면 보유는 주문 뒤인데 가격만 주문 전이라, 그 사이 변동이 허용오차 경계에서
+        # 거짓 완료를 만든다.
+        self._balance_gen = 0
+        self._balance_price_gen: Dict[str, int] = {}
         # 마지막으로 성공한 계좌 조회의 자산 구성(원화). 로그·보고용이고 매매 판단에 안 쓴다.
         self._last_asset: Dict[str, float] = {}
 
@@ -393,6 +399,10 @@ class KISAPI:
         """
         holdings = {}
         holdings_usd = 0.0
+        # 이 조회로 세대를 하나 넘긴다. 여기서 올려야 응답이 가격을 빠뜨린 종목의 옛
+        # 캐시가 이번 세대 것으로 안 읽힌다 — 끝에서 올리면 실패한 조회가 세대를 안
+        # 넘겨 그 구분이 사라진다.
+        self._balance_gen += 1
         _fk, _nk = '', ''
         for _page in range(BALANCE_PAGE_MAX):
             _cont: Dict[str, str] = {}
@@ -440,6 +450,7 @@ class KISAPI:
                         cur_price = float(item.get('now_pric2', 0) or item.get('ovrs_now_pric1', 0) or 0)
                         if cur_price > 0:
                             self._balance_price_cache[ticker] = cur_price
+                            self._balance_price_gen[ticker] = self._balance_gen
                     except Exception:
                         pass
             # 보유 목록도 쪽이 나뉜다. 첫 쪽만 읽고 전체로 쓰면 뒤쪽 종목이 "안 들고 있는
@@ -545,8 +556,15 @@ class KISAPI:
 
         return holdings, total_usd, exrt
 
-    def get_current_price(self, ticker: str) -> float:
-        """현재가 (USD). 장중 시세 → 잔고 캐시 → 일봉 종가 순으로 fallback."""
+    def get_current_price(self, ticker: str, fresh_only: bool = False) -> float:
+        """현재가 (USD). 장중 시세 → 잔고 캐시 → 일봉 종가 → Yahoo 종가 순으로 fallback.
+
+        `fresh_only` 는 완료 평가가 쓴다. 지금 받은 시세, 또는 방금 한 계좌 조회에서
+        같이 온 가격만 받고 나머지는 0 을 돌려준다. 과거 종가와 지난 조회의 캐시를
+        빼는 이유는 완료 판정의 분자(보유 수량)와 분모(총자산)가 둘 다 주문 뒤 값이기
+        때문이다 — 가격만 옛 것이면 그 사이의 작은 변동이 허용오차 경계에서 거짓
+        완료를 만든다. 0 을 받은 쪽은 그 회차를 완료로 닫지 않는다.
+        """
         excd = QUOTE_EXCD_MAP.get(ticker, 'NAS')
 
         # 1차: 실시간 시세
@@ -563,8 +581,16 @@ class KISAPI:
         # 2차: 잔고 조회에서 얻은 가격 캐시
         cached = self._balance_price_cache.get(ticker, 0)
         if cached > 0:
-            log(f'  {ticker}: 잔고 캐시 가격 사용 ${cached:.2f}')
-            return cached
+            if fresh_only and self._balance_price_gen.get(ticker) != self._balance_gen:
+                # 지난 조회에서 남은 값이다. 완료 평가에는 안 쓴다.
+                log(f'  {ticker}: 잔고 캐시가 이번 조회 것이 아니다 — 평가에 안 쓴다')
+            else:
+                log(f'  {ticker}: 잔고 캐시 가격 사용 ${cached:.2f}')
+                return cached
+        if fresh_only:
+            # 과거 종가(일봉·Yahoo)로는 완료를 판정하지 않는다. 0 은 "값을 못 매겼다"다.
+            log(f'  ⚠️ {ticker} 평가 시점 가격을 못 받았다 — 완료로 안 본다')
+            return 0.0
 
         # 3차: KIS 기간별시세 종가
         # (잔고 재조회 단계는 뺐다 — 주문 루프 도중 계좌 조회가 실패하면 그 자리에서
@@ -580,6 +606,10 @@ class KISAPI:
                     price = float(item.get('clos', 0))
                     if price > 0:
                         self._balance_price_cache[ticker] = price
+                        # 과거 종가다. 세대 표식을 지워 뒤의 평가가 이 값을 이번 조회에서
+                        # 온 것으로 읽지 않게 한다 — 안 지우면 같은 세대에 덮어쓴 종가가
+                        # 신선한 값으로 통과한다.
+                        self._balance_price_gen.pop(ticker, None)
                         log(f'  {ticker}: KIS 일봉 종가 사용 ${price:.2f}')
                         return price
         except Exception:
@@ -594,6 +624,7 @@ class KISAPI:
                 price = float(hist['Close'].iloc[-1])
                 if price > 0:
                     self._balance_price_cache[ticker] = price
+                    self._balance_price_gen.pop(ticker, None)
                     log(f'  {ticker}: Yahoo 종가 사용 ${price:.2f}')
                     return price
         except Exception:
@@ -613,7 +644,7 @@ class KISAPI:
         조회 실패, output 칸 자체가 없는 응답, 못 읽는 행, 다음 쪽이 남은 응답이 전부
         여기에 들어간다 — 셋 다 빈 목록으로 읽으면 "미체결 없음"과 구분이 안 된다.
         """
-        out, seen, fk, nk = {}, set(), '', ''
+        out, fk, nk = {}, '', ''
         for page in range(PENDING_PAGE_MAX):
             cont: Dict[str, str] = {}
             data = _get('/uapi/overseas-stock/v1/trading/inquire-nccs', 'TTTS3018R', {
@@ -650,18 +681,28 @@ class KISAPI:
                 if not order_no or not ticker:
                     log(f'  ⚠️ 미체결 행에 주문번호·종목이 없다({excg}): {str(item)[:60]}')
                     return False, []
-                if order_no in seen:
-                    continue
-                seen.add(order_no)
-                # 거래소는 응답이 말해 주면 그걸 쓴다. 안 주면 물어본 거래소를 쓰되 그
-                # 사실을 같이 적는다 — 추정값으로 취소를 내보낼지는 부르는 쪽이 정한다.
+                # 거래소를 먼저 푼다. 응답이 말해 주면 그걸 쓰고, 안 주면 물어본
+                # 거래소를 쓰되 그 사실을 같이 적는다 — 추정값으로 취소를 내보낼지는
+                # 부르는 쪽이 정한다. 중복 제거를 이보다 앞에 두면, 같은 쪽이나 다음
+                # 쪽에 같은 주문번호가 다른 거래소로 들어왔을 때 둘째 행이 먼저 사라져
+                # 아래 충돌 검사를 통째로 건너뛴다.
                 _resp_excg = str(item.get('ovrs_excg_cd') or '').strip().upper()
-                out[order_no] = {
+                row = {
                     'odno': order_no, 'ticker': ticker, 'qty': qty,
                     'excg': _resp_excg or excg,
                     'excg_src': 'resp' if _resp_excg else 'req',
                     'side': 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell',
                 }
+                _prev = out.get(order_no)
+                if _prev is not None:
+                    if _prev['excg'] != row['excg']:
+                        log(f'  ⚠️ 미체결 {ticker} 주문번호 {order_no} 가 한 조회 안에서 '
+                            f"{_prev['excg']}({_prev['excg_src']})·"
+                            f"{row['excg']}({row['excg_src']}) 두 거래소로 보인다 — 중단한다")
+                        return False, []
+                    # 같은 거래소로 두 번 보인 것은 중복 노출이다. 먼저 본 쪽을 남긴다.
+                    continue
+                out[order_no] = row
             # 쪽을 넘길지는 활성 행 수와 무관하게 정한다. 행이 비어 있어도 다음 쪽에
             # 미체결이 있을 수 있어서, "이 쪽이 비었으니 끝" 으로 읽으면 뒤쪽을 통째로
             # 놓친 채 "미체결 없음" 이라고 말하게 된다.
@@ -716,8 +757,13 @@ class KISAPI:
                     found_rows[row['odno']] = row
                     continue
                 if _prev['excg'] != row['excg']:
-                    log(f"  ⚠️ 미체결 {row['ticker']} 주문번호 {row['odno']} 가 "
-                        f"{_prev['excg']}·{row['excg']} 두 거래소로 보인다 — 취소를 안 낸다")
+                    _msg = (f"미체결 {row['ticker']} 주문번호 {row['odno']} 가 "
+                            f"{_prev['excg']}({_prev['excg_src']})·"
+                            f"{row['excg']}({row['excg_src']}) 두 거래소로 보인다")
+                    log(f'  ⚠️ {_msg} — 취소를 안 낸다')
+                    send_telegram(f'⛔ 주식: {_msg}. 취소를 안 내고 이 회차를 멈춘다 — '
+                                  f'한국투자증권 앱에서 원주문을 확인하고 손으로 취소한 뒤 '
+                                  f'다음 회차를 보라.')
                     return {'queried': False, 'found': 0, 'failed': 0}
                 # 같은 거래소로 두 번 보인 것은 중복 노출이다. 먼저 본 쪽을 남긴다.
         failed = 0
@@ -1721,13 +1767,20 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         holdings2, total2 = {}, 0.0
     # 완료 평가에 쓸 가격은 주문 뒤에 새로 묻는다. 주문 전 캐시(_px)를 쓰면 보유 수량과
     # 총자산은 주문 뒤 값인데 가격만 주문 전 값이 되어, 그 사이의 작은 변동이 허용오차
-    # 경계에서 거짓 완료를 만든다. 캐시를 나눠 두 시점이 안 섞이게 한다.
+    # 경계에서 거짓 완료를 만든다. 캐시를 나눠 두 시점이 안 섞이게 하고, 조회 안쪽의
+    # fallback 도 막는다(fresh_only) — 캐시를 비우는 것만으로는 그 안에서 지난 조회의
+    # 값과 과거 종가가 다시 나온다.
     _px_eval_cache: Dict[str, float] = {}
 
     def _px_eval(ticker: str) -> float:
         if ticker not in _px_eval_cache:
             try:
-                _px_eval_cache[ticker] = api.get_current_price(ticker)
+                _px_eval_cache[ticker] = api.get_current_price(ticker, fresh_only=True)
+            except TypeError:
+                # fresh_only 를 모르는 구현(옛 가짜·대역)은 평가를 막는다. 조용히
+                # 옛 경로로 내려가면 이 가드가 통째로 없어진다.
+                log(f'  ⚠️ {ticker} 평가 시점 가격 경로를 쓸 수 없다 — 완료로 안 본다')
+                _px_eval_cache[ticker] = 0.0
             except Exception:
                 _px_eval_cache[ticker] = 0.0
         return _px_eval_cache[ticker]

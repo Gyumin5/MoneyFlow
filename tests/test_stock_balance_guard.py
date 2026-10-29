@@ -286,7 +286,9 @@ class RealBalanceAPI(ex.KISAPI):
         COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
         return super().get_balance()
 
-    def get_current_price(self, ticker):
+    def get_current_price(self, ticker, fresh_only=False):
+        # fresh_only 는 완료 평가가 쓰는 칸이다. 가짜가 이 인자를 안 받으면 진짜
+        # 구현에 그 칸이 있는지 없는지를 시험이 가려 버린다.
         return {'BIL': 91.60, 'PDBC': 20.02}.get(ticker, 100.0)
 
     def ensure_auth(self) -> None:
@@ -964,7 +966,7 @@ print("\n[32] 보유 종목의 현재가를 못 구하면 그 보유를 0 으로
 
 
 class _PriceMissing(RealBalanceAPI):
-    def get_current_price(self, ticker) -> float:
+    def get_current_price(self, ticker, fresh_only=False) -> float:
         return 0.0 if ticker == 'BIL' else 20.02
 
 
@@ -1265,8 +1267,9 @@ class _UnpricedExtra(RealBalanceAPI):
             h['XYZ'] = 5
         return h, t, x
 
-    def get_current_price(self, ticker: str) -> float:
-        return 0.0 if ticker == 'XYZ' else super().get_current_price(ticker)
+    def get_current_price(self, ticker: str, fresh_only=False) -> float:
+        return (0.0 if ticker == 'XYZ'
+                else super().get_current_price(ticker, fresh_only=fresh_only))
 
 
 _st43 = _state()
@@ -1310,20 +1313,32 @@ class _FakeOrderResp:
         return {'rt_cd': '0', 'output': {'ODNO': '777'}}
 
 
-def run_boundary(token_delay):
-    """토큰 발급에 token_delay 초가 걸리는 상황에서 주문을 한 번 낸다.
+def run_boundary(auth_delay, header_delay):
+    """인증 준비에 auth_delay 초, 그 뒤 헤더 생성에 header_delay 초가 걸린다.
 
-    돌려주는 것은 (place_order 결과, 실제로 나간 전문 수).
-    pre_send 는 집행기가 쓰는 것과 같은 식이다 — 계좌값을 읽은 시각으로부터
-    BALANCE_MAX_AGE_SEC 를 넘으면 거짓.
+    둘을 나눠 재는 것이 이 시험의 핵심이다. 한 값으로 묶으면 나이 검사를 `_headers`
+    앞에 둔 잘못된 구현도 통과한다 — 인증 준비에서 이미 늙어 있어 검사가 어디에
+    있든 걸리기 때문이다. 인증 준비를 0초로 두면 검사 시점의 나이는 헤더 생성에서만
+    늘어나므로, 검사가 헤더 뒤에 있을 때만 걸린다.
+
+    돌려주는 것은 (place_order 결과, 나간 전문 수, 토큰 발급 호출 수).
+    발급 호출 수를 같이 보는 이유는 헤더 경로가 실제로 다시 발급을 탔는지 확인하기
+    위해서다 — 한 번만 불렸으면 지연을 헤더 쪽에 넣은 적이 없는 것이다.
     """
     clock = {'t': 0.0}
     bal_at = 0.0
-    fake = _FakeRequests(token_delay, clock)
+    calls = {'n': 0}
+    fake = _FakeRequests(0.0, clock)
+
+    def _tok():
+        calls['n'] += 1
+        clock['t'] += auth_delay if calls['n'] == 1 else header_delay
+        return 'TOK'
+
     old = {k: getattr(ex, k) for k in ('requests', '_get_token', 'log', 'time')}
     try:
         ex.requests = fake
-        ex._get_token = lambda: (clock.__setitem__('t', clock['t'] + token_delay), 'TOK')[1]
+        ex._get_token = _tok
         ex.log = lambda *a, **k: None
         ex.time = types.SimpleNamespace(sleep=lambda *_a: None, time=lambda: 0.0,
                                         monotonic=lambda: clock['t'])
@@ -1332,20 +1347,28 @@ def run_boundary(token_delay):
         res = api.place_order(
             'BIL', 10, 91.60, 'buy',
             pre_send=lambda: (clock['t'] - bal_at) <= ex.BALANCE_MAX_AGE_SEC)
-        return res, len(fake.sent)
+        return res, len(fake.sent), calls['n']
     finally:
         for k, v in old.items():
             setattr(ex, k, v)
 
 
-_res44, _sent44 = run_boundary(90.0)
-check("헤더 만드는 동안 90초가 지나면 전송 0건", _sent44 == 0, str(_sent44))
+# 인증 준비는 즉시 끝나고 헤더 생성에서만 90초가 흐른다 — 검사가 헤더 뒤에 있어야 걸린다.
+_res44, _sent44, _tok44 = run_boundary(0.0, 90.0)
+check("헤더 경로가 토큰을 다시 받는다 (지연을 그 자리에 넣었다)", _tok44 >= 2, str(_tok44))
+check("인증 준비는 즉시 끝났는데 헤더에서 90초가 지나면 전송 0건", _sent44 == 0, str(_sent44))
 check("그 주문은 'stale' 이다 (접수 여부 불명이 아니다)", _res44 == 'stale', str(_res44))
 
-# 양성 대조 — 같은 경로에서 지연이 짧으면 전문이 나간다. 빈 비교가 아니다.
-_res44b, _sent44b = run_boundary(1.0)
-check("지연이 짧으면 전문이 나간다", _sent44b == 1, str(_sent44b))
+# 양성 대조 — 같은 경로에서 헤더 지연이 짧으면 전문이 나간다. 빈 비교가 아니다.
+_res44b, _sent44b, _ = run_boundary(0.0, 1.0)
+check("헤더 지연이 짧으면 전문이 나간다", _sent44b == 1, str(_sent44b))
 check("그 주문은 접수된다", _res44b == 'ok', str(_res44b))
+
+# 반대쪽 — 인증 준비에서만 늙은 경우도 안 보낸다. 이 칸은 검사가 헤더 앞에 있어도
+# 통과하므로 위 칸을 대신하지 못한다. 둘을 같이 둬야 "어디서 늙든 안 보낸다" 가 된다.
+_res44c, _sent44c, _ = run_boundary(90.0, 0.0)
+check("인증 준비에서만 늙어도 전송 0건", _sent44c == 0, str(_sent44c))
+check("그 주문도 'stale' 이다", _res44c == 'stale', str(_res44c))
 
 # 인증 준비가 실패하면 그 주문을 아예 안 낸다 — 경고만 찍고 넘어가면 뒤의 전송 경로가
 # 인증을 다시 기다리고, 그 대기가 나이 검사 뒤에 들어간다.
@@ -1405,7 +1428,7 @@ class _PriceMoves(RealBalanceAPI):
         COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
         return {'BIL': 10}, 1000.0, FX
 
-    def get_current_price(self, ticker):
+    def get_current_price(self, ticker, fresh_only=False):
         # 완료 평가는 주문 뒤 잔고 조회 다음에 돈다. 그 뒤의 조회만 내린 값을 준다.
         if ticker == 'BIL' and COUNTS.get('get_balance', 0) >= 2:
             return type(self).eval_price
@@ -1435,7 +1458,7 @@ check("가격이 그대로면 같은 회차가 완료로 닫힌다",
 class _EvalPriceRaises(_PriceMoves):
     """평가 시점 가격 조회가 예외를 던진다 — 0 으로 세지 말고 완료를 미뤄야 한다."""
 
-    def get_current_price(self, ticker):
+    def get_current_price(self, ticker, fresh_only=False):
         if ticker == 'BIL' and COUNTS.get('get_balance', 0) >= 2:
             raise RuntimeError('호가 조회 실패')
         return 92.10
@@ -1446,6 +1469,69 @@ _st45c['rebalancing_needed'] = True
 _o45c, _a45c, saved45c = _with_api(_EvalPriceRaises, FULL, _st45c, _signal())
 check("평가 가격을 못 받으면 완료로 안 닫는다",
       saved45c is not None and saved45c.get('rebalancing_needed') is True, str(saved45c))
+
+# ── 여기부터는 가격 경로도 진짜를 쓴다. 가짜로 바꾸는 것은 통신(_get) 하나다.
+# 위 칸들은 get_current_price 를 통째로 대역으로 바꾸므로, 진짜 구현의 fallback
+# 사다리(실시간 시세 → 잔고 캐시 → 일봉 종가 → Yahoo 종가)가 완료 평가에서 어디까지
+# 허용되는지를 못 본다. 실제 결함이 거기 있었다 — 주문 뒤 조회가 가격을 빠뜨리면
+# 주문 전 캐시가 그대로 남아 평가에 쓰였다.
+
+
+class _RealPriceAPI(RealBalanceAPI):
+    """잔고·가격 둘 다 진짜 구현. 주문만 가로챈다."""
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        return _KISAPI_REAL.get_balance(self)
+
+    def get_current_price(self, ticker, fresh_only=False):
+        return _KISAPI_REAL.get_current_price(self, ticker, fresh_only=fresh_only)
+
+
+def _price_table(second_price):
+    """첫 계좌 조회는 92.10 을 같이 주고, 주문 뒤 조회는 second_price 를 준다.
+
+    second_price=None 이면 그 조회에 가격 칸이 아예 없다(실계좌에서 종종 빈다).
+    실시간 시세(HHDFS76200200)와 일봉 종가(HHDFS76240000)는 표에 없어서 둘 다
+    실패한다 — 그래야 평가가 잔고 캐시 하나에 걸리고, 그 캐시의 세대를 보는지가
+    드러난다.
+    """
+    calls = {'n': 0}
+
+    def _bal():
+        calls['n'] += 1
+        px = 92.10 if calls['n'] == 1 else second_price
+        row = {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': '10',
+               'ovrs_stck_evlu_amt': '921.00'}
+        if px is not None:
+            row['now_pric2'] = f'{px:.2f}'
+        return {'rt_cd': '0', 'output1': [row]}
+
+    return {'TTTS3012R': _bal, 'CTRP6504R': ok_present(),
+            'CTRP6548R': ok_account(tot=1000.0 * FX), 'TTTC2101R': ok_margin()}
+
+
+_st45d = _state_bil_only()
+_st45d['rebalancing_needed'] = True
+_o45d, _a45d, saved45d = _with_api(_RealPriceAPI, _price_table(None), _st45d, _signal())
+check("주문 뒤 조회가 가격을 빠뜨리면 주문 전 캐시로 완료를 닫지 않는다",
+      saved45d is not None and saved45d.get('rebalancing_needed') is True, str(saved45d))
+check("그 회차도 주문은 없다 (가격 시점만 보는 칸이다)", _o45d == [], str(_o45d))
+
+# 양성 대조 — 주문 뒤 조회가 같은 가격을 같이 주면 그 값으로 완료를 닫는다.
+_st45e = _state_bil_only()
+_st45e['rebalancing_needed'] = True
+_o45e, _a45e, saved45e = _with_api(_RealPriceAPI, _price_table(92.10), _st45e, _signal())
+check("주문 뒤 조회가 가격을 같이 주면 완료로 닫는다",
+      saved45e is not None and saved45e.get('rebalancing_needed') is False, str(saved45e))
+
+# 주문 뒤 조회가 내려간 가격을 주면 허용오차 밖이라 완료가 아니다 — 가격 출처는
+# 신선한데 값 자체가 미달인 칸이다. 위 칸(출처가 낡은 것)과 사유가 다르다.
+_st45f = _state_bil_only()
+_st45f['rebalancing_needed'] = True
+_o45f, _a45f, saved45f = _with_api(_RealPriceAPI, _price_table(91.90), _st45f, _signal())
+check("신선한 가격이 미달이면 완료로 안 닫는다",
+      saved45f is not None and saved45f.get('rebalancing_needed') is True, str(saved45f))
 
 print("\n[46] 취소는 원주문이 실제로 있던 거래소로 보낸다")
 # 응답이 거래소를 알려주면 그 값을 쓴다. 우리가 주문을 보낼 때 쓰는 표(EXCHANGE_MAP)나
@@ -1467,12 +1553,63 @@ res, posts = run_cancel({'NASD': _nccs([_row(odno='D1', excg='NASD')]),
 check("거래소가 갈리면 조회 실패로 돌려준다", res.get('queried') is False, str(res))
 check("그 상태로 취소를 안 쏜다", posts == [], str(posts))
 
+# 같은 쪽 안에서 갈려도 같다. 중복 제거를 거래소 해석보다 앞에 두면 둘째 행이 먼저
+# 사라져서 이 충돌이 통째로 안 보이고, 한 거래소만 적힌 것처럼 취소가 나간다.
+res, posts = run_cancel(dict(_ALL_EMPTY,
+                             NASD=_nccs([_row(odno='S1', excg='NASD'),
+                                         _row(odno='S1', excg='NYSE')])),
+                        {'rt_cd': '0'})
+check("한 쪽 안에서 갈려도 조회 실패로 돌려준다", res.get('queried') is False, str(res))
+check("그 상태로 취소를 안 쏜다 (같은 쪽)", posts == [], str(posts))
+
+# 다음 쪽으로 넘어가서 갈려도 같다. 연속조회는 쪽마다 따로 들어오므로, 쪽 경계에서
+# 중복 제거가 먼저 돌면 같은 결함이 재현된다.
+res, posts = run_cancel(dict(_ALL_EMPTY,
+                             NASD=[_nccs([_row(odno='P1', excg='NASD')], nk='CUR1'),
+                                   _nccs([_row(odno='P1', excg='NYSE')])]),
+                        {'rt_cd': '0'})
+check("다음 쪽에서 갈려도 조회 실패로 돌려준다", res.get('queried') is False, str(res))
+check("그 상태로 취소를 안 쏜다 (다음 쪽)", posts == [], str(posts))
+
+# 같은 거래소로 두 번 보인 것은 중복 노출이다 — 그건 막지 않는다(양성 대조).
+res, posts = run_cancel(dict(_ALL_EMPTY,
+                             NASD=_nccs([_row(odno='S2', excg='NASD'),
+                                         _row(odno='S2', excg='NASD')])),
+                        {'rt_cd': '0'})
+check("같은 거래소 중복은 한 번만 센다",
+      res.get('queried') is True and res.get('found') == 1, str(res))
+check("그 한 건을 취소한다", posts == ['S2'], str(posts))
+
 # 응답이 거래소를 안 주면 물어본 코드를 쓴다 — 한 곳에만 보이면 모호하지 않다.
 res, posts = run_cancel(dict(_ALL_EMPTY, NYSE=_nccs([_row(odno='N1', pdno='BIL')])),
                         {'rt_cd': '0'})
 check("응답에 거래소가 없으면 물어본 코드로 취소한다",
       [b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES] == ['NYSE'],
       str([b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES]))
+
+# 모호함은 회차 시작 말고 다른 호출부에서도 회차를 멈춰야 한다. 매도 뒤 호출부가
+# 그걸 통과시키면, 거래소를 못 가린 미체결이 남은 채로 매수가 나간다.
+
+
+class _AmbiguousAfterSells(RealBalanceAPI):
+    """회차 시작의 취소 조회는 깨끗하고, 매도 뒤부터 거래소가 모호해진다."""
+
+    def cancel_all_pending(self):
+        n = getattr(self, '_c', 0) + 1
+        self._c = n
+        if n == 1:
+            return {'queried': True, 'found': 0, 'failed': 0}
+        return {'queried': False, 'found': 0, 'failed': 0}
+
+
+_st46 = _state_bil_only()
+_st46['rebalancing_needed'] = True
+orders46, alerts46, saved46 = _with_api(_AmbiguousAfterSells, FULL, _st46, _signal())
+check("매도 뒤에 모호해지면 매수를 안 낸다",
+      [o for o in orders46 if o[0] == 'buy'] == [],
+      str(orders46))
+check("그 회차를 완료로 안 닫는다",
+      saved46 is None or saved46.get('rebalancing_needed') is True, str(saved46))
 
 print()
 if FAILED:
