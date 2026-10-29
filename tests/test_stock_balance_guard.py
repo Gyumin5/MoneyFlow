@@ -647,13 +647,14 @@ def _nccs(rows, nk='', fk='', tr_cont=None):
     return d
 
 
-def _row(odno='0001', pdno='BIL', qty='10', side='01', excg=None):
-    """미체결 한 줄. excg 를 적으면 응답이 거래소를 알려주는 계좌다.
+def _row(odno='0001', pdno='BIL', qty='10', side='01', excg='NASD'):
+    """미체결 한 줄. excg=None 이면 응답이 거래소를 안 알려주는 계좌다.
 
     실계좌 응답에 ovrs_excg_cd 가 들어오는지는 아직 못 봤다(미체결이 있는 회차를 아직
-    안 만났다). 그래서 적는 쪽과 안 적는 쪽을 둘 다 시험한다 — 안 적으면 물어본
-    거래소가 추정값이 되고, 같은 주문번호가 두 코드에 보일 때 어느 쪽이 원주문인지
-    가릴 수 없다.
+    안 만났다). 그래서 적는 쪽과 안 적는 쪽을 둘 다 시험한다 — 안 적으면 원주문
+    거래소가 미확정이고, 그때 물어본 코드로 메우면 안 된다(이 조회는 한 코드로 물어도
+    미국 전체를 돌려준다). 기본값을 'NASD' 로 둔 것은 거래소와 상관없는 칸들이
+    정상 경로를 타게 하려는 것뿐이다.
     """
     d = {'odno': odno, 'pdno': pdno, 'nccs_qty': qty, 'sll_buy_dvsn_cd': side}
     if excg is not None:
@@ -665,10 +666,11 @@ _CANCEL_REQUESTS = []
 _CANCEL_BODIES = []    # 실제로 나간 취소 전문 — 거래소 코드까지 본다.
 
 
-def run_cancel(nccs_by_excg, post_result):
+def run_cancel(nccs_by_excg, post_result, api=None):
     """진짜 KISAPI.cancel_all_pending 을 통신만 가짜로 돌린다. (결과, 취소한 주문번호들)
 
     값을 목록으로 주면 그 거래소의 연속조회 쪽들이다 — 쪽마다 하나씩 돌려준다.
+    `api` 를 주면 그 인스턴스를 쓴다 — 우리가 보낸 주문의 거래소 기록을 미리 심을 때.
     """
     posts = []
     pages = {k: 0 for k in nccs_by_excg}
@@ -697,7 +699,8 @@ def run_cancel(nccs_by_excg, post_result):
 
     try:
         ex._get, ex._post, ex.log = _g, _p, lambda *a, **k: None
-        return _KISAPI_REAL(dry_run=False).cancel_all_pending(), posts
+        _api = api if api is not None else _KISAPI_REAL(dry_run=False)
+        return _api.cancel_all_pending(), posts
     finally:
         ex._get, ex._post, ex.log = old_get, old_post, old_log
 
@@ -791,11 +794,11 @@ res, posts = run_cancel(dict(_ALL_EMPTY, AMEX=_nccs([_row(odno='A1', pdno='GLD')
 check("AMEX 미체결도 잡는다", res.get('found') == 1, str(res))
 check("그 주문을 취소한다", posts == ['A1'], str(posts))
 
-res, posts = run_cancel({e: _nccs([_row(odno='SAME')]) for e in ex.PENDING_EXCHANGES},
+res, posts = run_cancel({e: _nccs([_row(odno='SAME', excg=None)]) for e in ex.PENDING_EXCHANGES},
                         {'rt_cd': '0'})
-# 응답이 거래소를 안 알려주면 물어본 코드가 추정값이다. 같은 주문번호가 셋 다에서
-# 보이면 원주문이 어디 것인지 모르는 상태라 취소를 쏘지 않는다 — 엉뚱한 거래소로 간
-# 취소는 성공으로 돌아오고 원주문은 살아남는다.
+# 응답이 거래소를 안 알려주고 우리가 보낸 기록도 없으면 원주문이 어디 것인지 모른다.
+# 그 상태로 취소를 쏘지 않는다 — 엉뚱한 거래소로 간 취소는 성공으로 돌아오고 원주문은
+# 살아남는다. 물어본 코드는 근거가 아니다(한 코드로 물어도 미국 전체가 온다).
 check("거래소를 가릴 수 없으면 조회 실패로 돌려준다", res.get('queried') is False, str(res))
 check("그 상태로 취소를 안 쏜다", posts == [], str(posts))
 
@@ -1015,8 +1018,18 @@ _dry = ex.KISAPI(dry_run=True)
 _cap = _dry.get_max_buy_qty('BIL', 91.60)
 check("모의 한도는 -1 이 아니다", _cap > 0, str(_cap))
 check("모의 주문은 통신 없이 ok", _dry.place_order('BIL', 1, 91.60, 'buy') == 'ok')
-check("모의 취소는 조회했다고 돌려준다",
-      ex.KISAPI(dry_run=True).cancel_all_pending().get('queried') is not None)
+# 모의 취소도 미체결 조회는 실제로 돈다(취소 전문만 안 나간다). 시험이 진짜 서버를
+# 치지 않게 그 조회만 막아 둔다 — 안 막으면 이 칸의 결과가 그날 망 상태에 걸린다.
+_old_get35, _old_log35 = ex._get, ex.log
+try:
+    ex.log = lambda *a, **k: None
+    ex._get = lambda path, tr_id, params, retries=3, tr_cont='', cont=None: (
+        cont.__setitem__('tr_cont', 'D') if cont is not None else None,
+        {'rt_cd': '0', 'output': [], 'ctx_area_nk200': '', 'ctx_area_fk200': ''})[1]
+    check("모의 취소는 조회했다고 돌려준다",
+          ex.KISAPI(dry_run=True).cancel_all_pending().get('queried') is True)
+finally:
+    ex._get, ex.log = _old_get35, _old_log35
 
 print("\n[36] 매도가 잔고에 비치면 매수가 나간다 — 양성 대조")
 
@@ -1454,6 +1467,96 @@ _o45b, _a45b, saved45b = _with_api(_PriceSteady, FULL, _st45b, _signal())
 check("가격이 그대로면 같은 회차가 완료로 닫힌다",
       saved45b is not None and saved45b.get('rebalancing_needed') is False, str(saved45b))
 
+# 유한하지 않은 평가 가격. 양수 검사만 하면 무한대가 가격 행세를 하고, 보유 수량과
+# 곱해진 비중이 숫자가 아닌 값이 된다. 최댓값 비교는 그 값을 그냥 통과시켜서(비교가
+# 거짓이라) 편차가 0 으로 남고 회차가 거짓 완료된다. 바로 위 92.10 칸이 양성 대조다.
+for _label, _bad in (('무한대', float('inf')), ('숫자 아님', float('nan')),
+                     ('음의 무한대', float('-inf'))):
+    _cls = type('_PriceBad', (_PriceMoves,), {'eval_price': _bad})
+    _stb = _state_bil_only()
+    _stb['rebalancing_needed'] = True
+    _ob, _ab, _savedb = _with_api(_cls, FULL, _stb, _signal())
+    check(f"평가 가격이 {_label} 이면 완료로 안 닫는다",
+          _savedb is not None and _savedb.get('rebalancing_needed') is True, str(_savedb))
+    check(f"그 상태를 평가 보류로 적는다 — {_label}",
+          _savedb is not None and _savedb.get('eval_pending', {}).get('tickers') == ['BIL'],
+          str(_savedb.get('eval_pending') if _savedb else None))
+
+
+class _OrderPriceInf(RealBalanceAPI):
+    """주문 산출에 쓰는 가격이 무한대로 온다 — 수량 계산이 깨진다."""
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        return {'BIL': 10}, 1000.0, FX
+
+    def get_current_price(self, ticker, fresh_only=False):
+        return float('inf')
+
+
+_st45i = _state_bil_only()
+_st45i['rebalancing_needed'] = True
+_o45i, _a45i, _saved45i = _with_api(_OrderPriceInf, FULL, _st45i, _signal())
+check("주문 산출 가격이 무한대면 주문을 안 낸다", _o45i == [], str(_o45i))
+check("그 사실을 알린다", any('현재가' in a for a in _a45i), str(_a45i))
+
+print("\n[47] 평가 가격만 없는 상태는 따로 적고, 돌아오면 푼다")
+# 주문 실패·미체결 불확실과 다른 상태다. 그 둘은 실제로 뭔가 틀어진 것이고, 이건 들고
+# 있는 것은 목표대로인데 값을 매길 길이 없는 것이다. 안 가르면 가격이 안 오는 동안
+# 종목 교체(드리프트 판정)가 통째로 멈추고 그 사실이 아무 데도 안 남는다.
+_alerts47 = []
+_old_tg47 = ex.send_telegram
+try:
+    ex.send_telegram = lambda m: _alerts47.append(m)
+    _s47 = {}
+    ex._note_eval_pending(_s47, ['BIL'], 0.001)
+    check("첫 회차를 기록한다",
+          _s47['eval_pending']['rounds'] == 1 and _s47['eval_pending']['tickers'] == ['BIL'],
+          str(_s47))
+    check("원인도 같이 적는다", '가격' in _s47['eval_pending']['reason'],
+          str(_s47['eval_pending']))
+    check("첫 발생을 알린다", len(_alerts47) == 1, str(_alerts47))
+    ex._note_eval_pending(_s47, ['BIL'], 0.001)
+    check("둘째 회차는 세기만 한다", _s47['eval_pending']['rounds'] == 2 and len(_alerts47) == 1,
+          f"{_s47['eval_pending']['rounds']} {len(_alerts47)}")
+    check("처음 본 시각은 안 바뀐다",
+          _s47['eval_pending']['first'] != _s47['eval_pending']['last']
+          or _s47['eval_pending']['rounds'] == 2, str(_s47['eval_pending']))
+    ex._note_eval_pending(_s47, ['BIL'], 0.001)
+    check("지속 발생을 다시 알린다 (3회차)",
+          _s47['eval_pending']['rounds'] == 3 and len(_alerts47) == 2, str(_alerts47))
+    # 드리프트 판정은 이 상태에서 열린다 — 아니면 가격이 안 오는 동안 종목 교체가 멈춘다.
+    _gate = dict(_s47, rebalancing_needed=True)
+    check("평가 보류 회차에도 드리프트 판정을 본다", ex._drift_gate_open(_gate) is True,
+          str(_gate.get('eval_pending')))
+    check("진짜 미달이면 드리프트 판정을 안 본다",
+          ex._drift_gate_open({'rebalancing_needed': True}) is False, 'rebalancing_needed only')
+    check("완료 회차는 평소대로 본다", ex._drift_gate_open({}) is True, 'empty state')
+    # 가격이 돌아오면 그 자리에서 푼다 — 안 풀면 한 번 걸린 계좌가 영영 그 상태로 남는다.
+    ex._note_eval_pending(_s47, [], 0.0)
+    check("가격이 돌아오면 기록을 지운다", 'eval_pending' not in _s47, str(_s47))
+    check("풀릴 때 따로 안 알린다", len(_alerts47) == 2, str(_alerts47))
+finally:
+    ex.send_telegram = _old_tg47
+
+# 회차를 통째로 돌려도 같다 — 막혔다가 돌아오면 완료로 닫히고 기록이 사라진다.
+_st47r = _state_bil_only()
+_st47r['rebalancing_needed'] = True
+_o47r, _a47r, _saved47r = _with_api(type('_PriceNan', (_PriceMoves,),
+                                        {'eval_price': float('nan')}),
+                                   FULL, _st47r, _signal())
+check("막힌 회차는 평가 보류로 남는다",
+      _saved47r is not None and _saved47r.get('eval_pending', {}).get('rounds') == 1,
+      str(_saved47r.get('eval_pending') if _saved47r else None))
+_st47s = dict(_saved47r) if _saved47r else {}
+_st47s['rebalancing_needed'] = True
+_o47s, _a47s, _saved47s = _with_api(_PriceSteady, FULL, _st47s, _signal())
+check("가격이 돌아온 회차는 완료로 닫는다",
+      _saved47s is not None and _saved47s.get('rebalancing_needed') is False, str(_saved47s))
+check("그 회차에 평가 보류 기록이 사라진다",
+      _saved47s is not None and 'eval_pending' not in _saved47s,
+      str(_saved47s.get('eval_pending') if _saved47s else None))
+
 
 class _EvalPriceRaises(_PriceMoves):
     """평가 시점 가격 조회가 예외를 던진다 — 0 으로 세지 말고 완료를 미뤄야 한다."""
@@ -1580,24 +1683,56 @@ check("같은 거래소 중복은 한 번만 센다",
       res.get('queried') is True and res.get('found') == 1, str(res))
 check("그 한 건을 취소한다", posts == ['S2'], str(posts))
 
-# 응답이 거래소를 안 주면 물어본 코드를 쓴다 — 한 곳에만 보이면 모호하지 않다.
-res, posts = run_cancel(dict(_ALL_EMPTY, NYSE=_nccs([_row(odno='N1', pdno='BIL')])),
+# 응답이 거래소를 안 주면 물어본 코드로 메우지 않는다. 이 조회는 한 코드로 물어도
+# 미국 전체를 돌려주므로(공식 예제), NYSE 로 물어 받은 행이 NYSE 주문이라는 증거가
+# 없다. 한 곳에서만 보여도 마찬가지다 — 셋 다 같은 목록을 돌려주면 한 곳에만 보이는
+# 것 자체가 그 거래소 것이라는 뜻이 아니다.
+res, posts = run_cancel(dict(_ALL_EMPTY, NYSE=_nccs([_row(odno='N1', pdno='BIL', excg=None)])),
                         {'rt_cd': '0'})
-check("응답에 거래소가 없으면 물어본 코드로 취소한다",
-      [b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES] == ['NYSE'],
+check("응답에 거래소가 없으면 취소를 안 낸다", res.get('queried') is False, str(res))
+check("그 상태로 취소를 안 쏜다 — 물어본 코드로 메우지 않는다", posts == [], str(posts))
+
+# 우리가 그 주문을 보낼 때 쓴 코드는 근거다. 응답이 거래소를 안 줘도 그 기록으로 확정한다.
+_api_sent = _KISAPI_REAL(dry_run=False)
+_api_sent._order_excg['M1'] = 'AMEX'
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=_nccs([_row(odno='M1', pdno='GLD', excg=None)])),
+                        {'rt_cd': '0'}, api=_api_sent)
+check("우리가 보낸 거래소 기록으로 확정해 취소한다",
+      res.get('found') == 1 and [b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES] == ['AMEX'],
+      f"{res} {[b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES]}")
+
+# 응답이 말한 거래소와 우리 기록이 다르면 응답을 따른다 — 그 주문이 지금 어디 있는지는
+# 거래소 쪽 보고가 말한다. 우리 표가 틀렸을 때 취소가 엉뚱한 곳으로 가는 것을 막는다.
+_api_mix = _KISAPI_REAL(dry_run=False)
+_api_mix._order_excg['M2'] = 'NASD'
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=_nccs([_row(odno='M2', pdno='GLD', excg='AMEX')])),
+                        {'rt_cd': '0'}, api=_api_mix)
+check("응답과 우리 기록이 다르면 응답을 따른다",
+      [b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES] == ['AMEX'],
       str([b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES]))
+
+# 한 행은 확정되고 다른 행이 미확정이면 확정된 것만 쏘지 않는다 — 회차 전체를 멈춘다.
+# 미확정 주문이 살아 있는 채로 매수가 나가면 그 위에 얹힌다.
+res, posts = run_cancel(dict(_ALL_EMPTY,
+                             NASD=_nccs([_row(odno='K1', excg='NASD'),
+                                         _row(odno='K2', excg=None)])),
+                        {'rt_cd': '0'})
+check("한 건이라도 미확정이면 전부 안 쏜다",
+      res.get('queried') is False and posts == [], f'{res} {posts}')
 
 # 모호함은 회차 시작 말고 다른 호출부에서도 회차를 멈춰야 한다. 매도 뒤 호출부가
 # 그걸 통과시키면, 거래소를 못 가린 미체결이 남은 채로 매수가 나간다.
+
+
+_C46 = {'n': 0}
 
 
 class _AmbiguousAfterSells(RealBalanceAPI):
     """회차 시작의 취소 조회는 깨끗하고, 매도 뒤부터 거래소가 모호해진다."""
 
     def cancel_all_pending(self):
-        n = getattr(self, '_c', 0) + 1
-        self._c = n
-        if n == 1:
+        _C46['n'] += 1
+        if _C46['n'] == 1:
             return {'queried': True, 'found': 0, 'failed': 0}
         return {'queried': False, 'found': 0, 'failed': 0}
 
@@ -1605,11 +1740,16 @@ class _AmbiguousAfterSells(RealBalanceAPI):
 _st46 = _state_bil_only()
 _st46['rebalancing_needed'] = True
 orders46, alerts46, saved46 = _with_api(_AmbiguousAfterSells, FULL, _st46, _signal())
+# 빈 회차로 통과하면 아무것도 안 잡는다. 매도가 실제로 나갔고, 그래서 매도 뒤 취소
+# 조회가 돌았고(둘째 호출), 상태가 저장됐다는 것까지 같이 단언한다.
+check("매도가 실제로 나갔다", [o for o in orders46 if o[0] == 'sell'] != [], str(orders46))
+check("매도 뒤 취소 조회가 돌았다", _C46['n'] >= 2, str(_C46['n']))
 check("매도 뒤에 모호해지면 매수를 안 낸다",
       [o for o in orders46 if o[0] == 'buy'] == [],
       str(orders46))
+check("상태를 저장한다 (주문은 나갔다)", saved46 is not None, str(saved46))
 check("그 회차를 완료로 안 닫는다",
-      saved46 is None or saved46.get('rebalancing_needed') is True, str(saved46))
+      saved46 is not None and saved46.get('rebalancing_needed') is True, str(saved46))
 
 print()
 if FAILED:

@@ -334,6 +334,18 @@ def _finite(v) -> float:
     return f if math.isfinite(f) else float('nan')
 
 
+def _merge_pending_row(prev: dict, row: dict):
+    """같은 주문번호가 두 번 보일 때 하나로 합친다. 거래소가 서로 어긋나면 None.
+
+    거래소 칸이 빈 쪽은 "모른다" 라서 충돌이 아니다 — 아는 쪽이 있으면 그쪽으로
+    확정한다. 둘 다 값이 있는데 다르면 어느 쪽이 원주문인지 가릴 수 없다.
+    """
+    a, b = prev.get('excg') or '', row.get('excg') or ''
+    if a and b and a != b:
+        return None
+    return prev if a else row
+
+
 def _post(path: str, tr_id: str, body: dict, retries=2, pre_send=None) -> dict:
     """전송 직전 검사를 받는다. `pre_send` 가 거짓을 돌려주면 보내지 않고 `_stale` 을 돌려준다.
 
@@ -381,6 +393,11 @@ class KISAPI:
         # 거짓 완료를 만든다.
         self._balance_gen = 0
         self._balance_price_gen: Dict[str, int] = {}
+        # 우리가 낸 주문의 주문번호 → 그 전문에 실제로 적은 거래소 코드. 미체결 조회가
+        # 거래소를 안 알려줄 때 쓰는 유일한 근거다. 미체결 조회는 한 거래소 코드로
+        # 물어도 미국 전체를 돌려주므로(공식 예제가 그렇게 적어 뒀다), 물어본 코드는
+        # 그 주문이 그 거래소 것이라는 증거가 아니다.
+        self._order_excg: Dict[str, str] = {}
         # 마지막으로 성공한 계좌 조회의 자산 구성(원화). 로그·보고용이고 매매 판단에 안 쓴다.
         self._last_asset: Dict[str, float] = {}
 
@@ -447,7 +464,9 @@ class KISAPI:
                     holdings[ticker] = qty
                     holdings_usd += eval_amt
                     try:
-                        cur_price = float(item.get('now_pric2', 0) or item.get('ovrs_now_pric1', 0) or 0)
+                        # 무한대·숫자 아님은 0 과 같이 "값 없음" 이다. 양수 검사만 하면
+                        # 무한대가 통과해서, 뒤의 비중 계산이 숫자가 아닌 값이 된다.
+                        cur_price = _finite(item.get('now_pric2') or item.get('ovrs_now_pric1') or 0)
                         if cur_price > 0:
                             self._balance_price_cache[ticker] = cur_price
                             self._balance_price_gen[ticker] = self._balance_gen
@@ -559,6 +578,10 @@ class KISAPI:
     def get_current_price(self, ticker: str, fresh_only: bool = False) -> float:
         """현재가 (USD). 장중 시세 → 잔고 캐시 → 일봉 종가 → Yahoo 종가 순으로 fallback.
 
+        돌려주는 값은 유한한 양수이거나 0 이다. 무한대·숫자 아님은 0 으로 떨어뜨린다 —
+        양수 검사만 통과시키면 무한대가 가격 행세를 하고, 보유 0 주와 곱해진 비중이
+        숫자가 아닌 값이 되어 최댓값 비교를 그대로 통과한다(그 회차가 거짓 완료된다).
+
         `fresh_only` 는 완료 평가가 쓴다. 지금 받은 시세, 또는 방금 한 계좌 조회에서
         같이 온 가격만 받고 나머지는 0 을 돌려준다. 과거 종가와 지난 조회의 캐시를
         빼는 이유는 완료 판정의 분자(보유 수량)와 분모(총자산)가 둘 다 주문 뒤 값이기
@@ -572,7 +595,7 @@ class KISAPI:
             data = _get('/uapi/overseas-price/v1/quotations/price-detail', 'HHDFS76200200', {
                 'AUTH': '', 'EXCD': excd, 'SYMB': ticker,
             }, retries=1)
-            price = float(data.get('output', {}).get('last', 0))
+            price = _finite(data.get('output', {}).get('last', 0))
             if price > 0:
                 return price
         except Exception:
@@ -603,7 +626,7 @@ class KISAPI:
             }, retries=1)
             for item in data.get('output2', []):
                 if isinstance(item, dict):
-                    price = float(item.get('clos', 0))
+                    price = _finite(item.get('clos', 0))
                     if price > 0:
                         self._balance_price_cache[ticker] = price
                         # 과거 종가다. 세대 표식을 지워 뒤의 평가가 이 값을 이번 조회에서
@@ -621,7 +644,7 @@ class KISAPI:
             tk = yf.Ticker(ticker)
             hist = tk.history(period='5d')
             if not hist.empty:
-                price = float(hist['Close'].iloc[-1])
+                price = _finite(hist['Close'].iloc[-1])
                 if price > 0:
                     self._balance_price_cache[ticker] = price
                     self._balance_price_gen.pop(ticker, None)
@@ -681,26 +704,28 @@ class KISAPI:
                 if not order_no or not ticker:
                     log(f'  ⚠️ 미체결 행에 주문번호·종목이 없다({excg}): {str(item)[:60]}')
                     return False, []
-                # 거래소를 먼저 푼다. 응답이 말해 주면 그걸 쓰고, 안 주면 물어본
-                # 거래소를 쓰되 그 사실을 같이 적는다 — 추정값으로 취소를 내보낼지는
-                # 부르는 쪽이 정한다. 중복 제거를 이보다 앞에 두면, 같은 쪽이나 다음
-                # 쪽에 같은 주문번호가 다른 거래소로 들어왔을 때 둘째 행이 먼저 사라져
-                # 아래 충돌 검사를 통째로 건너뛴다.
+                # 거래소는 응답이 말해 줄 때만 적는다. 물어본 코드는 근거가 아니다 —
+                # 이 조회는 한 거래소 코드로 물어도 미국 전체를 돌려준다(공식 예제가
+                # 그렇게 적어 뒀다). 그래서 NASD 로 물어 받은 행이 NASD 주문이라는
+                # 보장이 없고, 그 추정으로 취소를 내면 엉뚱한 거래소로 가서 성공을
+                # 돌려주고 원주문은 살아남는다. 빈 값은 "모른다" 다.
+                # 중복 제거를 이보다 앞에 두면, 같은 쪽이나 다음 쪽에 같은 주문번호가
+                # 다른 거래소로 들어왔을 때 둘째 행이 먼저 사라져 충돌 검사를 건너뛴다.
                 _resp_excg = str(item.get('ovrs_excg_cd') or '').strip().upper()
                 row = {
                     'odno': order_no, 'ticker': ticker, 'qty': qty,
-                    'excg': _resp_excg or excg,
-                    'excg_src': 'resp' if _resp_excg else 'req',
+                    'excg': _resp_excg,
+                    'excg_src': 'resp' if _resp_excg else 'none',
                     'side': 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell',
                 }
                 _prev = out.get(order_no)
                 if _prev is not None:
-                    if _prev['excg'] != row['excg']:
+                    _merged = _merge_pending_row(_prev, row)
+                    if _merged is None:
                         log(f'  ⚠️ 미체결 {ticker} 주문번호 {order_no} 가 한 조회 안에서 '
-                            f"{_prev['excg']}({_prev['excg_src']})·"
-                            f"{row['excg']}({row['excg_src']}) 두 거래소로 보인다 — 중단한다")
+                            f"{_prev['excg']}·{row['excg']} 두 거래소로 보인다 — 중단한다")
                         return False, []
-                    # 같은 거래소로 두 번 보인 것은 중복 노출이다. 먼저 본 쪽을 남긴다.
+                    out[order_no] = _merged
                     continue
                 out[order_no] = row
             # 쪽을 넘길지는 활성 행 수와 무관하게 정한다. 행이 비어 있어도 다음 쪽에
@@ -741,10 +766,12 @@ class KISAPI:
         거래소를 셋 다 묻는다. 주문은 EXCHANGE_MAP 대로 NASD 와 AMEX 로 나뉘어 나가는데
         한 코드로만 물으면 다른 쪽 미체결이 안 보인다. 주문번호로 겹친 것을 지운다.
 
-        같은 주문번호가 서로 다른 거래소로 보이면 취소를 안 낸다. 어느 쪽이 원주문인지
-        모르는 채로 보내면 취소가 엉뚱한 거래소로 가서 원주문은 그대로 살아 있고, 그 뒤의
-        매수가 잔존 주문 위에 얹힌다. "조회 못 함" 으로 돌려주면 부르는 쪽 넷이 전부
-        회차를 멈추거나 매수를 막는다.
+        취소를 낼 거래소는 둘 중 하나로만 확정한다 — 미체결 응답이 적어 준 거래소,
+        또는 우리가 그 주문을 보낼 때 전문에 적은 거래소. 물어본 코드는 근거가 아니다.
+        둘 다 없으면 미확정이라 취소를 안 낸다. 응답끼리 어긋나도 안 낸다. 어느 쪽이
+        원주문인지 모르는 채로 보내면 취소가 엉뚱한 거래소로 가서 성공을 돌려주고
+        원주문은 그대로 살아 있고, 그 뒤의 매수가 잔존 주문 위에 얹힌다. "조회 못 함"
+        으로 돌려주면 부르는 쪽 넷이 전부 회차를 멈추거나 매수를 막는다.
         """
         found_rows = {}
         for excg in PENDING_EXCHANGES:
@@ -756,16 +783,39 @@ class KISAPI:
                 if _prev is None:
                     found_rows[row['odno']] = row
                     continue
-                if _prev['excg'] != row['excg']:
+                _merged = _merge_pending_row(_prev, row)
+                if _merged is None:
                     _msg = (f"미체결 {row['ticker']} 주문번호 {row['odno']} 가 "
-                            f"{_prev['excg']}({_prev['excg_src']})·"
-                            f"{row['excg']}({row['excg_src']}) 두 거래소로 보인다")
+                            f"{_prev['excg']}·{row['excg']} 두 거래소로 보인다")
                     log(f'  ⚠️ {_msg} — 취소를 안 낸다')
                     send_telegram(f'⛔ 주식: {_msg}. 취소를 안 내고 이 회차를 멈춘다 — '
                                   f'한국투자증권 앱에서 원주문을 확인하고 손으로 취소한 뒤 '
                                   f'다음 회차를 보라.')
                     return {'queried': False, 'found': 0, 'failed': 0}
-                # 같은 거래소로 두 번 보인 것은 중복 노출이다. 먼저 본 쪽을 남긴다.
+                found_rows[row['odno']] = _merged
+        # 거래소를 확정한다. 응답이 적어 준 값이 먼저고, 없으면 우리가 그 주문을 보낼 때
+        # 쓴 코드다. 응답과 우리 기록이 어긋나면 응답을 따른다 — 그 주문이 지금 어디에
+        # 있는지는 거래소 쪽 보고가 말한다. 둘 다 없는 행이 하나라도 있으면 취소를 안 낸다.
+        _unresolved = []
+        for row in found_rows.values():
+            _sent = self._order_excg.get(row['odno'], '')
+            if row['excg']:
+                if _sent and _sent != row['excg']:
+                    log(f"  ⚠️ 미체결 {row['ticker']} {row['odno']}: 응답 {row['excg']} 와 "
+                        f'우리가 보낸 {_sent} 가 다르다 — 응답을 따른다')
+            elif _sent:
+                row['excg'], row['excg_src'] = _sent, 'sent'
+            else:
+                _unresolved.append(f"{row['ticker']}/{row['odno']}")
+        if _unresolved:
+            _msg = (f"미체결 {len(found_rows)}건 중 {', '.join(sorted(_unresolved))} 의 "
+                    f'원주문 거래소를 확정하지 못했다')
+            log(f'  ⚠️ {_msg} — 취소를 안 낸다')
+            send_telegram(f'⛔ 주식: {_msg}. 미체결 조회는 한 코드로 물어도 미국 전체를 '
+                          f'돌려줘서 물어본 코드로는 원주문 거래소를 알 수 없다. 취소를 안 '
+                          f'내고 이 회차를 멈춘다 — 한국투자증권 앱에서 그 주문을 확인하고 '
+                          f'손으로 취소한 뒤 다음 회차를 보라.')
+            return {'queried': False, 'found': 0, 'failed': 0}
         failed = 0
         for row in found_rows.values():
             ticker, qty, side = row['ticker'], row['qty'], row['side']
@@ -774,9 +824,9 @@ class KISAPI:
                 continue
             res = _post('/uapi/overseas-stock/v1/trading/order-rvsecncl', 'TTTT1004U', {
                 'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-                # 원주문이 실제로 보인 거래소 코드를 쓴다. EXCHANGE_MAP 은 우리가 주문을
-                # 보낼 때 쓰는 표라 그 표가 틀리면 취소가 다른 거래소로 나간다.
-                'OVRS_EXCG_CD': row.get('excg') or EXCHANGE_MAP.get(ticker, 'NASD'),
+                # 위에서 확정한 코드만 쓴다. 미확정이면 여기까지 안 온다 — EXCHANGE_MAP
+                # 으로 메우면 그 표가 틀렸을 때 취소가 다른 거래소로 나간다.
+                'OVRS_EXCG_CD': row['excg'],
                 'PDNO': ticker, 'ORGN_ODNO': row['odno'],
                 'RVSE_CNCL_DVSN_CD': '02',
                 'ORD_QTY': str(qty), 'OVRS_ORD_UNPR': '0',
@@ -809,9 +859,10 @@ class KISAPI:
             log(f'  [DRY] {side} {ticker} {qty}주 @ ${price:.2f}')
             return 'ok'
         tr_id = 'TTTT1002U' if side == 'buy' else 'TTTT1006U'
+        _sent_excg = EXCHANGE_MAP.get(ticker, 'NASD')
         result = _post('/uapi/overseas-stock/v1/trading/order', tr_id, {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
-            'OVRS_EXCG_CD': EXCHANGE_MAP.get(ticker, 'NASD'),
+            'OVRS_EXCG_CD': _sent_excg,
             'PDNO': ticker,
             'ORD_QTY': str(qty),
             'OVRS_ORD_UNPR': f'{price:.2f}',
@@ -855,6 +906,9 @@ class KISAPI:
         if not odno:
             log(f'  ⚠️ 주문 응답에 주문번호가 없다 {side} {ticker}: {str(result)[:120]}')
             return 'unknown'
+        # 우리가 보낸 거래소를 그 주문번호에 묶어 둔다. 뒤의 취소가 거래소를 확정하는
+        # 근거는 이것과 미체결 응답의 거래소 칸 둘뿐이다.
+        self._order_excg[odno] = _sent_excg
         log(f'  주문 {side} {ticker} {qty}주 @ ${price:.2f} (주문번호 {odno})')
         return 'ok'
 
@@ -1426,6 +1480,61 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
     return changed
 
 
+# 평가 가격만 없어서 완료를 못 닫은 회차가 몇 번 연속인가. 이 수의 배수마다 다시 알린다.
+EVAL_BLOCK_ALERT_ROUNDS = 3
+
+
+def _drift_gate_open(state: dict) -> bool:
+    """드리프트 판정을 볼 회차인가.
+
+    평소에는 "직전 회차가 완료로 닫혔을 때" 다 — 리밸런싱이 아직 안 끝난 상태에서
+    종목까지 갈아치우면 중간 상태 위에 새 목표가 얹힌다. 다만 평가 가격만 없어서 못
+    닫은 회차는 그 '안 끝남' 과 다르다. 들고 있는 것은 목표대로인데 값을 매길 길이
+    없는 것이라, 그걸 미달과 같이 보면 가격이 안 오는 동안 종목 교체가 영영 멈춘다.
+    """
+    if state.get('eval_pending'):
+        return True
+    return not state.get('rebalancing_needed', False)
+
+
+def _note_eval_pending(state: dict, tickers, max_diff_known: float) -> None:
+    """"평가 가격만 없어서 못 닫았다" 를 상태에 적고, 처음과 지속에 알린다.
+
+    주문 실패·미체결 불확실과 다른 상태다. 그 둘은 실제로 무엇이 틀어진 것이고, 이건
+    들고 있는 것은 목표대로인데 값을 매길 길이 없는 것이다. 갈라 적어야 다음 회차가
+    드리프트 판정을 열 수 있다 — 안 가르면 가격이 안 오는 동안 종목 교체가 통째로
+    멈추고, 그 사실이 아무 데도 안 남는다.
+
+    `tickers` 가 비면 그 상태가 풀린 것이라 기록을 지운다.
+    """
+    prev = state.get('eval_pending')
+    if not tickers:
+        if prev:
+            log('  ✅ 평가 가격이 돌아왔다 — 평가 보류 상태를 푼다')
+            state.pop('eval_pending', None)
+        return
+    _now = datetime.now().isoformat(timespec='seconds')
+    _rounds = int(prev.get('rounds', 0)) + 1 if isinstance(prev, dict) else 1
+    state['eval_pending'] = {
+        'tickers': list(tickers),
+        'reason': '평가 시점 가격을 못 받았다',
+        'rounds': _rounds,
+        'first': (prev.get('first') if isinstance(prev, dict) and prev.get('first') else _now),
+        'last': _now,
+        'max_diff_known': round(float(max_diff_known), 6),
+    }
+    _names = ', '.join(tickers)
+    log(f'  ⏳ 평가 가격만 없어서 완료를 안 닫는다 ({_names}, {_rounds}회 연속)')
+    if _rounds == 1:
+        send_telegram(f'⚠️ 주식: {_names} 의 평가 시점 가격을 못 받아 이번 회차를 완료로 '
+                      f'안 닫았다. 들고 있는 것은 목표대로다(값을 매긴 종목 기준 편차 '
+                      f'{max_diff_known:.1%}). 다음 회차에 다시 본다.')
+    elif _rounds % EVAL_BLOCK_ALERT_ROUNDS == 0:
+        send_telegram(f'⚠️ 주식: {_names} 의 평가 시점 가격을 {_rounds}회 연속 못 받고 있다. '
+                      f'완료 판정만 미뤄지는 상태이고 매매는 돈다. 한국투자증권 시세가 '
+                      f'계속 안 오면 손으로 확인이 필요하다.')
+
+
 def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None,
                   effective_pv_usd: float = None, prefetched_balance=None, prefetched_at=None):
     """target vs 현재 잔고 → Delta 매매 (정수 주 단위).
@@ -1477,8 +1586,11 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     _px_cache: Dict[str, float] = {}
 
     def _px(ticker: str) -> float:
+        # 경계에서 유한한 양수만 통과시킨다. 아래 가격 검사는 전부 `<= 0` 꼴인데
+        # 숫자가 아닌 값은 그 비교를 통과하고(비교가 거짓이라), 무한대도 통과한다.
         if ticker not in _px_cache:
-            _px_cache[ticker] = api.get_current_price(ticker)
+            _p = _finite(api.get_current_price(ticker))
+            _px_cache[ticker] = _p if _p > 0 else 0.0
         return _px_cache[ticker]
 
     # 현재 비중 계산 — 보유 수량 × 현재가. 총자산도 같은 시점 기준이라 둘이 일관된다.
@@ -1775,14 +1887,17 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     def _px_eval(ticker: str) -> float:
         if ticker not in _px_eval_cache:
             try:
-                _px_eval_cache[ticker] = api.get_current_price(ticker, fresh_only=True)
+                # 받은 값을 그대로 둔다 — 유한한지는 아래 평가 행이 판정한다. 여기서
+                # 0 으로 뭉개면 "값이 없다" 와 "숫자가 아닌 값이 왔다" 가 같아져서,
+                # 뒤의 비중 유한성 검사가 영영 안 걸리는 죽은 코드가 된다.
+                _px_eval_cache[ticker] = _finite(api.get_current_price(ticker, fresh_only=True))
             except TypeError:
                 # fresh_only 를 모르는 구현(옛 가짜·대역)은 평가를 막는다. 조용히
                 # 옛 경로로 내려가면 이 가드가 통째로 없어진다.
                 log(f'  ⚠️ {ticker} 평가 시점 가격 경로를 쓸 수 없다 — 완료로 안 본다')
-                _px_eval_cache[ticker] = 0.0
+                _px_eval_cache[ticker] = float('nan')
             except Exception:
-                _px_eval_cache[ticker] = 0.0
+                _px_eval_cache[ticker] = float('nan')
         return _px_eval_cache[ticker]
 
     if total2 > 0:
@@ -1795,32 +1910,50 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         # 하고, 아니면 cap 이 걸린 회차가 영영 완료로 안 닫힌다.
         denom_for_diff = total2
         if effective_pv_usd is not None:
-            denom_for_diff = min(denom_for_diff, effective_pv_usd)
+            _cap = _finite(effective_pv_usd)
+            if _cap > 0:
+                denom_for_diff = min(denom_for_diff, _cap)
         # 값을 매길 수 없는 종목이 하나라도 있으면 그 회차를 완료로 닫지 않는다. 가격이
         # 없는 종목을 편차 0 으로 세면 안 산 종목도 달성으로 읽힌다.
         eval_blocked = []
+        # 값을 매긴 종목만으로 잰 편차. 값을 못 매긴 종목은 여기 안 들어간다 — 그
+        # 종목의 비중을 0 으로 세어 부풀린 편차를 "진짜 미달" 로 읽으면, 가격이 계속
+        # 안 오는 계좌에서 회차가 영영 안 닫히고 드리프트 판정까지 통째로 막힌다.
+        max_diff_known = 0
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
             price = _px_eval(ticker)
-            if price <= 0 and (target_w > 0 or holdings2.get(ticker, 0) > 0):
+            _held = holdings2.get(ticker, 0)
+            # 유한한 양수가 아니면 값을 못 매긴 것이다. `<= 0` 으로만 물으면 숫자가
+            # 아닌 값이 그 비교를 통과해서(비교가 거짓이라) 가격 행세를 한다.
+            if not (price > 0) and (target_w > 0 or _held > 0):
                 eval_blocked.append(ticker)
             # cash buffer 반영 목표로 비교.
             # merge_tranches target 은 risky 합=1.0(버퍼 전)이라 실효 목표는 ×(1-buffer).
             # (미반영 시 현금이 정상적으로 buffer% 여도 max_diff 가 buffer 만큼 떠서
             #  rebalancing_needed 가 영구히 안 꺼지는 latch 버그 발생 — 2026-06-05 수정)
-            current_w = (holdings2.get(ticker, 0) * price / denom_for_diff) if price > 0 else 0
+            current_w = (_held * price / denom_for_diff) if price > 0 else 0
             target_eff = target_w * (1 - cash_buffer)
-            max_diff = max(max_diff, abs(target_eff - current_w))
+            # 여기서 비중이 숫자가 아닐 길은 없다. 가격은 바로 위에서 유한한 양수만
+            # 통과했고 보유 수량은 잔고 조회가 유한한 정수로 거른다 — 분모도 양수다.
+            # 한 겹 더 두면 그 겹은 어떤 입력으로도 안 걸리는 죽은 검사가 된다.
+            _d = abs(target_eff - current_w)
+            max_diff = max(max_diff, _d)
+            if ticker not in eval_blocked:
+                max_diff_known = max(max_diff_known, _d)
         # 목표에 없는데 아직 들고 있는 종목도 이탈이다. 목표 안쪽만 보면, 전량매도가
         # 접수 뒤 거절돼 보유가 그대로 남은 회차가 "목표 달성" 으로 닫힌다.
         for ticker, qty in holdings2.items():
             if ticker in target or qty <= 0:
                 continue
             price = _px_eval(ticker)
+            # 가격이 유한한 양수일 때만 값을 매긴다. `_px_eval` 은 유한하지 않은 값을
+            # 숫자 아님으로 돌려주므로 `> 0` 하나가 그 셋을 다 거른다.
             if price > 0:
                 _left = qty * price / denom_for_diff
                 max_diff = max(max_diff, _left)
+                max_diff_known = max(max_diff_known, _left)
                 log(f'  ⏳ 목표 밖 보유가 남았다: {ticker} {qty}주 ({_left:.1%})')
             else:
                 eval_blocked.append(ticker)
@@ -1829,6 +1962,15 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 f'— 완료로 안 본다')
         done = (max_diff < REBALANCE_TOLERANCE and not failed_orders
                 and not mid_uncertain and not unknown_send['hit'] and not eval_blocked)
+        # 평가 가격만 없는 상태를 주문 실패·미체결 불확실과 갈라 적는다. 값을 매긴
+        # 종목이 전부 목표에 맞는데 값을 못 매긴 종목 때문에만 못 닫은 회차가 이것이고,
+        # 다음 회차의 드리프트 판정은 이 상태에서 다시 열린다(그 판정은 자기 가격 가드를
+        # 따로 가진다). 과거 종가로 완료를 강제하지는 않는다.
+        _eval_only = bool(eval_blocked) and (max_diff_known < REBALANCE_TOLERANCE
+                                             and not failed_orders and not mid_uncertain
+                                             and not unknown_send['hit'])
+        _note_eval_pending(state, sorted(set(eval_blocked)) if _eval_only else [],
+                           max_diff_known)
         if done:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
@@ -2357,7 +2499,14 @@ def run_once(dry_run=False):
     # alloc_transit cap (옵션 D): effective_pv = total_usd × cap_ratio (cap_ratio < 1.0 일 때만)
     _stock_cap_ratio = _read_alloc_transit_cap_ratio('stock')
     _stock_cap_usd = None
-    if not state.get('rebalancing_needed', False):
+    # 평가 가격만 없어서 못 닫은 회차는 드리프트 판정을 막지 않는다. 그 상태는 "들고
+    # 있는 것은 목표대로인데 값을 매길 길이 없다" 라서, 그걸 미달과 같이 취급하면
+    # 가격이 안 오는 동안 종목 교체가 영영 멈춘다. 이 판정은 자기 가격 가드를 따로
+    # 가지고 있어(아래 _miss) 값을 못 구하면 그 자리에서 다시 쉰다.
+    _eval_pending = state.get('eval_pending')
+    if _eval_pending and state.get('rebalancing_needed', False):
+        log(f"  ↩️ 평가 보류 {_eval_pending.get('rounds')}회차 — 드리프트 판정은 그대로 본다")
+    if _drift_gate_open(state):
         try:
             _merged_target = merge_tranches(state)
             if _merged_target:

@@ -58,7 +58,10 @@ class FakeAPI:
         # 총자산은 매도해도 안 바뀐다 — 주식이 현금으로 바뀔 뿐이다.
         return dict(self.holdings), 30000.0 / (1 - ex.CASH_BUFFER_DEFAULT), 1380.0
 
-    def get_current_price(self, ticker):
+    def get_current_price(self, ticker, fresh_only=False):
+        # fresh_only 는 완료 평가가 쓰는 칸이다. 대역이 그 칸을 안 받으면 집행기가
+        # TypeError 로 읽어 평가를 통째로 막아 버려서, 이 파일이 보려는 경로가 아니라
+        # "값을 못 매겼다" 가 결과를 정한다.
         return 1000.0
 
     def get_max_buy_qty(self, ticker, price):
