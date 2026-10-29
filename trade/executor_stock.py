@@ -1347,7 +1347,7 @@ def check_anchors(signal: dict, state: dict):
                           f'종목 {picks} / 비중 {weights}')
         except Exception as e:
             log(f'  ⚠️ 앵커 보류 알림 전송 실패: {e}')
-        return
+        return []
 
     snapshots = state.setdefault('snapshots', {})
     if all(not (snapshots.get(str(i)) or {}) for i in range(N_SNAPS)):
@@ -1368,8 +1368,12 @@ def check_anchors(signal: dict, state: dict):
             send_telegram(f'⚠️ {msg}')
         except Exception as e:
             log(f'  ⚠️ 초기화 알림 전송 실패: {e}')
-        return
+        return []
 
+    # 어느 스냅샷이 실제로 갈아탔나. 시간표만 복구한 회차와 구분하려고 따로 모은다 —
+    # 같은 비중으로 발화하면 합산 목표 키가 안 바뀌어서, 키 대조만으로는 "목표가 그대로다"
+    # 로 읽히고 지난 평가 보류 표식이 같은 회차의 드리프트 리필을 연다(열한째 토론 4번).
+    fired: List[str] = []
     schedule, repair = _resolve_anchor_schedule(snapshots, today)
     if repair:
         log(f'  🧭 {repair} → ' + ', '.join(d.isoformat() for d in schedule))
@@ -1398,7 +1402,9 @@ def check_anchors(signal: dict, state: dict):
             next_date += timedelta(days=SNAP_PERIOD_DAYS)
         snap['next_rebal_date'] = next_date.isoformat()
         state['rebalancing_needed'] = True
+        fired.append(str(snap_id))
         log(f'  📅 snap{snap_id} 앵커 발화 → {picks} (다음 앵커 {next_date.isoformat()})')
+    return fired
 
 
 def snapshot_payload_defect(state: dict):
@@ -1426,8 +1432,12 @@ def snapshot_payload_defect(state: dict):
         picks = snap.get('picks')
         if not isinstance(picks, list):
             continue
-        held = {t for t, w in (snap.get('weights') or {}).items()
-                if t != 'Cash' and _as_float(w) > 0}
+        _w = snap.get('weights')
+        if not isinstance(_w, dict):
+            # 비중이 딕셔너리가 아니면 위 `bad` 가 이미 잡았다. 여기서 items() 를 부르면
+            # 예외가 나서 그 판정과 알림까지 통째로 못 간다(열한째 토론 5번).
+            continue
+        held = {t for t, w in _w.items() if t != 'Cash' and _as_float(w) > 0}
         if held - set(picks):
             mismatch.append(k)
     if not bad and not missing and not mismatch:
@@ -1521,11 +1531,13 @@ def _drift_gate_open(state: dict, target_key: str = '', target_changed: bool = F
     그때 평가한 목표와 같다. 하나라도 어긋나면 그 표식은 지금 보유가 목표대로라는
     증거가 아니다 — 그런데도 문을 열면 정규 앵커가 갈 스냅샷 말고 나머지 스냅샷까지
     드리프트 리필이 갈아치운다.
+
+    빈 `target_key` 는 "대조 불가" 다 — 못 재서 비었을 수 있으므로 문을 안 연다.
     """
     ep = state.get('eval_pending')
-    if isinstance(ep, dict) and ep.get('drift_ok') and not target_changed:
-        if not target_key or ep.get('target_key') == target_key:
-            return True
+    if (isinstance(ep, dict) and ep.get('drift_ok') and not target_changed
+            and target_key and ep.get('target_key') == target_key):
+        return True
     return not state.get('rebalancing_needed', False)
 
 
@@ -1688,6 +1700,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     buys = []
     failed_orders = []
     shrunk_buys: List[str] = []
+    # 주문 전 보유에서 시작해 실제로 접수된 수량만 더하고 뺀다. 평가 가격이 없는 종목은
+    # 값으로 못 재므로, 이 장부와 주문 뒤 보유를 수량으로 대조해 "들고 있는 것이 목표대로"
+    # 인지를 본다. 주문이 하나도 없던 종목도 대조 대상이다 — 보유가 양수라는 것만으로
+    # 자격을 주면 그 사이 외부 체결·분할이 생긴 회차가 완료로 닫힌다(열한째 토론 1번).
+    expected_qty: Dict[str, int] = {_tk: int(_q) for _tk, _q in holdings.items()
+                                    if isinstance(_q, (int, float)) and _q > 0}
     target_usd = pv_for_target * (1 - cash_buffer)
     if effective_pv_usd is not None and effective_pv_usd < total_usd:
         log(f'    🔴 alloc_transit cap 적용: pv ${total_usd:,.0f} → ${pv_for_target:,.0f}')
@@ -1801,7 +1819,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             continue
         sell_price = price * (1 - LIMIT_PRICE_SLIP)
         log(f'  매도: {ticker} {qty}주 @ ${sell_price:.2f}')
-        if not _send('sell', ticker, qty, sell_price):
+        if _send('sell', ticker, qty, sell_price):
+            expected_qty[ticker] = max(0, expected_qty.get(ticker, 0) - int(qty))
+        else:
             failed_orders.append(('sell', ticker, qty))
             if not unknown_send['hit'] and not expired['hit']:
                 send_telegram(f'⚠️ 주문 실패: sell {ticker} {qty}주')
@@ -1929,7 +1949,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             # 그 종목 값을 못 매기면 "보유가 목표대로" 라는 근거가 없다(열째 토론 지적).
             shrunk_buys.append(ticker)
         log(f'  매수: {ticker} {actual_qty}주 @ ${buy_price:.2f}')
-        if not _send('buy', ticker, actual_qty, buy_price):
+        if _send('buy', ticker, actual_qty, buy_price):
+            expected_qty[ticker] = expected_qty.get(ticker, 0) + int(actual_qty)
+        else:
             failed_orders.append(('buy', ticker, actual_qty))
             if not unknown_send['hit'] and not expired['hit']:
                 send_telegram(f'⚠️ 주문 실패: buy {ticker} {actual_qty}주')
@@ -2054,6 +2076,21 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 # 보유가 다음 회차 종목 교체를 열어 준다.
                 eval_blocked.append(ticker)
                 eval_unsafe.append(ticker)
+        # 값을 못 매긴 종목은 수량으로 대조한다. 기대 보유(주문 전 보유 ± 실제 접수 수량)와
+        # 주문 뒤 보유가 다르면 미반영·부분 체결이다 — "값만 모른다" 가 아니라 집행이
+        # 목표에 못 닿은 것이라 다음 회차 종목 교체를 열면 안 된다(열한째 토론 1번).
+        # 모의 실행은 실제로 주문이 안 나가 잔고가 안 줄므로 이 대조를 안 한다.
+        if eval_blocked and not getattr(api, 'dry_run', False):
+            for _tk in sorted(set(eval_blocked)):
+                _want = expected_qty.get(_tk, 0)
+                _have = holdings2.get(_tk, 0)
+                if not isinstance(_have, (int, float)) or int(_have) != int(_want):
+                    log(f'  ⛔ {_tk} 기대 보유 {_want}주인데 주문 뒤 {_have}주 '
+                        f'— 집행이 목표에 안 닿았다')
+                    if _tk not in eval_unsafe:
+                        eval_unsafe.append(_tk)
+                else:
+                    log(f'  ✓ {_tk} 수량 대조 통과 ({_want}주) — 값만 못 매겼다')
         if eval_blocked:
             log(f'  ⏳ 값을 매길 수 없는 보유가 있다: {", ".join(sorted(set(eval_blocked)))} '
                 f'— 완료로 안 본다')
@@ -2606,7 +2643,15 @@ def run_once(dry_run=False):
     # 적어 둔다. 아래 드리프트 게이트가 "지난 회차의 평가 보류 표식" 을 쓸 자격이 있는지
     # 가를 때 이 값과 대조한다 — 이번 회차에 목표가 달라졌으면 그 표식은 다른 목표를 두고
     # 잰 것이라 지금 보유가 목표대로라는 근거가 못 된다.
-    _target_key_pre = _target_key(merge_tranches(state))
+    # 이 자리는 스냅샷 온전성 검사(3.5)보다 앞이라, 손상된 비중(문자열·None·리스트)이
+    # merge_tranches 에 들어올 수 있다. 거기서 예외가 나면 아래 검사와 알림까지 통째로
+    # 못 가고 회차가 통신 오류처럼 죽는다 — 열한째 토론 5번. 못 재면 빈 값으로 두고,
+    # 빈 값은 _drift_gate_open 이 "대조 불가" 로 받아 문을 안 연다.
+    try:
+        _target_key_pre = _target_key(merge_tranches(state))
+    except Exception as _ex_pre:
+        log(f'  ⚠️ 회차 시작 목표를 못 쟀다 ({_ex_pre}) — 지난 평가 보류 표식을 쓰지 않는다')
+        _target_key_pre = ''
 
     # 3. 카나리 플립
     _flipped = check_canary_flip(signal, state)
@@ -2632,7 +2677,7 @@ def run_once(dry_run=False):
         return
 
     # 4. 앵커 체크
-    check_anchors(signal, state)
+    _anchors_fired = check_anchors(signal, state)
 
     # 4.5. Drift trigger (2026-05-23): cur_w vs combined target half_turnover ≥ 0.10
     # alloc_transit cap (옵션 D): effective_pv = total_usd × cap_ratio (cap_ratio < 1.0 일 때만)
@@ -2647,12 +2692,19 @@ def run_once(dry_run=False):
     # 앵커가 갈아탈 스냅샷 하나 말고 나머지까지 리필이 덮는다(열째 토론 지적).
     _target_now = merge_tranches(state)
     _target_key_now = _target_key(_target_now)
-    _target_changed = bool(_flipped) or (_target_key_now != _target_key_pre)
+    # 실제 발화를 따로 센다. 같은 비중으로 갈아타면 합산 목표 키가 안 바뀌어서 키
+    # 대조만으로는 "목표 그대로" 로 읽히는데, 그 회차의 드리프트 리필은 앵커가 갈
+    # 스냅샷 말고 나머지까지 덮는다(열한째 토론 4번).
+    _target_changed = (bool(_flipped) or bool(_anchors_fired)
+                       or (_target_key_now != _target_key_pre))
     _eval_pending = state.get('eval_pending')
     if _eval_pending and state.get('rebalancing_needed', False):
         if _target_changed:
-            log(f"  ⛔ 평가 보류 {_eval_pending.get('rounds')}회차인데 이번 회차에 목표가 "
-                f'바뀌었다 — 지난 표식으로 드리프트를 열지 않는다')
+            _why_chg = ('카나리 전환' if _flipped
+                        else (f"앵커 발화 snap{','.join(_anchors_fired)}" if _anchors_fired
+                              else '목표 구성 변경'))
+            log(f"  ⛔ 평가 보류 {_eval_pending.get('rounds')}회차인데 이번 회차에 "
+                f'{_why_chg} 가 있었다 — 지난 표식으로 드리프트를 열지 않는다')
         else:
             log(f"  ↩️ 평가 보류 {_eval_pending.get('rounds')}회차 — 드리프트 판정은 그대로 본다")
     if _drift_gate_open(state, _target_key_now, target_changed=_target_changed):
@@ -2676,13 +2728,32 @@ def run_once(dry_run=False):
                         if not _p or _p <= 0:
                             _miss.append(_tk)
                             continue
-                        _cur_w[_tk] = (_qty * _p) / _pv_basis
+                        _w_one = _finite(_qty * _p) / _pv_basis
+                        if not math.isfinite(_w_one):
+                            log(f'  ⛔ {_tk} 의 평가액 계산이 유한하지 않다 '
+                                f'(수량 {_qty} × 가격 {_p}) — 드리프트 판정을 쉰다')
+                            send_telegram(f'⛔ 주식: {_tk} 평가액 계산이 유한하지 않아 '
+                                          f'드리프트 판정을 건너뛴다. 종목 교체와 발화는 없다.')
+                            raise _StockDriftSkip()
+                        _cur_w[_tk] = _w_one
                     # 현재가를 못 구한 보유를 빼면 그 몫이 현금으로 세어져 드리프트가 부풀고,
                     # 발화하면 drift-refill 이 스냅 종목까지 갈아버린다. 판정을 쉰다.
                     if _miss:
                         log(f"  ⛔ 보유 {', '.join(_miss)} 의 현재가를 못 구했다 — 드리프트 판정을 쉰다")
                         send_telegram(f"⛔ 주식: 보유 {', '.join(_miss)} 의 현재가를 못 구해 드리프트 "
                                       f'판정을 건너뛴다. 종목 교체와 발화는 없다.')
+                        raise _StockDriftSkip()
+                    # 가격을 모으는 동안 시간이 흐른다. 종목이 많거나 조회가 느리면 사전
+                    # 조회 계좌값이 이미 낡는다 — 그 값으로 스냅샷을 갈아치우면 되돌릴 수
+                    # 없다. 판정·리필 직전에 다시 본다(열한째 토론 2번).
+                    _drift_age = time.monotonic() - _bal_pre_at
+                    log(f'    드리프트 판정 직전 계좌값 나이: {_drift_age:.1f}s '
+                        f'(허용 {BALANCE_MAX_AGE_SEC}s)')
+                    if _drift_age > BALANCE_MAX_AGE_SEC:
+                        log(f'  ⛔ 계좌값이 {_drift_age:.0f}초 전 것이다 — 드리프트 판정과 '
+                            f'종목 교체를 쉰다')
+                        send_telegram(f'⛔ 주식: 가격 수집에 {_drift_age:.0f}초가 걸려 계좌값이 '
+                                      f'낡았다. 드리프트 판정과 종목 교체를 건너뛴다.')
                         raise _StockDriftSkip()
                     _cash_w = max(0.0, 1.0 - sum(_cur_w.values()))
                     if _cash_w > 0:
@@ -2701,6 +2772,11 @@ def run_once(dry_run=False):
                     _all_keys = set(_cur_w.keys()) | set(_target_buf.keys())
                     _ht = sum(abs(_cur_w.get(_k, 0.0) - _target_buf.get(_k, 0.0))
                               for _k in _all_keys) / 2
+                    if not math.isfinite(_ht):
+                        log(f'  ⛔ 반회전율이 유한하지 않다 ({_ht}) — 드리프트 판정을 쉰다')
+                        send_telegram('⛔ 주식: 반회전율 계산이 유한하지 않아 드리프트 판정을 '
+                                      '건너뛴다. 종목 교체와 발화는 없다.')
+                        raise _StockDriftSkip()
                     if _ht >= 0.05:
                         state['rebalancing_needed'] = True
                         log(f'  🌊 V25 stock drift trigger: ht={_ht*100:.2f}pp ≥ 5pp → rebal 필요')

@@ -292,7 +292,14 @@ check("신호 종목·비중 정합 가드가 세 곳에 있다",
 check("스냅샷 결함 판정이 있다", 'def snapshot_payload_defect(' in src)
 check("생존 예정일 복원 규칙이 있다", 'def _resolve_from_dates(' in src)
 check("결함 검사가 앵커 체크보다 먼저다",
-      src.index('_defect = snapshot_payload_defect(state)') < src.index('    check_anchors(signal, state)'))
+      src.index('_defect = snapshot_payload_defect(state)')
+      < src.index('_anchors_fired = check_anchors(signal, state)'))
+# 앵커가 실제로 갈아탄 스냅샷을 돌려줘야 한다. 같은 비중으로 발화하면 합산 목표 키가
+# 안 바뀌어서, 키 대조만으로는 "목표 그대로" 로 읽히고 지난 평가 보류 표식이 그 회차의
+# 드리프트 리필을 연다 — 앵커가 갈 스냅샷 말고 나머지까지 덮는다(열한째 토론 4번).
+check("앵커 체크가 실제 발화 목록을 돌려준다",
+      'fired.append(str(snap_id))' in src and '    return fired' in src)
+check("그 목록이 목표 변경 판정에 들어간다", 'or bool(_anchors_fired)' in src)
 
 print()
 if FAILED:

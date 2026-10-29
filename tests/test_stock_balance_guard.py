@@ -2248,6 +2248,77 @@ _api54 = ex.KISAPI(dry_run=False)
 run_place_api(_api54, 'SPY', {'_error': {'exception': "RuntimeError('x')", 'sent': False}})
 check("미전송은 거래소 기록을 안 남긴다", _api54._order_excg == {}, str(_api54._order_excg))
 
+print("\n[55] 열한째 토론 반례 — 자격은 수량·나이·유한성·실제 발화로 가른다")
+
+# 가. 체결 반례 — 값을 못 매긴 종목은 기대 보유와 대조해야 자격을 받는다.
+_SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'trade', 'executor_stock.py')).read()
+check("기대 보유 장부가 주문 전 보유에서 출발한다",
+      'expected_qty: Dict[str, int] = {_tk: int(_q) for _tk, _q in holdings.items()' in _SRC)
+check("접수된 매수만 장부에 더한다",
+      "expected_qty[ticker] = expected_qty.get(ticker, 0) + int(actual_qty)" in _SRC)
+check("접수된 매도만 장부에서 뺀다",
+      "expected_qty[ticker] = max(0, expected_qty.get(ticker, 0) - int(qty))" in _SRC)
+check("축소된 실제 전송 수량이 반영된다(actual_qty 를 더한다)",
+      "+ int(actual_qty)" in _SRC and "+ int(qty)\n" not in _SRC)
+check("값을 못 매긴 종목은 수량으로 대조한다",
+      'if eval_blocked and not getattr(api, \'dry_run\', False):' in _SRC
+      and 'if _tk not in eval_unsafe:' in _SRC)
+check("어긋나면 자격을 뺀다(eval_unsafe 로 간다)",
+      '_have, (int, float)) or int(_have) != int(_want)' in _SRC
+      or 'int(_have) != int(_want)' in _SRC)
+check("무주문 종목도 대조 대상이다(주문 전 보유가 장부에 있다)",
+      'for _tk, _q in holdings.items()' in _SRC)
+
+# 나. 만료 반례 — 가격 수집에 시간이 걸리면 드리프트와 리필을 건너뛴다.
+_clock = {'t': 0.0}
+
+
+def _slow():
+    """시계를 읽을 때마다 90초씩 간다 — 가격 수집이 오래 걸린 회차를 흉내낸다."""
+    _clock['t'] += 90.0
+    return _clock['t']
+
+
+_st55 = _state()
+for _s in _st55['snapshots'].values():
+    _s['picks'], _s['weights'] = ['BIL'], {'BIL': 1.0}
+_o55, _a55, _sv55 = run_cycle(FULL, _st55, _signal(), clock=_slow)
+check("가격 수집이 길어지면 드리프트 판정을 쉰다",
+      any('계좌값이' in a and '낡았다' in a for a in _a55), str(_a55))
+check("그 회차에 주문이 없다", _o55 == [], str(_o55))
+check("스냅샷이 보존된다",
+      _sv55 is None or all((v.get('picks') == ['BIL'])
+                           for v in (_sv55.get('snapshots') or {}).values()),
+      str(_sv55 and _sv55.get('snapshots')))
+
+_clock2 = {'t': 0.0}
+_o55b, _a55b, _ = run_cycle(FULL, _state(), _signal(), clock=lambda: 0.0)
+check("[양성] 나이가 정상이면 만료 알림이 없다",
+      not any('낡았다' in a for a in _a55b), str(_a55b))
+
+# 다. 산술 반례 — 유한한 입력의 결과가 넘치면 판정을 쉰다.
+check("평가액 계산 넘침을 드리프트에서 막는다",
+      "if not math.isfinite(_w_one):" in _SRC and "_StockDriftSkip()" in _SRC)
+check("반회전율 넘침도 막는다", "if not math.isfinite(_ht):" in _SRC)
+
+# 라. 앵커 반례 — 같은 비중으로 발화해도 지난 표식으로 리필을 열지 않는다.
+check("앵커 체크가 실제 발화 목록을 돌려준다",
+      "fired.append(str(snap_id))" in _SRC and "\n    return fired" in _SRC)
+check("그 목록이 목표 변경 판정에 들어간다", "or bool(_anchors_fired)" in _SRC)
+check("빈 목표 키는 대조 불가로 닫는다",
+      "and target_key and ep.get('target_key') == target_key" in _SRC)
+
+# 마. 상태 반례 — 손상된 비중이 목표 키 계산에서 예외를 내도 회차가 안 죽는다.
+for _label, _bad in (('문자열', 'BIL'), ('None', None), ('리스트', ['BIL'])):
+    _st55m = _state()
+    _st55m['snapshots']['1']['weights'] = _bad
+    _o55m, _a55m, _sv55m = run_cycle(FULL, _st55m, _signal())
+    check(f"{_label} 비중 → 주문 0건", _o55m == [], str(_o55m))
+    check(f"{_label} 비중 → 상태를 안 바꾼다", _sv55m is None, str(_sv55m is None))
+    check(f"{_label} 비중 → 알린다",
+          any('상태 이상' in a or '온전하지' in a for a in _a55m), str(_a55m))
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)}건 실패: {FAILED}")
