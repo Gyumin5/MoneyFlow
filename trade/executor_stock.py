@@ -334,11 +334,21 @@ def _finite(v) -> float:
     return f if math.isfinite(f) else float('nan')
 
 
-def _post(path: str, tr_id: str, body: dict, retries=2) -> dict:
+def _post(path: str, tr_id: str, body: dict, retries=2, pre_send=None) -> dict:
+    """전송 직전 검사를 받는다. `pre_send` 가 거짓을 돌려주면 보내지 않고 `_stale` 을 돌려준다.
+
+    자리가 중요하다 — 헤더를 만드는 `_headers` 안에서 토큰 발급이 일어나고, 그 발급은 파일
+    잠금을 기다리느라 분 단위로 길어질 수 있다. 검사를 이 함수 밖에 두면 그 대기가 검사와
+    실제 전송 사이에 들어가서, 이미 만료된 계좌값으로 주문이 나간다. 재시도마다 다시 묻는
+    것도 같은 이유다(한 번 통과한 뒤 1초 대기와 재발급이 또 끼어든다).
+    """
     last_error = None
     for i in range(retries):
         try:
-            resp = requests.post(f'{BASE_URL}{path}', headers=_headers(tr_id), json=body, timeout=15)
+            _hdr = _headers(tr_id)
+            if pre_send is not None and not pre_send():
+                return {'_stale': True}
+            resp = requests.post(f'{BASE_URL}{path}', headers=_hdr, json=body, timeout=15)
             data = resp.json()
             if data.get('rt_cd') == '0':
                 return data
@@ -643,8 +653,13 @@ class KISAPI:
                 if order_no in seen:
                     continue
                 seen.add(order_no)
+                # 거래소는 응답이 말해 주면 그걸 쓴다. 안 주면 물어본 거래소를 쓰되 그
+                # 사실을 같이 적는다 — 추정값으로 취소를 내보낼지는 부르는 쪽이 정한다.
+                _resp_excg = str(item.get('ovrs_excg_cd') or '').strip().upper()
                 out[order_no] = {
-                    'odno': order_no, 'ticker': ticker, 'qty': qty, 'excg': excg,
+                    'odno': order_no, 'ticker': ticker, 'qty': qty,
+                    'excg': _resp_excg or excg,
+                    'excg_src': 'resp' if _resp_excg else 'req',
                     'side': 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell',
                 }
             # 쪽을 넘길지는 활성 행 수와 무관하게 정한다. 행이 비어 있어도 다음 쪽에
@@ -684,6 +699,11 @@ class KISAPI:
 
         거래소를 셋 다 묻는다. 주문은 EXCHANGE_MAP 대로 NASD 와 AMEX 로 나뉘어 나가는데
         한 코드로만 물으면 다른 쪽 미체결이 안 보인다. 주문번호로 겹친 것을 지운다.
+
+        같은 주문번호가 서로 다른 거래소로 보이면 취소를 안 낸다. 어느 쪽이 원주문인지
+        모르는 채로 보내면 취소가 엉뚱한 거래소로 가서 원주문은 그대로 살아 있고, 그 뒤의
+        매수가 잔존 주문 위에 얹힌다. "조회 못 함" 으로 돌려주면 부르는 쪽 넷이 전부
+        회차를 멈추거나 매수를 막는다.
         """
         found_rows = {}
         for excg in PENDING_EXCHANGES:
@@ -691,10 +711,15 @@ class KISAPI:
             if not ok:
                 return {'queried': False, 'found': 0, 'failed': 0}
             for row in rows:
-                # 같은 주문번호가 두 거래소 응답에 다 보이면 먼저 본 쪽을 남긴다. 덮어쓰면
-                # 취소 요청이 원주문과 다른 거래소 코드로 나간다.
-                if row['odno'] not in found_rows:
+                _prev = found_rows.get(row['odno'])
+                if _prev is None:
                     found_rows[row['odno']] = row
+                    continue
+                if _prev['excg'] != row['excg']:
+                    log(f"  ⚠️ 미체결 {row['ticker']} 주문번호 {row['odno']} 가 "
+                        f"{_prev['excg']}·{row['excg']} 두 거래소로 보인다 — 취소를 안 낸다")
+                    return {'queried': False, 'found': 0, 'failed': 0}
+                # 같은 거래소로 두 번 보인 것은 중복 노출이다. 먼저 본 쪽을 남긴다.
         failed = 0
         for row in found_rows.values():
             ticker, qty, side = row['ticker'], row['qty'], row['side']
@@ -719,8 +744,12 @@ class KISAPI:
                 log(f'  ⚠️ 미체결 취소 실패: {ticker} {side} {qty}주 — {str(res)[:120]}')
         return {'queried': True, 'found': len(found_rows), 'failed': failed}
 
-    def place_order(self, ticker: str, qty: int, price: float, side: str = 'buy') -> str:
-        """지정가 주문. 결과를 셋으로 갈라 돌려준다 — 'ok' / 'rejected' / 'unknown'.
+    def place_order(self, ticker: str, qty: int, price: float, side: str = 'buy',
+                    pre_send=None) -> str:
+        """지정가 주문. 결과를 넷으로 갈라 돌려준다 — 'ok' / 'rejected' / 'unknown' / 'stale'.
+
+        'stale' 은 `pre_send` 가 전송을 막은 것이다. 요청이 나가지 않았음이 확정이라
+        접수 여부 불명과 다르다 — 부르는 쪽은 그 주문만 미전송 실패로 적고 멈춘다.
 
         'unknown' 은 접수됐는지 안 됐는지 모른다는 뜻이다. 통신이 끊기거나 시간이 넘으면
         서버는 받아놓고 우리만 응답을 못 받을 수 있다. 그때 같은 주문을 다시 보내면 두 번
@@ -743,10 +772,13 @@ class KISAPI:
             'CTAC_TLNO': '', 'MGCO_APTM_ODNO': '',
             'ORD_SVR_DVSN_CD': '0',
             'ORD_DVSN': '00',
-        }, retries=1)
+        }, retries=1, pre_send=pre_send)
         if not isinstance(result, dict):
             log(f'  ⚠️ 주문 응답을 못 읽었다 {side} {ticker}: {str(result)[:120]}')
             return 'unknown'
+        if result.get('_stale'):
+            # 전송 직전 검사가 막았다. 요청은 나가지 않았다.
+            return 'stale'
         err = result.get('_error')
         if err is not None:
             # 확정 거절은 "접수되지 않았음" 이 응답으로 드러난 것뿐이다 — 업무 거절 코드를
@@ -1494,6 +1526,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     def _send(side: str, ticker: str, qty: int, price: float) -> bool:
         """한 종목 주문. 돌려주는 것은 접수됐나다. 'unknown' 이면 재전송하지 않는다."""
         for attempt in range(MAX_ORDER_ATTEMPTS):
+            _where = f'{side} {ticker}' + (' 재시도' if attempt else '')
             # 인증을 먼저 끝낸다. 나이를 재고 나서 토큰을 받으면 그 대기가 검사 뒤에
             # 들어가 만료된 계좌값으로 주문이 나간다 — 느린 쪽이 검사 앞에 와야 한다.
             _fn = getattr(api, 'ensure_auth', None)
@@ -1501,13 +1534,25 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 try:
                     _fn()
                 except Exception as _e:
-                    log(f'  ⚠️ 인증 준비 실패 {side} {ticker}: {str(_e)[:80]}')
+                    # 미전송 실패다. 요청을 보낸 적이 없으므로 접수 여부 불명이 아니고,
+                    # 그렇다고 넘어가서도 안 된다 — 그대로 진행하면 뒤의 전송 경로가
+                    # 인증을 다시 기다리고 그 대기가 나이 검사 뒤에 들어간다.
+                    log(f'  ⛔ 인증 준비 실패 {side} {ticker}: {str(_e)[:80]} — 주문을 안 낸다')
+                    send_telegram(f'⛔ 주식: {side} {ticker} {qty}주의 인증 준비가 실패해 주문을 '
+                                  f'내지 않았다. 다음 회차에 다시 계산한다.')
+                    return False
             # 실제 전송 직전마다 다시 잰다 — 거절 뒤 대기와 인증 갱신이 그 사이에 든다.
-            if _too_old(f'{side} {ticker}' + (' 재시도' if attempt else '')):
+            if _too_old(_where):
                 return False
-            res = api.place_order(ticker, qty, price, side)
+            # 같은 검사를 전송 경계에서 한 번 더 받는다. 위 검사와 실제 요청 사이에는
+            # 아직 헤더 생성(= 토큰 재발급 가능)이 남아 있다.
+            res = api.place_order(ticker, qty, price, side,
+                                  pre_send=lambda: not _too_old(_where + ' 전송 직전'))
             if res == 'ok':
                 return True
+            if res == 'stale':
+                # 전송 경계 검사가 막았다. 사유와 알림은 _too_old 가 이미 남겼다.
+                return False
             if res != 'rejected':
                 unknown_send['hit'] = True
                 log(f'  ⛔ {side} {ticker} 접수 여부 불명 — 재전송하지 않고 신규 주문을 멈춘다')
@@ -1674,13 +1719,27 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         log(f'  ⚠️ 주문 후 잔고 조회 실패 — 체결 확인 불가: {_e}')
         send_telegram(f'⚠️ 주식: 주문은 냈는데 잔고 조회가 안 된다 — 체결 확인 불가 ({_e})')
         holdings2, total2 = {}, 0.0
+    # 완료 평가에 쓸 가격은 주문 뒤에 새로 묻는다. 주문 전 캐시(_px)를 쓰면 보유 수량과
+    # 총자산은 주문 뒤 값인데 가격만 주문 전 값이 되어, 그 사이의 작은 변동이 허용오차
+    # 경계에서 거짓 완료를 만든다. 캐시를 나눠 두 시점이 안 섞이게 한다.
+    _px_eval_cache: Dict[str, float] = {}
+
+    def _px_eval(ticker: str) -> float:
+        if ticker not in _px_eval_cache:
+            try:
+                _px_eval_cache[ticker] = api.get_current_price(ticker)
+            except Exception:
+                _px_eval_cache[ticker] = 0.0
+        return _px_eval_cache[ticker]
+
     if total2 > 0:
         max_diff = 0
-        # alloc_transit cap 적용 시 denom 도 capped 기준.
-        # 분모는 주문 뒤 총자산 하나로 간다 — 보유 수량도 주문 뒤 값이라 같은 시점이어야
-        # 비중이 맞는다. 매수 예산 쪽에 건 min(주문 전 총자산) 을 여기에 같이 걸면 분모가
-        # 작아져 현재 비중이 커 보이고, 목표에 못 미치는 보유가 달성으로 읽힌다. 예산
-        # 상한은 덜 쓰는 쪽이라 안전하지만 완료 판정은 반대 방향이다.
+        # 분모는 목표 금액의 기준과 같이 간다. 평소에는 주문 뒤 총자산 하나다 — 보유
+        # 수량도 주문 뒤 값이라 같은 시점이어야 비중이 맞는다. 주문 전 총자산을 상한으로
+        # 걸면 분모가 작아져 현재 비중이 커 보이고, 목표에 못 미치는 보유가 달성으로
+        # 읽힌다. alloc_transit cap 이 걸린 날만 예외다 — 그날은 목표 금액 자체가
+        # pv_for_target = min(총자산, effective_pv_usd) 이므로 분모도 같은 기준이어야
+        # 하고, 아니면 cap 이 걸린 회차가 영영 완료로 안 닫힌다.
         denom_for_diff = total2
         if effective_pv_usd is not None:
             denom_for_diff = min(denom_for_diff, effective_pv_usd)
@@ -1690,7 +1749,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         for ticker, target_w in target.items():
             if ticker == 'Cash':
                 continue
-            price = _px(ticker)
+            price = _px_eval(ticker)
             if price <= 0 and (target_w > 0 or holdings2.get(ticker, 0) > 0):
                 eval_blocked.append(ticker)
             # cash buffer 반영 목표로 비교.
@@ -1705,7 +1764,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         for ticker, qty in holdings2.items():
             if ticker in target or qty <= 0:
                 continue
-            price = _px(ticker)
+            price = _px_eval(ticker)
             if price > 0:
                 _left = qty * price / denom_for_diff
                 max_diff = max(max_diff, _left)

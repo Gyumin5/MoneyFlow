@@ -64,9 +64,12 @@ class FakeAPI:
     def get_max_buy_qty(self, ticker, price):
         return 999
 
-    def place_order(self, ticker, qty, price, side='buy'):
-        # 집행기 계약: 'ok' / 'rejected' / 'unknown'. 참거짓이 아니다 — 접수 여부를
-        # 모르는 것과 확정 거절을 가르지 않으면 중복 전송이 섞인다.
+    def place_order(self, ticker, qty, price, side='buy', pre_send=None):
+        # 집행기 계약: 'ok' / 'rejected' / 'unknown' / 'stale'. 참거짓이 아니다 — 접수
+        # 여부를 모르는 것과 확정 거절을 가르지 않으면 중복 전송이 섞인다.
+        # pre_send 는 전송 직전 계좌값 나이 검사다. 진짜 구현과 같은 자리에서 묻는다.
+        if pre_send is not None and not pre_send():
+            return 'stale'
         self.orders.append((side, ticker, qty))
         if side == 'sell':
             self.holdings[ticker] = max(0, self.holdings.get(ticker, 0) - qty)
