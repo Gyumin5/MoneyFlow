@@ -556,6 +556,12 @@ class KISAPI:
             raise BalanceUnavailable('계좌 총자산(tot_asst_amt)을 못 읽었다')
         _stock_krw = _finite(_o2.get('ovrs_stck_evlu_amt1'))
         total_usd = _tot_krw / exrt
+        # 둘 다 유한한 양수여도 몫은 넘칠 수 있다 — 총자산 1e308 을 환율 1e-308 로 나누면
+        # 무한대다. 그 값이 총자산 행세를 하면 모든 목표 금액이 무한대가 되고, 보유 비중은
+        # 무한대를 무한대로 나눈 숫자 아님이 되어 편차 비교를 그대로 통과한다.
+        if not (math.isfinite(total_usd) and total_usd > 0):
+            raise BalanceUnavailable(
+                f'환산 총자산이 정상 범위를 벗어났다 (총자산 {_tot_krw!r} / 환율 {exrt!r})')
 
         # 외화RP 등 기타 = 총자산 − 주식 − 예수금. 이름 있는 칸으로만 도출한다.
         _rp_krw = _tot_krw - _stock_krw - _frcr_cash - _krw_cash if not math.isnan(_stock_krw) else float('nan')
@@ -942,30 +948,25 @@ class KISAPI:
         output = data.get('output', {})
         if not output:
             return -1
-        try:
-            qty = int(float(output.get('ovrs_max_ord_psbl_qty', 0)))
-            if qty > 0:
-                return qty
-        except (ValueError, TypeError):
-            pass
-        try:
-            amt = float(output.get('frcr_ord_psbl_amt1', 0))
-            if amt > 0 and price > 0:
-                return int(amt / price)
-        except (ValueError, TypeError):
-            pass
-        try:
-            qty = int(float(output.get('ord_psbl_qty', 0)))
-            if qty > 0:
-                return qty
-        except (ValueError, TypeError):
-            pass
-        try:
-            amt = float(output.get('ovrs_ord_psbl_amt', 0))
-            if amt > 0 and price > 0:
-                return int(amt / price)
-        except (ValueError, TypeError):
-            pass
+        # 네 칸 모두 _finite 를 거친다. 무한대·숫자 아님은 nan 이 되고 `> 0` 에서 걸러지므로
+        # int() 에 닿지 않는다 — int(inf) 는 OverflowError 를 던지는데 그 예외는 여기서
+        # 안 잡히고 매수 루프 밖으로 나가, 주문을 낸 뒤의 확인과 상태 저장을 통째로 건너뛴다.
+        # 금액/가격 몫도 둘 다 유한한 양수에서 넘칠 수 있어(1e308 / 1e-308) 다시 본다.
+        def _qty(key: str) -> int:
+            q = _finite(output.get(key, 0))
+            return int(q) if q > 0 else 0
+
+        def _qty_by_amt(key: str) -> int:
+            amt = _finite(output.get(key, 0))
+            if not (amt > 0 and price > 0):
+                return 0
+            q = amt / price
+            return int(q) if math.isfinite(q) and q > 0 else 0
+
+        for _q in (_qty('ovrs_max_ord_psbl_qty'), _qty_by_amt('frcr_ord_psbl_amt1'),
+                   _qty('ord_psbl_qty'), _qty_by_amt('ovrs_ord_psbl_amt')):
+            if _q > 0:
+                return _q
         return 0
 
 
@@ -1484,28 +1485,59 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
 EVAL_BLOCK_ALERT_ROUNDS = 3
 
 
-def _drift_gate_open(state: dict) -> bool:
+def _target_key(target) -> str:
+    """목표를 한 줄 문자열로. 평가 보류 표식이 어느 목표에서 난 것인지 묶는 데 쓴다."""
+    if not isinstance(target, dict):
+        return ''
+    return '|'.join(f'{k}:{round(float(v), 6)}' for k, v in sorted(target.items()))
+
+
+def _drift_gate_open(state: dict, target_key: str = '', target_changed: bool = False) -> bool:
     """드리프트 판정을 볼 회차인가.
 
     평소에는 "직전 회차가 완료로 닫혔을 때" 다 — 리밸런싱이 아직 안 끝난 상태에서
     종목까지 갈아치우면 중간 상태 위에 새 목표가 얹힌다. 다만 평가 가격만 없어서 못
     닫은 회차는 그 '안 끝남' 과 다르다. 들고 있는 것은 목표대로인데 값을 매길 길이
     없는 것이라, 그걸 미달과 같이 보면 가격이 안 오는 동안 종목 교체가 영영 멈춘다.
+
+    그 예외는 세 조건을 다 만족할 때만 쓴다. ⑴그 회차가 평가 가격 말고는 다 끝났고
+    (`drift_ok`), ⑵이번 회차가 카나리·앵커로 목표를 새로 바꾸지 않았고, ⑶지금 목표가
+    그때 평가한 목표와 같다. 하나라도 어긋나면 그 표식은 지금 보유가 목표대로라는
+    증거가 아니다 — 그런데도 문을 열면 정규 앵커가 갈 스냅샷 말고 나머지 스냅샷까지
+    드리프트 리필이 갈아치운다.
     """
-    if state.get('eval_pending'):
-        return True
+    ep = state.get('eval_pending')
+    if isinstance(ep, dict) and ep.get('drift_ok') and not target_changed:
+        if not target_key or ep.get('target_key') == target_key:
+            return True
     return not state.get('rebalancing_needed', False)
 
 
-def _note_eval_pending(state: dict, tickers, max_diff_known: float) -> None:
-    """"평가 가격만 없어서 못 닫았다" 를 상태에 적고, 처음과 지속에 알린다.
+def _revoke_drift_ok(state: dict, why: str) -> None:
+    """평가 보류 표식에서 "드리프트를 열어도 된다" 자격만 뺀다. 관측 기록은 남긴다.
 
-    주문 실패·미체결 불확실과 다른 상태다. 그 둘은 실제로 무엇이 틀어진 것이고, 이건
-    들고 있는 것은 목표대로인데 값을 매길 길이 없는 것이다. 갈라 적어야 다음 회차가
-    드리프트 판정을 열 수 있다 — 안 가르면 가격이 안 오는 동안 종목 교체가 통째로
-    멈추고, 그 사실이 아무 데도 안 남는다.
+    가격 결측을 몇 회차째 겪고 있나는 계속 세야 하고, 집행이 불확실해졌다는 사실은
+    그것과 다른 축이다. 표식을 통째로 지우면 연속 회차가 초기화되어 알림이 영영
+    안 가고, 그대로 두면 집행이 불확실한 회차의 표식이 다음 회차 문을 연다.
+    """
+    ep = state.get('eval_pending')
+    if isinstance(ep, dict) and ep.get('drift_ok'):
+        ep['drift_ok'] = False
+        ep['revoked'] = why
+        log(f'  ↩️ 평가 보류 표식에서 드리프트 자격을 뺀다 — {why}')
 
-    `tickers` 가 비면 그 상태가 풀린 것이라 기록을 지운다.
+
+def _note_eval_pending(state: dict, tickers, max_diff_known: float,
+                       drift_ok: bool = False, target_key: str = '') -> None:
+    """"평가 시점 가격을 못 받았다" 를 상태에 적고, 처음과 지속에 알린다.
+
+    기록(어느 종목이 몇 회차째 값을 못 받나)과 자격(그래서 다음 회차 드리프트를 열어도
+    되나)을 갈라 둔다. 주문 실패·미체결 불확실이 겹친 회차도 가격은 똑같이 못 받은
+    것이라 기록은 남기고, 자격만 안 준다.
+
+    `tickers` 가 비어야만 기록을 지운다 — 가격이 실제로 돌아온 회차다. 다른 실패 때문에
+    자격을 잃은 회차를 "돌아왔다" 로 적으면 연속 회차가 초기화되어 지속 알림이 영영
+    안 간다.
     """
     prev = state.get('eval_pending')
     if not tickers:
@@ -1515,19 +1547,26 @@ def _note_eval_pending(state: dict, tickers, max_diff_known: float) -> None:
         return
     _now = datetime.now().isoformat(timespec='seconds')
     _rounds = int(prev.get('rounds', 0)) + 1 if isinstance(prev, dict) else 1
-    state['eval_pending'] = {
+    _rec = {
         'tickers': list(tickers),
         'reason': '평가 시점 가격을 못 받았다',
         'rounds': _rounds,
         'first': (prev.get('first') if isinstance(prev, dict) and prev.get('first') else _now),
         'last': _now,
         'max_diff_known': round(float(max_diff_known), 6),
+        'drift_ok': bool(drift_ok),
     }
+    if drift_ok:
+        _rec['target_key'] = target_key
+    state['eval_pending'] = _rec
     _names = ', '.join(tickers)
-    log(f'  ⏳ 평가 가격만 없어서 완료를 안 닫는다 ({_names}, {_rounds}회 연속)')
+    _tail = '' if drift_ok else ' (집행이 끝나지 않아 종목 교체는 열지 않는다)'
+    log(f'  ⏳ 평가 가격을 못 받았다 ({_names}, {_rounds}회 연속){_tail}')
+    if not drift_ok:
+        return   # 그 회차의 사유는 아래 완료 판정이 따로 알린다 — 같은 일로 두 번 안 쏜다
     if _rounds == 1:
         send_telegram(f'⚠️ 주식: {_names} 의 평가 시점 가격을 못 받아 이번 회차를 완료로 '
-                      f'안 닫았다. 들고 있는 것은 목표대로다(값을 매긴 종목 기준 편차 '
+                      f'안 닫았다. 값을 매긴 종목은 목표대로다(그 기준 편차 '
                       f'{max_diff_known:.1%}). 다음 회차에 다시 본다.')
     elif _rounds % EVAL_BLOCK_ALERT_ROUNDS == 0:
         send_telegram(f'⚠️ 주식: {_names} 의 평가 시점 가격을 {_rounds}회 연속 못 받고 있다. '
@@ -1554,6 +1593,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 
     def _stale_result(hold, tot, rate):
         state['rebalancing_needed'] = True
+        # 주문을 안 내고 돌아간 회차다. 이번 보유가 목표대로인지 재지 못했으므로 지난
+        # 회차의 평가 보류 표식으로 다음 회차 종목 교체를 열어 주면 안 된다.
+        _revoke_drift_ok(state, '주문 없이 돌아간 회차')
         return {
             'holdings': hold, 'total_usd': tot, 'exchange_rate': rate,
             'sells': [], 'buys': [], 'failed_orders': [],
@@ -1577,8 +1619,21 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         _bal_at = time.monotonic()
         holdings, total_usd, exrt = api.get_balance()
 
+    # 분모와 목표 금액의 바탕이 되는 값이다. 유한한 양수가 아니면 모든 목표 금액과 비중이
+    # 무한대·숫자 아님이 되고, 그 값들은 `<= 0` 꼴 검사를 그대로 통과한다. 주문 전에 멈춘다.
+    if not (math.isfinite(total_usd) and total_usd > 0):
+        log(f'    ⛔ 총자산 값이 정상 범위를 벗어났다 ({total_usd!r}) — 주문 없이 돌아간다')
+        send_telegram(f'⛔ 주식: 총자산 값이 정상 범위를 벗어나 주문을 내지 않았다 ({total_usd!r}). '
+                      f'다음 회차에 다시 계산한다.')
+        return _stale_result(holdings, total_usd, exrt)
+
     # alloc_transit cap 적용
     pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
+    if not (math.isfinite(pv_for_target) and pv_for_target > 0):
+        log(f'    ⛔ 목표 산출 기준액이 정상 범위를 벗어났다 ({pv_for_target!r}) — 주문 없이 돌아간다')
+        send_telegram(f'⛔ 주식: 목표 산출 기준액이 정상 범위를 벗어나 주문을 내지 않았다 '
+                      f'({pv_for_target!r}). 다음 회차에 다시 계산한다.')
+        return _stale_result(holdings, total_usd, exrt)
 
     # 현재가는 종목마다 한 번만 묻고 그 값을 회차 끝까지 쓴다. 같은 종목을 두 번 물으면
     # 한 번은 실패하고 한 번은 성공할 수 있고, 그때 보유가치 0 과 양수 가격이 짝지어
@@ -1616,6 +1671,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     sells = []
     buys = []
     failed_orders = []
+    shrunk_buys: List[str] = []
     target_usd = pv_for_target * (1 - cash_buffer)
     if effective_pv_usd is not None and effective_pv_usd < total_usd:
         log(f'    🔴 alloc_transit cap 적용: pv ${total_usd:,.0f} → ${pv_for_target:,.0f}')
@@ -1853,6 +1909,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         actual_qty = min(qty, max_qty)
         if max_qty < qty:
             log(f'  ⚠️ {ticker} 매수 축소: {qty}→{actual_qty}주 (주문가능금액 제한)')
+            # 실패는 아니다 — 산 만큼은 나갔다. 다만 목표에 못 미친 채 끝난 회차라,
+            # 그 종목 값을 못 매기면 "보유가 목표대로" 라는 근거가 없다(열째 토론 지적).
+            shrunk_buys.append(ticker)
         log(f'  매수: {ticker} {actual_qty}주 @ ${buy_price:.2f}')
         if not _send('buy', ticker, actual_qty, buy_price):
             failed_orders.append(('buy', ticker, actual_qty))
@@ -1900,7 +1959,10 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 _px_eval_cache[ticker] = float('nan')
         return _px_eval_cache[ticker]
 
-    if total2 > 0:
+    # 유한한 양수일 때만 평가한다. 무한대를 분모로 쓰면 모든 보유 비중이 0 이 되고,
+    # 숫자 아님이면 편차 비교가 전부 거짓이라 어느 쪽이든 판정이 뜻을 잃는다.
+    _total2_ok = _finite(total2)
+    if _total2_ok > 0:
         max_diff = 0
         # 분모는 목표 금액의 기준과 같이 간다. 평소에는 주문 뒤 총자산 하나다 — 보유
         # 수량도 주문 뒤 값이라 같은 시점이어야 비중이 맞는다. 주문 전 총자산을 상한으로
@@ -1908,7 +1970,7 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         # 읽힌다. alloc_transit cap 이 걸린 날만 예외다 — 그날은 목표 금액 자체가
         # pv_for_target = min(총자산, effective_pv_usd) 이므로 분모도 같은 기준이어야
         # 하고, 아니면 cap 이 걸린 회차가 영영 완료로 안 닫힌다.
-        denom_for_diff = total2
+        denom_for_diff = _total2_ok
         if effective_pv_usd is not None:
             _cap = _finite(effective_pv_usd)
             if _cap > 0:
@@ -1916,6 +1978,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         # 값을 매길 수 없는 종목이 하나라도 있으면 그 회차를 완료로 닫지 않는다. 가격이
         # 없는 종목을 편차 0 으로 세면 안 산 종목도 달성으로 읽힌다.
         eval_blocked = []
+        # 값을 못 매겼는데 그것만으로는 "보유가 목표대로" 라고 못 하는 자리. 하나라도
+        # 있으면 다음 회차 드리프트를 열지 않는다.
+        eval_unsafe = []
         # 값을 매긴 종목만으로 잰 편차. 값을 못 매긴 종목은 여기 안 들어간다 — 그
         # 종목의 비중을 0 으로 세어 부풀린 편차를 "진짜 미달" 로 읽으면, 가격이 계속
         # 안 오는 계좌에서 회차가 영영 안 닫히고 드리프트 판정까지 통째로 막힌다.
@@ -1929,15 +1994,27 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             # 아닌 값이 그 비교를 통과해서(비교가 거짓이라) 가격 행세를 한다.
             if not (price > 0) and (target_w > 0 or _held > 0):
                 eval_blocked.append(ticker)
+                # 사야 하는데 한 주도 없는 종목은 가격이 없어도 미달인 것을 안다.
+                # 그걸 "값만 모른다" 로 세면 안 산 종목이 목표 달성으로 읽힌다.
+                if _held <= 0 and target_w * (1 - cash_buffer) >= REBALANCE_TOLERANCE:
+                    eval_unsafe.append(ticker)
             # cash buffer 반영 목표로 비교.
             # merge_tranches target 은 risky 합=1.0(버퍼 전)이라 실효 목표는 ×(1-buffer).
             # (미반영 시 현금이 정상적으로 buffer% 여도 max_diff 가 buffer 만큼 떠서
             #  rebalancing_needed 가 영구히 안 꺼지는 latch 버그 발생 — 2026-06-05 수정)
             current_w = (_held * price / denom_for_diff) if price > 0 else 0
             target_eff = target_w * (1 - cash_buffer)
-            # 여기서 비중이 숫자가 아닐 길은 없다. 가격은 바로 위에서 유한한 양수만
-            # 통과했고 보유 수량은 잔고 조회가 유한한 정수로 거른다 — 분모도 양수다.
-            # 한 겹 더 두면 그 겹은 어떤 입력으로도 안 걸리는 죽은 검사가 된다.
+            # 입력이 유한해도 계산 결과는 넘칠 수 있다 — 보유 2주 × 가격 1e308 은
+            # 무한대이고, 무한대를 큰 분모로 나누면 숫자가 아닌 값이 된다. 최댓값
+            # 비교는 그 값을 그냥 지나쳐서(비교가 거짓이라) 편차가 0 으로 남고 회차가
+            # 거짓 완료된다. 가격 경계를 유한한 양수로 좁혀도 이 자리는 안 닫힌다.
+            if not math.isfinite(current_w):
+                log(f'  ⚠️ {ticker} 비중 계산이 넘쳤다 (보유 {_held} × {price}) — 완료로 안 본다')
+                if ticker not in eval_blocked:
+                    eval_blocked.append(ticker)
+                if ticker not in eval_unsafe:
+                    eval_unsafe.append(ticker)
+                continue
             _d = abs(target_eff - current_w)
             max_diff = max(max_diff, _d)
             if ticker not in eval_blocked:
@@ -1950,27 +2027,42 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             price = _px_eval(ticker)
             # 가격이 유한한 양수일 때만 값을 매긴다. `_px_eval` 은 유한하지 않은 값을
             # 숫자 아님으로 돌려주므로 `> 0` 하나가 그 셋을 다 거른다.
-            if price > 0:
-                _left = qty * price / denom_for_diff
+            _left = qty * price / denom_for_diff if price > 0 else float('nan')
+            if price > 0 and math.isfinite(_left):
                 max_diff = max(max_diff, _left)
                 max_diff_known = max(max_diff_known, _left)
                 log(f'  ⏳ 목표 밖 보유가 남았다: {ticker} {qty}주 ({_left:.1%})')
             else:
+                # 목표 밖인데 아직 들고 있다는 것 자체가 이탈이다. 값을 못 매겼다고
+                # "보유는 목표대로인데 값만 모른다" 로 세면, 전량매도가 거절돼 남은
+                # 보유가 다음 회차 종목 교체를 열어 준다.
                 eval_blocked.append(ticker)
+                eval_unsafe.append(ticker)
         if eval_blocked:
             log(f'  ⏳ 값을 매길 수 없는 보유가 있다: {", ".join(sorted(set(eval_blocked)))} '
                 f'— 완료로 안 본다')
         done = (max_diff < REBALANCE_TOLERANCE and not failed_orders
                 and not mid_uncertain and not unknown_send['hit'] and not eval_blocked)
         # 평가 가격만 없는 상태를 주문 실패·미체결 불확실과 갈라 적는다. 값을 매긴
-        # 종목이 전부 목표에 맞는데 값을 못 매긴 종목 때문에만 못 닫은 회차가 이것이고,
-        # 다음 회차의 드리프트 판정은 이 상태에서 다시 열린다(그 판정은 자기 가격 가드를
-        # 따로 가진다). 과거 종가로 완료를 강제하지는 않는다.
+        # 종목이 전부 목표에 맞고, 값을 못 매긴 종목도 "보유는 목표대로인데 값만 모른다"
+        # 로 볼 수 있을 때만 그 회차에 드리프트 자격을 준다(eval_unsafe 가 비어 있다).
+        # 그래야 다음 회차가 종목 교체를 열어도 중간 상태 위에 새 목표가 안 얹힌다.
+        # 과거 종가로 완료를 강제하지는 않는다.
+        if eval_unsafe:
+            log(f'  ⛔ 값을 못 매긴 자리가 보유 미달·목표 밖 잔존이다: '
+                f'{", ".join(sorted(set(eval_unsafe)))} — 다음 회차 종목 교체를 열지 않는다')
+        # 축소 매수는 주문 실패가 아니라 "목표에 못 미친 채 끝난 회차" 다. 값을 매길 수
+        # 있으면 편차로 잡히지만, 하필 그 종목 평가 가격이 없으면 "값만 모른다" 로 세어진다.
+        if shrunk_buys:
+            log(f"  ⛔ 주문가능금액에 막혀 축소 매수한 종목이 있다({', '.join(shrunk_buys)}) "
+                f'— 다음 회차 종목 교체를 열지 않는다')
         _eval_only = bool(eval_blocked) and (max_diff_known < REBALANCE_TOLERANCE
                                              and not failed_orders and not mid_uncertain
-                                             and not unknown_send['hit'])
-        _note_eval_pending(state, sorted(set(eval_blocked)) if _eval_only else [],
-                           max_diff_known)
+                                             and not unknown_send['hit']
+                                             and not eval_unsafe and not shrunk_buys)
+        # 기록은 가격을 못 받은 회차마다 남기고(연속 회차를 세야 한다), 자격만 가른다.
+        _note_eval_pending(state, sorted(set(eval_blocked)), max_diff_known,
+                           drift_ok=_eval_only, target_key=_target_key(target))
         if done:
             state['rebalancing_needed'] = False
             log(f'  ✅ 목표 달성 (±{REBALANCE_TOLERANCE:.0%} 이내)')
@@ -1998,6 +2090,9 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             'post_balance': post_balance,
         }
 
+    # 주문 뒤 총자산을 못 읽어 이번 회차 보유를 재지 못했다. 지난 회차의 평가 보류
+    # 표식이 그대로 남으면 집행이 불확실한데도 다음 회차 종목 교체가 열린다.
+    _revoke_drift_ok(state, '주문 뒤 잔고를 못 읽어 완료 판정을 못 했다')
     return {
         'holdings': holdings,
         'total_usd': total_usd,
@@ -2405,8 +2500,19 @@ def run_once(dry_run=False):
     if not signal:
         log('  signal 없음 — 스킵')
         return
-    # V24 (2026-05-26): stock_cash_buffer 키 우선, 없으면 legacy cash_buffer, 둘 다 없으면 default 6%
-    cash_buffer = float(state.get('stock_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
+    # V24 (2026-05-26): stock_cash_buffer 키 우선, 없으면 legacy cash_buffer, 둘 다 없으면 default 7%
+    # 상태파일이 손상되면 이 칸이 숫자가 아니거나 음수·1 이상일 수 있다. 그대로 쓰면 목표
+    # 금액이 0 이나 음수가 되어 전량 매도가 되고, 기본값으로 말없이 바꿔 쓰면 운영자가
+    # 정한 값과 다른 비중으로 돈다. 둘 다 안 한다 — 주문 전에 멈추고 알린다.
+    cash_buffer = _finite(state.get('stock_cash_buffer',
+                                    state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
+    if not (0.0 <= cash_buffer < 1.0):
+        _raw = state.get('stock_cash_buffer', state.get('cash_buffer', CASH_BUFFER_DEFAULT))
+        log(f'  ⛔ 현금버퍼 값이 정상 범위를 벗어났다 ({_raw!r}) — 이번 회차 매매를 건너뛴다')
+        send_telegram(f'⛔ 주식: 현금버퍼 값이 정상 범위를 벗어났다 ({_raw!r}). 주문 없이 '
+                      f'이번 회차를 쉰다. 상태파일의 stock_cash_buffer 를 확인해야 한다.')
+        log('주식 executor 완료 (현금버퍼 이상)')
+        return
     log(f'  cash_buffer: {cash_buffer:.0%}')
 
     # V24: snapshots 또는 V21 tranches 둘 중 하나라도 없으면 첫 실행 — 마이그레이션이 자동 처리.
@@ -2469,6 +2575,12 @@ def run_once(dry_run=False):
         log('주식 executor 완료 (잔고 조회 불가)')
         return
 
+    # 목표를 바꾸는 세 자리(카나리 플립·스냅샷 초기화·앵커 발화)보다 앞에서 지금 목표를
+    # 적어 둔다. 아래 드리프트 게이트가 "지난 회차의 평가 보류 표식" 을 쓸 자격이 있는지
+    # 가를 때 이 값과 대조한다 — 이번 회차에 목표가 달라졌으면 그 표식은 다른 목표를 두고
+    # 잰 것이라 지금 보유가 목표대로라는 근거가 못 된다.
+    _target_key_pre = _target_key(merge_tranches(state))
+
     # 3. 카나리 플립
     _flipped = check_canary_flip(signal, state)
 
@@ -2503,10 +2615,20 @@ def run_once(dry_run=False):
     # 있는 것은 목표대로인데 값을 매길 길이 없다" 라서, 그걸 미달과 같이 취급하면
     # 가격이 안 오는 동안 종목 교체가 영영 멈춘다. 이 판정은 자기 가격 가드를 따로
     # 가지고 있어(아래 _miss) 값을 못 구하면 그 자리에서 다시 쉰다.
+    # 다만 그 예외는 지난 회차에 잰 목표가 지금도 같을 때만이다. 이번 회차에 플립이나
+    # 앵커가 목표를 바꿨으면 지난 표식은 다른 목표를 두고 잰 것이라, 그걸로 문을 열면
+    # 앵커가 갈아탈 스냅샷 하나 말고 나머지까지 리필이 덮는다(열째 토론 지적).
+    _target_now = merge_tranches(state)
+    _target_key_now = _target_key(_target_now)
+    _target_changed = bool(_flipped) or (_target_key_now != _target_key_pre)
     _eval_pending = state.get('eval_pending')
     if _eval_pending and state.get('rebalancing_needed', False):
-        log(f"  ↩️ 평가 보류 {_eval_pending.get('rounds')}회차 — 드리프트 판정은 그대로 본다")
-    if _drift_gate_open(state):
+        if _target_changed:
+            log(f"  ⛔ 평가 보류 {_eval_pending.get('rounds')}회차인데 이번 회차에 목표가 "
+                f'바뀌었다 — 지난 표식으로 드리프트를 열지 않는다')
+        else:
+            log(f"  ↩️ 평가 보류 {_eval_pending.get('rounds')}회차 — 드리프트 판정은 그대로 본다")
+    if _drift_gate_open(state, _target_key_now, target_changed=_target_changed):
         try:
             _merged_target = merge_tranches(state)
             if _merged_target:
@@ -2540,8 +2662,9 @@ def run_once(dry_run=False):
                         _cur_w['Cash'] = _cash_w
                     # cash buffer 반영 — merged_target 은 risky-asset 100% 정규화이므로
                     # execute_delta 가 적용하는 cash buffer 만큼 target 도 스케일 다운 + Cash 추가
-                    _stock_buf = float(state.get('stock_cash_buffer',
-                                                 state.get('cash_buffer', CASH_BUFFER_DEFAULT)))
+                    # 위에서 범위를 확인한 값을 그대로 쓴다 — 여기서 다시 읽으면 그 검사를
+                    # 안 거친 값이 드리프트 판정에만 들어간다.
+                    _stock_buf = cash_buffer
                     # V25: target 은 risky+Cash slot (sum=1.0 또는 risky 만 sum<=1.0).
                     # 모든 weight*(1-buf) 후 잔여 (buf 만큼)를 Cash 에 흡수.
                     _target_buf = {_k: float(_w) * (1.0 - _stock_buf)

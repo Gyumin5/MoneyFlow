@@ -127,6 +127,17 @@ def with_api(table, fn):
         ex._get, ex.log = old_get, old_log
 
 
+def with_api_live(table, fn):
+    """dry_run=False 인 인스턴스로 부른다 — 모의 경로가 가로채는 함수를 재려면 필요하다."""
+    old_get, old_log = ex._get, ex.log
+    try:
+        ex._get = fake_get(table)
+        ex.log = lambda *a, **k: None
+        return fn(ex.KISAPI(dry_run=False))
+    finally:
+        ex._get, ex.log = old_get, old_log
+
+
 def raises_unavailable(table):
     def _run(api):
         try:
@@ -1506,38 +1517,94 @@ print("\n[47] 평가 가격만 없는 상태는 따로 적고, 돌아오면 푼�
 # 종목 교체(드리프트 판정)가 통째로 멈추고 그 사실이 아무 데도 안 남는다.
 _alerts47 = []
 _old_tg47 = ex.send_telegram
+_old_dt47 = ex.datetime
+
+
+class _StepClock(_dt.datetime):
+    """부를 때마다 1분씩 가는 시계. 처음 본 시각이 그대로인지를 실제로 비교하려면
+    회차마다 다른 시각이 들어와야 한다 — 같은 초에 다 적히면 그 비교가 늘 참이다."""
+    _n = [0]
+
+    @classmethod
+    def now(cls, tz=None):
+        cls._n[0] += 1
+        return _dt.datetime(2026, 10, 21, 23, 35) + _dt.timedelta(minutes=cls._n[0])
+
+
+_KEY47 = 'BIL:1.0'
 try:
     ex.send_telegram = lambda m: _alerts47.append(m)
+    ex.datetime = _StepClock
     _s47 = {}
-    ex._note_eval_pending(_s47, ['BIL'], 0.001)
+    ex._note_eval_pending(_s47, ['BIL'], 0.001, drift_ok=True, target_key=_KEY47)
     check("첫 회차를 기록한다",
           _s47['eval_pending']['rounds'] == 1 and _s47['eval_pending']['tickers'] == ['BIL'],
           str(_s47))
     check("원인도 같이 적는다", '가격' in _s47['eval_pending']['reason'],
           str(_s47['eval_pending']))
+    check("그때 잰 목표를 같이 적는다", _s47['eval_pending'].get('target_key') == _KEY47,
+          str(_s47['eval_pending']))
     check("첫 발생을 알린다", len(_alerts47) == 1, str(_alerts47))
-    ex._note_eval_pending(_s47, ['BIL'], 0.001)
+    _first47 = _s47['eval_pending']['first']
+    ex._note_eval_pending(_s47, ['BIL'], 0.001, drift_ok=True, target_key=_KEY47)
     check("둘째 회차는 세기만 한다", _s47['eval_pending']['rounds'] == 2 and len(_alerts47) == 1,
           f"{_s47['eval_pending']['rounds']} {len(_alerts47)}")
-    check("처음 본 시각은 안 바뀐다",
-          _s47['eval_pending']['first'] != _s47['eval_pending']['last']
-          or _s47['eval_pending']['rounds'] == 2, str(_s47['eval_pending']))
-    ex._note_eval_pending(_s47, ['BIL'], 0.001)
+    # 시각이 실제로 흘렀는지 먼저 단언한다 — 안 흐르면 아래 비교가 빈 검사가 된다.
+    check("회차마다 마지막 시각이 갱신된다", _s47['eval_pending']['last'] != _first47,
+          str(_s47['eval_pending']))
+    check("처음 본 시각은 안 바뀐다", _s47['eval_pending']['first'] == _first47,
+          str(_s47['eval_pending']))
+    ex._note_eval_pending(_s47, ['BIL'], 0.001, drift_ok=True, target_key=_KEY47)
     check("지속 발생을 다시 알린다 (3회차)",
           _s47['eval_pending']['rounds'] == 3 and len(_alerts47) == 2, str(_alerts47))
     # 드리프트 판정은 이 상태에서 열린다 — 아니면 가격이 안 오는 동안 종목 교체가 멈춘다.
+    # 단 그때 잰 목표가 지금도 같을 때만이다.
     _gate = dict(_s47, rebalancing_needed=True)
-    check("평가 보류 회차에도 드리프트 판정을 본다", ex._drift_gate_open(_gate) is True,
+    check("평가 보류 회차에도 드리프트 판정을 본다",
+          ex._drift_gate_open(_gate, _KEY47) is True, str(_gate.get('eval_pending')))
+    check("그때와 목표가 다르면 안 본다",
+          ex._drift_gate_open(_gate, 'BIL:0.5|PDBC:0.5') is False, str(_gate.get('eval_pending')))
+    check("이번 회차에 목표가 바뀌었으면 안 본다",
+          ex._drift_gate_open(_gate, _KEY47, target_changed=True) is False,
           str(_gate.get('eval_pending')))
     check("진짜 미달이면 드리프트 판정을 안 본다",
           ex._drift_gate_open({'rebalancing_needed': True}) is False, 'rebalancing_needed only')
     check("완료 회차는 평소대로 본다", ex._drift_gate_open({}) is True, 'empty state')
+    # 집행이 안 끝난 회차의 기록은 자격을 못 가진다 — 기록은 남고 문만 닫힌다.
+    _s47b = {}
+    ex._note_eval_pending(_s47b, ['BIL'], 0.001, drift_ok=False)
+    check("집행 미완료 회차도 기록은 남긴다",
+          _s47b['eval_pending']['rounds'] == 1 and _s47b['eval_pending']['drift_ok'] is False,
+          str(_s47b))
+    check("그 회차는 따로 안 알린다 (완료 판정이 이미 알린다)", len(_alerts47) == 2,
+          str(_alerts47))
+    check("그 기록으로는 드리프트를 안 연다",
+          ex._drift_gate_open(dict(_s47b, rebalancing_needed=True), _KEY47) is False,
+          str(_s47b['eval_pending']))
+    # 자격만 뺀다 — 몇 회차째인지는 남아야 지속 알림이 산다.
+    ex._revoke_drift_ok(_s47, '시험')
+    check("자격을 빼도 회차 기록은 남는다",
+          _s47['eval_pending']['rounds'] == 3 and _s47['eval_pending']['tickers'] == ['BIL'],
+          str(_s47['eval_pending']))
+    check("자격만 빠진다", _s47['eval_pending']['drift_ok'] is False
+          and _s47['eval_pending'].get('revoked') == '시험', str(_s47['eval_pending']))
+    check("자격이 빠지면 드리프트를 안 연다",
+          ex._drift_gate_open(dict(_s47, rebalancing_needed=True), _KEY47) is False,
+          str(_s47['eval_pending']))
     # 가격이 돌아오면 그 자리에서 푼다 — 안 풀면 한 번 걸린 계좌가 영영 그 상태로 남는다.
     ex._note_eval_pending(_s47, [], 0.0)
     check("가격이 돌아오면 기록을 지운다", 'eval_pending' not in _s47, str(_s47))
     check("풀릴 때 따로 안 알린다", len(_alerts47) == 2, str(_alerts47))
+    # 가격이 여전히 없는데 자격만 잃은 회차가 기록을 지우면, 다음 회차가 "첫 발생" 으로
+    # 다시 세어져 지속 알림이 영영 안 온다. 그 거짓 복구를 막는다.
+    _s47c = {}
+    ex._note_eval_pending(_s47c, ['BIL'], 0.001, drift_ok=True, target_key=_KEY47)
+    ex._note_eval_pending(_s47c, ['BIL'], 0.001, drift_ok=False)
+    check("자격을 잃어도 회차는 이어 센다", _s47c['eval_pending']['rounds'] == 2,
+          str(_s47c['eval_pending']))
 finally:
     ex.send_telegram = _old_tg47
+    ex.datetime = _old_dt47
 
 # 회차를 통째로 돌려도 같다 — 막혔다가 돌아오면 완료로 닫히고 기록이 사라진다.
 _st47r = _state_bil_only()
@@ -1750,6 +1817,267 @@ check("매도 뒤에 모호해지면 매수를 안 낸다",
 check("상태를 저장한다 (주문은 나갔다)", saved46 is not None, str(saved46))
 check("그 회차를 완료로 안 닫는다",
       saved46 is not None and saved46.get('rebalancing_needed') is True, str(saved46))
+
+print("\n[48] 지난 회차의 평가 보류 표식은 그때 목표가 지금도 같을 때만 문을 연다")
+# 열째 토론 지적. 표식만 보고 문을 열면, 정규 앵커가 스냅샷 하나를 갈아탄 회차에
+# 드리프트까지 발화해 리필이 나머지 스냅샷까지 덮는다 — 앵커 하나만 움직여야 하는
+# 날에 셋이 다 움직인다.
+
+
+def _run_refill_count(cls, state_obj, signal):
+    """한 회차를 돌리고 refill_snaps_fresh 가 몇 번 불렸는지 같이 돌려준다."""
+    calls = []
+    _old = ex.refill_snaps_fresh
+    try:
+        ex.refill_snaps_fresh = lambda sig, st: (calls.append(1), _old(sig, st))[1]
+        out = _with_api(cls, FULL, state_obj, signal)
+    finally:
+        ex.refill_snaps_fresh = _old
+    return out + (calls,)
+
+
+class _DriftBal(RealBalanceAPI):
+    """보유가 목표(BIL)와 전혀 다른 계좌 — 드리프트가 확실히 임계를 넘는다."""
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        return {'PDBC': 40}, 1000.0, FX
+
+    def get_current_price(self, ticker, fresh_only=False):
+        return 20.0 if ticker == 'PDBC' else 92.10
+
+
+def _pending48(target_key='BIL:1.0', drift_ok=True, rounds=1):
+    return {'tickers': ['BIL'], 'reason': '평가 시점 가격을 못 받았다', 'rounds': rounds,
+            'first': '2026-10-20T23:35:00', 'last': '2026-10-20T23:35:00',
+            'max_diff_known': 0.001, 'drift_ok': drift_ok, 'target_key': target_key}
+
+
+# 양성 대조 1 — 표식이 아예 없는 평범한 회차. 드리프트가 발화하고 리필이 돈다.
+_st48a = _state_bil_only()
+_st48a['rebalancing_needed'] = False
+_o48a, _a48a, _s48a, _c48a = _run_refill_count(_DriftBal, _st48a, _signal())
+check("[양성] 평범한 회차는 드리프트가 발화하고 리필이 돈다", _c48a == [1], str(_c48a))
+
+# 양성 대조 2 — 표식이 있고 목표가 그대로면 문이 열린다(가격이 안 오는 동안 교체가
+# 영영 멈추지 않게 하는 쪽). 이게 열려야 아래 닫힘이 빈 검사가 아니다.
+_st48b = _state_bil_only()
+_st48b['rebalancing_needed'] = True
+_st48b['eval_pending'] = _pending48()
+_o48b, _a48b, _s48b, _c48b = _run_refill_count(_DriftBal, _st48b, _signal())
+check("[양성] 목표가 그대로면 평가 보류 회차도 리필이 돈다", _c48b == [1], str(_c48b))
+
+# 본 검사 — 같은 상태에서 스냅샷 0 의 정규 앵커만 발화시킨다.
+_st48c = _state_bil_only()
+_st48c['rebalancing_needed'] = True
+_st48c['eval_pending'] = _pending48()
+# 세 예정일을 같은 폭으로 당긴다. snap0 만 오늘 이하가 되고 23일 위상은 그대로라,
+# _resolve_anchor_schedule 이 시간표를 복구하지 않는다(위상이 깨지면 복구가 돌아
+# 앵커가 안 터지고 대신 드리프트가 돌아서, 검사가 재려던 자리가 사라진다).
+_TODAY48 = _FrozenDatetime._today
+for _i, _snap in _st48c['snapshots'].items():
+    _snap['next_rebal_date'] = (_TODAY48
+                                + _dt.timedelta(days=int(_i) * ex.SNAP_STAGGER_DAYS)).isoformat()
+_o48c, _a48c, _s48c, _c48c = _run_refill_count(_DriftBal, _st48c, _signal())
+check("앵커가 목표를 바꾼 회차는 드리프트 리필을 안 부른다", _c48c == [], str(_c48c))
+check("그 회차에 앵커는 실제로 발화했다",
+      _s48c is not None
+      and _s48c['snapshots']['0']['last_rebal_date'] == _TODAY48.isoformat(),
+      str(_s48c['snapshots']['0'] if _s48c else None))
+check("앵커가 안 건드린 스냅샷은 그대로다",
+      _s48c is not None
+      and _s48c['snapshots']['1']['picks'] == ['BIL']
+      and _s48c['snapshots']['2']['picks'] == ['BIL'],
+      str({k: v['picks'] for k, v in _s48c['snapshots'].items()} if _s48c else None))
+
+# 카나리 전환도 같다 — 전환이 부르는 리필 하나로 끝나야 하고, 드리프트가 또 부르면 안 된다.
+_st48d = _state_bil_only()
+_st48d['rebalancing_needed'] = True
+_st48d['prev_risk_on'] = True          # 신호는 risk_on=False → 이번 회차가 전환이다
+_st48d['eval_pending'] = _pending48()
+_o48d, _a48d, _s48d, _c48d = _run_refill_count(_DriftBal, _st48d, _signal())
+check("카나리 전환은 리필을 한 번만 부른다 (드리프트가 또 안 부른다)", _c48d == [1], str(_c48d))
+check("그 회차에 전환은 실제로 일어났다",
+      _s48d is not None and _s48d.get('prev_risk_on') is False, str(_s48d))
+
+# 표식에 적힌 목표가 지금 목표와 다르면(옛 상태를 물려받은 경우) 역시 안 연다.
+_st48e = _state_bil_only()
+_st48e['rebalancing_needed'] = True
+_st48e['eval_pending'] = _pending48(target_key='SPY:0.5|QQQ:0.5')
+_o48e, _a48e, _s48e, _c48e = _run_refill_count(_DriftBal, _st48e, _signal())
+check("표식의 목표가 지금과 다르면 리필을 안 부른다", _c48e == [], str(_c48e))
+
+print("\n[49] 집행이 불확실한 회차는 표식의 드리프트 자격을 잃는다")
+# 기록(몇 회차째 가격이 없나)은 남기고 자격만 뺀다.
+
+
+class _PostBalFails(RealBalanceAPI):
+    """주문 뒤 잔고 조회만 실패한다 — 이번 보유를 재지 못한 회차."""
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        if COUNTS['get_balance'] >= 2:
+            raise ex.BalanceUnavailable('주문 뒤 조회 실패')
+        return {'PDBC': 40}, 1000.0, FX
+
+    def get_current_price(self, ticker, fresh_only=False):
+        return 20.0 if ticker == 'PDBC' else 92.10
+
+
+_st49a = _state_bil_only()
+_st49a['rebalancing_needed'] = True
+_st49a['eval_pending'] = _pending48(rounds=2)
+_o49a, _a49a, _s49a = _with_api(_PostBalFails, FULL, _st49a, _signal())
+check("주문 뒤 잔고를 못 읽으면 자격을 뺀다",
+      _s49a is not None and _s49a.get('eval_pending', {}).get('drift_ok') is False,
+      str(_s49a.get('eval_pending') if _s49a else None))
+check("그래도 회차 기록은 남는다",
+      _s49a is not None and _s49a.get('eval_pending', {}).get('rounds') == 2
+      and _s49a.get('eval_pending', {}).get('tickers') == ['BIL'],
+      str(_s49a.get('eval_pending') if _s49a else None))
+
+# 계좌값이 낡아 주문 없이 돌아간 회차도 같다.
+_st49b = _state_bil_only()
+_st49b['rebalancing_needed'] = True
+_st49b['eval_pending'] = _pending48(rounds=2)
+_o49b, _a49b, _s49b = _with_api(_DriftBal, FULL, _st49b, _signal(), clock=step_clock(1, 100.0))
+check("계좌값이 낡아 돌아간 회차도 자격을 뺀다",
+      _s49b is not None and _s49b.get('eval_pending', {}).get('drift_ok') is False,
+      str(_s49b.get('eval_pending') if _s49b else None))
+check("그 회차는 주문이 0건이다", _o49b == [], str(_o49b))
+
+print("\n[50] 값을 못 매긴 자리가 '보유 미달' 이면 완료로도 자격으로도 안 센다")
+
+
+class _LeftoverUnpriced(RealBalanceAPI):
+    """주문 뒤에 목표 밖 보유(SPY)가 남았는데 그 평가 가격이 없다."""
+
+    spy_eval = None    # None 이면 평가 가격 없음
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        if COUNTS['get_balance'] >= 2:
+            return {'BIL': 10, 'SPY': 3}, 1000.0, FX
+        return {'BIL': 10}, 1000.0, FX
+
+    def get_current_price(self, ticker, fresh_only=False):
+        if ticker == 'SPY' and COUNTS.get('get_balance', 0) >= 2:
+            _v = type(self).spy_eval
+            return 0.0 if _v is None else _v
+        return 92.10
+
+
+_st50a = _state_bil_only()
+_st50a['rebalancing_needed'] = True
+_o50a, _a50a, _s50a = _with_api(_LeftoverUnpriced, FULL, _st50a, _signal())
+check("목표 밖 잔존의 값을 못 매기면 완료로 안 닫는다",
+      _s50a is not None and _s50a.get('rebalancing_needed') is True, str(_s50a))
+check("그 회차 표식은 드리프트 자격이 없다",
+      _s50a is not None and _s50a.get('eval_pending', {}).get('drift_ok') is False,
+      str(_s50a.get('eval_pending') if _s50a else None))
+
+# 양성 대조 — 같은 잔존인데 값이 매겨지면 그 자리는 편차로 세어지고 표식이 안 남는다.
+_o50b, _a50b, _s50b = _with_api(type('_LeftoverPriced', (_LeftoverUnpriced,),
+                                     {'spy_eval': 400.0}),
+                                FULL, dict(_state_bil_only(), rebalancing_needed=True), _signal())
+check("[양성] 값이 매겨지면 평가 보류로 안 적는다",
+      _s50b is not None and 'eval_pending' not in _s50b,
+      str(_s50b.get('eval_pending') if _s50b else None))
+
+
+class _ShrunkBuy(RealBalanceAPI):
+    """매수 가능 수량이 1주뿐이라 축소 체결된 회차 + 평가 가격 결측."""
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        return {'BIL': 1}, 1000.0, FX
+
+    def get_max_buy_qty(self, ticker, price) -> int:
+        return 1
+
+    def get_current_price(self, ticker, fresh_only=False):
+        if COUNTS.get('get_balance', 0) >= 2:
+            return 0.0      # 평가 시점 가격 없음
+        return 92.10
+
+
+_st50c = _state_bil_only()
+_st50c['rebalancing_needed'] = True
+_o50c, _a50c, _s50c = _with_api(_ShrunkBuy, FULL, _st50c, _signal())
+check("축소 매수가 있었다", [o for o in _o50c if o[0] == 'buy' and o[2] == 1] != [], str(_o50c))
+check("축소 매수 + 평가 결측은 완료로 안 닫는다",
+      _s50c is not None and _s50c.get('rebalancing_needed') is True, str(_s50c))
+check("그 회차 표식도 드리프트 자격이 없다",
+      _s50c is not None and _s50c.get('eval_pending', {}).get('drift_ok') is False,
+      str(_s50c.get('eval_pending') if _s50c else None))
+
+print("\n[51] 유한한 값끼리의 곱·나눗셈이 넘치는 자리")
+# 입력 하나하나는 유한한데 결과가 무한대·숫자 아님이 되는 경우다. 직접 넣은 inf 만
+# 막으면 여기서 샌다 — 열째 토론이 댄 반례(보유 2주 × 가격 1e308).
+
+
+class _EvalOverflow(_PriceMoves):
+    """평가 가격이 유한한데 보유와 곱하면 넘친다."""
+    eval_price = 1e308
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        return {'BIL': 2}, 1000.0, FX
+
+
+_st51a = _state_bil_only()
+_st51a['rebalancing_needed'] = True
+_o51a, _a51a, _s51a = _with_api(_EvalOverflow, FULL, _st51a, _signal())
+check("보유 × 가격이 넘치면 완료로 안 닫는다",
+      _s51a is not None and _s51a.get('rebalancing_needed') is True, str(_s51a))
+check("그 회차는 드리프트 자격도 없다",
+      _s51a is not None and _s51a.get('eval_pending', {}).get('drift_ok') is False,
+      str(_s51a.get('eval_pending') if _s51a else None))
+
+# 환산 총자산 — 총자산도 환율도 유한한 양수인데 몫이 넘친다.
+_ovf = {'TTTS3012R': ok_balance(),
+        'CTRP6504R': ok_present(exrt=1e-308),
+        'CTRP6548R': ok_account(tot=1e308),
+        'TTTC2101R': ok_margin(exrt=1e-308)}
+check("환산 총자산이 넘치면 조회 실패로 돌린다",
+      '정상 범위' in (raises_unavailable(_ovf) or ''), str(raises_unavailable(_ovf)))
+
+# 매수 가능 수량 응답이 무한대 — int(inf) 는 OverflowError 다. 그 예외가 매수 루프
+# 밖으로 나가면 주문을 낸 뒤의 확인과 상태 저장을 통째로 건너뛴다.
+for _label, _resp in (('수량이 무한대', {'ovrs_max_ord_psbl_qty': 'inf'}),
+                      ('수량이 숫자 아님', {'ovrs_max_ord_psbl_qty': 'nan'}),
+                      ('금액이 무한대', {'frcr_ord_psbl_amt1': 'inf'}),
+                      ('금액/가격이 넘친다', {'frcr_ord_psbl_amt1': '1e308'})):
+    _qty_tbl = {'TTTS3007R': {'rt_cd': '0', 'output': _resp}}
+
+    _px51 = 1e-308 if '넘친' in _label else 92.10
+    _got = with_api_live(_qty_tbl, lambda api, _p=_px51: api.get_max_buy_qty('BIL', _p))
+    check(f"매수 가능 수량이 비정상이면 0 으로 본다 — {_label}", _got == 0, str(_got))
+
+_ok_qty = with_api_live({'TTTS3007R': {'rt_cd': '0', 'output': {'ovrs_max_ord_psbl_qty': '12'}}},
+                        lambda api: api.get_max_buy_qty('BIL', 92.10))
+check("[양성] 정상 응답은 그대로 읽는다", _ok_qty == 12, str(_ok_qty))
+
+print("\n[52] 현금버퍼 값이 정상 범위를 벗어나면 주문 전에 멈춘다")
+# 기본값으로 조용히 바꿔 쓰면 운영자가 정한 값과 다른 비중으로 돌고, 그대로 쓰면
+# 목표 금액이 0 이나 음수가 되어 전량 매도가 된다. 둘 다 안 한다.
+for _label, _bad in (('숫자가 아니다', 'abc'), ('1 이상이다', 1.0),
+                     ('음수다', -0.1), ('무한대다', float('inf'))):
+    _st52 = _state_bil_only()
+    _st52['rebalancing_needed'] = True
+    _st52['stock_cash_buffer'] = _bad
+    _o52, _a52, _s52 = _with_api(_DriftBal, FULL, _st52, _signal())
+    check(f"현금버퍼가 {_label} → 주문 0건", _o52 == [], str(_o52))
+    check(f"현금버퍼가 {_label} → 상태를 안 바꾼다", _s52 is None, str(_s52))
+    check(f"현금버퍼가 {_label} → 알린다",
+          any('현금버퍼' in a for a in _a52), str(_a52))
+
+_st52ok = _state_bil_only()
+_st52ok['rebalancing_needed'] = True
+_st52ok['stock_cash_buffer'] = 0.07
+_o52ok, _a52ok, _s52ok = _with_api(_DriftBal, FULL, _st52ok, _signal())
+check("[양성] 정상 버퍼면 회차가 돈다", _o52ok != [] and _s52ok is not None,
+      f'{_o52ok} {_s52ok is not None}')
 
 print()
 if FAILED:
