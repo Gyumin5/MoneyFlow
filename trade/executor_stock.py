@@ -2197,7 +2197,10 @@ def _kis_fill_recent(ticker, have_last_date, target_date):
             if not xy or not cl:
                 continue
             d = pd.to_datetime(xy, format='%Y%m%d')
-            c = float(cl)
+            # 주문·평가 경로와 같은 경계다. float('inf') 는 `> 0` 을 통과해서 시계열에
+            # 섞이고, 그 뒤의 수익률·표준편차가 통째로 숫자 아님이 되어 종목 선정이
+            # 조용히 달라진다. _finite 는 유한하지 않은 값을 nan 으로 돌려준다.
+            c = _finite(cl)
             if c > 0 and have_last_date < d.date() <= target_date:
                 filled[d] = c
     except Exception as e:
@@ -2232,6 +2235,7 @@ def _fetch_strategy_prices(tickers, days=400, max_close_date=None):
     """
     import yfinance as yf
     import pandas as pd
+    from numpy import isfinite as _np_finite
     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
     if max_close_date is None:
         # KST 어제 = T-1 안전 (yfinance row index 는 UTC 자정 기준)
@@ -2248,6 +2252,13 @@ def _fetch_strategy_prices(tickers, days=400, max_close_date=None):
             if df is None or len(df) == 0:
                 continue
             s = df['Close'].squeeze().dropna()
+            # dropna 는 숫자 아님만 거른다 — 무한대와 0 이하는 그대로 남는다. 주문·평가
+            # 경로와 같은 경계(유한한 양수)를 여기서도 건다. 섞이면 수익률·표준편차가
+            # 숫자 아님이 되어 Z점수 순위가 바뀌고, 그 결과가 그대로 목표 비중이 된다.
+            s = s[_np_finite(s) & (s > 0)]
+            if len(s) < 2:
+                log(f'  ⚠️ {t}: 유한한 양수 종가가 부족하다 ({len(s)} rows)')
+                continue
             s.index = pd.to_datetime(s.index)
             # max_close_date 이후 row 제거 (장중 partial 차단)
             s = s[s.index.date <= max_close_date]

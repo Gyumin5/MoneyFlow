@@ -1818,6 +1818,85 @@ check("상태를 저장한다 (주문은 나갔다)", saved46 is not None, str(s
 check("그 회차를 완료로 안 닫는다",
       saved46 is not None and saved46.get('rebalancing_needed') is True, str(saved46))
 
+print("\n[53] 전송 거래소 기록은 주문에서 취소까지 한 줄로 이어진다")
+# [46] 은 그 기록을 손으로 심어 취소 쪽만 봤다. 열째 토론이 요구한 것은 사슬 전체다 —
+# place_order 가 실제로 적는가, 그 값이 취소 전문에 그대로 나가는가, 프로세스가 다시
+# 뜨면(기록이 메모리라 사라진다) 어떻게 되는가.
+
+
+def run_place_api(api, ticker, result, side='buy'):
+    """진짜 place_order 를 통신만 가짜로 돌린다. (판정, 나간 주문 전문)
+
+    위 [30] 의 run_place 와 달리 인스턴스를 밖에서 받는다 — 그 인스턴스에 남는
+    전송 거래소 기록을 뒤의 취소까지 이어 보려는 것이다.
+    """
+    sent = []
+
+    def _p(path, tr_id, body, retries=2, pre_send=None):
+        sent.append(body)
+        return result
+
+    old_post, old_log = ex._post, ex.log
+    try:
+        ex._post, ex.log = _p, lambda *a, **k: None
+        return api.place_order(ticker, 3, 91.60, side), sent
+    finally:
+        ex._post, ex.log = old_post, old_log
+
+
+# BIL 은 EXCHANGE_MAP 에서 AMEX 다 — 기본값 NASD 와 다른 종목을 골라야 "표를 안 보고
+# NASD 로 메운다" 와 구분된다.
+_api53 = _KISAPI_REAL(dry_run=False)
+_v53, _sent53 = run_place_api(_api53, 'BIL', {'rt_cd': '0', 'output': {'ODNO': 'E1'}})
+check("주문이 접수됐다", _v53 == 'ok', _v53)
+check("전송 전문의 거래소는 표가 정한 값이다",
+      [b.get('OVRS_EXCG_CD') for b in _sent53] == ['AMEX'],
+      str([b.get('OVRS_EXCG_CD') for b in _sent53]))
+check("그 거래소를 주문번호에 묶어 적는다", _api53._order_excg.get('E1') == 'AMEX',
+      str(_api53._order_excg))
+
+# 같은 인스턴스로 취소까지 간다. 응답이 거래소를 안 줘도 이 기록으로 확정해 쏜다.
+res53, posts53 = run_cancel(dict(_ALL_EMPTY,
+                                 NASD=_nccs([_row(odno='E1', pdno='BIL', excg=None)])),
+                            {'rt_cd': '0'}, api=_api53)
+check("그 기록으로 취소가 나간다",
+      res53.get('found') == 1 and posts53 == ['E1']
+      and [b.get('OVRS_EXCG_CD') for b in _CANCEL_BODIES] == ['AMEX'],
+      f'{res53} {posts53} {[b.get("OVRS_EXCG_CD") for b in _CANCEL_BODIES]}')
+
+# 프로세스가 다시 뜨면 그 기록이 없다. 응답도 거래소를 안 주면 확정할 근거가 0 이다 —
+# 물어본 코드나 EXCHANGE_MAP 으로 메우지 않고 회차를 멈춘다. 멈춘 채로 사람이 앱에서
+# 처리할 때까지 매 회차 같은 자리에서 선다(토론이 risks 로 적은 장기 정지).
+_api53b = _KISAPI_REAL(dry_run=False)
+check("새 인스턴스에는 그 기록이 없다", _api53b._order_excg == {}, str(_api53b._order_excg))
+res53b, posts53b = run_cancel(dict(_ALL_EMPTY,
+                                   NASD=_nccs([_row(odno='E1', pdno='BIL', excg=None)])),
+                              {'rt_cd': '0'}, api=_api53b)
+check("재시작 뒤 근거가 없으면 취소를 안 쏜다",
+      res53b.get('queried') is False and posts53b == [], f'{res53b} {posts53b}')
+
+# 재시작이어도 응답이 거래소를 주면 그걸로 확정한다 — 기록 소실이 영구 정지의 유일한
+# 조건이 아니라는 양성 대조.
+_api53c = _KISAPI_REAL(dry_run=False)
+res53c, posts53c = run_cancel(dict(_ALL_EMPTY,
+                                   NASD=_nccs([_row(odno='E1', pdno='BIL', excg='AMEX')])),
+                              {'rt_cd': '0'}, api=_api53c)
+check("[양성] 재시작이어도 응답이 거래소를 주면 쏜다",
+      res53c.get('found') == 1 and posts53c == ['E1'], f'{res53c} {posts53c}')
+
+# 접수 여부를 모르거나 거절된 주문은 기록하지 않는다. 주문번호가 없는 것을 빈 문자열로
+# 적어 두면, 나중에 같은 빈 번호의 행이 "확정된 거래소" 를 얻어 엉뚱한 취소가 나간다.
+for _label, _res, _want in (('주문번호가 없다', {'rt_cd': '0', 'output': {}}, 'unknown'),
+                            ('output 이 없다', {'rt_cd': '0'}, 'unknown'),
+                            ('응답이 비었다', {}, 'unknown'),
+                            ('거절됐다',
+                             {'_error': {'status_code': 400, 'body': {'rt_cd': '1'}}},
+                             'rejected')):
+    _apix = _KISAPI_REAL(dry_run=False)
+    _vx, _ = run_place_api(_apix, 'BIL', _res)
+    check(f"{_label} → {_want} 로 보고 기록을 안 남긴다",
+          _vx == _want and _apix._order_excg == {}, f'{_vx} {_apix._order_excg}')
+
 print("\n[48] 지난 회차의 평가 보류 표식은 그때 목표가 지금도 같을 때만 문을 연다")
 # 열째 토론 지적. 표식만 보고 문을 열면, 정규 앵커가 스냅샷 하나를 갈아탄 회차에
 # 드리프트까지 발화해 리필이 나머지 스냅샷까지 덮는다 — 앵커 하나만 움직여야 하는
