@@ -43,6 +43,9 @@ class FakeAPI:
 
     def __init__(self, *args, **kwargs):
         self.orders = []
+        # 체결된 매도는 잔고에서 빠진다. 집행기가 매도 뒤 잔고를 다시 읽어 "판 만큼
+        # 줄었나" 를 보므로, 잔고가 고정이면 멀쩡한 매도도 안 비친 것으로 읽힌다.
+        self.holdings = {'VNQ': 10, 'EEM': 10, 'SPY': 10}
         FakeAPI.last = self
 
     def cancel_all_pending(self):
@@ -52,7 +55,8 @@ class FakeAPI:
     def get_balance(self):
         # VNQ/EEM/SPY 각 <금액> + 현금 7% = 목표(버퍼 반영)와 정확히 일치.
         # 이래야 드리프트가 저절로 발화하지 않아 시험하려는 경로만 남는다.
-        return {'VNQ': 10, 'EEM': 10, 'SPY': 10}, 30000.0 / (1 - ex.CASH_BUFFER_DEFAULT), 1380.0
+        # 총자산은 매도해도 안 바뀐다 — 주식이 현금으로 바뀔 뿐이다.
+        return dict(self.holdings), 30000.0 / (1 - ex.CASH_BUFFER_DEFAULT), 1380.0
 
     def get_current_price(self, ticker):
         return 1000.0
@@ -64,6 +68,10 @@ class FakeAPI:
         # 집행기 계약: 'ok' / 'rejected' / 'unknown'. 참거짓이 아니다 — 접수 여부를
         # 모르는 것과 확정 거절을 가르지 않으면 중복 전송이 섞인다.
         self.orders.append((side, ticker, qty))
+        if side == 'sell':
+            self.holdings[ticker] = max(0, self.holdings.get(ticker, 0) - qty)
+        else:
+            self.holdings[ticker] = self.holdings.get(ticker, 0) + qty
         return 'ok'
 
 

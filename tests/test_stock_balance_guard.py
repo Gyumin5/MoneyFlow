@@ -686,12 +686,20 @@ res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='P1')], nk='NK')
 check("둘째 쪽 미체결도 잡는다", res.get('found') == 2, str(res))
 check("둘 다 취소한다", sorted(posts) == ['P1', 'P2'], str(posts))
 
-# 마지막 쪽에서도 연속조회 키를 되돌려주는 응답이 있다. 새 행이 안 늘어난 쪽에서 끝낸다 —
-# 키만 보면 영원히 돌거나 영원히 막힌다.
+# 커서가 안 움직이면 다음 쪽을 봤는지 같은 쪽을 다시 봤는지 가를 수 없다 — 그걸 "끝" 으로
+# 읽으면 뒤쪽 미체결을 놓친 채 없다고 말하게 된다.
 res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='Q1')], nk='NK'),
                                                _nccs([_row(odno='Q1')], nk='NK')]),
                         {'rt_cd': '0'})
-check("같은 행만 되돌아오면 거기서 끝낸다", res == {'queried': True, 'found': 1, 'failed': 0}, str(res))
+check("커서가 그대로면 전부 읽었다고 말하지 않는다", res.get('queried') is False, str(res))
+check("그 상태로 취소를 쏘지 않는다 — 커서 정체", posts == [], str(posts))
+
+# 수량 0 인 행만 담긴 쪽 뒤에도 미체결이 더 있을 수 있다. 활성 행 수로 쪽을 끊으면 그걸 놓친다.
+res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='Z0', qty='0')], nk='NK'),
+                                               _nccs([_row(odno='Z1')], nk='')]),
+                        {'rt_cd': '0'})
+check("수량 0 쪽 뒤의 미체결을 놓치지 않는다", res.get('found') == 1, str(res))
+check("그 주문을 취소한다", posts == ['Z1'], str(posts))
 
 _endless = [_nccs([_row(odno=f'E{i}')], nk='NK') for i in range(ex.PENDING_PAGE_MAX + 2)]
 res, posts = run_cancel(dict(_ALL_EMPTY, NASD=_endless), {'rt_cd': '0'})
@@ -804,10 +812,24 @@ def run_place(post_result):
 
 
 check("정상 접수 → ok", run_place({'rt_cd': '0', 'output': {'ODNO': '123'}}) == 'ok')
-check("서버가 본문으로 거절 → rejected",
+check("업무 거절 코드가 담긴 본문 → rejected",
       run_place({'_error': {'status_code': 400, 'body': {'rt_cd': '1'}}}) == 'rejected')
+check("HTTP 200 에 rt_cd 1 도 rejected",
+      run_place({'_error': {'status_code': 200, 'body': {'rt_cd': '1', 'msg1': '잔고부족'}}}) == 'rejected')
 check("예외(시간 초과·연결 끊김) → unknown",
       run_place({'_error': {'exception': 'timeout'}}) == 'unknown')
+# 게이트웨이 5xx 는 서버가 이미 받아놓은 뒤일 수 있다. 본문이 있다는 것만으로 거절로 읽으면
+# 같은 주문이 재시도 횟수만큼 다시 나간다.
+check("502 는 본문이 있어도 unknown",
+      run_place({'_error': {'status_code': 502, 'body': {'msg': 'Bad Gateway'}}}) == 'unknown')
+check("504 도 unknown",
+      run_place({'_error': {'status_code': 504, 'body': {'rt_cd': '1'}}}) == 'unknown')
+check("rt_cd 칸이 없으면 unknown",
+      run_place({'_error': {'status_code': 400, 'body': {'msg1': '알 수 없음'}}}) == 'unknown')
+check("rt_cd 가 null 이면 unknown",
+      run_place({'_error': {'status_code': 400, 'body': {'rt_cd': None}}}) == 'unknown')
+check("본문이 비면 unknown",
+      run_place({'_error': {'status_code': 400, 'body': {}}}) == 'unknown')
 check("응답이 비면 unknown", run_place({}) == 'unknown')
 check("output 칸이 없으면 unknown", run_place({'rt_cd': '0'}) == 'unknown')
 check("output 이 dict 가 아니면 unknown", run_place({'rt_cd': '0', 'output': []}) == 'unknown')
@@ -880,6 +902,31 @@ _st['rebalancing_needed'] = False
 orders, alerts, saved = _with_api(_PriceMissing, FULL, _st, _signal())
 check("드리프트 판정도 쉰다 — 주문 0건", orders == [], str(orders))
 check("판정을 쉰다고 알린다", any('드리프트' in a for a in alerts), str(alerts))
+
+print("\n[33] 미체결 목록에서 사라진 것이 체결의 증거는 아니다")
+
+
+class _SellVanishes(RealBalanceAPI):
+    """매도는 접수됐는데(ok) 잔고는 그대로다 — 접수 뒤 거절·취소된 모양."""
+
+
+_st = _state_bil_only()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SellVanishes, FULL, _st, _signal())
+check("매도는 나갔다", [o for o in orders if o[0] == 'sell'] != [], str(orders))
+check("잔고가 안 줄었으면 매수를 안 낸다", [o for o in orders if o[0] == 'buy'] == [], str(orders))
+check("잔고에 안 비쳤다고 알린다",
+      any('잔고에 반영되지 않아' in a for a in alerts), str(alerts))
+check("완료로 안 닫는다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+
+print("\n[34] 목표 밖 보유가 남으면 완료가 아니다")
+# 목표는 BIL 하나인데 PDBC 를 그대로 들고 있다. 목표 안쪽만 보면 BIL 비중만 재서
+# "달성" 으로 닫히는 자리다.
+_st = _state_bil_only()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_SellVanishes, FULL, _st, _signal())
+check("목표 밖 보유를 이탈로 센다",
+      saved is not None and saved.get('rebalancing_needed') is True, str(saved))
 
 print()
 if FAILED:
