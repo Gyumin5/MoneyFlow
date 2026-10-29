@@ -1061,6 +1061,11 @@ check("모의에서 매수도 보인다", [o for o in orders if o[0] == 'buy'] !
 check("모의는 상태파일을 안 쓴다", saved is None, str(saved))
 
 print("\n[40] 연속조회 요청이 계약대로 나간다 — tr_cont 와 커서 둘")
+# 실계좌 관측(2026-10-29 16:5x KST, 서버에서 읽기만 하는 조회 한 번): 미체결이 없는
+# 계좌의 TTTS3018R 는 세 거래소 모두 HTTP 200 · rt_cd 0 · 응답 헤더 tr_cont='D' ·
+# output 0행 · nk200 빈 값 · fk200 은 비지 않은 문자열(계좌·거래소·정렬을 ^ 로 이은 것)
+# 을 돌려줬다. 그래서 종료 판정을 헤더 우선으로 둔다 — fk200 이 남아 있다고 더 있는
+# 것이 아니고, 헤더가 D·E 면 커서가 남아도 끝이다.
 res, posts = run_cancel(dict(_ALL_EMPTY, NASD=[_nccs([_row(odno='P1')], nk='NK1', fk='FK1'),
                                                _nccs([_row(odno='P2')], nk='')]),
                         {'rt_cd': '0'})
