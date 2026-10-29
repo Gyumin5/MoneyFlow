@@ -46,7 +46,8 @@ class FakeAPI:
         FakeAPI.last = self
 
     def cancel_all_pending(self):
-        return True
+        # 집행기는 결과 dict 를 보고 "미체결 없음" 과 "조회 실패" 를 가른다.
+        return {'queried': True, 'found': 0, 'failed': 0}
 
     def get_balance(self):
         # VNQ/EEM/SPY 각 <금액> + 현금 7% = 목표(버퍼 반영)와 정확히 일치.

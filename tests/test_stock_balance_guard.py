@@ -31,6 +31,8 @@ import types
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'trade'))
 import executor_stock as ex  # noqa: E402
 
+_KISAPI_REAL = ex.KISAPI   # run_cycle 이 ex.KISAPI 를 갈아끼우므로 진짜 클래스를 잡아 둔다
+
 FAILED = []
 
 # 2026-10-23 10:00 KST 실측 (읽기 전용 조회). 숫자를 그대로 쓴다.
@@ -256,8 +258,16 @@ class RealBalanceAPI(ex.KISAPI):
         self.orders = []
         RealBalanceAPI.last = self
 
+    # 집행기는 취소 결과를 dict 로 받아 "확인됨" 과 "모름" 을 가른다.
+    cancel_result = {'queried': True, 'found': 0, 'failed': 0}
+
     def cancel_all_pending(self):
-        return True
+        return dict(type(self).cancel_result)
+
+    def get_balance(self):
+        # 계수기는 예외 전에 올린다 — 실패한 조회도 한 번 물은 것이다.
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        return super().get_balance()
 
     def get_current_price(self, ticker):
         return {'BIL': 91.60, 'PDBC': 20.02}.get(ticker, 100.0)
@@ -270,7 +280,17 @@ class RealBalanceAPI(ex.KISAPI):
         return True
 
 
-def run_cycle(table, state_obj, signal):
+def step_clock(jump_after, jump_to):
+    """부른 횟수가 jump_after 를 넘으면 jump_to 를 돌려주는 시계. 계좌값 나이 시험용."""
+    box = {'n': 0}
+
+    def t():
+        box['n'] += 1
+        return jump_to if box['n'] > jump_after else 0.0
+    return t
+
+
+def run_cycle(table, state_obj, signal, clock=None):
     COUNTS.clear()
     alerts, saved = [], {}
     tmp = tempfile.mkdtemp()
@@ -287,7 +307,8 @@ def run_cycle(table, state_obj, signal):
         ex.send_telegram = lambda m: alerts.append(m)
         ex.save_json = lambda p, d, default=None: saved.update({'state': d})
         ex.TRADE_STATE_FILE = path
-        ex.time = types.SimpleNamespace(sleep=lambda s: None, time=lambda: 0.0)
+        ex.time = types.SimpleNamespace(sleep=lambda s: None,
+                                        time=clock if clock else (lambda: 0.0))
         ex._read_alloc_transit_cap_ratio = lambda sleeve: None
         ex._get = fake_get(table)
         ex.log = lambda *a, **k: None
@@ -416,43 +437,141 @@ check("내용이 온전하다", json.loads(saved).get('token') == '새토큰1', 
 
 print("\n[20] 매매 없는 회차는 계좌를 한 번만 묻는다 (사전 조회를 판단에 재사용)")
 orders, alerts, saved = run_cycle(FULL, _state(), _signal())
-_reads = COUNTS.get('TTTS3012R', 0)
+_reads = COUNTS.get('get_balance', 0)
 check("계좌 조회 1회", _reads == 1, f'{_reads}회')
+check("조회 네 갈래도 한 벌", COUNTS.get('TTTS3012R', 0) == 1, str(COUNTS.get('TTTS3012R')))
 check("주문 0건", orders == [], str(orders))
 
 print("\n[21] 리밸 회차는 두 번 — 주문 전 판단 한 번, 주문 뒤 체결 확인 한 번")
 st = _state()
 st['rebalancing_needed'] = True
 orders, alerts, saved = run_cycle(FULL, st, _signal())
-_reads = COUNTS.get('TTTS3012R', 0)
+_reads = COUNTS.get('get_balance', 0)
 check("계좌 조회 2회", _reads == 2, f'{_reads}회')
 
-print("\n[22] 주문 뒤 조회가 실패하면 체결 확인 불가로 남고 보고용으로 또 묻지 않는다")
+
+def _with_api(cls, table, state_obj, signal, clock=None):
+    """RealBalanceAPI 자리를 cls 로 바꿔 한 회차 돌린다."""
+    old = globals()['RealBalanceAPI']
+    try:
+        globals()['RealBalanceAPI'] = cls
+        return run_cycle(table, state_obj, signal, clock=clock)
+    finally:
+        globals()['RealBalanceAPI'] = old
+
+
+print("\n[22] 주문 뒤 조회가 실패하면 체결 확인 불가로 남는다 — 마무리 재조회는 판정을 안 바꾼다")
 
 
 class _FailAfterOrders(RealBalanceAPI):
     """첫 조회는 되고 그 다음부터 실패한다 — 주문 뒤 조회가 깨진 회차."""
 
     def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
         n = getattr(self, '_n', 0) + 1
         self._n = n
         if n == 1:
-            return super().get_balance()
+            return _KISAPI_REAL.get_balance(self)
         raise ex.BalanceUnavailable('주문 뒤 조회 실패(시험)')
 
 
-_old_cls = RealBalanceAPI
-try:
-    _state_obj = _state()
-    _state_obj['rebalancing_needed'] = True
-    globals()['RealBalanceAPI'] = _FailAfterOrders
-    orders, alerts, saved = run_cycle(FULL, _state_obj, _signal())
-finally:
-    globals()['RealBalanceAPI'] = _old_cls
-check("체결 확인 불가를 알린다",
-      any('체결 확인 불가' in a for a in alerts), str(alerts))
-check("완료 판정을 안 내린다",
-      saved is None or saved.get('rebalancing_needed') is True, str(saved))
+class _FailOnceAfterOrders(RealBalanceAPI):
+    """체결 확인만 실패하고 마무리 로그용 재조회는 성공한다."""
+
+    def get_balance(self):
+        COUNTS['get_balance'] = COUNTS.get('get_balance', 0) + 1
+        n = getattr(self, '_n', 0) + 1
+        self._n = n
+        if n == 2:
+            raise ex.BalanceUnavailable('주문 뒤 조회 실패(시험)')
+        return _KISAPI_REAL.get_balance(self)
+
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_FailAfterOrders, FULL, _st, _signal())
+check("체결 확인 불가를 알린다", any('체결 확인 불가' in a for a in alerts), str(alerts))
+check("완료 판정을 안 내린다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+check("상태를 저장한다 (주문은 나갔다)", saved is not None, str(saved))
+_reads = COUNTS.get('get_balance', 0)
+check("조회 3회 — 사전·체결확인·마무리", _reads == 3, f'{_reads}회')
+
+_st = _state()
+_st['rebalancing_needed'] = True
+orders, alerts, saved = _with_api(_FailOnceAfterOrders, FULL, _st, _signal())
+check("마무리 재조회가 성공해도 완료로 안 바뀐다",
+      saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+check("그래도 체결 확인 불가를 알린다", any('체결 확인 불가' in a for a in alerts), str(alerts))
+_reads = COUNTS.get('get_balance', 0)
+check("조회 3회", _reads == 3, f'{_reads}회')
+
+print("\n[23] 미체결 조회가 실패하면 그 회차를 쉰다 — 잔존 주문을 '없음' 으로 읽지 않는다")
+
+
+class _PendingQueryFails(RealBalanceAPI):
+    cancel_result = {'queried': False, 'found': 0, 'failed': 0}
+
+
+orders, alerts, saved = _with_api(_PendingQueryFails, FULL, _state(), _signal())
+check("주문 0건", orders == [], str(orders))
+check("상태파일을 안 바꾼다", saved is None, str(saved))
+check("미체결 때문에 쉰다고 알린다", any('미체결' in a for a in alerts), str(alerts))
+check("계좌 조회도 안 한다", COUNTS.get('get_balance', 0) == 0, str(COUNTS.get('get_balance')))
+
+print("\n[24] 취소가 실패했거나 미체결이 남아 있으면 그 회차를 쉰다")
+
+
+class _CancelFails(RealBalanceAPI):
+    cancel_result = {'queried': True, 'found': 2, 'failed': 1}
+
+
+orders, alerts, saved = _with_api(_CancelFails, FULL, _state(), _signal())
+check("취소 실패 → 주문 0건", orders == [], str(orders))
+check("취소 실패 → 상태 유지", saved is None, str(saved))
+
+
+class _PendingStays(RealBalanceAPI):
+    cancel_result = {'queried': True, 'found': 1, 'failed': 0}
+
+
+orders, alerts, saved = _with_api(_PendingStays, FULL, _state(), _signal())
+check("미체결 잔존 → 주문 0건", orders == [], str(orders))
+check("미체결 잔존 → 상태 유지", saved is None, str(saved))
+
+print("\n[25] 미체결이 있었지만 취소·종결이 확인되면 회차는 그대로 돈다")
+
+
+class _PendingCleared(RealBalanceAPI):
+    """첫 조회에 1건, 재조회부터 0건 — 취소가 먹힌 모양."""
+    _seq = 0
+
+    def cancel_all_pending(self):
+        type(self)._seq += 1
+        if type(self)._seq == 1:
+            return {'queried': True, 'found': 1, 'failed': 0}
+        return {'queried': True, 'found': 0, 'failed': 0}
+
+
+_PendingCleared._seq = 0
+orders, alerts, saved = _with_api(_PendingCleared, FULL, _state(), _signal())
+check("회차가 돈다 (사전 조회까지 간다)", COUNTS.get('get_balance', 0) >= 1, str(COUNTS.get('get_balance')))
+check("쉰다는 알림 없음", not any('미체결 주문 상태를 확인하지 못해' in a for a in alerts), str(alerts))
+
+print("\n[26] 계좌값이 허용 나이를 넘기면 그 값으로 주문하지 않는다")
+_st = _state()
+_st['rebalancing_needed'] = True
+# 시계 4번째 호출(주문 직전 나이 측정)부터 뛴다 — 들어올 때는 신선, 수량 산출 중 만료.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(3, 100.0))
+check("주문 0건", orders == [], str(orders))
+check("보류를 알린다", any('주문을 내지 않았다' in a for a in alerts), str(alerts))
+check("다음 회차로 넘긴다", saved is not None and saved.get('rebalancing_needed') is True, str(saved))
+check("체결 확인 조회 안 함", COUNTS.get('get_balance', 0) == 1, str(COUNTS.get('get_balance')))
+
+_st = _state()
+_st['rebalancing_needed'] = True
+# 시계 3번째 호출(execute_delta 진입)부터 뛴다 — 들어올 때 이미 만료라 새로 읽는다.
+orders, alerts, saved = run_cycle(FULL, _st, _signal(), clock=step_clock(2, 100.0))
+check("만료면 새로 읽고 진행한다", COUNTS.get('get_balance', 0) == 3, str(COUNTS.get('get_balance')))
 
 print()
 if FAILED:

@@ -539,22 +539,33 @@ class KISAPI:
         """VT 현재가."""
         return self.get_current_price('VT')
 
-    def cancel_all_pending(self):
-        """미체결 전량 취소."""
+    def cancel_all_pending(self) -> dict:
+        """미체결 전량 취소. 결과를 돌려준다 — {'queried', 'found', 'failed'}.
+
+        조회가 안 된 것을 빈 목록으로 읽으면 "미체결 없음"과 구분이 안 된다. 그 상태로
+        사전 잔고를 잡으면 뒤늦게 체결되는 잔존 주문이 그 값을 거짓으로 만들고, 낡은
+        수량으로 한 번 더 주문이 나간다. 부르는 쪽이 "확인됨"과 "모름"을 가르게 한다.
+        """
         data = _get('/uapi/overseas-stock/v1/trading/inquire-nccs', 'TTTS3018R', {
             'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
             'OVRS_EXCG_CD': 'NASD', 'SORT_SQN': 'DS',
             'CTX_AREA_FK200': '', 'CTX_AREA_NK200': '',
         })
+        if not data:
+            log('  ⚠️ 미체결 조회 실패 — 미체결 없음과 구분할 수 없다')
+            return {'queried': False, 'found': 0, 'failed': 0}
+        found = 0
+        failed = 0
         for item in data.get('output', []):
             order_no = item.get('odno', '')
             ticker = item.get('pdno', '')
             qty = int(float(item.get('nccs_qty', 0)))
             side = 'buy' if item.get('sll_buy_dvsn_cd') == '02' else 'sell'
             if order_no and qty > 0:
+                found += 1
                 log(f'  미체결 취소: {ticker} {side} {qty}주')
                 if not self.dry_run:
-                    _post('/uapi/overseas-stock/v1/trading/order-rvsecncl', 'TTTT1004U', {
+                    res = _post('/uapi/overseas-stock/v1/trading/order-rvsecncl', 'TTTT1004U', {
                         'CANO': KIS_ACCOUNT, 'ACNT_PRDT_CD': KIS_ACCOUNT_PROD,
                         'OVRS_EXCG_CD': EXCHANGE_MAP.get(ticker, 'NASD'),
                         'PDNO': ticker, 'ORGN_ODNO': order_no,
@@ -563,6 +574,10 @@ class KISAPI:
                         'CTAC_TLNO': '', 'MGCO_APTM_ODNO': '',
                         'ORD_SVR_DVSN_CD': '0',
                     })
+                    if not res:
+                        failed += 1
+                        log(f'  ⚠️ 미체결 취소 실패: {ticker} {side} {qty}주')
+        return {'queried': True, 'found': found, 'failed': failed}
 
     def place_order(self, ticker: str, qty: int, price: float, side: str = 'buy') -> bool:
         """지정가 주문."""
@@ -1145,7 +1160,7 @@ def refill_snaps_fresh(signal: dict, state: dict) -> bool:
 
 
 def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None,
-                  effective_pv_usd: float = None, prefetched_balance=None):
+                  effective_pv_usd: float = None, prefetched_balance=None, prefetched_at=None):
     """target vs 현재 잔고 → Delta 매매 (정수 주 단위).
 
     effective_pv_usd: alloc_transit cap 시 effective_pv (= min(actual, target_ratio×total)).
@@ -1153,13 +1168,26 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     prefetched_balance: 같은 회차에서 이미 읽은 (보유, 총자산USD, 환율). 주문을 내기 전이라
                      값이 같으므로 그대로 쓴다. None 이면 여기서 직접 읽는다.
                      주문 뒤 체결 확인은 이 값을 안 쓰고 항상 새로 묻는다.
+    prefetched_at:   그 값을 읽은 시각(time.time()). 나이가 BALANCE_MAX_AGE_SEC 를 넘으면
+                     그 값으로 주문하지 않는다 — 들어올 때 넘었으면 새로 읽고, 수량을
+                     산출하는 동안 넘겼으면 주문 없이 돌아간다.
     """
     if cash_buffer is None:
         cash_buffer = CASH_BUFFER_DEFAULT
-    if prefetched_balance is not None:
+    _reuse_age = (time.time() - prefetched_at) if (prefetched_balance is not None
+                                                   and prefetched_at is not None) else None
+    if prefetched_balance is not None and (_reuse_age is None or _reuse_age <= BALANCE_MAX_AGE_SEC):
         holdings, total_usd, exrt = prefetched_balance
+        _bal_at = prefetched_at if prefetched_at is not None else time.time()
+        if _reuse_age is not None:
+            log(f'    사전 조회 재사용 (나이 {_reuse_age:.1f}s / 허용 {BALANCE_MAX_AGE_SEC}s)')
     else:
-        holdings, total_usd, exrt = api.get_balance()
+        if prefetched_balance is not None:
+            log(f'    ⚠️ 사전 조회가 {_reuse_age:.0f}초 전 값이다 — 낡은 값으로 주문하지 않고 새로 읽는다')
+            holdings, total_usd, exrt = _read_balance_or_skip(api)
+        else:
+            holdings, total_usd, exrt = api.get_balance()
+        _bal_at = time.time()
 
     # alloc_transit cap 적용
     pv_for_target = total_usd if effective_pv_usd is None else min(total_usd, effective_pv_usd)
@@ -1203,6 +1231,30 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             price = api.get_current_price(ticker)
             if price > 0 and qty > 0:
                 sells.append((ticker, qty, price))
+
+    # 주문 직전 나이 검사 — 여기까지 오는 동안 종목마다 현재가 조회가 돌았다. 수량을
+    # 산출한 계좌값이 허용 나이를 넘겼으면 주문을 내지 않고 돌아간다. rebalancing_needed
+    # 가 True 로 남아 다음 회차가 그때의 실제 잔고로 다시 계산한다.
+    _order_age = time.time() - _bal_at
+    if sells or buys:
+        log(f'    주문 직전 계좌값 나이: {_order_age:.1f}s (허용 {BALANCE_MAX_AGE_SEC}s)')
+        if _order_age > BALANCE_MAX_AGE_SEC:
+            log(f'    ⛔ 계좌값이 낡았다({_order_age:.0f}s) — 주문 없이 돌아간다')
+            send_telegram(f'⛔ 주식: 계좌값이 {_order_age:.0f}초 전 것이라 주문을 내지 않았다. '
+                          f'다음 회차에 다시 계산한다.')
+            state['rebalancing_needed'] = True
+            return {
+                'holdings': holdings,
+                'total_usd': total_usd,
+                'exchange_rate': exrt,
+                'sells': [],
+                'buys': [],
+                'failed_orders': [],
+                'max_diff': None,
+                'completed': False,
+                'post_balance': None,
+                'stale_abort': True,
+            }
 
     # 매도 먼저 (delta 주수만큼만, target=0이면 전량)
     for ticker, qty, price in sells:
@@ -1310,6 +1362,37 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 
 BALANCE_RETRY_ATTEMPTS = 3   # 계좌 조회를 몇 번까지 다시 볼까
 BALANCE_RETRY_WAIT_SEC = 30  # 다시 보기 전에 쉬는 시간
+
+# 사전에 읽은 계좌값으로 주문을 낼 수 있는 최대 나이. 넘기면 그 값으로 주문하지 않는다.
+# 실측 회차 전체가 6.5~7.0초(2026-10-26·27·28)라 정상 흐름과는 거리가 멀고, 넘겼을 때의
+# 대가는 조회 한 번 또는 그 회차 주문 보류라 작게 잡는다.
+BALANCE_MAX_AGE_SEC = 60
+
+PENDING_CONFIRM_ATTEMPTS = 3  # 취소를 건 뒤 미체결이 없어졌는지 다시 볼 횟수
+PENDING_CONFIRM_WAIT_SEC = 5  # 그 사이 쉬는 시간
+
+
+def _confirm_no_pending(api: 'KISAPI', cancel_result: dict):
+    """취소를 건 뒤 미체결이 실제로 사라졌는지 확인한다. (확정됐나, 사유).
+
+    확정 못 하면 부르는 쪽이 그 회차를 주문 없이 멈춘다. 잔존 주문이 뒤늦게 체결되면
+    이어서 읽는 사전 잔고가 거짓이 되고, 그 수량으로 중복 주문이 나간다.
+    """
+    if not cancel_result.get('queried'):
+        return False, '미체결 조회 실패'
+    if not cancel_result.get('found'):
+        return True, '미체결 없음'
+    if cancel_result.get('failed'):
+        return False, f"취소 실패 {cancel_result['failed']}건"
+    for _ in range(PENDING_CONFIRM_ATTEMPTS):
+        time.sleep(PENDING_CONFIRM_WAIT_SEC)
+        again = api.cancel_all_pending()
+        if not again.get('queried'):
+            return False, '취소 뒤 미체결 재조회 실패'
+        if not again.get('found'):
+            return True, f"미체결 {cancel_result['found']}건 취소·종결 확인"
+        log(f"  ⏳ 미체결 {again['found']}건이 남아 있다 — {PENDING_CONFIRM_WAIT_SEC}초 뒤 다시 본다")
+    return False, '취소 뒤에도 미체결이 남아 있다'
 
 
 def _read_balance_or_skip(api: 'KISAPI'):
@@ -1686,8 +1769,20 @@ def run_once(dry_run=False):
         log('  ⚠️ signal이 24시간 이상 오래됨 — 가드만 체크')
         send_telegram('⚠️ signal_state 갱신 안 됨 (24시간 초과)')
 
-    # 1. 미체결 취소
-    api.cancel_all_pending()
+    # 1. 미체결 취소 — 결과를 확인한다. 조회가 안 됐거나 취소가 실패했거나 주문이 남아
+    #    있으면 아래에서 읽을 사전 잔고를 믿을 수 없다(잔존 주문이 뒤늦게 체결되면 그
+    #    수량이 틀린다). 그때는 주문 없이 회차를 멈춘다 — 상태를 저장하지 않으므로 다음
+    #    회차가 같은 자리에서 잇는다. 모의 실행은 취소를 실제로 보내지 않아 검사하지 않는다.
+    _cancel = api.cancel_all_pending()
+    if not dry_run:
+        _pending_ok, _pending_why = _confirm_no_pending(api, _cancel)
+        log(f'  미체결 확인: {_pending_why}')
+        if not _pending_ok:
+            log(f'  ⛔ 미체결 상태를 확정하지 못했다 — 이번 회차 매매를 건너뛴다: {_pending_why}')
+            send_telegram(f'⛔ 주식: 미체결 주문 상태를 확인하지 못해 이번 회차를 쉰다 '
+                          f'({_pending_why}). 다음 회차에 다시 본다.')
+            log('주식 executor 완료 (미체결 확정 불가)')
+            return
 
     # 2. V24: 가드 없음. 잔존 crash_active 만 정리.
     check_crash(signal, api, state)
@@ -1706,6 +1801,7 @@ def run_once(dry_run=False):
     # 한 회차의 판단이 서로 다른 시점을 섞는다. 체결 확인만 주문 뒤에 새로 묻는다.
     try:
         _bal_pre = _read_balance_or_skip(api)
+        _bal_pre_at = time.time()   # 이 값의 나이를 주문 직전에 다시 잰다
     except BalanceUnavailable as _e:
         log(f'  ⛔ 계좌 조회 불가 — 이번 회차 매매를 건너뛴다: {_e}')
         send_telegram(f'⛔ 주식: 계좌 조회가 안 돼 이번 회차를 쉰다 ({_e}). 다음 회차에 다시 본다.')
@@ -1804,13 +1900,24 @@ def run_once(dry_run=False):
 
     # 5. Merge + Delta 매매
     _bal_after = None   # 주문 뒤 조회값. 리밸 분기를 안 타면 그대로 None 이다.
+    _stale_abort = False  # 계좌값이 낡아 주문을 보류한 회차인가
     _rebal_ran = bool(state.get('rebalancing_needed', False))
     if state.get('rebalancing_needed', False):
         target = merge_tranches(state)
         log(f'  Target: {target}')
         mode = 'DRY-RUN' if dry_run else 'LIVE'
-        result = execute_delta(target, api, state, cash_buffer=cash_buffer,
-                               effective_pv_usd=_stock_cap_usd, prefetched_balance=_bal_pre)
+        try:
+            result = execute_delta(target, api, state, cash_buffer=cash_buffer,
+                                   effective_pv_usd=_stock_cap_usd, prefetched_balance=_bal_pre,
+                                   prefetched_at=_bal_pre_at)
+        except BalanceUnavailable as _e:
+            # 사전 조회가 허용 나이를 넘겨 새로 읽었는데 그것도 실패했다. 주문은 아직
+            # 안 나갔다 — 상태를 저장하지 않고 멈춘다.
+            log(f'  ⛔ 계좌 재조회 실패 — 주문 없이 이번 회차를 멈춘다: {_e}')
+            send_telegram(f'⛔ 주식: 계좌 조회가 안 돼 주문 없이 이번 회차를 멈춘다 ({_e}). '
+                          f'다음 회차에 다시 본다.')
+            log('주식 executor 완료 (잔고 재조회 실패)')
+            return
         sells = result.get('sells', [])
         buys = result.get('buys', [])
         max_diff = result.get('max_diff')
@@ -1825,8 +1932,9 @@ def run_once(dry_run=False):
 
         # 보고용 잔고는 execute_delta 가 체결 확인에 쓴 그 값이다. 같은 시점을 두 번 묻지 않는다.
         _bal_after = result.get('post_balance')
-        if _bal_after is None:
-            log('  ⚠️ 보고용 잔고 없음 — 주문 뒤 조회가 실패한 회차다')
+        _stale_abort = bool(result.get('stale_abort'))
+        if _bal_after is None and not _stale_abort:
+            log('  ⚠️ 보고용 잔고 없음 — 주문 뒤 조회가 실패한 회차다(체결 확인 불가)')
         if isinstance(_bal_after, tuple) and len(_bal_after) >= 2:
             holdings_q, total_usd, fx = _bal_after[0], _bal_after[1], (_bal_after[2] if len(_bal_after) > 2 else 1.0)
         else:
@@ -1878,16 +1986,23 @@ def run_once(dry_run=False):
     if not dry_run:
         save_json(TRADE_STATE_FILE, state)
     # 마무리 한 줄 — 이미 읽은 값을 쓴다. 매매가 없었으면 2.5 의 사전 조회가 지금 값이고,
-    # 매매가 있었으면 주문 뒤에 읽은 값이 지금 값이다. 그 둘이 다 없을 때만 새로 묻는다.
+    # 매매가 있었으면 주문 뒤에 읽은 값이 지금 값이다. 체결 확인이 실패한 회차에서만
+    # 로그 한 줄을 위해 다시 묻는다 — 저장은 이미 위에서 끝났고, 이 조회가 성공해도
+    # 체결 확인 상태를 바꾸지 않는다(rebalancing_needed 는 True 로 남는다). 그 사실이
+    # 보이도록 로그에 표시를 붙인다.
+    _tag = ''
     try:
         if isinstance(_bal_after, tuple) and len(_bal_after) >= 3:
             _h, _t, _e = _bal_after[0], _bal_after[1], _bal_after[2]
-        elif _rebal_ran:
+        elif _rebal_ran and not _stale_abort:
             _h, _t, _e = api.get_balance()
+            _tag = ' | 체결 확인 불가(아래 잔고는 마무리 로그용 재조회, 판정 안 바꿈)'
         else:
             _h, _t, _e = _bal_pre
+            if _stale_abort:
+                _tag = ' | 계좌값 만료로 주문 보류(아래 잔고는 사전 조회값)'
         _elapsed = time.time() - _t0
-        log(f'주식 executor 완료 ({_elapsed:.1f}s) | 총자산: ${_t:,.0f} (환율 {_e:,.0f}) | 잔고: {_h}')
+        log(f'주식 executor 완료 ({_elapsed:.1f}s){_tag} | 총자산: ${_t:,.0f} (환율 {_e:,.0f}) | 잔고: {_h}')
     except Exception:
         _elapsed = time.time() - _t0
         log(f'주식 executor 완료 ({_elapsed:.1f}s)')
