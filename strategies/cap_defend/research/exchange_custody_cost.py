@@ -107,6 +107,37 @@ def main() -> int:
         short = sum(1 for x in lens if x <= 7)
         print(f'  7일 이하로 끝난 구간 {short}개 — 짧은 구간일수록 지연이 통째로 먹는다')
 
+    # ── 꺼진 뒤 유예: 왕복 횟수와 거래소 체류 비율 ──
+    # 유예는 전략을 안 바꾼다. 파는 것은 거래소 안에서 즉시 하고 돈만 더 오래 둔다.
+    # 그래서 여기서 바뀌는 것은 성과가 아니라 손이 가는 횟수와 노출 시간뿐이다.
+    print()
+    print('=== 꺼진 뒤 며칠 더 두고 뺄 때 — 왕복 횟수와 노출')
+    print(f'  {"유예":>6} {"왕복":>7} {"연 왕복":>8} {"거래소 체류":>11} {"없어진 왕복":>11}')
+    arr = can.to_numpy()
+    base_trips = None
+    for g in (0, 1, 2, 3, 5, 7, 10, 14):
+        # 켜진 날은 반드시 두고, 꺼진 구간이 g 일 이하면 그대로 둔 채로 넘긴다.
+        held = arr.copy()
+        i = 0
+        n = len(arr)
+        while i < n:
+            if arr[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and not arr[j]:
+                j += 1
+            # [i, j) 가 꺼진 구간. 양쪽이 다 켜짐이고 길이가 g 이하면 유지한다.
+            if i > 0 and j < n and (j - i) <= g:
+                held[i:j] = True
+            i = j
+        trips = int(np.sum(held[1:] & ~held[:-1])) + (1 if held[0] else 0)
+        if base_trips is None:
+            base_trips = trips
+        print(f'  {g:>4}일 {trips:>6}회 {trips / yrs:>7.1f}회'
+              f' {held.mean() * 100:>10.1f}%'
+              f' {base_trips - trips:>10}회')
+
     # ── 슬리브별 진입 지연 비용 (앵커 7곳) ──
     # 앵커 하나로 재면 그 자리만의 우연이 결론이 된다 — 이 저장소 기준은 앵커 평균이다.
     for kind, runner, phases in (('코인 현물 25%', R.run_spot, R.PH_SPOT[:7]),
