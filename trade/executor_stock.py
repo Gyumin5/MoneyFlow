@@ -1615,8 +1615,41 @@ def _note_eval_pending(state: dict, tickers, max_diff_known: float,
                       f'계속 안 오면 손으로 확인이 필요하다.')
 
 
+def _inflight_expected(mark: dict) -> int:
+    """그 주문이 접수됐다면 해당 종목 보유가 얼마가 돼야 하나."""
+    before, qty = int(mark.get('qty_before', 0)), int(mark.get('qty', 0))
+    return before - qty if mark.get('side') == 'sell' else before + qty
+
+
+def resolve_inflight(state: dict, holdings: dict):
+    """지난 회차에 접수 여부를 모른 채 끝난 주문을 지금 보유로 가린다.
+
+    돌려주는 것은 (이번 회차에 주문을 내도 되나, 사유) 다. 가릴 수 없으면 주문을 막는다 —
+    다시 보내면 두 번 체결된다. "보유가 그대로니 접수 안 됐다" 는 판정은 호출하는 쪽이
+    미체결 없음을 먼저 확정했을 때만 선다(run_once 의 _confirm_no_pending).
+    """
+    mark = state.get('inflight_order')
+    if not isinstance(mark, dict) or not mark.get('ticker'):
+        return True, '없음'
+    tk = mark.get('ticker')
+    cur = holdings.get(tk, 0)
+    if isinstance(cur, bool) or not isinstance(cur, (int, float)):
+        return False, f'{tk} 의 보유수량을 읽을 수 없다'
+    cur, before, want = int(cur), int(mark.get('qty_before', 0)), _inflight_expected(mark)
+    side, qty = mark.get('side'), mark.get('qty')
+    if cur == want:
+        state.pop('inflight_order', None)
+        return True, f'{side} {tk} {qty}주가 체결됐다 (보유 {cur}주)'
+    if cur == before:
+        state.pop('inflight_order', None)
+        return True, f'{side} {tk} {qty}주는 접수되지 않았다 (보유 {cur}주 그대로)'
+    return False, (f'{side} {tk} {qty}주의 결과를 모른다 — 보유가 {before}주도 {want}주도 '
+                   f'아닌 {cur}주다')
+
+
 def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffer: float = None,
-                  effective_pv_usd: float = None, prefetched_balance=None, prefetched_at=None):
+                  effective_pv_usd: float = None, prefetched_balance=None, prefetched_at=None,
+                  persist=None):
     """target vs 현재 잔고 → Delta 매매 (정수 주 단위).
 
     effective_pv_usd: alloc_transit cap 시 effective_pv (= min(actual, target_ratio×total)).
@@ -1628,6 +1661,10 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                      를 넘으면 그 값으로 주문하지 않는다. 들어올 때 이미 넘었으면 주문 없이
                      돌아간다 — 여기서 새로 읽으면 부르는 쪽이 옛 값으로 계산해 넘겨준
                      상한(effective_pv_usd)과 짝이 안 맞는다.
+    persist:         상태를 그 자리에서 디스크에 쓰는 함수. 주문 전송 직전에 "이 주문을
+                     보낸다" 를 남기고 결과를 안 뒤 지운다. 여기서 프로세스가 죽거나 응답을
+                     못 받으면 그 표식이 남아, 다음 회차가 resolve_inflight 로 결과를 가린다.
+                     None 이면 표식을 안 남긴다 — 모의 실행과 단위 시험용이다.
     """
     if cash_buffer is None:
         cash_buffer = CASH_BUFFER_DEFAULT
@@ -1713,6 +1750,8 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     buys = []
     failed_orders = []
     shrunk_buys: List[str] = []
+    # 정수 주로 깎여 주문이 아예 안 난 종목 중, 남은 편차가 허용오차를 넘는 것.
+    trunc_short: List[str] = []
     # 주문 전 보유에서 시작해 실제로 접수된 수량만 더하고 뺀다. 평가 가격이 없는 종목은
     # 값으로 못 재므로, 이 장부와 주문 뒤 보유를 수량으로 대조해 "들고 있는 것이 목표대로"
     # 인지를 본다. 주문이 하나도 없던 종목도 대조 대상이다 — 보유가 양수라는 것만으로
@@ -1744,6 +1783,13 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
             sells.append((ticker, abs(delta_qty), price))
         elif delta_qty > 0:
             buys.append((ticker, delta_qty, price))
+        elif total_usd > 0 and abs(delta_val) >= REBALANCE_TOLERANCE * total_usd:
+            # 한 주 값이 커서 정수 절삭에 주문이 통째로 사라졌는데 편차는 허용오차를 넘는다.
+            # 값을 매길 수 있으면 아래 편차 계산이 잡지만, 하필 그 종목의 평가 가격이 없으면
+            # 수량 대조만 통과해 "값만 모른다" 로 세어지고 다음 회차 종목 교체가 열린다.
+            log(f'    ⛔ {ticker} 편차 {abs(delta_val) / total_usd:.1%} 가 남았는데 '
+                f'한 주(${price:,.2f})에 못 미쳐 주문이 안 난다')
+            trunc_short.append(ticker)
 
     # 보유 중이지만 target에 없는 종목 → 전량 매도
     for ticker, qty in holdings.items():
@@ -1784,6 +1830,37 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
     # 서버가 받아놓고 우리만 응답을 못 받은 경우가 섞여 있어서, 다시 보내면 두 번 체결된다.
     unknown_send = {'hit': False}
 
+    def _inflight_mark(side: str, ticker: str, qty: int) -> bool:
+        """전송 직전에 주문 의도를 디스크에 남긴다. 못 남기면 주문을 내지 않는다."""
+        if persist is None:
+            return True
+        state['inflight_order'] = {
+            'side': side, 'ticker': ticker, 'qty': int(qty),
+            # 이 종목은 이번 회차에 주문이 하나뿐이라, 지금 장부값이 주문 전 보유다.
+            'qty_before': int(expected_qty.get(ticker, 0)),
+            'at': datetime.now().isoformat(timespec='seconds'),
+        }
+        try:
+            persist()
+        except Exception as _e:
+            state.pop('inflight_order', None)
+            log(f'  ⛔ 주문 의도를 기록하지 못했다({str(_e)[:60]}) — {side} {ticker} 주문을 안 낸다')
+            send_telegram(f'⛔ 주식: {side} {ticker} {qty}주의 주문 의도를 상태파일에 기록하지 '
+                          f'못해 주문을 내지 않았다. 다음 회차에 다시 계산한다.')
+            return False
+        return True
+
+    def _inflight_clear() -> None:
+        """결과를 확정했으면 표식을 지운다. 접수 여부 불명일 때는 부르지 않는다."""
+        if persist is None or 'inflight_order' not in state:
+            return
+        state.pop('inflight_order', None)
+        try:
+            persist()
+        except Exception as _e:
+            # 남아도 안전한 쪽이다 — 다음 회차가 보유로 가려서 지운다.
+            log(f'  ⚠️ 주문 의도 표식을 지우지 못했다({str(_e)[:60]})')
+
     def _send(side: str, ticker: str, qty: int, price: float) -> bool:
         """한 종목 주문. 돌려주는 것은 접수됐나다. 'unknown' 이면 재전송하지 않는다."""
         for attempt in range(MAX_ORDER_ATTEMPTS):
@@ -1807,12 +1884,18 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 return False
             # 같은 검사를 전송 경계에서 한 번 더 받는다. 위 검사와 실제 요청 사이에는
             # 아직 헤더 생성(= 토큰 재발급 가능)이 남아 있다.
+            # 전송 의도를 먼저 디스크에 남긴다. 안 남기면 여기서 프로세스가 죽었을 때
+            # 다음 회차가 같은 주문을 다시 내서 두 번 체결된다.
+            if not _inflight_mark(side, ticker, qty):
+                return False
             res = api.place_order(ticker, qty, price, side,
                                   pre_send=lambda: not _too_old(_where + ' 전송 직전'))
             if res == 'ok':
+                _inflight_clear()
                 return True
             if res == 'stale':
                 # 전송 경계 검사가 막았다. 사유와 알림은 _too_old 가 이미 남겼다.
+                _inflight_clear()
                 return False
             if res != 'rejected':
                 unknown_send['hit'] = True
@@ -1820,7 +1903,10 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 send_telegram(f'⛔ 주식: {side} {ticker} {qty}주의 접수 여부를 모른다. 중복 체결을 '
                               f'막으려고 다시 보내지 않고 남은 주문도 멈췄다. 미체결·체결 내역을 '
                               f'직접 확인해야 한다.')
+                # 표식은 남긴다 — 다음 회차가 보유로 결과를 가린다.
                 return False
+            # 거절은 미접수 확정이다. 표식을 지우고 재시도한다.
+            _inflight_clear()
             if attempt < MAX_ORDER_ATTEMPTS - 1:
                 time.sleep(ORDER_WAIT_SEC)
         return False
@@ -2134,10 +2220,16 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
         if shrunk_buys:
             log(f"  ⛔ 주문가능금액에 막혀 축소 매수한 종목이 있다({', '.join(shrunk_buys)}) "
                 f'— 다음 회차 종목 교체를 열지 않는다')
+        # 정수 절삭으로 주문이 사라진 자리도 같다 — 주문 실패가 아니라 목표에 못 미친 채
+        # 끝난 회차다. 그 종목 평가 가격이 없으면 수량 대조는 통과하므로 여기서 가른다.
+        if trunc_short:
+            log(f"  ⛔ 정수 주 절삭으로 주문이 안 난 편차가 남았다({', '.join(trunc_short)}) "
+                f'— 다음 회차 종목 교체를 열지 않는다')
         _eval_only = bool(eval_blocked) and (max_diff_known < REBALANCE_TOLERANCE
                                              and not failed_orders and not mid_uncertain
                                              and not unknown_send['hit']
-                                             and not eval_unsafe and not shrunk_buys)
+                                             and not eval_unsafe and not shrunk_buys
+                                             and not trunc_short)
         # 기록은 가격을 못 받은 회차마다 남기고(연속 회차를 세야 한다), 자격만 가른다.
         _note_eval_pending(state, sorted(set(eval_blocked)), max_diff_known,
                            drift_ok=_eval_only, target_key=_target_key(target))
@@ -2664,6 +2756,21 @@ def run_once(dry_run=False):
         log('주식 executor 완료 (잔고 조회 불가)')
         return
 
+    # 2.6 지난 회차에 접수 여부를 모른 채 끝난 주문이 있으면 지금 보유로 결과를 가린다.
+    # 가릴 수 없으면 이번 회차엔 주문을 내지 않는다 — 다시 보내면 두 번 체결된다.
+    # 바로 위 미체결 확정(_confirm_no_pending)이 통과했으므로 "보유가 그대로 = 접수 안 됨"
+    # 이 선다. 모의 실행은 주문을 안 내므로 표식을 만들지도 지우지도 않는다.
+    if not dry_run:
+        _inf_ok, _inf_why = resolve_inflight(state, _bal_pre[0])
+        log(f'  직전 회차 주문 표식: {_inf_why}')
+        if not _inf_ok:
+            send_telegram(f'⛔ 주식: {_inf_why}. 중복 체결을 막으려고 이번 회차엔 주문을 내지 '
+                          f'않는다. 주문·체결 내역과 실제 보유를 직접 확인해야 한다.')
+            log('주식 executor 완료 (직전 주문 결과 불명)')
+            return
+        if _inf_why != '없음':
+            save_json(TRADE_STATE_FILE, state)
+
     # 목표를 바꾸는 세 자리(카나리 플립·스냅샷 초기화·앵커 발화)보다 앞에서 지금 목표를
     # 적어 둔다. 아래 드리프트 게이트가 "지난 회차의 평가 보류 표식" 을 쓸 자격이 있는지
     # 가를 때 이 값과 대조한다 — 이번 회차에 목표가 달라졌으면 그 표식은 다른 목표를 두고
@@ -2844,7 +2951,9 @@ def run_once(dry_run=False):
         try:
             result = execute_delta(target, api, state, cash_buffer=cash_buffer,
                                    effective_pv_usd=_stock_cap_usd, prefetched_balance=_bal_pre,
-                                   prefetched_at=_bal_pre_at)
+                                   prefetched_at=_bal_pre_at,
+                                   persist=(None if dry_run else
+                                            (lambda: save_json(TRADE_STATE_FILE, state))))
         except BalanceUnavailable as _e:
             # 주문 전 계좌 조회가 안 됐다. 주문은 아직 안 나갔다 — 상태를 저장하지 않고 멈춘다.
             log(f'  ⛔ 계좌 재조회 실패 — 주문 없이 이번 회차를 멈춘다: {_e}')

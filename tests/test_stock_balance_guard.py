@@ -2333,9 +2333,9 @@ class _LedgerAPI(ex.KISAPI):
         return {'queried': True, 'found': 0, 'failed': 0}
 
 
-def _delta(api, target, **kw):
-    """진짜 execute_delta 를 돌린다. (결과, 그 회차가 남긴 평가 보류 표식)"""
-    st = {}
+def _delta_full(api, target, st=None, **kw):
+    """진짜 execute_delta 를 돌린다. (결과, 그 회차의 상태)"""
+    st = {} if st is None else st
     old_log, old_tg, old_time = ex.log, ex.send_telegram, ex.time
     try:
         ex.log = lambda *a, **k: None
@@ -2345,6 +2345,12 @@ def _delta(api, target, **kw):
         r = ex.execute_delta(target, api, st, cash_buffer=0.07, **kw)
     finally:
         ex.log, ex.send_telegram, ex.time = old_log, old_tg, old_time
+    return r, st
+
+
+def _delta(api, target, **kw):
+    """진짜 execute_delta 를 돌린다. (결과, 그 회차가 남긴 평가 보류 표식)"""
+    r, st = _delta_full(api, target, **kw)
     return r, (st.get('eval_pending') or {})
 
 
@@ -2445,6 +2451,131 @@ for _label, _bad in (('참거짓', {'BIL': True, 'Cash': False}),
     check(f"{_label} 비중 → 상태를 안 바꾼다", _sv55n is None, str(_sv55n is None))
     check(f"{_label} 비중 → 알린다",
           any('상태 이상' in a or '온전하지' in a for a in _a55n), str(_a55n))
+
+# ─────────────────────────────────────────────────────────────────────────
+# [56] 접수 여부를 모른 주문이 다음 회차에 다시 나가지 않는다 (열세째 토론 1번)
+#
+# 열두째까지의 가드는 그 회차의 남은 주문만 멈췄다. 접수 여부 불명은 상태로 안 남아서,
+# 다음 회차가 "보유가 아직 안 줄었다" 를 보고 같은 주문을 다시 냈다 — 서버가 받아놓고
+# 우리만 응답을 못 받은 경우면 두 번 체결된다. 전송 직전에 의도를 디스크에 남기고,
+# 다음 회차가 실제 보유로 그 결과를 가린다.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class _UnknownAPI(_LedgerAPI):
+    """주문을 보냈는데 응답이 ok·rejected·stale 중 어느 것도 아닌 거래소."""
+
+    def place_order(self, t, q, p, side='buy', **kw):
+        self.sent.append(('order', side, t, q))
+        return 'timeout'
+
+
+_trace56 = []
+_api56 = _UnknownAPI({'BIL': 830, 'PDBC': 500}, {'BIL': 830, 'PDBC': 500},
+                     price=_ORDER_PX, eval_price=_ORDER_PX)
+_st56 = {}
+_api56.sent = _trace56  # 주문과 저장을 한 줄에 섞어 순서를 본다
+
+
+def _persist56():
+    _trace56.append(('persist', json.loads(json.dumps(_st56.get('inflight_order')))))
+
+
+_r56, _st56 = _delta_full(_api56, {'BIL': 1.0}, st=_st56, persist=_persist56)
+
+check("접수 불명 회차가 주문을 실제로 보냈다",
+      any(e[0] == 'order' for e in _trace56), str(_trace56))
+check("접수 불명이면 회차가 완료로 안 닫힌다", _r56.get('completed') is not True,
+      str(_r56.get('completed')))
+check("접수 불명 표식을 남긴다", isinstance(_st56.get('inflight_order'), dict),
+      str(_st56.get('inflight_order')))
+
+_first_order = next((i for i, e in enumerate(_trace56) if e[0] == 'order'), None)
+_marked_before = [i for i, e in enumerate(_trace56)
+                  if e[0] == 'persist' and isinstance(e[1], dict)]
+check("의도를 디스크에 남긴 뒤에 주문을 보낸다",
+      _first_order is not None and _marked_before and min(_marked_before) < _first_order,
+      f'order={_first_order} persist={_marked_before}')
+
+_mark56 = _st56.get('inflight_order') or {}
+check("표식이 어느 주문인지 적는다",
+      (_mark56.get('side'), _mark56.get('ticker'), _mark56.get('qty'),
+       _mark56.get('qty_before')) == ('sell', 'PDBC', 500, 500), str(_mark56))
+
+# 프로세스가 죽었다 다시 떠도 표식이 살아 있어야 한다 — 상태파일을 거쳐 되읽는다.
+_st56r = json.loads(json.dumps(_st56))
+check("표식이 상태파일 왕복을 견딘다", isinstance(_st56r.get('inflight_order'), dict),
+      str(_st56r.get('inflight_order')))
+
+# 가. 접수 안 됨 — 보유가 그대로다. (회차 시작의 미체결 확정이 통과했을 때만 선다)
+_stA = json.loads(json.dumps(_st56))
+_okA, _whyA = ex.resolve_inflight(_stA, {'BIL': 830, 'PDBC': 500})
+check("보유가 그대로면 미접수로 닫고 진행한다", _okA is True and '접수되지 않았' in _whyA, _whyA)
+check("닫은 뒤 표식을 지운다", 'inflight_order' not in _stA, str(_stA))
+
+# 나. 체결됨 — 보유가 기대대로 줄었다.
+_stB = json.loads(json.dumps(_st56))
+_okB, _whyB = ex.resolve_inflight(_stB, {'BIL': 830, 'PDBC': 0})
+check("보유가 기대대로면 체결로 닫고 진행한다", _okB is True and '체결' in _whyB, _whyB)
+check("체결로 닫은 뒤 표식을 지운다", 'inflight_order' not in _stB, str(_stB))
+
+# 다. 반례 본체 — 부분 체결이라 둘 중 어느 쪽도 아니다. 다시 보내면 두 번 체결된다.
+_stC = json.loads(json.dumps(_st56))
+_okC, _whyC = ex.resolve_inflight(_stC, {'BIL': 830, 'PDBC': 300})
+check("부분 체결이면 이번 회차 주문을 막는다", _okC is False, _whyC)
+check("막은 회차는 표식을 지우지 않는다",
+      isinstance(_stC.get('inflight_order'), dict), str(_stC))
+
+# 라. 보유수량이 숫자가 아니면 가릴 수 없다 — 막는다.
+_stD = json.loads(json.dumps(_st56))
+check("보유수량을 못 읽으면 막는다",
+      ex.resolve_inflight(_stD, {'PDBC': None})[0] is False, '')
+
+# 마. [양성] 표식이 없으면 그대로 진행한다.
+check("표식이 없으면 막지 않는다", ex.resolve_inflight({}, {'BIL': 1})[0] is True, '')
+
+# 바. [양성] 정상 응답 회차는 표식을 남기지 않는다.
+_trace56b = []
+_api56b = _LedgerAPI({'BIL': 830, 'PDBC': 500}, {'BIL': 930, 'PDBC': 0},
+                     price=_ORDER_PX, eval_price=_ORDER_PX,
+                     mid={'BIL': 830, 'PDBC': 0})
+_st56b = {}
+_r56b, _st56b = _delta_full(_api56b, {'BIL': 1.0}, st=_st56b,
+                            persist=lambda: _trace56b.append(
+                                json.loads(json.dumps(_st56b.get('inflight_order')))))
+check("[양성] 정상 회차도 주문을 보냈다", _api56b.sent != [], str(_api56b.sent))
+check("[양성] 정상 회차는 표식을 안 남긴다", 'inflight_order' not in _st56b, str(_st56b))
+check("[양성] 그래도 전송 때마다 표식을 남겼다 지웠다",
+      any(isinstance(m, dict) for m in _trace56b) and _trace56b[-1] is None,
+      str(_trace56b))
+
+# ─────────────────────────────────────────────────────────────────────────
+# [57] 정수 주 절삭으로 주문이 사라진 편차 (열세째 토론 2번)
+#
+# 한 주 값이 커서 매수 수량이 0 으로 깎이면 주문이 안 난다. 그 종목의 평가 가격까지
+# 없으면 수량 대조는 "주문 전과 같다" 로 통과해 "값만 모른다" 가 되고, 다음 회차
+# 종목 교체가 열린다 — 실제로는 허용오차를 넘는 편차가 남아 있다.
+# ─────────────────────────────────────────────────────────────────────────
+
+# 총자산 100,000, 실효 목표 93,000. BIL 50% = 46,500 인데 보유 465주×100 = 46,500 (딱 맞음).
+# PDBC 50% = 46,500 인데 보유 15주×3,000 = 45,000 → 모자란 1,500 이 한 주(3,000)에 못 미쳐
+# 주문이 안 난다. 편차 1.5% 는 허용오차 1% 를 넘는다.
+_TRUNC_PX = {'BIL': 100.0, 'PDBC': 3000.0}
+_api57 = _LedgerAPI({'BIL': 465, 'PDBC': 15}, {'BIL': 465, 'PDBC': 15},
+                    price=_TRUNC_PX, eval_price={'BIL': 100.0})
+_r57, _ep57 = _delta(_api57, {'BIL': 0.5, 'PDBC': 0.5})
+check("절삭 회차는 주문이 안 난다", _api57.sent == [], str(_api57.sent))
+check("절삭으로 남은 편차는 다음 회차 종목 교체를 안 연다",
+      _ep57.get('drift_ok') is not True, str(_ep57))
+
+# [양성] 같은 자리에서 편차가 허용오차 안이면 자격을 그대로 받는다.
+# PDBC 46,000 (보유 46주×1,000) → 모자란 500 은 0.5% 라 허용오차 안이다.
+_FINE_PX = {'BIL': 100.0, 'PDBC': 1000.0}
+_api57b = _LedgerAPI({'BIL': 465, 'PDBC': 46}, {'BIL': 465, 'PDBC': 46},
+                     price=_FINE_PX, eval_price={'BIL': 100.0})
+_r57b, _ep57b = _delta(_api57b, {'BIL': 0.5, 'PDBC': 0.5})
+check("[양성] 절삭 편차가 허용오차 안이면 주문도 없다", _api57b.sent == [], str(_api57b.sent))
+check("[양성] 그 회차는 자격을 받는다", _ep57b.get('drift_ok') is True, str(_ep57b))
 
 print()
 if FAILED:
