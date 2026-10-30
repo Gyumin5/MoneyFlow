@@ -1832,6 +1832,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
 
     def _inflight_mark(side: str, ticker: str, qty: int) -> bool:
         """전송 직전에 주문 의도를 디스크에 남긴다. 못 남기면 주문을 내지 않는다."""
+        # 주문이 하나라도 나가면 보유는 중간 상태가 된다. 그 상태를 디스크에 적을 때
+        # 지난 회차의 "목표에 닿았다" 가 같이 굳으면, 여기서 프로세스가 죽었을 때 다음
+        # 회차가 미완성 목표 위에 리필·스냅샷 교체를 얹는다(열네째 토론 1번). 자격은
+        # 이 회차가 완료 조건을 다시 채웠을 때 _note_eval_pending 이 새로 준다.
+        # 저장 여부와 무관하게 거둔다 — 메모리 상태도 중간 상태가 되기 때문이다.
+        _revoke_drift_ok(state, '주문이 나간다 — 보유가 중간 상태가 된다')
         if persist is None:
             return True
         state['inflight_order'] = {
@@ -1901,8 +1907,12 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 unknown_send['hit'] = True
                 log(f'  ⛔ {side} {ticker} 접수 여부 불명 — 재전송하지 않고 신규 주문을 멈춘다')
                 send_telegram(f'⛔ 주식: {side} {ticker} {qty}주의 접수 여부를 모른다. 중복 체결을 '
-                              f'막으려고 다시 보내지 않고 남은 주문도 멈췄다. 미체결·체결 내역을 '
-                              f'직접 확인해야 한다.')
+                              f'막으려고 다시 보내지 않고 남은 주문도 멈췄다.\n'
+                              f'그 주문을 상태파일에 표시해 뒀다 — 다음 회차가 실제 보유로 결과를 '
+                              f'가린다. 보유가 주문 전 그대로면 접수 안 된 것으로, 기대대로 바뀌었으면 '
+                              f'체결된 것으로 보고 그대로 이어간다.\n'
+                              f'둘 다 아니면(부분 체결) 다음 회차가 주문을 멈추고 다시 알린다. '
+                              f'그때 체결 내역을 확인해야 한다.')
                 # 표식은 남긴다 — 다음 회차가 보유로 결과를 가린다.
                 return False
             # 거절은 미접수 확정이다. 표식을 지우고 재시도한다.
@@ -2764,8 +2774,14 @@ def run_once(dry_run=False):
         _inf_ok, _inf_why = resolve_inflight(state, _bal_pre[0])
         log(f'  직전 회차 주문 표식: {_inf_why}')
         if not _inf_ok:
-            send_telegram(f'⛔ 주식: {_inf_why}. 중복 체결을 막으려고 이번 회차엔 주문을 내지 '
-                          f'않는다. 주문·체결 내역과 실제 보유를 직접 확인해야 한다.')
+            send_telegram(
+                f'⛔ 주식: {_inf_why}. 중복 체결을 막으려고 이번 회차엔 주문을 내지 않았다.\n'
+                f'풀지 않으면 다음 평일 23:35 회차도 같은 자리에서 멈춘다 — 방어 매도가 밀린다.\n'
+                f'확인할 것 셋: 그 종목의 체결 내역, 미체결 주문이 없다는 것, 지금 보유 수량.\n'
+                f'셋이 맞으면 서버에서 이 한 줄로 푼다 (kis_trade_state.json 의 표식만 지운다):\n'
+                f'cd /home/ubuntu && python3 -c "from common.io import load_json,save_json;'
+                f"f='kis_trade_state.json';d=load_json(f);print(d.pop('inflight_order',None));"
+                f'save_json(f,d)"')
             log('주식 executor 완료 (직전 주문 결과 불명)')
             return
         if _inf_why != '없음':

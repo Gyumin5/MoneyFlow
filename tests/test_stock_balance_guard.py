@@ -2577,6 +2577,73 @@ _r57b, _ep57b = _delta(_api57b, {'BIL': 0.5, 'PDBC': 0.5})
 check("[양성] 절삭 편차가 허용오차 안이면 주문도 없다", _api57b.sent == [], str(_api57b.sent))
 check("[양성] 그 회차는 자격을 받는다", _ep57b.get('drift_ok') is True, str(_ep57b))
 
+# ─────────────────────────────────────────────────────────────────────────
+# [58] 주문이 나가는 순간 지난 회차의 드리프트 자격을 거둔다 (열네째 토론 1번)
+#
+# 주문 의도를 디스크에 남길 때 상태가 통째로 굳는다. 그 상태에 지난 회차의
+# "목표에 닿았다"(eval_pending.drift_ok)가 같이 들어 있으면, 매도만 나간 채
+# 프로세스가 죽었을 때 다음 회차가 미완성 목표 위에 리필·스냅샷 교체를 얹는다.
+# 중간 저장 시점마다 상태를 JSON 으로 떠서, 어느 시점에 재시작해도 문이 닫혀
+# 있는지 본다.
+# ─────────────────────────────────────────────────────────────────────────
+
+_TGT58 = {'BIL': 1.0}
+_KEY58 = ex._target_key(_TGT58)
+
+
+def _prev_credit58():
+    """지난 회차가 "값만 못 매겼고 목표엔 닿았다" 로 닫힌 상태."""
+    return {'eval_pending': {
+        'tickers': ['PDBC'], 'reason': '평가 시점 가격을 못 받았다', 'rounds': 1,
+        'first': '2026-10-29T23:35:00', 'last': '2026-10-29T23:35:00',
+        'max_diff_known': 0.0, 'drift_ok': True, 'target_key': _KEY58,
+    }, 'rebalancing_needed': True}
+
+
+# 들어가기 전에 그 표식이 실제로 문을 여는 것을 먼저 확인한다 — 안 그러면 아래
+# 검사가 "원래 안 열리는 문" 을 보고 통과한다.
+check("[전제] 지난 회차 자격은 같은 목표에서 문을 연다",
+      ex._drift_gate_open(_prev_credit58(), target_key=_KEY58, target_changed=False) is True)
+
+_snaps58 = []
+_api58 = _LedgerAPI({'BIL': 830, 'PDBC': 500}, {'BIL': 930, 'PDBC': 0},
+                    price=_ORDER_PX, eval_price=_ORDER_PX,
+                    mid={'BIL': 830, 'PDBC': 0})
+_st58 = _prev_credit58()
+_r58, _st58 = _delta_full(_api58, _TGT58, st=_st58,
+                          persist=lambda: _snaps58.append(json.loads(json.dumps(_st58))))
+
+check("그 회차가 실제로 주문을 냈다", _api58.sent != [], str(_api58.sent))
+check("중간 저장이 한 번은 일어났다", len(_snaps58) >= 2, str(len(_snaps58)))
+
+# 저장된 모든 중간 시점에서 재시작해도 문이 안 열려야 한다. 표식을 남긴 직후,
+# 전송 뒤 지우기 직전, 지운 직후가 전부 이 목록에 들어 있다.
+_open58 = [i for i, s in enumerate(_snaps58)
+           if ex._drift_gate_open(s, target_key=_KEY58, target_changed=False)]
+check("어느 중간 시점에서 재시작해도 종목 교체가 안 열린다", _open58 == [],
+      f'열린 시점 {_open58} / 전체 {len(_snaps58)}')
+check("표식을 남긴 저장에도 자격이 안 남는다",
+      all((s.get('eval_pending') or {}).get('drift_ok') is not True for s in _snaps58),
+      str([(s.get('eval_pending') or {}).get('drift_ok') for s in _snaps58]))
+check("표식을 지운 저장에도 회수가 유지된다",
+      (_snaps58[-1].get('eval_pending') or {}).get('drift_ok') is not True
+      and 'inflight_order' not in _snaps58[-1], str(_snaps58[-1]))
+check("관측 기록은 남는다 — 연속 회차를 계속 센다",
+      all(isinstance(s.get('eval_pending'), dict) for s in _snaps58),
+      str([type(s.get('eval_pending')).__name__ for s in _snaps58]))
+
+# [양성] 주문이 하나도 안 나간 회차는 자격을 그대로 둔다. 보유가 목표와 같아
+# 매매가 없고, 값도 다 매겨져 완료로 닫히는 회차다.
+_snaps58b = []
+_api58b = _LedgerAPI({'BIL': 930}, {'BIL': 930}, price=_ORDER_PX, eval_price=_ORDER_PX)
+_st58b = _prev_credit58()
+_r58b, _st58b = _delta_full(_api58b, _TGT58, st=_st58b,
+                            persist=lambda: _snaps58b.append(json.loads(json.dumps(_st58b))))
+check("[양성] 그 회차엔 주문이 없다", _api58b.sent == [], str(_api58b.sent))
+check("[양성] 주문이 없으면 중간 저장도 없다", _snaps58b == [], str(_snaps58b))
+check("[양성] 값을 다 매긴 회차는 완료로 닫힌다", _r58b.get('completed') is True,
+      str(_r58b.get('completed')))
+
 print()
 if FAILED:
     print(f"❌ {len(FAILED)}건 실패: {FAILED}")

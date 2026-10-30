@@ -161,6 +161,41 @@ cd ~/stockdry && HOME=~/stockdry/home python3 ~/executor_stock_candidate.py --dr
 - `serve.py` — `pkill -f "python3 serve.py"; nohup python3 serve.py > http.log 2>&1 &`
 - `watchdog_serve.sh` — 재시작 불필요 (cron 이 5분 후 자동 적용)
 
+## 4-b. 주식 주문의 접수 여부가 불명일 때
+
+주식 집행기는 주문을 보내기 직전에 그 의도를 `kis_trade_state.json` 의
+`inflight_order` 에 적는다(`side`·`ticker`·`qty`·`qty_before`·`at`). 응답이
+접수·거절·미전송 중 하나면 그 자리에서 지우고, 응답을 못 받았거나 프로세스가 그
+사이에 죽으면 남는다. 다음 회차는 계좌를 읽은 뒤 그 표식을 실제 보유와 대조한다.
+
+- 보유가 `qty_before` 그대로 → 접수 안 됨. 표식을 지우고 그대로 진행한다.
+  (회차 시작의 미체결 확정이 통과했을 때만 이 판정이 선다.)
+- 보유가 기대대로 바뀜(매도면 `qty_before - qty`) → 체결됨. 지우고 진행한다.
+- 둘 다 아님(부분 체결 등) → 그 회차의 주문을 전부 멈추고 알린다. 자동으로 안 푼다.
+
+마지막 경우가 사람이 푸는 자리다. 담당은 운영자 한 사람이고, 알림은 텔레그램으로
+간다. 다음 평일 23:35 회차 전까지 풀어야 한다 — 안 풀면 그 회차도 같은 자리에서
+멈추고 방어 매도가 하루 밀린다.
+
+푸는 순서는 셋을 확인한 뒤 한 줄이다. 시간이 지났다는 이유로 그냥 지우지 않는다.
+
+1. 그 종목의 체결 내역 — 몇 주가 언제 체결됐나.
+2. 미체결 주문이 남아 있지 않다는 것.
+3. 지금 보유 수량 — 1·2와 앞뒤가 맞나.
+
+```
+cd /home/ubuntu && python3 -c "from common.io import load_json,save_json;\
+f='kis_trade_state.json';d=load_json(f);print(d.pop('inflight_order',None));save_json(f,d)"
+```
+
+표식을 지우면 다음 회차가 그때의 실제 보유로 목표를 다시 계산한다 — 중간에 체결된
+수량은 보유에 이미 반영돼 있으므로 따로 손댈 것이 없다. `rebalancing_needed` 도
+건드리지 않는다. 그 회차의 드리프트 자격은 주문이 나가는 순간 이미 회수돼 있어서,
+미완성 목표 위에 종목 교체가 얹히지 않는다.
+
+`~/.stock_lock`(HealthGuard)과는 다른 장치다. 그쪽은 사람이 `rm` 으로 푸는 전체
+정지이고, 이쪽은 한 주문에 대한 표식이다. 둘 다 떠 있으면 lock 을 먼저 푼다.
+
 ## 5. 장애 복구
 
 ### 5.1 serve.py 좀비 (2026-04-29 발생)
