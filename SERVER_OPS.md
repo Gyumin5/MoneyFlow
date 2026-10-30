@@ -116,6 +116,43 @@ V24 시절에서 멈춰 있다. 매일 도는 신호 감시는 어느 슬리브�
 5. cron 다음 실행 결과 로그 확인 (`tail -f ~/recommend.log` 등)
 6. git commit + push (서버는 git 저장소가 아님 — 로컬이 단일 source of truth)
 
+매매 경로(`executor_*.py`, `auto_trade_binance.py`)는 위 표준 절차에 다음을 더한다.
+실행 예약과 겹치지 않는 낮 시간에 하고, 코드와 상태파일을 함께 백업하고
+(`~/<파일>.bak_<날짜>_<시각>`), 임시 이름으로 올려 집·서버 md5 가 같은 것을 본 뒤
+`mv` 로 원자적으로 바꾼다. 바꾸기 전에 아래 격리 모의 실행을 통과시킨다.
+
+### 격리 모의 실행 (주식 집행기 기준)
+
+집행기가 쓰는 파일은 두 갈래라 격리 방법이 다르다. 한쪽만 막으면 시험 회차가 운영
+기록에 섞인다.
+
+- 작업 디렉토리를 따라가는 것 — `kis_trade_state.json`, `signal_state.json`,
+  `trade_state.json`, `executor_stock.log`. 임시 디렉토리로 `cd` 하면 격리된다.
+  cron 은 `run_executor.sh` 가 `cd /home/ubuntu` 한 뒤 돌린다.
+- 사용자 홈을 따라가는 것 — `~/.kis_token.json`(과 그 잠금), 그리고
+  `~/.stock_health.json`·`~/.stock_lock`·`~/stock_abort.log`
+  (`HealthGuard(name='stock')` 가 base_dir 없이 불려 기본값 `~` 를 쓴다).
+  `HOME` 을 바꿔야 격리된다. 안 바꾸면 시험이 중단으로 끝났을 때 연속 중단 횟수가
+  올라 다음 실거래 회차가 막힐 수 있다.
+
+알림은 따로 막지 않는다 — `--dry-run` 이 텔레그램을 로그 한 줄로 돌린다.
+`config.py`(자격증명)는 격리하지 않는다. 모듈 탐색 경로의 첫 항목이 스크립트가 있는
+`/home/ubuntu` 라 `HOME` 을 바꿔도 그대로 찾고, 실제 계좌를 조회해야 맞다.
+
+```
+mkdir -p ~/stockdry/home
+cp ~/kis_trade_state.json ~/signal_state.json ~/trade_state.json ~/stockdry/
+cp ~/.kis_token.json ~/stockdry/home/          # 발급 빈도 제한 때문에 복사한다
+md5sum ~/kis_trade_state.json ~/signal_state.json ~/trade_state.json   # 기준값
+cd ~/stockdry && HOME=~/stockdry/home python3 ~/executor_stock.py --dry-run
+# 사본을 되돌린 뒤 후보를 같은 자리에서 돌린다
+cd ~/stockdry && HOME=~/stockdry/home python3 ~/executor_stock_candidate.py --dry-run
+```
+
+본다 — 두 회차의 주문 목록·목표·보유·편차가 같나, 원본 상태파일 셋의 md5 가 기준값
+그대로인가, `~/.stock_health.json` 의 수정 시각이 안 변했나. 끝나면
+`rm -rf ~/stockdry ~/executor_stock_candidate.py`.
+
 배포 빈번한 파일 (수정 자주)
 - `recommend*.py`, `executor_*.py`, `coin_live_engine.py`, `auto_trade_binance.py`
 
