@@ -166,12 +166,13 @@ def _load(kind: str, key: str) -> pd.Series | None:
     return s if len(s) > 100 else None
 
 
-def run_spot(over: dict, phase: int, stress: bool) -> pd.Series:
+def run_spot(over: dict, phase: int, stress: bool, trace: list | None = None) -> pd.Series:
     from unified_backtest import run as bt_run
     os.environ["DRIFT_HEALTH_MODE"] = "refill"
     kw = dict(SPOT_BASE)
     kw.update(over)
     m = bt_run(_bars, _funding, interval="D", asset_type="spot", leverage=1.0,
+               _trace=trace,
                tx_cost=TX_SPOT * (STRESS if stress else 1.0),
                start_date=START, end_date=END,
                vol_mode="daily", phase_offset_bars=phase,
@@ -183,12 +184,12 @@ def run_spot(over: dict, phase: int, stress: bool) -> pd.Series:
     return m.get("_equity")
 
 
-def run_fut(over: dict, phase: int, stress: bool) -> pd.Series:
+def run_fut(over: dict, phase: int, stress: bool, trace: list | None = None) -> pd.Series:
     from backtest_futures_v25 import run as fbt_run
     os.environ["DRIFT_HEALTH_MODE"] = "refill"
     kw = dict(FUT_BASE)
     kw.update(over)
-    m = fbt_run(_bars, _funding, interval="D", leverage=_k2,
+    m = fbt_run(_bars, _funding, interval="D", leverage=_k2, _trace=trace,
                 tx_cost=TX_FUT * (STRESS if stress else 1.0), maint_rate=0.004,
                 vol_days=90, vol_mode="daily", post_flip_delay=5,
                 phase_offset_bars=phase, health_mode="mom2vol",
