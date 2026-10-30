@@ -27,6 +27,10 @@
 # 집행기가 쓰는 get_balance 를 그대로 불러 조회가 살아 있는지만 본다. 주문·전략 상태 쓰기 없음.
 0 20-23,0-6 * * * cd /home/ubuntu && python3 balance_read_watch.py >> /home/ubuntu/balance_watch.log 2>&1
 
+# 집 신호대조 감시의 침묵 점검 — 매일 11:40 KST (2026-09-30 설치)
+# 보낸 경보는 ~/server_alerts.jsonl 에도 적힌다. 집 크론(*/10 server_alert_relay.py)이 세션에 넣는다.
+40 11 * * * cd /home/ubuntu && python3 parity_watch.py >> /home/ubuntu/parity_watch.log 2>&1
+
 # params drift check 는 Daily Report(recommend_personal 09:15) 안에 통합 — 별도 cron 없음.
 #
 # 2026-08-25 폐기: 월 1회 BT replay (30 9 1 * * bt_replay_monthly.py).

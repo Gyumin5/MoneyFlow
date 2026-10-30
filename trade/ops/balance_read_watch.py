@@ -86,13 +86,27 @@ def _write_state(fail_streak: int, alerted: bool) -> bool:
         return False
 
 
+def _log_alert(text: str, sent: bool) -> None:
+    """집 중계기가 읽을 자리에 같은 글을 남긴다. 실패해도 알림 자체는 건드리지 않는다."""
+    try:
+        import server_alert_log
+        server_alert_log.record('balance_read_watch', text, sent=sent)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _notify(ex, text: str) -> bool:
-    """보냈으면 True. 전송 자체가 실패하면 그 사실을 적고 False."""
+    """보냈으면 True. 전송 자체가 실패하면 그 사실을 적고 False.
+
+    보낸 글은 server_alerts.jsonl 에도 적는다 — 집 중계기가 세션에 주입한다(2026-10-30).
+    """
     try:
         ex.send_telegram(text)
+        _log_alert(text, True)
         return True
     except Exception as e:  # noqa: BLE001
         print(f'{_now()}  알림 전송 실패: {type(e).__name__}: {e}')
+        _log_alert(text, False)
         return False
 
 

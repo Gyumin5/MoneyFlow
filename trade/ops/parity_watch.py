@@ -190,8 +190,22 @@ def prune(now):
         pass
 
 
+def _log_alert(text: str, sent: bool) -> None:
+    """집 중계기가 읽을 자리에 같은 글을 남긴다. 실패해도 알림 자체는 건드리지 않는다."""
+    try:
+        sys.path.insert(0, '/home/ubuntu')
+        import server_alert_log
+        server_alert_log.record('parity_watch', text, sent=sent)
+    except Exception:                                 # noqa: BLE001
+        pass
+
+
 def notify(text: str) -> bool:
-    """서버 자기 통로로 보낸다. 집 유저봇을 안 탄다 — 그게 이 감시의 요점이다."""
+    """서버 자기 통로로 보낸다. 집 유저봇을 안 탄다 — 그게 이 감시의 요점이다.
+
+    보낸 글은 server_alerts.jsonl 에도 한 줄 적는다. 집 중계기가 그걸 읽어 세션에
+    주입한다 — 통로를 바꾸는 게 아니라 하나 더 두는 것이다(2026-10-30).
+    """
     try:
         import requests
         sys.path.insert(0, '/home/ubuntu')
@@ -200,12 +214,15 @@ def notify(text: str) -> bool:
         chat = getattr(config, 'TELEGRAM_CHAT_ID', None)
         if not token or not chat:
             print('통보 못 함 — 서버 config 에 텔레그램 값이 없다')
+            _log_alert(text, False)
             return False
         requests.post(f'https://api.telegram.org/bot{token}/sendMessage',
                       data={'chat_id': chat, 'text': text}, timeout=10)
+        _log_alert(text, True)
         return True
     except Exception as exc:                          # noqa: BLE001
         print(f'통보 실패 — {type(exc).__name__}: {exc}')
+        _log_alert(text, False)
         return False
 
 

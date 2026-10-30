@@ -16,6 +16,8 @@
 | 코인 live engine | `trade/coin_live_engine.py` | `~/coin_live_engine.py` |
 | 주식 executor | `trade/executor_stock.py` | `~/executor_stock.py` |
 | 밤 조회 감시 (읽기 전용) | `trade/ops/balance_read_watch.py` | `~/balance_read_watch.py` |
+| 집 감시의 침묵 감시 (매매 경로 아님) | `trade/ops/parity_watch.py` | `~/parity_watch.py` |
+| 서버 경보 적기 (매매 경로 아님) | `trade/ops/server_alert_log.py` | `~/server_alert_log.py` |
 | 선물 자동매매 | `trade/auto_trade_binance.py` | `~/auto_trade_binance.py` |
 | 추천 (general) | `strategies/cap_defend/recommend.py` | `~/recommend.py` |
 | 추천 (personal) | `strategies/cap_defend/recommend_personal.py` | `~/recommend_personal.py` |
@@ -51,12 +53,30 @@ state 백업 (2026-08-25 전면 수정)
 5 9 * * *                      ~/run_executor.sh coin                 # 코인현물 V24, 매일 09:05 1회
 5 9 * * *                      python3 ~/auto_trade_binance.py --trade # 선물 V25, 매일 09:05 1회
 0 20-23,0-6 * * *              python3 ~/balance_read_watch.py        # 밤 계좌 조회 감시, 매시 정각
+40 11 * * *                    python3 ~/parity_watch.py              # 집 신호대조 감시의 침묵 점검
+```
+
+집(홈) 크론도 이 운영에 함께 든다.
+
+```
+20 9 * * *                     ~/mon/251229/trade/ops/run_signal_parity.sh refresh
+0 10 * * *                     ~/mon/251229/trade/ops/run_signal_parity.sh parity
+*/10 * * * *                   python3 ~/mon/251229/trade/ops/server_alert_relay.py
 ```
 
 밤 조회 감시(2026-10-24 설치)는 집행기가 쓰는 `get_balance` 를 그대로 불러 조회가 살아 있는지만
 본다. 주문·전략 상태 쓰기가 없고, 연속 2회 실패에서 한 번만 알리고 회복 때 해소를 한 번 알린다.
 기록은 `~/balance_watch_streak.json`(연속 실패 횟수와 알림 전송 여부), 로그는 `~/balance_watch.log`.
 토큰 캐시 `~/.kis_token.json` 은 집행기와 공유한다 — 쓰기는 잠금 + 임시파일 rename 이다.
+
+서버 경보 중계(2026-10-30 설치). 서버의 두 감시는 서버 자기 텔레그램 봇으로 운영자에게 알린다.
+그 통로는 집 유저봇을 일부러 안 탄다 — 집이 통째로 죽어도 알림이 나가야 하기 때문이다. 그래서
+집 세션은 그 경보를 못 봤다. 이제 보낸 글을 `~/server_alerts.jsonl` 에 한 줄씩 적고(최근 300줄
+보관), 집 크론이 10분마다 그 파일을 읽어 아직 안 본 줄만 세션에 주입한다. 서버 통로는 그대로다 —
+중계는 하나 더 두는 것이다. 집 표식은 `state/server-alert-relay/seen.json`, 로그는
+`logs/server_alert_relay.log`. 24시간보다 낡은 줄과 한 회차 5건 초과는 안 넣는다. ssh 가 안 되면
+조용히 로그만 남긴다 — 서버 통로가 이미 운영자에게 닿아 있어서 중계 실패를 또 경보로 만들면
+같은 사건이 두 번 시끄러워진다. 손으로 볼 때는 `python3 trade/ops/server_alert_relay.py --dry-run`.
 
 인증 env 는 crontab 이 아니라 `start_trade_api.sh` 가 단일 출처로 읽는다(2026-07-21 TRADE_PIN 폐지,
 DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 않는다.

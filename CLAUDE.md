@@ -424,7 +424,19 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
 - `trade/ops/run_executor.sh` → `~/run_executor.sh`
 - `trade/ops/run_recommend.sh` → `~/run_recommend.sh`
 - `trade/ops/parity_watch.py` → `~/parity_watch.py` (집 감시의 침묵을 서버에서 잡는다. 매매 경로 아님)
+- `trade/ops/server_alert_log.py` → `~/server_alert_log.py` (서버가 보낸 경보를 적는다. 매매 경로 아님)
+- `trade/ops/server_alert_relay.py` → 집에서만 돈다 (10분마다 서버 경보를 이 세션에 주입)
 - `trade/ops/crontab.txt` → `crontab -l` 사본
+
+### 서버가 보낸 경보는 집 세션에 자동으로 들어온다
+
+서버 감시(`parity_watch.py`·`balance_read_watch.py`)는 서버 자기 텔레그램 봇으로 운영자에게
+알린다. 그 통로는 집 유저봇을 일부러 안 탄다 — 집이 죽어도 알림이 나가야 하기 때문이다.
+그래서 집 세션은 그 경보를 못 봤고, 운영자가 손으로 옮겨 적어야 알았다(2026-10-30 텔레그램 9365).
+이제 보낸 글을 서버 `~/server_alerts.jsonl` 에 적고 집 크론(`*/10`)의
+`trade/ops/server_alert_relay.py` 가 아직 안 본 줄만 세션에 주입한다. 서버 통로는 그대로 둔다.
+새 경보를 더할 때는 보내는 자리에서 `server_alert_log.record(<출처>, <글>, sent=<보냈나>)` 를
+같이 부른다 — 안 부르면 그 경보만 다시 세션에 안 들어온다.
 
 ### 신호 대조를 손으로 다시 돌릴 때는 껍데기로 돌린다
 
