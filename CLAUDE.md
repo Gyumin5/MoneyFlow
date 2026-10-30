@@ -77,7 +77,9 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   허용한다(`EngineResult.liquidation_only`). 조회 실패를 빈 유니버스나 현금 100% 목표로 표현하지
   않는다 — 그건 전량청산 지시로 읽힌다. 구현은 `coin_live_engine.fetch_coingecko_top` /
   `_independent_canary` / `_market_meta_blocked`, 검증은 `trade/test_spot_market_meta_age.py`.
-- TX: 0.04% (BT), 실매매는 Upbit 수수료
+- TX: 0.4% 편도 (BT), 실매매는 Upbit 수수료. 채택 호출부 `trade/v24_shadow_today.py` 가
+  `tx_cost=0.004` 를 넘기고 아래 "거래비용" 절의 코인 0.4% 와 같은 값이다. 엔진 기본값
+  (`unified_backtest.py` 의 0.0004)은 호출부가 항상 덮어쓰므로 인용하지 않는다.
 - 단독 sleeve (BT 5.8yr, 2020-10-01~2026-08-24, 라이브 체결규칙 정합): CAGR +77.6%, MDD -17.8%, Cal 4.35
   · 옛 표기 "Cal 4.63 / CAGR +82% (5.4yr)" 는 BT 에만 있던 5% 체결 밴드로 잰 값이라 stale.
     라이브(executor_coin)에는 상대 밴드가 없고 5,000원 절대 최소주문만 있어 BT 밴드를 0 으로 정합했다
