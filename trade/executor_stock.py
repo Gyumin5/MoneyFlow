@@ -1103,11 +1103,19 @@ def _weights_ok(w) -> bool:
     비중은 항상 위험자산 + Cash 로 합이 1 이다(compute_offense 의 cash_slot).
     합이 모자란 비중으로 발화하면 그 모자란 만큼이 현금 목표가 되어 멀쩡한 보유를 판다.
     종목 목록만 있고 비중이 비어 있는 신호도 여기서 걸린다.
+
+    검사와 계산의 자료형 계약을 맞춘다 — 숫자 문자열('1.0')은 손상으로 거절한다.
+    float() 로 통과시키면 `merge_tranches` 가 같은 값을 그대로 나눠서 예외를 낸다.
+    검증이 허락한 상태를 계산이 못 다루면 그 회차는 알림 없이 죽는다(열두째 토론 1번).
+    정상 경로는 항상 숫자를 쓴다 — 저장도 신호 계산도 float 를 넣는다.
     """
     if not isinstance(w, dict) or not w:
         return False
     total = 0.0
     for v in w.values():
+        # 참거짓은 정수의 하위형이라 isinstance 를 그냥 쓰면 True 가 비중 1 로 통과한다.
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return False
         try:
             f = float(v)
         except (TypeError, ValueError):
@@ -1469,8 +1477,13 @@ def merge_tranches(state: dict) -> Dict[str, float]:
     n = len(snapshots) or 1
     merged = {}
     for snap in snapshots.values():
-        for ticker, w in (snap.get('weights', {}) or {}).items():
-            merged[ticker] = merged.get(ticker, 0) + w / n
+        _w = (snap or {}).get('weights') if isinstance(snap, dict) else None
+        if not isinstance(_w, dict):
+            # 여기서 예외를 내면 호출한 회차가 알림 없이 죽는다. 손상 판정은
+            # `snapshot_payload_defect` 가 하고 거기서 사람에게 알린다.
+            continue
+        for ticker, w in _w.items():
+            merged[ticker] = merged.get(ticker, 0) + _as_float(w) / n
     return merged
 
 
@@ -1926,6 +1939,13 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 _rebuilt.append((ticker, _delta, price))
             buys = _rebuilt
 
+    # 이번 회차에 매매할 뜻이 있었던 종목. 값을 못 매긴 채로 "목표대로" 라고 말할 수
+    # 있는 것은 애초에 건드릴 게 없던 종목뿐이다 — 사려 했던 종목은 예산 상한 때문에
+    # 접수 수량이 다 나가고도 목표 비중에 못 닿을 수 있고(목표 93%에 보유 62%),
+    # 그때 수량 장부는 멀쩡히 일치한다. 가격이 없으면 그 미달을 잴 길이 없으므로
+    # 자격을 주지 않는다(열두째 토론 2번).
+    touched: set = {_t for _t, _q, _p in buys} | {_t for _t, _q, _p in sells}
+
     # 매수 (psamount로 가능 수량 확인 후 실행)
     for ticker, qty, price in buys:
         if unknown_send['hit']:
@@ -2087,6 +2107,11 @@ def execute_delta(target: Dict[str, float], api: KISAPI, state: dict, cash_buffe
                 if not isinstance(_have, (int, float)) or int(_have) != int(_want):
                     log(f'  ⛔ {_tk} 기대 보유 {_want}주인데 주문 뒤 {_have}주 '
                         f'— 집행이 목표에 안 닿았다')
+                    if _tk not in eval_unsafe:
+                        eval_unsafe.append(_tk)
+                elif _tk in touched:
+                    log(f'  ⛔ {_tk} 수량은 맞지만({_want}주) 이번 회차에 매매한 종목이다 '
+                        f'— 값을 못 매겨 목표 도달을 증명할 수 없다')
                     if _tk not in eval_unsafe:
                         eval_unsafe.append(_tk)
                 else:

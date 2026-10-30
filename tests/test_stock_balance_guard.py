@@ -2251,24 +2251,139 @@ check("미전송은 거래소 기록을 안 남긴다", _api54._order_excg == {}
 print("\n[55] 열한째 토론 반례 — 자격은 수량·나이·유한성·실제 발화로 가른다")
 
 # 가. 체결 반례 — 값을 못 매긴 종목은 기대 보유와 대조해야 자격을 받는다.
+# 소스 문자열이 아니라 실제 회차를 돌려 상태에 남는 자격으로 판정한다(열두째 토론 3번).
+
+
+def _blocked_cycle(state_obj, signal=None, table=None, clock=None):
+    """회차를 돌리고 (주문, 알림, 저장된 상태, eval_pending) 을 돌려준다."""
+    _o, _a, _s = run_cycle(table or FULL, state_obj, signal or _signal(), clock=clock)
+    return _o, _a, _s, ((_s or {}).get('eval_pending') or {})
+
+
+# 평가 가격만 없는 보유(now_pric2 가 비었다). 수량은 그대로고 매매할 것도 없다.
+def _bal_noprice(bil='1534', pdbc='7041', px_bil='', px_pdbc=''):
+    return {'rt_cd': '0', 'output1': [
+        {'ovrs_pdno': 'BIL', 'ovrs_cblc_qty': bil, 'ovrs_stck_evlu_amt': str(LIVE_BIL),
+         'now_pric2': px_bil},
+        {'ovrs_pdno': 'PDBC', 'ovrs_cblc_qty': pdbc, 'ovrs_stck_evlu_amt': str(LIVE_PDBC),
+         'now_pric2': px_pdbc},
+    ]}
+
+
+_T55 = dict(FULL)
+_T55['TTTS3012R'] = _bal_noprice()
+_st55a = _state()
+_st55a['rebalancing_needed'] = True
+_o, _a, _s, _ep = _blocked_cycle(_st55a, table=_T55)
+check("[양성] 값만 못 매긴 무매매 회차는 자격을 받는다",
+      _ep.get('drift_ok') is True or not _ep, f'{_ep}')
+
+# 매도가 접수됐는데 보유가 그대로다 → 미반영. 자격을 안 준다.
+check("기대 보유 장부가 실제로 산출된다(코드가 돈다)",
+      'expected_qty' in open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          '..', 'trade', 'executor_stock.py')).read())
+
+# execute_delta 를 직접 돌려 장부·대조를 함수 실행으로 본다.
 _SRC = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          '..', 'trade', 'executor_stock.py')).read()
-check("기대 보유 장부가 주문 전 보유에서 출발한다",
-      'expected_qty: Dict[str, int] = {_tk: int(_q) for _tk, _q in holdings.items()' in _SRC)
-check("접수된 매수만 장부에 더한다",
-      "expected_qty[ticker] = expected_qty.get(ticker, 0) + int(actual_qty)" in _SRC)
-check("접수된 매도만 장부에서 뺀다",
-      "expected_qty[ticker] = max(0, expected_qty.get(ticker, 0) - int(qty))" in _SRC)
-check("축소된 실제 전송 수량이 반영된다(actual_qty 를 더한다)",
-      "+ int(actual_qty)" in _SRC and "+ int(qty)\n" not in _SRC)
-check("값을 못 매긴 종목은 수량으로 대조한다",
-      'if eval_blocked and not getattr(api, \'dry_run\', False):' in _SRC
-      and 'if _tk not in eval_unsafe:' in _SRC)
-check("어긋나면 자격을 뺀다(eval_unsafe 로 간다)",
-      '_have, (int, float)) or int(_have) != int(_want)' in _SRC
-      or 'int(_have) != int(_want)' in _SRC)
-check("무주문 종목도 대조 대상이다(주문 전 보유가 장부에 있다)",
-      'for _tk, _q in holdings.items()' in _SRC)
+
+
+class _LedgerAPI(ex.KISAPI):
+    """주문은 다 접수되고, 주문 뒤 잔고만 바꿔 끼운다."""
+
+    def __init__(self, pre, post, price=None, eval_price=None, maxqty=10 ** 9,
+                 mid=None):
+        super().__init__(dry_run=False)
+        self._pre, self._post, self._n = pre, post, 0
+        # 매도 뒤 매수 금액을 다시 세는 조회가 받는 값. 안 주면 둘째 조회부터 post 다.
+        self._mid = mid
+        self._price, self._maxqty = price or {}, maxqty
+        # 평가 시점(fresh_only=True)에만 쓰는 값. 안 주면 주문용과 같다 — 주문 전
+        # 가드가 보유 종목 현재가를 요구하므로 둘을 갈라야 "값만 못 매긴 회차" 를
+        # 만들 수 있다.
+        self._eval_price = self._price if eval_price is None else eval_price
+        self.sent = []
+
+    def get_balance(self):
+        self._n += 1
+        if self._n == 1:
+            h = self._pre
+        elif self._n == 2 and self._mid is not None:
+            h = self._mid
+        else:
+            h = self._post
+        return dict(h), 100000.0, 1300.0
+
+    def get_current_price(self, t, fresh_only=False):
+        src = self._eval_price if fresh_only else self._price
+        return src.get(t, 0.0)
+
+    def get_max_buy_qty(self, t, p):
+        return self._maxqty
+
+    def ensure_auth(self):
+        # 진짜 토큰 발급을 타면 주문 전에 인증 실패로 되돌아간다(망·자격증명 미사용).
+        return True
+
+    def place_order(self, t, q, p, side='buy', **kw):
+        self.sent.append((side, t, q))
+        return 'ok'
+
+    def cancel_all_pending(self):
+        return {'queried': True, 'found': 0, 'failed': 0}
+
+
+def _delta(api, target, **kw):
+    """진짜 execute_delta 를 돌린다. (결과, 그 회차가 남긴 평가 보류 표식)"""
+    st = {}
+    old_log, old_tg, old_time = ex.log, ex.send_telegram, ex.time
+    try:
+        ex.log = lambda *a, **k: None
+        ex.send_telegram = lambda m: None
+        ex.time = types.SimpleNamespace(sleep=lambda s: None, time=lambda: 0.0,
+                                        monotonic=lambda: 0.0)
+        r = ex.execute_delta(target, api, st, cash_buffer=0.07, **kw)
+    finally:
+        ex.log, ex.send_telegram, ex.time = old_log, old_tg, old_time
+    return r, (st.get('eval_pending') or {})
+
+
+# 주문용 가격은 멀쩡하고 평가 시점 가격만 없는 회차를 만든다. 총자산 100,000 에
+# BIL 930주×100 = 93,000 이면 실효 목표(1.0×(1-0.07))와 같아 매매가 안 난다.
+_ORDER_PX = {'BIL': 100.0, 'PDBC': 20.0}
+
+# 매도 접수 뒤 보유가 안 줄었다(미반영) + 그 종목 평가 가격 없음 → 자격 없음.
+_api1 = _LedgerAPI({'BIL': 830, 'PDBC': 500}, {'BIL': 930, 'PDBC': 500},
+                   price=_ORDER_PX, eval_price={'BIL': 100.0})
+_r1, _ep1 = _delta(_api1, {'BIL': 1.0})
+check("목표 밖 종목을 실제로 판다", ('sell', 'PDBC', 500) in _api1.sent, str(_api1.sent))
+check("매도 미반영 + 값 결측이면 완료로 안 본다", _r1.get('completed') is not True,
+      str(_r1.get('completed')))
+check("그 회차는 드리프트 자격을 못 받는다", _ep1.get('drift_ok') is not True, str(_ep1))
+
+# 이번 회차에 매매한 종목은 수량이 맞아도 값을 못 매기면 증명이 안 된다(열두째 2번).
+# 반을 팔고 반을 사서 둘 다 기대대로 체결된 회차다 — 장부 대조만으로는 통과한다.
+# PDBC 는 주문 뒤에도 보유가 남아 평가 대상이고, 그 값만 못 매긴다.
+_api3 = _LedgerAPI({'BIL': 830, 'PDBC': 500}, {'BIL': 465, 'PDBC': 2325},
+                   price=_ORDER_PX, eval_price={'BIL': 100.0},
+                   mid={'BIL': 465, 'PDBC': 500})
+_r3, _ep3 = _delta(_api3, {'BIL': 0.5, 'PDBC': 0.5})
+check("그 회차가 실제로 매매했다",
+      any(t == 'PDBC' for _s, t, _q in _api3.sent), str(_api3.sent))
+check("매매한 종목은 수량이 맞아도 값이 없으면 자격을 안 준다",
+      _ep3.get('drift_ok') is not True, str(_ep3))
+
+# 안 건드린 종목이 값만 없으면 자격을 받는다(양성 대조).
+_api2 = _LedgerAPI({'BIL': 930}, {'BIL': 930}, price=_ORDER_PX, eval_price={})
+_r2, _ep2 = _delta(_api2, {'BIL': 1.0})
+check("[양성] 그 회차에 주문이 없다", _api2.sent == [], str(_api2.sent))
+check("[양성] 수량이 맞고 안 건드린 종목은 자격을 받는다",
+      _ep2.get('drift_ok') is True, f'{_ep2} / {_r2.get("completed")}')
+
+# 수량이 어긋나면 양성 대조와 같은 모양에서도 자격을 뺏는다(장부 검사의 실제 발화).
+_api4 = _LedgerAPI({'BIL': 930}, {'BIL': 700}, price=_ORDER_PX, eval_price={})
+_r4, _ep4 = _delta(_api4, {'BIL': 1.0})
+check("주문 없이 보유가 줄면 자격을 안 준다", _ep4.get('drift_ok') is not True, str(_ep4))
 
 # 나. 만료 반례 — 가격 수집에 시간이 걸리면 드리프트와 리필을 건너뛴다.
 _clock = {'t': 0.0}
@@ -2318,6 +2433,18 @@ for _label, _bad in (('문자열', 'BIL'), ('None', None), ('리스트', ['BIL']
     check(f"{_label} 비중 → 상태를 안 바꾼다", _sv55m is None, str(_sv55m is None))
     check(f"{_label} 비중 → 알린다",
           any('상태 이상' in a or '온전하지' in a for a in _a55m), str(_a55m))
+
+# 값이 숫자가 아닌 경우도 같다. 참거짓은 정수의 하위형이라 isinstance 를 그냥 쓰면
+# True 가 비중 1 로 통과하고, 숫자 문자열은 뒤에서 float 로 바뀌어 주문까지 간다.
+for _label, _bad in (('참거짓', {'BIL': True, 'Cash': False}),
+                     ('숫자 문자열', {'BIL': '1.0', 'Cash': '0.0'})):
+    _st55n = _state()
+    _st55n['snapshots']['1']['weights'] = _bad
+    _o55n, _a55n, _sv55n = run_cycle(FULL, _st55n, _signal())
+    check(f"{_label} 비중 → 주문 0건", _o55n == [], str(_o55n))
+    check(f"{_label} 비중 → 상태를 안 바꾼다", _sv55n is None, str(_sv55n is None))
+    check(f"{_label} 비중 → 알린다",
+          any('상태 이상' in a or '온전하지' in a for a in _a55n), str(_a55n))
 
 print()
 if FAILED:
