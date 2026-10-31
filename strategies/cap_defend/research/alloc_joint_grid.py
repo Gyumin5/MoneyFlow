@@ -113,8 +113,14 @@ def build_combos(mixes):
 
 def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
                           tgt: np.ndarray, ht: np.ndarray, t3u: np.ndarray,
-                          delay: int = 0):
+                          delay: int = 0, transfer_cost: float = 0.0):
     """모든 조합을 동시에 전진시킨다. 반환 = (공통 날짜, 자산곡선 (K,N), 발화수 (K,)).
+
+    transfer_cost 는 계좌 사이로 옮기는 금액에 물리는 비율이다. 0 이면 공짜 송금이고
+    그게 기본값이다 — 기존 결과를 그대로 재현하기 위해서다. 슬리브 안의 매매비용은
+    각 슬리브 엔진이 이미 물리지만 계좌 간 이동(환전 스프레드·출금 수수료)은 아무도
+    안 물린다. 이 값은 그 빠진 자리를 메운다. 무는 금액은 그날 실제로 옮긴 몫
+    sum|목표금액 - 현재금액|/2 이고, 총자산에서 깎은 뒤 목표 비중으로 다시 나눈다.
 
     delay 는 발화일과 실제 송금 사이의 영업일 수다. 0 이면 그날 바로 되돌린다.
     라이브는 알림을 받고 사람이 송금하므로 0 이 아니고, 결정 규칙(Decisions In Force)이
@@ -158,9 +164,17 @@ def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
         fire = np.abs(tgt - cur).sum(axis=1) / 2.0 >= ht
         rel = np.where(pos, (tgt - cur) / np.where(pos, tgt, 1.0), -np.inf)
         fire |= ((rel >= t3u_col) & cans[i][None, :]).any(axis=1)
+        def _settle(sel):
+            """sel 인 행을 목표 비중으로 되돌린다. 옮긴 몫에 송금비용을 물린다."""
+            t = total[sel]
+            if transfer_cost > 0.0:
+                moved = np.abs(tgt[sel] * t[:, None] - cap[sel]).sum(axis=1) / 2.0
+                t = t - moved * transfer_cost
+            cap[sel] = tgt[sel] * t[:, None]
+
         if delay <= 0:
             if fire.any():
-                cap[fire] = tgt[fire] * total[fire][:, None]
+                _settle(fire)
                 fires += fire
             continue
         # 무장은 쉬고 있을 때만 — 이미 보내는 중이면 또 보내지 않는다.
@@ -169,7 +183,7 @@ def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
         pend[arm] = delay
         due = pend == 0
         if due.any():
-            cap[due] = tgt[due] * total[due][:, None]
+            _settle(due)
         pend[pend >= 0] -= 1
     return common, out, fires
 
@@ -277,6 +291,9 @@ def main() -> int:
                     help='창별 등수를 따로 저장한다(<out>.win.npz). 짧은 구간 대응 분석용')
     ap.add_argument('--delay', type=int, default=0,
                     help='발화일과 실제 송금 사이의 영업일 수. 0 = 그날 바로(기본, 옛 결과 재현용)')
+    ap.add_argument('--transfer-cost', type=float, default=0.0,
+                    help='계좌 사이로 옮기는 금액에 물리는 비율(예: 0.002 = 0.2%%). '
+                         '0 = 공짜 송금(기본, 옛 결과 재현용). 환전 스프레드·출금 수수료 자리다')
     ap.add_argument('--stocks', default='',
                     help='주식 축을 퍼센트로 지목한다(예: 60,70). 비우면 기본 8칸')
     ap.add_argument('--ratios', default='',
@@ -333,7 +350,8 @@ def main() -> int:
     t3u = np.array([c[5] for c in combos], dtype=float)
 
     dates, curves, fires = build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
-                                                 tgt, ht, t3u, delay=a.delay)
+                                                 tgt, ht, t3u, delay=a.delay,
+                                                 transfer_cost=a.transfer_cost)
     print(f'[{a.anchor}/{a.stress}] 조합 {len(combos)}개 합성 ({time.time() - t0:.0f}초)',
           flush=True)
 
@@ -353,6 +371,7 @@ def main() -> int:
         cal=cal, sharpe=sharpe, cagr=cagr, mdd=mdd,
         fires_per_year=fires / yrs,
         anchor=a.anchor, stress=a.stress, delay=a.delay,
+        transfer_cost=a.transfer_cost,
         d0=str(dates[0].date()), d1=str(dates[-1].date()), ndays=len(dates),
     )
     print(f'[{a.anchor}/{a.stress}] 저장 {a.out} ({time.time() - t0:.0f}초)', flush=True)
@@ -371,6 +390,7 @@ def main() -> int:
             # 되만들면 어긋난다(2026-10-31 실측 2026-06-29 대 2026-09-18).
             days=np.array([str(d.date()) for d in dates]),
             anchor=a.anchor, stress=a.stress, delay=a.delay,
+        transfer_cost=a.transfer_cost,
         )
         print(f'[{a.anchor}/{a.stress}] 창별 등수 {wp} ({len(det)}창)', flush=True)
     return 0
