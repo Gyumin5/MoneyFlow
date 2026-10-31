@@ -13,6 +13,7 @@ bt_coin_param_resweep.window_rs)와 같은 답을 내는지 본다. 슬리브 �
   5. 선물 목표 0 칸에서 상대부족이 발화를 못 만든다 (0/0 분모).
   6. 벡터화 창 순위합이 기존 window_rs 와 같은 순위합·창 수를 낸다.
   7. 송금 지연이 실제로 미루고, 무장 중에는 다시 무장하지 않는다.
+  8. 창별 등수 통로가 합계와 어긋나지 않는다 (짧은 구간 대응 분석의 입력).
 """
 from __future__ import annotations
 
@@ -279,6 +280,35 @@ class TestRankSum(unittest.TestCase):
                                              tgt, ht, t3u, delay=1)
         self.assertGreater(int(f1[0]), 0)
         self.assertFalse(np.allclose(c1[0], c0[0]))
+
+    def test_창별_등수를_다_더하면_순위합과_같다(self):
+        """짧은 구간 대응 분석은 전부 이 창별 등수 위에서 돈다.
+
+        합계와 창별이 어긋나면 창 길이별 비교·최악 창·복원추출이 전부 조용히
+        틀린 답을 낸다. 합계 쪽은 이미 기존 구현과 맞댄 검사가 있으므로
+        여기서는 둘이 같은지만 본다. detail 을 안 주면 아무것도 안 쌓는 것도 같이 본다.
+        """
+        rng = np.random.default_rng(11)
+        K, N = 9, 1300
+        curves = np.cumprod(1.0 + rng.normal(0.0006, 0.013, (K, N)), axis=1)
+        dates = pd.bdate_range('2020-01-01', periods=N)
+        sizes, strides = [504, 756], [126, 252]
+
+        det: list = []
+        rs, _w, rs_cg, _w2, n = J.window_ranksum(curves, dates, sizes, strides, detail=det)
+        self.assertEqual(len(det), n, '창 수와 쌓인 창 수가 다르다')
+        self.assertTrue(np.allclose(sum(d[3] for d in det), rs), '칼마 등수 합이 순위합과 다르다')
+        self.assertTrue(np.allclose(sum(d[4] for d in det), rs_cg), '연복리 등수 합이 순위합과 다르다')
+        for size, stride, start, rc, rg in det:
+            self.assertIn(size, sizes)
+            self.assertIn(stride, strides)
+            self.assertEqual(rc.shape, (K,))
+            # 한 창 안의 등수는 1..K 의 순열(동률은 평균)이라 합이 K(K+1)/2 다
+            self.assertAlmostEqual(float(rc.sum()), K * (K + 1) / 2, places=3)
+            self.assertAlmostEqual(float(rg.sum()), K * (K + 1) / 2, places=3)
+
+        none_det = J.window_ranksum(curves, dates, sizes, strides)
+        self.assertTrue(np.allclose(none_det[0], rs), 'detail 을 주면 합계가 달라진다')
 
 
 if __name__ == '__main__':

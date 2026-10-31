@@ -183,11 +183,17 @@ def _avg_ranks(score: np.ndarray) -> np.ndarray:
 
 
 def window_ranksum(curves: np.ndarray, dates: pd.DatetimeIndex,
-                   win_sizes, strides, lo: int = 0, hi: int | None = None):
+                   win_sizes, strides, lo: int = 0, hi: int | None = None,
+                   detail: list | None = None):
     """창마다 순위를 매겨 합산. 두 기준을 같은 창으로 함께 잰다.
 
     반환 = (칼마 순위합 (K,), 칼마 1위 횟수 (K,),
             연복리 순위합 (K,), 연복리 1위 횟수 (K,), 창 수).
+
+    detail 에 리스트를 주면 창마다 (창길이, 이동폭, 시작, 칼마등수, 연복리등수)를
+    그 리스트에 쌓는다. 합계만으로는 못 보는 것 셋을 보려고 둔 통로다 — 창 길이별로
+    답이 뒤집히는지, 441창 중 최악이 어디인지, 창을 복원추출하면 두 후보 구간이
+    겹치는지. 안 주면 아무것도 안 쌓아 기존 경로가 그대로다.
 
     칼마 정의는 bt_coin_param_resweep.window_rs 와 같다 — 창 안 연복리를 낙폭
     절대값으로 나눈 값으로 순위를 매기고 동률은 평균순위를 준다. 연복리 기준은
@@ -219,10 +225,15 @@ def window_ranksum(curves: np.ndarray, dates: pd.DatetimeIndex,
                     cal = np.where(mdd < 0, cagr / np.abs(mdd), 0.0)
                 cal = np.nan_to_num(cal, nan=-1e9, posinf=-1e9, neginf=-1e9)
                 cg = np.nan_to_num(cagr, nan=-1e9, posinf=-1e9, neginf=-1e9)
-                rs += _avg_ranks(cal)
+                r_cal = _avg_ranks(cal)
+                r_cg = _avg_ranks(cg)
+                rs += r_cal
                 wins += cal == cal.max()
-                rs_cagr += _avg_ranks(cg)
+                rs_cagr += r_cg
                 wins_cagr += cg == cg.max()
+                if detail is not None:
+                    detail.append((size, stride, i,
+                                   r_cal.astype(np.float32), r_cg.astype(np.float32)))
                 n += 1
     return rs, wins, rs_cagr, wins_cagr, n
 
@@ -247,6 +258,8 @@ def main() -> int:
     ap.add_argument('--anchor', type=int, required=True)
     ap.add_argument('--stress', type=int, required=True)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--win-detail', action='store_true',
+                    help='창별 등수를 따로 저장한다(<out>.win.npz). 짧은 구간 대응 분석용')
     ap.add_argument('--delay', type=int, default=0,
                     help='발화일과 실제 송금 사이의 영업일 수. 0 = 그날 바로(기본, 옛 결과 재현용)')
     a = ap.parse_args()
@@ -298,7 +311,9 @@ def main() -> int:
           flush=True)
 
     cal, sharpe, cagr, mdd, yrs = curve_metrics(curves, dates)
-    rs, wins, rs_cagr, wins_cagr, n = window_ranksum(curves, dates, R.WIN_SIZES, R.STRIDES)
+    det: list | None = [] if a.win_detail else None
+    rs, wins, rs_cagr, wins_cagr, n = window_ranksum(curves, dates, R.WIN_SIZES, R.STRIDES,
+                                                     detail=det)
     print(f'[{a.anchor}/{a.stress}] 창 {n} ({time.time() - t0:.0f}초)', flush=True)
 
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
@@ -314,6 +329,18 @@ def main() -> int:
         d0=str(dates[0].date()), d1=str(dates[-1].date()), ndays=len(dates),
     )
     print(f'[{a.anchor}/{a.stress}] 저장 {a.out} ({time.time() - t0:.0f}초)', flush=True)
+    if det is not None:
+        wp = a.out.replace('.npz', '') + '.win.npz'
+        np.savez_compressed(
+            wp,
+            size=np.array([d[0] for d in det], dtype=np.int32),
+            stride=np.array([d[1] for d in det], dtype=np.int32),
+            start=np.array([d[2] for d in det], dtype=np.int32),
+            rank_cal=np.stack([d[3] for d in det]),
+            rank_cg=np.stack([d[4] for d in det]),
+            anchor=a.anchor, stress=a.stress, delay=a.delay,
+        )
+        print(f'[{a.anchor}/{a.stress}] 창별 등수 {wp} ({len(det)}창)', flush=True)
     return 0
 
 
