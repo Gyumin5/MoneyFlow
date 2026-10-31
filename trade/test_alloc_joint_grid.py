@@ -12,6 +12,7 @@ bt_coin_param_resweep.window_rs)와 같은 답을 내는지 본다. 슬리브 �
   4. 꺼짐(무한대) 칸이 실제로 안 발화한다. 둘 다 꺼지면 송금이 0 이다.
   5. 선물 목표 0 칸에서 상대부족이 발화를 못 만든다 (0/0 분모).
   6. 벡터화 창 순위합이 기존 window_rs 와 같은 순위합·창 수를 낸다.
+  7. 송금 지연이 실제로 미루고, 무장 중에는 다시 무장하지 않는다.
 """
 from __future__ import annotations
 
@@ -233,6 +234,51 @@ class TestRankSum(unittest.TestCase):
         # 분모가 떨어졌는지 — 두 기준이 완전히 같은 열이면 낙폭을 안 쓴 것이다
         rs_cal, _w2, _g2, _w3, _n2 = J.window_ranksum(curves, dates, sizes, strides)
         self.assertFalse(np.allclose(rs_cal, rs_cagr), '칼마와 연복리 순위가 같다')
+
+    def test_송금_지연이_발화일과_집행일을_떼어_놓는다(self):
+        """delay 가 0 이 아니면 그날 되돌리지 않고 N 영업일 뒤에 되돌린다.
+
+        라이브는 알림을 받고 사람이 송금하므로 지연이 0 이 아니다. 이 축을 넣을 때
+        가장 쉬운 실수는 지연 중에 또 무장해서 송금 횟수가 부풀거나, 반대로 집행을
+        아예 잃어버리는 것이다. 둘 다 여기서 막는다.
+        """
+        (st, sp, fu), (can_st, can_sp, can_fu) = fake_sleeves()
+        tgt = np.array([[0.60, 0.25, 0.15]])
+        ht = np.array([0.20])
+        t3u = np.array([0.20])
+
+        d0, c0, f0 = J.build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
+                                             tgt, ht, t3u, delay=0)
+        d5, c5, f5 = J.build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
+                                             tgt, ht, t3u, delay=5)
+        self.assertTrue((d0 == d5).all())
+        self.assertGreater(int(f0[0]), 0, '가짜 슬리브에서 발화가 0 이면 검사가 무의미하다')
+        # 지연이 있으면 되돌림이 미뤄져 곡선이 달라진다
+        self.assertFalse(np.allclose(c0[0], c5[0]), '지연을 줬는데 곡선이 같다')
+        # 지연 중 재무장 금지. 총 횟수로는 못 본다 — 지연이 길면 더 오래 어긋난 채로
+        # 굴러서 전체 기간의 발화가 오히려 늘 수 있다. 보는 것은 간격이다: 매일 걸리는
+        # 조건을 줘도 무장은 (지연+1) 영업일에 한 번을 넘을 수 없다.
+        every = np.array([0.0])
+        n_days = len(d0)
+        for dl in (1, 3, 5):
+            _dd, _cc, ff = J.build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
+                                                   tgt, every, t3u, delay=dl)
+            cap_fires = -(-n_days // (dl + 1))   # 올림
+            self.assertLessEqual(int(ff[0]), cap_fires,
+                                 f'지연 {dl}: 무장 {int(ff[0])} > 상한 {cap_fires} — 무장 중 재무장이다')
+            self.assertGreater(int(ff[0]), 0, f'지연 {dl}: 무장이 아예 없다')
+
+        # delay=0 은 옛 경로와 바이트 단위로 같아야 한다(기본값이라 과거 결과 재현용)
+        d_def, c_def, f_def = J.build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
+                                                      tgt, ht, t3u)
+        self.assertTrue(np.array_equal(c_def, c0))
+        self.assertTrue(np.array_equal(f_def, f0))
+
+        # 집행이 실제로 일어나는지 — 지연 1 이면 발화 다음 영업일에 비중이 목표가 된다
+        d1, c1, f1 = J.build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
+                                             tgt, ht, t3u, delay=1)
+        self.assertGreater(int(f1[0]), 0)
+        self.assertFalse(np.allclose(c1[0], c0[0]))
 
 
 if __name__ == '__main__':

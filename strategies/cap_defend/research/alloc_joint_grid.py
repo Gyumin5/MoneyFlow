@@ -102,8 +102,15 @@ def build_combos(mixes):
 # --- 합성 (조합 축 벡터화) ---------------------------------------------------------
 
 def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
-                          tgt: np.ndarray, ht: np.ndarray, t3u: np.ndarray):
+                          tgt: np.ndarray, ht: np.ndarray, t3u: np.ndarray,
+                          delay: int = 0):
     """모든 조합을 동시에 전진시킨다. 반환 = (공통 날짜, 자산곡선 (K,N), 발화수 (K,)).
+
+    delay 는 발화일과 실제 송금 사이의 영업일 수다. 0 이면 그날 바로 되돌린다.
+    라이브는 알림을 받고 사람이 송금하므로 0 이 아니고, 결정 규칙(Decisions In Force)이
+    5영업일 안에 보내라고 적어 둔 값이 5 다. 지연 중에는 다시 무장하지 않는다 —
+    송금 한 번이 끝나기 전에 또 보내지는 않기 때문이다. 발화수는 무장한 횟수를 센다
+    (= 사람이 받는 알림 수 = 송금 횟수).
 
     정의는 alloc_mix_real_rebal.build_alloc_real 과 같다 — 세 슬리브 자본이 각자 자라고,
     반회전율 >= ht 이거나 (상대부족 >= t3u 이고 그 슬리브 카나리 ON) 이면 그날 목표로
@@ -130,6 +137,8 @@ def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
     fires = np.zeros(K, dtype=np.int64)
     pos = tgt > 0
     t3u_col = t3u[:, None]
+    # 남은 영업일. -1 = 무장 안 됨. delay=0 이면 무장과 집행이 같은 날이라 안 쓴다.
+    pend = np.full(K, -1, dtype=np.int64)
     for i in range(N):
         cap *= (1.0 + rets[i])
         total = cap.sum(axis=1)
@@ -139,9 +148,19 @@ def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
         fire = np.abs(tgt - cur).sum(axis=1) / 2.0 >= ht
         rel = np.where(pos, (tgt - cur) / np.where(pos, tgt, 1.0), -np.inf)
         fire |= ((rel >= t3u_col) & cans[i][None, :]).any(axis=1)
-        if fire.any():
-            cap[fire] = tgt[fire] * total[fire][:, None]
-            fires += fire
+        if delay <= 0:
+            if fire.any():
+                cap[fire] = tgt[fire] * total[fire][:, None]
+                fires += fire
+            continue
+        # 무장은 쉬고 있을 때만 — 이미 보내는 중이면 또 보내지 않는다.
+        arm = fire & (pend < 0)
+        fires += arm
+        pend[arm] = delay
+        due = pend == 0
+        if due.any():
+            cap[due] = tgt[due] * total[due][:, None]
+        pend[pend >= 0] -= 1
     return common, out, fires
 
 
@@ -228,6 +247,8 @@ def main() -> int:
     ap.add_argument('--anchor', type=int, required=True)
     ap.add_argument('--stress', type=int, required=True)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--delay', type=int, default=0,
+                    help='발화일과 실제 송금 사이의 영업일 수. 0 = 그날 바로(기본, 옛 결과 재현용)')
     a = ap.parse_args()
 
     import bt_coin_param_resweep as R
@@ -272,7 +293,7 @@ def main() -> int:
     t3u = np.array([c[5] for c in combos], dtype=float)
 
     dates, curves, fires = build_alloc_real_many(st, sp, fu, can_st, can_sp, can_fu,
-                                                 tgt, ht, t3u)
+                                                 tgt, ht, t3u, delay=a.delay)
     print(f'[{a.anchor}/{a.stress}] 조합 {len(combos)}개 합성 ({time.time() - t0:.0f}초)',
           flush=True)
 
@@ -289,7 +310,7 @@ def main() -> int:
         rs=rs, wins=wins, rs_cagr=rs_cagr, wins_cagr=wins_cagr, n=n,
         cal=cal, sharpe=sharpe, cagr=cagr, mdd=mdd,
         fires_per_year=fires / yrs,
-        anchor=a.anchor, stress=a.stress,
+        anchor=a.anchor, stress=a.stress, delay=a.delay,
         d0=str(dates[0].date()), d1=str(dates[-1].date()), ndays=len(dates),
     )
     print(f'[{a.anchor}/{a.stress}] 저장 {a.out} ({time.time() - t0:.0f}초)', flush=True)
