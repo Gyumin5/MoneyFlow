@@ -158,7 +158,7 @@ class TestRankSum(unittest.TestCase):
         dates, curves, _f = J.build_alloc_real_many(st, sp, fu, cs, cp, cf, tgt, ht, t3u)
 
         sizes, strides = [252, 378], [63, 126]
-        rs, wins, n = J.window_ranksum(curves, dates, sizes, strides)
+        rs, wins, _rsg, _wg, n = J.window_ranksum(curves, dates, sizes, strides)
 
         old_sizes, old_strides = R.WIN_SIZES, R.STRIDES
         try:
@@ -183,13 +183,56 @@ class TestRankSum(unittest.TestCase):
         dates, curves, _f = J.build_alloc_real_many(st, sp, fu, cs, cp, cf, tgt, ht, t3u)
         sizes, strides = [252], [63]
         split = len(dates) - 300
-        _rs_a, _w, n_tr = J.window_ranksum(curves, dates, sizes, strides, 0, split)
-        _rs_b, _w, n_te = J.window_ranksum(curves, dates, sizes, strides, split, len(dates))
-        _rs_all, _w, n_all = J.window_ranksum(curves, dates, sizes, strides)
+        _a, _w, _ag, _wg, n_tr = J.window_ranksum(curves, dates, sizes, strides, 0, split)
+        _b, _w, _bg, _wg, n_te = J.window_ranksum(curves, dates, sizes, strides, split, len(dates))
+        _c, _w, _cg, _wg, n_all = J.window_ranksum(curves, dates, sizes, strides)
         # 분할하면 경계를 가로지르는 창이 빠지므로 합이 전체보다 작다
         self.assertGreater(n_tr, 0)
         self.assertGreater(n_te, 0)
         self.assertLess(n_tr + n_te, n_all)
+
+    def test_연복리_순위합이_창마다_직접_센_것과_같다(self):
+        """칼마 옆에 붙인 연복리 기준이 같은 창·같은 동률 규칙을 쓰는지 본다.
+
+        운영자 지시 9451 로 더한 축이라, 칼마 쪽을 베껴 쓰다 분모를 못 뗀 채로
+        돌면 두 열이 같은 값이 되어 "수익률도 봤다" 가 거짓이 된다.
+        """
+        (st, sp, fu), (cs, cp, cf) = fake_sleeves(n=700, seed=23)
+        rows = [
+            (0.60, 0.25, 0.15, 0.20, 0.20),
+            (0.75, 0.1375, 0.1125, 0.25, 0.10),
+            (0.90, 0.055, 0.045, np.inf, 0.40),
+        ]
+        tgt = np.array([[r[0], r[1], r[2]] for r in rows], dtype=float)
+        ht = np.array([r[3] for r in rows], dtype=float)
+        t3u = np.array([r[4] for r in rows], dtype=float)
+        dates, curves, _f = J.build_alloc_real_many(st, sp, fu, cs, cp, cf, tgt, ht, t3u)
+
+        sizes, strides = [252], [63]
+        _rs, _w, rs_cagr, wins_cagr, n = J.window_ranksum(curves, dates, sizes, strides)
+
+        days = dates.to_numpy().astype('datetime64[D]').astype(np.int64)
+        exp_rs = np.zeros(len(rows))
+        exp_wins = np.zeros(len(rows), dtype=int)
+        cnt = 0
+        for size in sizes:
+            for stride in strides:
+                for i in range(0, len(dates) - size, stride):
+                    j = i + size - 1
+                    yrs = (days[j] - days[i]) / 365.25
+                    g = np.array([(curves[k, j] / curves[k, i]) ** (1.0 / yrs) - 1.0
+                                  for k in range(len(rows))])
+                    exp_rs += np.array([1 + int((g > g[k]).sum()) for k in range(len(rows))],
+                                       dtype=float)
+                    exp_wins += (g == g.max())
+                    cnt += 1
+        self.assertEqual(n, cnt)
+        for k in range(len(rows)):
+            self.assertAlmostEqual(rs_cagr[k], exp_rs[k], places=9, msg=f'행 {k} 연복리 순위합')
+            self.assertEqual(int(wins_cagr[k]), int(exp_wins[k]), msg=f'행 {k} 연복리 1위')
+        # 분모가 떨어졌는지 — 두 기준이 완전히 같은 열이면 낙폭을 안 쓴 것이다
+        rs_cal, _w2, _g2, _w3, _n2 = J.window_ranksum(curves, dates, sizes, strides)
+        self.assertFalse(np.allclose(rs_cal, rs_cagr), '칼마와 연복리 순위가 같다')
 
 
 if __name__ == '__main__':

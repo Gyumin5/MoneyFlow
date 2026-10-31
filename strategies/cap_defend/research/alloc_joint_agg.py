@@ -65,8 +65,10 @@ def stack(got, key: str, stress: int) -> np.ndarray:
 
 
 def fmt_cond(ht: float, t3u: float) -> str:
-    h = '꺼짐' if not np.isfinite(ht) else f'{ht * 100:.0f}'
-    t = '꺼짐' if not np.isfinite(t3u) else f'{t3u * 100:.0f}'
+    # %g 로 찍는다 — 3회차에 더한 바닥 넷(0.5·1·1.5·2%)이 소수라, 정수로 반올림하면
+    # 0.5% 와 1.5% 가 0 과 2 로 뭉개져 서로 다른 칸이 같은 이름으로 보인다.
+    h = '꺼짐' if not np.isfinite(ht) else f'{ht * 100:g}'
+    t = '꺼짐' if not np.isfinite(t3u) else f'{t3u * 100:g}'
     return f'{h}/{t}'
 
 
@@ -105,6 +107,10 @@ def main() -> int:
         res[s] = {
             'rank': avg_rank(stack(got, 'rs', s).sum(axis=0), nwin),
             'rank_by_anchor': stack(got, 'rs', s) / int(ref['n']),
+            # 연복리 기준 순위 — 운영자 지시 9451("칼마뿐만 아니라 수익률 자체도").
+            # 같은 창·같은 동률 규칙이라 두 열을 나란히 읽는다.
+            'rank_cg': avg_rank(stack(got, 'rs_cagr', s).sum(axis=0), nwin),
+            'rank_cg_by_anchor': stack(got, 'rs_cagr', s) / int(ref['n']),
             'cal': stack(got, 'cal', s).mean(axis=0),
             'mdd': stack(got, 'mdd', s).mean(axis=0),
             'cagr': stack(got, 'cagr', s).mean(axis=0),
@@ -116,15 +122,35 @@ def main() -> int:
     for s in STRESSES:
         lab = '기본 비용' if s == 0 else '비용 5배'
         r = res[s]
-        head(f'[주표/{lab}] 합동 조합 순위 (평균순위 낮을수록 우세)')
-        print(f'{"순":>3} {"비중":<14} {"조건":>8} {"평균순위":>9} {"칼마":>6} '
-              f'{"낙폭%":>7} {"연복리%":>8} {"샤프":>6} {"송금/년":>7}')
+        head(f'[주표/{lab}] 합동 조합 순위 — 칼마 기준 (평균순위 낮을수록 우세)')
+        print(f'{"순":>3} {"비중":<14} {"조건":>8} {"칼마순위":>9} {"수익순위":>9} '
+              f'{"칼마":>6} {"낙폭%":>7} {"연복리%":>8} {"샤프":>6} {"송금/년":>7}')
         order = np.argsort(r['rank'], kind='stable')
+        ord_cg = np.argsort(r['rank_cg'], kind='stable')
         for i in list(order[:a.top]):
             print(f'{int(np.where(order == i)[0][0]) + 1:>3} {mix[i]:<14} '
                   f'{fmt_cond(ht[i], t3u[i]):>8} {r["rank"][i]:>9.1f} '
+                  f'{r["rank_cg"][i]:>9.1f} '
                   f'{r["cal"][i]:>6.2f} {r["mdd"][i]:>7.1f} {r["cagr"][i]:>8.1f} '
                   f'{r["sharpe"][i]:>6.2f} {r["fires"][i]:>7.2f}')
+
+        head(f'[주표-수익/{lab}] 같은 조합을 연복리 순위로 다시 세운다')
+        print(f'{"순":>3} {"비중":<14} {"조건":>8} {"수익순위":>9} {"칼마순위":>9} '
+              f'{"칼마":>6} {"낙폭%":>7} {"연복리%":>8} {"샤프":>6} {"송금/년":>7}')
+        for i in list(ord_cg[:a.top]):
+            print(f'{int(np.where(ord_cg == i)[0][0]) + 1:>3} {mix[i]:<14} '
+                  f'{fmt_cond(ht[i], t3u[i]):>8} {r["rank_cg"][i]:>9.1f} '
+                  f'{r["rank"][i]:>9.1f} '
+                  f'{r["cal"][i]:>6.2f} {r["mdd"][i]:>7.1f} {r["cagr"][i]:>8.1f} '
+                  f'{r["sharpe"][i]:>6.2f} {r["fires"][i]:>7.2f}')
+        kc = int(order[0])
+        kg = int(ord_cg[0])
+        print(f'    칼마 1위 = {mix[kc]} {fmt_cond(ht[kc], t3u[kc])} '
+              f'(연복리 {r["cagr"][kc]:.1f}%, 낙폭 {r["mdd"][kc]:.1f}%, '
+              f'수익순위 {int(np.where(ord_cg == kc)[0][0]) + 1}위)')
+        print(f'    수익 1위 = {mix[kg]} {fmt_cond(ht[kg], t3u[kg])} '
+              f'(연복리 {r["cagr"][kg]:.1f}%, 낙폭 {r["mdd"][kg]:.1f}%, '
+              f'칼마순위 {int(np.where(order == kg)[0][0]) + 1}위)')
         # 현행 비중 × 라이브 조건이 어디에 있나
         cur = np.array([('현행' in m) for m in mix])
         k = np.where(cur & live)[0]
@@ -292,18 +318,20 @@ def main() -> int:
     for s in STRESSES:
         lab = '기본 비용' if s == 0 else '비용 5배'
         r = res[s]
-        head(f'[주표2/{lab}] 송금 한도마다의 최적 조합')
-        print(f'{"한도/년":>7} {"비중":<14} {"조건":>8} {"평균순위":>9} {"칼마":>6} '
-              f'{"낙폭%":>7} {"연복리%":>8} {"샤프":>6} {"실제송금":>8}')
+        head(f'[주표2/{lab}] 송금 한도마다의 최적 조합 (칼마 기준과 수익 기준을 나란히)')
+        print(f'{"한도/년":>7} {"기준":>4} {"비중":<14} {"조건":>8} {"그순위":>8} '
+              f'{"칼마":>6} {"낙폭%":>7} {"연복리%":>8} {"샤프":>6} {"실제송금":>8}')
         for b in BUDGETS:
             ok = r['fires'] <= b + 1e-9
             if not ok.any():
                 continue
-            k = int(np.argsort(np.where(ok, r['rank'], np.inf), kind='stable')[0])
             lb = '제한없음' if b > 1e8 else f'{b:g}회'
-            print(f'{lb:>7} {mix[k]:<14} {fmt_cond(ht[k], t3u[k]):>8} '
-                  f'{r["rank"][k]:>9.1f} {r["cal"][k]:>6.2f} {r["mdd"][k]:>7.1f} '
-                  f'{r["cagr"][k]:>8.1f} {r["sharpe"][k]:>6.2f} {r["fires"][k]:>8.2f}')
+            for key, kl in (('rank', '칼마'), ('rank_cg', '수익')):
+                k = int(np.argsort(np.where(ok, r[key], np.inf), kind='stable')[0])
+                print(f'{lb if kl == "칼마" else "":>7} {kl:>4} {mix[k]:<14} '
+                      f'{fmt_cond(ht[k], t3u[k]):>8} {r[key][k]:>8.1f} '
+                      f'{r["cal"][k]:>6.2f} {r["mdd"][k]:>7.1f} '
+                      f'{r["cagr"][k]:>8.1f} {r["sharpe"][k]:>6.2f} {r["fires"][k]:>8.2f}')
 
     # --- 진단: 상대부족 축에 봉우리가 있나 ------------------------------------
     head('[진단] 상대부족 축 — 최적 비중에서 축을 내리면 계속 좋아지나 (기본 비용)')
@@ -312,15 +340,17 @@ def main() -> int:
     print(f'  기준 비중 {best_mix}, 반회전율은 그 비중의 최적값으로 고정')
     sel = mix == best_mix
     kb = int(np.argsort(np.where(sel, r['rank'], np.inf), kind='stable')[0])
-    print(f'{"상대부족":>8} {"평균순위":>9} {"칼마":>6} {"낙폭%":>7} {"송금/년":>8}')
+    print(f'{"상대부족":>8} {"칼마순위":>9} {"수익순위":>9} {"칼마":>6} {"낙폭%":>7} '
+          f'{"연복리%":>8} {"송금/년":>8}')
     for t in J.GRID_T3U:
         k = np.where(sel & (ht == ht[kb]) & (t3u == t))[0]
         if not len(k):
             continue
         k = int(k[0])
         lb = '꺼짐' if not np.isfinite(t) else f'{t * 100:g}%'
-        print(f'{lb:>8} {r["rank"][k]:>9.1f} {r["cal"][k]:>6.2f} '
-              f'{r["mdd"][k]:>7.1f} {r["fires"][k]:>8.2f}')
+        print(f'{lb:>8} {r["rank"][k]:>9.1f} {r["rank_cg"][k]:>9.1f} '
+              f'{r["cal"][k]:>6.2f} {r["mdd"][k]:>7.1f} {r["cagr"][k]:>8.1f} '
+              f'{r["fires"][k]:>8.2f}')
 
     # --- 진단: 라이브 조건이 어디쯤인가 --------------------------------------
     head('[진단] 라이브 조건(20/20) 이 비중마다 몇 등인가 (기본 비용, 56칸 중)')

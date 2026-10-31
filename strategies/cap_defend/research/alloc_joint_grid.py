@@ -57,7 +57,10 @@ GRID_HT = [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, np.inf]
 # 최적이 거기 붙어서, 봉우리인지 벽인지 구분이 안 됐다 — 격자 끝 문제는 이 측정에서 이미
 # 한 번 겪었다. 0 은 안 넣는다: 상대부족 0 은 "카나리가 켜진 슬리브가 목표에 모자라면
 # 언제나" 라 매일 송금하는 것과 같고, 그건 조건이 아니라 다른 정책이다.
-GRID_T3U = [0.025, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, np.inf]
+GRID_T3U = [0.005, 0.01, 0.015, 0.02, 0.025, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.40, np.inf]
+# 바닥 넷(0.5·1·1.5·2%)은 3회차에 더했다. 운영자가 송금 횟수 제한을 풀어서(텔레그램 9450)
+# 2.5% 아래에 봉우리가 있는지 봐야 한다. 0% 는 안 넣는다 — 조건이 아니라 매일 되돌리는
+# 다른 정책이라 같은 축에서 못 겨룬다.
 
 LIVE_HT, LIVE_T3U = 0.20, 0.20     # recommend_personal.REBAL_HT_THRESHOLD / REBAL_T3U_REL
 LIVE_MIX = (0.60, 0.25, 0.15)      # 현행 자산배분. 격자의 '60/5:3' 칸과 같은 자리다.
@@ -144,19 +147,42 @@ def build_alloc_real_many(eq_st, eq_sp, eq_fu, can_st, can_sp, can_fu,
 
 # --- 창 순위 (조합 축 벡터화) ------------------------------------------------------
 
+def _avg_ranks(score: np.ndarray) -> np.ndarray:
+    """높을수록 좋은 점수를 내림차순 순위로. 동률은 평균순위."""
+    K = score.shape[0]
+    order = np.argsort(-score, kind='stable')
+    ssorted = score[order]
+    ranks = np.empty(K)
+    s = 0
+    while s < K:
+        e = s
+        while e + 1 < K and ssorted[e + 1] == ssorted[s]:
+            e += 1
+        ranks[order[s:e + 1]] = (s + e) / 2.0 + 1.0
+        s = e + 1
+    return ranks
+
+
 def window_ranksum(curves: np.ndarray, dates: pd.DatetimeIndex,
                    win_sizes, strides, lo: int = 0, hi: int | None = None):
-    """창마다 칼마 순위를 매겨 합산. 반환 = (순위합 (K,), 1위 횟수 (K,), 창 수).
+    """창마다 순위를 매겨 합산. 두 기준을 같은 창으로 함께 잰다.
 
-    정의는 bt_coin_param_resweep.window_rs 와 같다 — 창 안 연복리를 낙폭 절대값으로
-    나눈 값으로 순위를 매기고 동률은 평균순위를 준다. lo/hi 는 창의 시작 위치를
-    그 구간 안으로 제한한다(학습·후행 분할용이고, 창이 분할일을 가로지르면 안 쓴다).
+    반환 = (칼마 순위합 (K,), 칼마 1위 횟수 (K,),
+            연복리 순위합 (K,), 연복리 1위 횟수 (K,), 창 수).
+
+    칼마 정의는 bt_coin_param_resweep.window_rs 와 같다 — 창 안 연복리를 낙폭
+    절대값으로 나눈 값으로 순위를 매기고 동률은 평균순위를 준다. 연복리 기준은
+    그 분자만 쓴다(운영자 지시 9451 — 칼마만 보지 말고 수익률 자체도 본다).
+    두 기준이 같은 창·같은 동률 규칙을 쓰므로 순위를 나란히 읽을 수 있다.
+    lo/hi 는 창의 시작 위치를 그 구간 안으로 제한한다.
     """
     K, N = curves.shape
     hi = N if hi is None else hi
     days = dates.to_numpy().astype('datetime64[D]').astype(np.int64)
     rs = np.zeros(K)
     wins = np.zeros(K, dtype=np.int64)
+    rs_cagr = np.zeros(K)
+    wins_cagr = np.zeros(K, dtype=np.int64)
     n = 0
     for size in win_sizes:
         for stride in strides:
@@ -173,22 +199,13 @@ def window_ranksum(curves: np.ndarray, dates: pd.DatetimeIndex,
                     mdd = (seg / np.maximum.accumulate(seg, axis=1) - 1.0).min(axis=1)
                     cal = np.where(mdd < 0, cagr / np.abs(mdd), 0.0)
                 cal = np.nan_to_num(cal, nan=-1e9, posinf=-1e9, neginf=-1e9)
-                # 높을수록 좋다 → 내림차순 순위, 동률은 평균순위
-                order = np.argsort(-cal, kind='stable')
-                sorted_cal = cal[order]
-                ranks = np.empty(K)
-                s = 0
-                while s < K:
-                    e = s
-                    while e + 1 < K and sorted_cal[e + 1] == sorted_cal[s]:
-                        e += 1
-                    ranks[order[s:e + 1]] = (s + e) / 2.0 + 1.0
-                    s = e + 1
-                rs += ranks
-                best = cal == cal.max()
-                wins += best
+                cg = np.nan_to_num(cagr, nan=-1e9, posinf=-1e9, neginf=-1e9)
+                rs += _avg_ranks(cal)
+                wins += cal == cal.max()
+                rs_cagr += _avg_ranks(cg)
+                wins_cagr += cg == cg.max()
                 n += 1
-    return rs, wins, n
+    return rs, wins, rs_cagr, wins_cagr, n
 
 
 def curve_metrics(curves: np.ndarray, dates: pd.DatetimeIndex):
@@ -260,7 +277,7 @@ def main() -> int:
           flush=True)
 
     cal, sharpe, cagr, mdd, yrs = curve_metrics(curves, dates)
-    rs, wins, n = window_ranksum(curves, dates, R.WIN_SIZES, R.STRIDES)
+    rs, wins, rs_cagr, wins_cagr, n = window_ranksum(curves, dates, R.WIN_SIZES, R.STRIDES)
     print(f'[{a.anchor}/{a.stress}] 창 {n} ({time.time() - t0:.0f}초)', flush=True)
 
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
@@ -269,7 +286,7 @@ def main() -> int:
         mix=np.array([c[0] for c in combos]),
         ht=ht, t3u=t3u,
         w_st=tgt[:, 0], w_sp=tgt[:, 1], w_fu=tgt[:, 2],
-        rs=rs, wins=wins, n=n,
+        rs=rs, wins=wins, rs_cagr=rs_cagr, wins_cagr=wins_cagr, n=n,
         cal=cal, sharpe=sharpe, cagr=cagr, mdd=mdd,
         fires_per_year=fires / yrs,
         anchor=a.anchor, stress=a.stress,
