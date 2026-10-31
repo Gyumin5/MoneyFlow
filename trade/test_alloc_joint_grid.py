@@ -299,13 +299,16 @@ class TestRankSum(unittest.TestCase):
         self.assertEqual(len(det), n, '창 수와 쌓인 창 수가 다르다')
         self.assertTrue(np.allclose(sum(d[3] for d in det), rs), '칼마 등수 합이 순위합과 다르다')
         self.assertTrue(np.allclose(sum(d[4] for d in det), rs_cg), '연복리 등수 합이 순위합과 다르다')
-        for size, stride, start, rc, rg in det:
+        for size, stride, start, rc, rg, cg_w, md_w in det:
             self.assertIn(size, sizes)
             self.assertIn(stride, strides)
             self.assertEqual(rc.shape, (K,))
             # 한 창 안의 등수는 1..K 의 순열(동률은 평균)이라 합이 K(K+1)/2 다
             self.assertAlmostEqual(float(rc.sum()), K * (K + 1) / 2, places=3)
             self.assertAlmostEqual(float(rg.sum()), K * (K + 1) / 2, places=3)
+            # 원지표도 같이 쌓인다 — 불리한 창을 날짜·낙폭과 함께 보고하려면 필요하다
+            self.assertEqual(cg_w.shape, (K,))
+            self.assertTrue((md_w <= 0).all(), '창 낙폭이 양수다')
 
         none_det = J.window_ranksum(curves, dates, sizes, strides)
         self.assertTrue(np.allclose(none_det[0], rs), 'detail 을 주면 합계가 달라진다')

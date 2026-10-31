@@ -49,7 +49,12 @@ for _p in (HERE, PARENT):
 
 STOCK_AXIS = [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95]
 # (이름, 현물 몫, 선물 몫). 코인 전체를 이 비로 가른다. 전부 현물은 1:0.
-COIN_RATIOS = [('1:0', 1, 0), ('5:1', 5, 1), ('3:1', 3, 1), ('5:3', 5, 3), ('11:9', 11, 9)]
+COIN_RATIOS = [('1:0', 1, 0), ('5:1', 5, 1), ('3:1', 3, 1), ('5:3', 5, 3),
+               ('7:5', 7, 5), ('11:9', 11, 9), ('21:19', 21, 19)]
+# 7:5 와 21:19 는 2026-10-31 토론 뒤에 더했다. 그 전 격자는 11:9 에서 끝났는데 최적이
+# 거기 붙어서, 봉우리인지 격자 끝인지 구분이 안 됐다 — 상대부족 축에서 이미 같은 일을
+# 겪었다. 21:19 는 현물 52.5 대 선물 47.5 로, "현물이 선물보다 크게" 라는 운영자 제약이
+# 허용하는 거의 끝이다. 1:1 은 그 제약을 깨므로 안 넣는다.
 
 # 꺼짐은 np.inf 로 둔다 — 임계에 영원히 안 닿으므로 그 트리거가 없는 것과 같다.
 GRID_HT = [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50, np.inf]
@@ -190,10 +195,11 @@ def window_ranksum(curves: np.ndarray, dates: pd.DatetimeIndex,
     반환 = (칼마 순위합 (K,), 칼마 1위 횟수 (K,),
             연복리 순위합 (K,), 연복리 1위 횟수 (K,), 창 수).
 
-    detail 에 리스트를 주면 창마다 (창길이, 이동폭, 시작, 칼마등수, 연복리등수)를
-    그 리스트에 쌓는다. 합계만으로는 못 보는 것 셋을 보려고 둔 통로다 — 창 길이별로
-    답이 뒤집히는지, 441창 중 최악이 어디인지, 창을 복원추출하면 두 후보 구간이
-    겹치는지. 안 주면 아무것도 안 쌓아 기존 경로가 그대로다.
+    detail 에 리스트를 주면 창마다 (창길이, 이동폭, 시작, 칼마등수, 연복리등수,
+    창 연복리, 창 낙폭)를 그 리스트에 쌓는다. 합계만으로는 못 보는 것을 보려고 둔
+    통로다 — 창 길이별로 답이 뒤집히는지, 같은 창에서 후보끼리 짝지으면 누가 이기는지,
+    불리한 창이 언제이고 그때 실제 낙폭이 얼마였는지. 안 주면 아무것도 안 쌓아
+    기존 경로가 그대로다.
 
     칼마 정의는 bt_coin_param_resweep.window_rs 와 같다 — 창 안 연복리를 낙폭
     절대값으로 나눈 값으로 순위를 매기고 동률은 평균순위를 준다. 연복리 기준은
@@ -232,8 +238,12 @@ def window_ranksum(curves: np.ndarray, dates: pd.DatetimeIndex,
                 rs_cagr += r_cg
                 wins_cagr += cg == cg.max()
                 if detail is not None:
+                    # 등수와 함께 그 창의 원지표도 남긴다. 등수만으로는 "어느 창에서
+                    # 얼마나 나빴나" 를 못 말한다 — 2026-10-31 토론이 불리한 창을
+                    # 보고할 때 날짜·절대 낙폭·연복리를 같이 내라고 한 자리다.
                     detail.append((size, stride, i,
-                                   r_cal.astype(np.float32), r_cg.astype(np.float32)))
+                                   r_cal.astype(np.float32), r_cg.astype(np.float32),
+                                   cg.astype(np.float32), mdd.astype(np.float32)))
                 n += 1
     return rs, wins, rs_cagr, wins_cagr, n
 
@@ -338,6 +348,11 @@ def main() -> int:
             start=np.array([d[2] for d in det], dtype=np.int32),
             rank_cal=np.stack([d[3] for d in det]),
             rank_cg=np.stack([d[4] for d in det]),
+            cagr_w=np.stack([d[5] for d in det]),
+            mdd_w=np.stack([d[6] for d in det]),
+            # 실제 거래일 배열을 그대로 남긴다. 휴일 때문에 d0 에서 영업일을 세어
+            # 되만들면 어긋난다(2026-10-31 실측 2026-06-29 대 2026-09-18).
+            days=np.array([str(d.date()) for d in dates]),
             anchor=a.anchor, stress=a.stress, delay=a.delay,
         )
         print(f'[{a.anchor}/{a.stress}] 창별 등수 {wp} ({len(det)}창)', flush=True)
