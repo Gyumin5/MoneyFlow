@@ -71,8 +71,13 @@ LIVE_HT, LIVE_T3U = 0.20, 0.20     # recommend_personal.REBAL_HT_THRESHOLD / REB
 LIVE_MIX = (0.60, 0.25, 0.15)      # 현행 자산배분. 격자의 '60/5:3' 칸과 같은 자리다.
 
 
-def build_mixes() -> list[tuple[str, float, float, float]]:
+def build_mixes(stock_axis=None, ratios=None,
+                allow_equal: bool = False) -> list[tuple[str, float, float, float]]:
     """제약(주식 >= 60, 현물 > 선물)을 만족하는 비중 40칸.
+
+    축을 인자로 주면 그만큼만 만든다 — 운영자가 특정 비중을 지목해 물을 때 쓴다.
+    `allow_equal` 은 현물 > 선물 걸름을 끈다. 기본 격자에는 안 쓴다(그 제약이 운영자
+    것이라서). 손으로 비를 지목한 호출은 그 지목 자체가 제약 해제라 이 길로 온다.
 
     현행 60/25/15 는 따로 더하지 않는다 — 주식 60 의 5:3 이 바로 그 칸이라(코인 40 을
     5:3 으로 가르면 25/15) 더하면 같은 자리가 두 번 들어간다. 그러면 그 칸이 자기
@@ -80,12 +85,12 @@ def build_mixes() -> list[tuple[str, float, float, float]]:
     순위합이 함께 흔들린다. 하필 운영자가 가장 궁금해하는 칸이라 이름만 붙여 둔다.
     """
     out = []
-    for st in STOCK_AXIS:
+    for st in (STOCK_AXIS if stock_axis is None else stock_axis):
         coin = 1.0 - st
-        for rname, a, b in COIN_RATIOS:
+        for rname, a, b in (COIN_RATIOS if ratios is None else ratios):
             sp = coin * a / (a + b)
             fu = coin - sp
-            if not (sp > fu or (fu == 0.0 and sp >= 0.0)):
+            if not allow_equal and not (sp > fu or (fu == 0.0 and sp >= 0.0)):
                 continue
             name = f'{st * 100:.0f}/{rname}'
             if np.allclose((st, sp, fu), LIVE_MIX):
@@ -272,7 +277,19 @@ def main() -> int:
                     help='창별 등수를 따로 저장한다(<out>.win.npz). 짧은 구간 대응 분석용')
     ap.add_argument('--delay', type=int, default=0,
                     help='발화일과 실제 송금 사이의 영업일 수. 0 = 그날 바로(기본, 옛 결과 재현용)')
+    ap.add_argument('--stocks', default='',
+                    help='주식 축을 퍼센트로 지목한다(예: 60,70). 비우면 기본 8칸')
+    ap.add_argument('--ratios', default='',
+                    help='코인 현물:선물 비를 지목한다(예: 1:1,5:3). 비우면 기본 7칸. '
+                         '지목하면 "현물 > 선물" 걸름을 끈다 — 지목 자체가 제약 해제다')
     a = ap.parse_args()
+    stock_axis = [float(x) / 100 for x in a.stocks.split(',')] if a.stocks else None
+    ratios = None
+    if a.ratios:
+        ratios = []
+        for tok in a.ratios.split(','):
+            x, y = tok.split(':')
+            ratios.append((tok, int(x), int(y)))
 
     import bt_coin_param_resweep as R
     from unified_backtest import load_data
@@ -309,7 +326,7 @@ def main() -> int:
     can_fu = canary_from_trace(tr_fu)
     print(f'[{a.anchor}/{a.stress}] 슬리브 셋 ({time.time() - t0:.0f}초)', flush=True)
 
-    mixes = build_mixes()
+    mixes = build_mixes(stock_axis, ratios, allow_equal=bool(ratios))
     combos = build_combos(mixes)
     tgt = np.array([[c[1], c[2], c[3]] for c in combos], dtype=float)
     ht = np.array([c[4] for c in combos], dtype=float)
