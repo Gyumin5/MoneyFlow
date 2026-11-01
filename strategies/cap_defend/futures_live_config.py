@@ -9,7 +9,8 @@ V25 도입 (2026-05-28):
   · final L per coin = min(BTC cap, per-coin K2)
 - shift(1) lag (전일 신호 → 당일 적용)
 - BT: 5.6yr Cal 8.12 / CAGR 312% / MDD -38.3% / Sharpe 1.90 (단독 sleeve)
-- alloc 60/25/15 + T1=20pp/T3U=25pp: Cal 5.72 / MDD -18.6% / CAGR 106%
+- alloc 60/20/20 + T1=25pp/T3U=20%: Cal 4.07 / MDD -18.8% / CAGR 76.4% / Sharpe 1.84
+  (5.8yr, 송금 지연 5영업일. 2026-11-01 합동 격자 수익 1위)
 - 채택 근거: window rank-sum 1/25 plateau (K2 SMA=7 h=2.5%), J(mom-based) 7.45 보다 Cal +0.67 + MDD 7pp 개선
 
 V24 (2026-04-30~2026-05-28, deprecated):

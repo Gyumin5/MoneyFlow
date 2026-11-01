@@ -203,7 +203,7 @@ def main():
           '_alloc_bd' not in src.split('fire_reason = []')[1])
     for frag in ('t1_fire = ht >= REBAL_HT_THRESHOLD',
                  'fire = t1_fire or t3u_fire',
-                 'REBAL_HT_THRESHOLD = 0.20',
+                 'REBAL_HT_THRESHOLD = 0.25',
                  'REBAL_T3U_REL = 0.20',
                  'tgt_stock_krw = alloc_total * STOCK_RATIO'):
         check(f'T9 보존: {frag[:32]}', frag in src)

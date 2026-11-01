@@ -17,9 +17,10 @@
 - 주식 60% / 업비트(현물) 25% / 바이낸스(선물) 15%
 - per-sleeve cash buffer: 주식 7% / spot 1% / fut 1% (총 cash ≈ 5%)
 - 자산간 리밸런싱: 자동 송금·자동 cap 폐지. 트리거 발화 시 텔레그램 알림만 전송, 사용자가 수동 송금.
-  - T1: half_turnover(sum|cur_w − tgt_w|/2) ≥ 20pp → 전체 리셋
+  - T1: half_turnover(sum|cur_w − tgt_w|/2) ≥ 25pp → 전체 리셋
   - T3U_can: sleeve 상대 미달 ≥ 20% AND 해당 sleeve 카나리 ON → 탑업
-- 3자산 합성 백테스트(60/25/15 + T1+T3U): Cal 5.72 / CAGR 106% / MDD -18.6%
+- 3자산 합성 백테스트(60/20/20 + T1 25pp + T3U 20%): Cal 4.07 / CAGR 76.4% / MDD -18.8% / Sharpe 1.84
+  (5.8yr, 송금 지연 5영업일, 송금 연 2.05회. 합동 격자 6,656칸 중 수익 1위 — 2026-11-01)
 
 ---
 

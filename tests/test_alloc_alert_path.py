@@ -172,7 +172,7 @@ def main():
 
     # T8 — 판정식·문턱·금액 계산 보존
     check('T8 문턱 상수가 그대로다',
-          'REBAL_HT_THRESHOLD = 0.20' in src and 'REBAL_T3U_REL = 0.20' in src)
+          'REBAL_HT_THRESHOLD = 0.25' in src and 'REBAL_T3U_REL = 0.20' in src)
     for frag in ('t1_fire = ht >= REBAL_HT_THRESHOLD',
                  'fire = t1_fire or t3u_fire',
                  't3u_fire = t3u_stock or t3u_spot or t3u_fut'):

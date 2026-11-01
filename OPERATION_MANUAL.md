@@ -48,7 +48,8 @@ updated: 2026-08-25
 | cash buffer | 1% (`CASH_BUFFER`) |
 
 단독 sleeve BT(5.6yr): Cal 8.12 / CAGR 312% / MDD -38.3% / Sharpe 1.90.
-자산배분 60/25/15 + T1+T3U: Cal 5.72 / CAGR 106% / MDD -18.6%.
+자산배분 60/20/20 + T1 25pp + T3U 20%: Cal 4.07 / CAGR 76.4% / MDD -18.8% / Sharpe 1.84
+(5.8yr, 송금 지연 5영업일).
 
 ## 동적 레버리지 결정 (매 cron)
 
@@ -172,14 +173,14 @@ refill v2 는 drift 0.10 에서 앵커 전용과 사실상 동일하다(2026-06-
 
 ---
 
-# 자산배분 (60/25/15, 수동 송금)
+# 자산배분 (60/20/20, 수동 송금)
 
-- 주식 60% / 업비트 25% / 바이낸스 15%. 정본은 라이브 코드 `STOCK_RATIO/COIN_RATIO/FUTURES_RATIO`.
+- 주식 60% / 업비트 20% / 바이낸스 20%. 정본은 라이브 코드 `STOCK_RATIO/COIN_RATIO/FUTURES_RATIO`.
 - per-sleeve cash buffer: 주식 7% / 현물 1% / 선물 1% (총 cash ≈ 5%).
 - 자동 송금·자동 cap 은 폐지됐다(alloc_transit phantom buffer 영구 비활성화).
   트리거가 켜지면 텔레그램 알림만 보내고 사용자가 직접 송금한다.
 - 트리거 (OR):
-  · T1 — `half_turnover ≥ 20pp`
+  · T1 — `half_turnover ≥ 25pp`
   · T3U_can — `max((tgt − cur)/tgt) ≥ 20%` AND 해당 sleeve 카나리 ON
     (주식=EEM Risk-On, 현물=BTC > SMA42×1.015, 선물=`binance_state.json` `strat.canary_on`)
 - 같은 사유 알림은 24시간에 1회.

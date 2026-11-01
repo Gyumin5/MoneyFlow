@@ -185,7 +185,7 @@ def expire_stock_cache(reason):
     return done
 
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.25, 0.15
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.20, 0.20
 CASH_ASSET = 'Cash'
 # No Cash Buffer for standard report
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']

@@ -155,7 +155,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   · K2 per-coin: close/SMA7 ratio > 1.075 → L4, > 1.025 → L3, else L2
 - 마진모드: CROSS (V24 ISOLATED → V25 CROSS)
 - 단독 sleeve BT (backtest_futures_v25.py, 5.6yr, tx 0.0006): CAGR 312%, MDD -38.3%, Cal 8.12 (V24 4.05 대비 +4.07)
-- alloc 60/25/15 + T1+T3U: Cal 5.72 / MDD -18.6% / CAGR 106%
+- alloc 60/20/20 + T1 25pp + T3U 20%: Cal 4.07 / MDD -18.8% / CAGR 76.4% / Sharpe 1.84 (5.8yr, 송금 지연 5영업일)
 
 ### 실행 파라미터 (V25)
 
@@ -184,7 +184,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 
 - 선물 sleeve: D_SMA42 + L3 ISO → D_SMA42 + 동적 L4 max + CROSS
 - 코인 spot / 주식 sleeve: V24 유지 (변경 없음)
-- 자산배분 60/25/15: V24 그대로 유지
+- 자산배분: 2026-11-01 에 60/25/15 → 60/20/20 (T1 25pp). 아래 "자산배분" 절이 정본.
 - 코드 변경:
   · `strategies/cap_defend/futures_live_config.py` (LEVERAGE_MIN/MID/MAX, K2_*, BTC_CAP_*, MARGIN_TYPE)
   · `trade/auto_trade_binance.py` (LEVERAGE_FLOOR/MID/CEILING=2/3/4, SCHEMA_VERSION='V25', _calc_btc_cap_lev/_calc_percoin_k2_lev, set_margin_type 기본 CROSSED)
@@ -201,13 +201,15 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - cron 은 전 자산 1일 1회(`5 9 * * *`), 주식만 23:35 평일.
 - V22→V24 전환 절차와 마이그레이션 스크립트는 2026-04-30 에 끝났고 삭제했다(git 이력 참조).
 
-### 자산배분 (V24 갱신 2026-05-26, B 안 채택 — per-sleeve buffer + 수동 송금)
+### 자산배분 (2026-11-01 갱신 — per-sleeve buffer + 수동 송금)
 
-- 주식 계좌 60% / 업비트 25% / 바이낸스 15% (각 sleeve 계좌 내부에 cash buffer 포함)
-  - 정본: 라이브 코드 STOCK_RATIO/COIN_RATIO/FUTURES_RATIO = 0.60/0.25/0.15 (recommend.py:32, recommend_personal.py:244)
-  - 2026-05-27 V24 그리드 best 로 65/20/15 → 60/25/15 확정 (BT Cal 3.86, MDD -18.2%, CAGR 70.5%, 5.6yr). ※ 옛 "65/20/15" 표기는 stale
+- 주식 계좌 60% / 업비트 20% / 바이낸스 20% (각 sleeve 계좌 내부에 cash buffer 포함)
+  - 정본: 라이브 코드 STOCK_RATIO/COIN_RATIO/FUTURES_RATIO = 0.60/0.20/0.20 (recommend.py, recommend_personal.py)
+  - 2026-11-01 합동 격자(6,656칸)에서 수익 1위로 60/25/15 → 60/20/20 확정. 조건은 T1 25pp · T3U 20%.
+    Cal 4.07 / CAGR 76.4% / MDD -18.8% / Sharpe 1.84 / 송금 2.05회per년 (5.8yr, 송금 지연 5영업일).
+    비중과 문턱은 한 짝이다 — 비중만 옮기고 T1 을 20pp 로 두면 Cal 3.70 으로 옛 60/25/15(3.87)보다 나쁘다.
   - stock 실투자 = 60 × 0.93 = 55.8% of total (7% 계좌 내 cash buffer 제외)
-  - total cash ≈ 4.6% of total (60×0.07 + 25×0.01 + 15×0.01)
+  - total cash ≈ 4.6% of total (60×0.07 + 20×0.01 + 20×0.01)
 - Per-sleeve cash buffer (V24 B 안):
   - stock 계좌 (KIS): 7% cash (계좌 내부 cash buffer, 송금 즉시 활용)
   - spot 계좌 (Upbit): 1% KRW
@@ -219,7 +221,7 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
     슬리브는 그 값을 못 보고 코드 기본값으로 돈다 — 2026-05-26 마이그레이션이 셋을
     `trade_state.json` 에만 써서 선물이 2026-09-06 까지 2% 로 돌았다(2026-09-06 1% 로 교정).
 - 리밸 트리거 (OR 조합):
-  - T1: half_turnover (sum|cur_w - tgt_w|/2) ≥ 20pp
+  - T1: half_turnover (sum|cur_w - tgt_w|/2) ≥ 25pp
   - T3U_can: max((tgt - cur_w)/tgt) ≥ 20% AND 해당 sleeve canary ON
     - stock sleeve canary = EEM Risk-On (live: SMA200 hyst 0.5% dead-zone — V25 정합)
     - spot sleeve canary = BTC > SMA42*(1+1.5%)
@@ -235,8 +237,8 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
   - 자동 cap_ratio + cap_defend 매도 트리거
 - BT 결과 (5.13yr, V24 sleeve, 알림 시점 100% 송금 가정):
   - alloc 60/20/15 + buffer (6/1/1): CAGR 71.2%, Cal 3.88, MDD -18.4%, 누적 14.99x, fire 16
-  - 라이브 트리거는 T1 ht>=20pp OR T3U_can 20% 다. 정본은 recommend_personal.py 의
-    REBAL_HT_THRESHOLD=0.20 과 REBAL_T3U_REL=0.20 이고, 위 "리밸 트리거" 절과 같은 값이다.
+  - 라이브 트리거는 T1 ht>=25pp OR T3U_can 20% 다. 정본은 recommend_personal.py 의
+    REBAL_HT_THRESHOLD=0.25 과 REBAL_T3U_REL=0.20 이고, 위 "리밸 트리거" 절과 같은 값이다.
     (이 자리에 2026-05-23 채택분 T1=13 이 남아 있었다. 2026-10-16 에 코드와 대조해 지웠다.)
   - 트리거 변경 (T3U=25 state) Cal +0.04 향상은 라이브 안정성 손해로 미채택
 
