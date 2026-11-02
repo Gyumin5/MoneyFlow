@@ -6,20 +6,28 @@
 안 하고 있었다. 민감도와 교차 격자는 전 구간 하나로 잰 지도다. 한 사건이 전체를
 설명해도 그 수에는 안 보인다. 여기서 창 순위합을 건다 — 자산배분 때 쓴 그 방식이다.
 
-어떻게 하나. 후보 구성과 기준선을 같은 앵커·같은 자료로 돌려 일별 자산곡선을 받고,
-창마다 네 지표(칼마·샤프·연복리·낙폭)의 순위를 매겨 합산한다. 창은 셋이다 —
+어떻게 하나. 후보와 기준선을 같은 앵커·같은 자료로 돌려 일별 자산곡선을 받고,
+창마다 네 지표(칼마·샤프·연복리·낙폭)를 재서 둘을 비교한다. 창은 셋이다 —
 504봉을 63봉씩, 756봉을 126봉씩, 1008봉을 252봉씩 민다. 짧은 창은 자리를 촘촘히
 보고 긴 창은 한 사건에 덜 흔들린다.
 
-판정은 셋을 같이 본다.
-  ⑴ 순위합이 기준선보다 낮은가(낮을수록 좋다).
-  ⑵ 창마다 기준선을 이긴 비율이 얼마인가 — 같은 창에서 짝으로 비교한다.
-  ⑶ 앵커 일곱 중 몇 곳에서 이기나. 토론 판정선은 최소 다섯이다.
-한 사건이 순개선의 절반 이상을 설명하면 채택하지 않는다 — 창별 승률이 그걸 드러낸다.
+판정은 쌍대다 — 후보 하나와 기준선 둘만 놓고 잰다. 여럿을 한 번에 줄 세우면 끼어든
+제3 구성이 후보의 점수와 앵커 판정을 바꾼다(토론 run-20261102T022434Z 지적). 쌍대로
+재면 순위합이 1.0(모든 창 모든 지표에서 이김) ~ 2.0(다 짐) 사이의 절대 척도가 되어
+회차를 넘어 비교할 수 있다. 1.5 가 동률이다.
+
+동률은 양쪽에 같은 평균순위(1.5)를 준다. 전에는 후보에게 유리한 쪽으로 셌다 —
+`m[k] >= b[k]` 라 두 곡선이 같은 창(둘 다 현금인 구간)이 전부 후보 우세로 집계됐다.
+같은 이유로 창 판정을 승·무·패 셋으로 나눈다.
+
+창 길이별 결과를 따로 내고, 길이별 동일 가중으로도 집계한다. 504봉 창이 1008봉보다
+개수가 훨씬 많아 그냥 합치면 짧은 창이 판정을 지배한다.
+
+판정선은 앵커 일곱 중 다섯이다.
 
 쓰는 법:
   python3 spot_long_windows.py --arms n2-c33-d10-m127,n2-c50-d20-m90
-  python3 spot_long_windows.py --top 8     (교차 격자 칼마 상위에서 자동으로 고른다)
+  python3 spot_long_windows.py --all        (교차 격자의 완성된 구성 전부)
   python3 spot_long_windows.py --summary
 """
 from __future__ import annotations
@@ -36,6 +44,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CAP = os.path.dirname(HERE)
 sys.path.insert(0, CAP)
 sys.path.insert(0, HERE)
+
+# 채택 호출부(trade/v24_shadow_today.py)와 같은 설정으로 돌린다. 이 줄이 없으면
+# 엔진이 'off' 로 떨어져 드리프트 발화 때 종목을 안 갈아끼운다 — 라이브와 다른
+# 전략을 재게 된다(토론 run-20261102T022434Z 가 짚은 자리, 2026-11-02 에 고쳤다).
+os.environ.setdefault('DRIFT_HEALTH_MODE', 'refill')
 
 import unified_backtest as ub  # noqa: E402
 
@@ -57,6 +70,8 @@ BASE = dict(
 # (창 길이, 이동폭) — 봉 단위. 일봉이라 504봉 ≈ 2년, 1008봉 ≈ 4년.
 WINDOWS = [(504, 63), (756, 126), (1008, 252)]
 CAPS = {'c25': 0.25, 'c33': 1 / 3, 'c50': 0.50, 'c100': 1.0}
+KEYS = ('cal', 'sharpe', 'cagr', 'mdd')
+EPS = 1e-12
 
 
 def parse_arm(name):
@@ -98,20 +113,24 @@ def run_arm(bars, fund, name, phase):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--arms', default='')
-    ap.add_argument('--top', type=int, default=8)
+    ap.add_argument('--all', action='store_true',
+                    help='교차 격자에서 앵커 일곱이 다 끝난 구성 전부')
     a = ap.parse_args()
 
     os.makedirs(OUT, exist_ok=True)
     if a.arms:
         arms = [x.strip() for x in a.arms.split(',') if x.strip()]
-    else:
+    elif a.all:
         agg = {}
         for line in open(CROSS, encoding='utf-8'):
             r = json.loads(line)
-            if r.get('Cal') is not None:
-                agg.setdefault(r['arm'], []).append(r['Cal'])
-        full = {k: float(np.mean(v)) for k, v in agg.items() if len(v) >= len(PHASES)}
-        arms = [k for k, _ in sorted(full.items(), key=lambda t: -t[1])[:a.top]]
+            agg.setdefault(r['arm'], []).append(r)
+        arms = sorted(k for k, v in agg.items() if len(v) >= len(PHASES))
+    else:
+        print("후보를 지목해라: --arms <이름들> 또는 --all")
+        print("(전 구간 칼마 상위만 골라 보내는 길은 폐지했다 — 그 선별 자체가"
+              " 창 판정이 잡으려는 함정이다.)")
+        return 2
     if 'BASE' not in arms:
         arms = ['BASE'] + arms
     print(f"후보 {len(arms)}개: {', '.join(arms)}", flush=True)
@@ -119,9 +138,19 @@ def main():
     from long_history import load_extended
     bars, fund = load_extended(verbose=False)
 
+    # 이미 받아 둔 곡선은 다시 안 돌린다.
+    path = os.path.join(OUT, 'curves.npz')
     curves = {}
+    if os.path.exists(path):
+        z = np.load(path)
+        for k in z.files:
+            n, ph = k.split('|')
+            curves[(n, int(ph))] = z[k]
+
     for name in arms:
         for ph in PHASES:
+            if (name, ph) in curves:
+                continue
             t0 = time.time()
             eq = run_arm(bars, fund, name, ph)
             if eq is None:
@@ -130,89 +159,102 @@ def main():
             curves[(name, ph)] = eq
             print(f"  {name} 위상 {ph}: {len(eq)}봉 {time.time()-t0:.1f}초", flush=True)
 
-    np.savez_compressed(os.path.join(OUT, 'curves.npz'),
+    np.savez_compressed(path,
                         **{f"{n}|{p}": v for (n, p), v in curves.items()})
     judge(curves, arms)
     return 0
 
 
-def judge(curves, arms):
-    """창마다 순위를 매겨 합산하고, 기준선과의 짝 비교 승률도 낸다."""
-    rows = []          # (창id, 구성, 지표dict)
-    for ph in PHASES:
-        have = [n for n in arms if (n, ph) in curves]
-        if len(have) < 2:
-            continue
-        L = min(len(curves[(n, ph)]) for n in have)
-        for wlen, step in WINDOWS:
-            if L < wlen:
-                continue
-            for s in range(0, L - wlen + 1, step):
-                wid = f"p{ph}-w{wlen}-s{s}"
-                for n in have:
-                    m = win_metrics(curves[(n, ph)][s:s + wlen])
-                    if m:
-                        rows.append((wid, n, m))
-    if not rows:
-        print("창이 없다")
-        return
-
-    by_win = {}
-    for wid, n, m in rows:
-        by_win.setdefault(wid, {})[n] = m
-
-    ranks = {n: [] for n in arms}
-    wins = {n: [0, 0] for n in arms}   # [기준선을 이긴 창, 전체 창]
-    for wid, d in by_win.items():
-        if 'BASE' not in d or len(d) < 2:
-            continue
-        for key, rev in (('cal', True), ('sharpe', True), ('cagr', True), ('mdd', True)):
-            order = sorted(d.items(), key=lambda t: -t[1][key] if rev else t[1][key])
-            for i, (n, _m) in enumerate(order, 1):
-                ranks[n].append(i)
-        b = d['BASE']
-        for n, m in d.items():
-            if n == 'BASE':
-                continue
-            wins[n][1] += 1
-            better = sum(1 for k in ('cal', 'sharpe', 'cagr', 'mdd') if m[k] >= b[k])
-            if better >= 3:
-                wins[n][0] += 1
-
-    print(f"\n창 {len(by_win)}개 (앵커 {len(PHASES)}곳 × 창길이 셋)")
-    print("  구성                 순위합평균  기준선대비 우세창   네지표 전구간평균")
+def pair_windows(curves, name, ph):
+    """한 앵커에서 후보와 기준선의 창별 지표 짝을 낸다 — (창길이, 후보m, 기준선m)."""
+    if (name, ph) not in curves or ('BASE', ph) not in curves:
+        return []
+    a, b = curves[(name, ph)], curves[('BASE', ph)]
+    L = min(len(a), len(b))
     out = []
-    for n in arms:
-        if not ranks[n]:
+    for wlen, step in WINDOWS:
+        if L < wlen:
             continue
-        rs = float(np.mean(ranks[n]))
-        w = wins[n]
-        pct = (100.0 * w[0] / w[1]) if w[1] else 0.0
-        out.append((n, rs, pct))
-    for n, rs, pct in sorted(out, key=lambda t: t[1]):
-        tag = ' (기준선)' if n == 'BASE' else ''
-        print(f"  {n:<20} {rs:9.3f} {pct:14.1f}%{tag}")
+        for s in range(0, L - wlen + 1, step):
+            ma = win_metrics(a[s:s + wlen])
+            mb = win_metrics(b[s:s + wlen])
+            if ma and mb:
+                out.append((wlen, ma, mb))
+    return out
 
-    # 앵커별로 기준선을 이겼나 — 토론 판정선은 일곱 중 다섯이다.
-    print("\n앵커별 우세 (창 순위합 기준, 기준선보다 낮으면 우세)")
-    for n in arms:
-        if n == 'BASE':
+
+def score_pair(pairs):
+    """쌍대 순위합과 승·무·패. 순위는 1.0/1.5/2.0 (동률은 양쪽 1.5)."""
+    rs, w, d, l = [], 0, 0, 0
+    for _wlen, ma, mb in pairs:
+        better = worse = 0
+        for k in KEYS:
+            if ma[k] > mb[k] + EPS:
+                rs.append(1.0)
+                better += 1
+            elif ma[k] < mb[k] - EPS:
+                rs.append(2.0)
+                worse += 1
+            else:
+                rs.append(1.5)
+        if better > worse:
+            w += 1
+        elif better < worse:
+            l += 1
+        else:
+            d += 1
+    n = w + d + l
+    return dict(rank=float(np.mean(rs)) if rs else float('nan'),
+                win=w, draw=d, loss=l, n=n,
+                winpct=(100.0 * w / n) if n else 0.0)
+
+
+def judge(curves, arms):
+    """후보마다 기준선과 둘씩 비교한다. 제3 구성이 점수에 끼어들지 않는다."""
+    print(f"\n쌍대 창 판정 (앵커 {len(PHASES)}곳 × 창길이 셋)")
+    print("  순위합은 1.0 이 모든 창·모든 지표 우세, 1.5 가 동률, 2.0 이 전패다.")
+    print("\n  구성                 순위합  승     무     패    승률   앵커")
+    results = []
+    for name in arms:
+        if name == 'BASE':
             continue
-        cnt = 0
+        all_pairs, per_len, anchors = [], {}, 0
         for ph in PHASES:
-            rb, rn = [], []
-            for wid, d in by_win.items():
-                if not wid.startswith(f"p{ph}-") or 'BASE' not in d or n not in d:
-                    continue
-                for key in ('cal', 'sharpe', 'cagr', 'mdd'):
-                    order = sorted(d.items(), key=lambda t: -t[1][key])
-                    pos = {k: i for i, (k, _) in enumerate(order, 1)}
-                    rb.append(pos['BASE'])
-                    rn.append(pos[n])
-            if rb and float(np.mean(rn)) < float(np.mean(rb)):
-                cnt += 1
-        mark = '통과' if cnt >= 5 else '미달'
-        print(f"  {n:<20} {cnt}/7  {mark}")
+            p = pair_windows(curves, name, ph)
+            if not p:
+                continue
+            all_pairs += p
+            for wlen, ma, mb in p:
+                per_len.setdefault(wlen, []).append((wlen, ma, mb))
+            if score_pair(p)['rank'] < 1.5 - EPS:
+                anchors += 1
+        if not all_pairs:
+            continue
+        s = score_pair(all_pairs)
+        # 창 길이별 동일 가중 — 504봉 창이 개수로 판정을 지배하지 않게 한다.
+        lens = sorted(per_len)
+        bylen = {wl: score_pair(per_len[wl]) for wl in lens}
+        s['rank_eq'] = float(np.mean([bylen[wl]['rank'] for wl in lens])) if lens else s['rank']
+        s['anchors'] = anchors
+        s['bylen'] = bylen
+        results.append((name, s))
+        mark = '통과' if anchors >= 5 else '미달'
+        print(f"  {name:<20} {s['rank']:6.3f} {s['win']:5d} {s['draw']:6d} "
+              f"{s['loss']:6d} {s['winpct']:6.1f}% {anchors}/7 {mark}")
+
+    print("\n창 길이별 (순위합 / 승률) · 맨 끝은 길이 동일가중 순위합")
+    print("  구성                  504봉          756봉         1008봉     동일가중")
+    for name, s in results:
+        cells = []
+        for wl in (504, 756, 1008):
+            b = s['bylen'].get(wl)
+            cells.append(f"{b['rank']:5.3f}/{b['winpct']:4.1f}%" if b else "    -     ")
+        print(f"  {name:<20} {cells[0]}  {cells[1]}  {cells[2]}  {s['rank_eq']:8.3f}")
+
+    print("\n읽는 법. 승·무·패는 창 하나에서 네 지표 중 엄격 우세 수와 엄격 열세 수를")
+    print("비교해 가른다. 무는 양쪽이 같은 창이다 — 둘 다 현금인 구간이 여기 모인다.")
+    print("앵커 칸은 그 앵커만의 쌍대 순위합이 1.5 보다 낮은 곳 수이고 판정선은 다섯이다.")
+    return results
 
 
 def summary():
