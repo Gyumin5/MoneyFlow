@@ -58,6 +58,9 @@ CROSS = os.path.join(CAP, '..', '..', 'state',
 # ('off' 리필), state/20261102-spot-long-windows-refill (리필은 맞지만 가드가 켜진 채).
 # 설정을 입증할 수 없는 캐시는 재사용하지 않는다(토론 run-20261102T062159Z).
 OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-windows-noguard')
+# 2차 격자는 다른 디렉토리에 쌓는다. 환경변수로 덮는 이유는 spot_cross_metrics.py 가
+# 이 상수를 import 해서 쓰기 때문이다 — 인자로 받으면 그쪽이 못 따라온다.
+OUT = os.environ.get('SPOT_WIN_OUT') or OUT
 START = '2017-01-01'
 END = '2026-11-01'
 PHASES = [0, 4, 8, 12, 16, 20, 24]
@@ -86,12 +89,52 @@ EPS = 1e-12
 
 
 def parse_arm(name):
-    """교차 격자의 이름(n2-c33-d10-m127)을 run() 인자로 되돌린다."""
+    """격자의 이름을 run() 인자로 되돌린다.
+
+    1차 격자는 축 넷이다 — n2-c33-d10-m127.
+    2차 격자는 뒤에 둘을 더 붙인다 — n2-c50-d10-m127-s217-v90 (앵커 간격 · 변동성 기간).
+    꼬리가 없으면 그 축은 BASE 값이라 1차 이름이 그대로 산다. 두 격자의 같은 구성이
+    같은 곡선을 내야 하므로 이름만 보고 갈라지지 않게 한다.
+    """
     if name == 'BASE':
         return {}
-    n, c, d, m = name.split('-')
-    return dict(universe_size=int(n[1:]), cap=CAPS[c],
-                drift_threshold=int(d[1:]) / 100.0, mom_long_days=int(m[1:]))
+    parts = name.split('-')
+    n, c, d, m = parts[:4]
+    out = dict(universe_size=int(n[1:]), cap=CAPS[c],
+               drift_threshold=int(d[1:]) / 100.0, mom_long_days=int(m[1:]))
+    for tail in parts[4:]:
+        if tail.startswith('s'):
+            out['snap_interval_bars'] = int(tail[1:])
+        elif tail.startswith('v'):
+            out['vol_days'] = int(tail[1:])
+        else:
+            raise ValueError(f"모르는 꼬리: {tail} (이름 {name})")
+    return out
+
+
+# ─── 2차 격자 ───
+# 1차 격자(축 넷)가 고른 축은 가드를 켠 채 돌린 민감도에서 나왔다. 가드를 끄고 다시
+# 재니 앵커 간격(앵커폭 대비 0.35 → 1.63)과 변동성 기간(0.80 → 1.54)이 잡음선 위로
+# 올라왔다(커밋 a157c2a). 그 둘을 더해 다시 짠다.
+#
+# 값에서 뺀 것 셋은 1차에서 명확히 나빴고 축별 평균이 단조로웠다 — 종목 5개(칼마
+# 1.454 대 2개 2.032), 상한 25%(1.568 대 100% 2.017), 장기 모멘텀 240일(1.099 대
+# 127일 2.180). 되살릴 이유가 없고, 안 빼면 칸이 두 배를 넘는다.
+# 현행 구성(n3-c33-d10-m127-s217-v90)과 1차 통과 구성(n2-c50-d10-m127-s217-v90)은
+# 둘 다 이 격자 안에 그대로 있다.
+G2_NSEL = [2, 3]
+G2_CAPS = ['c33', 'c50', 'c100']
+G2_DRIFT = [10, 20, 30]
+G2_MOML = [90, 127]
+G2_SNAP = [170, 217, 280]
+G2_VOL = [60, 90, 120]
+
+
+def grid2_arms():
+    import itertools
+    for n, c, d, m, s, v in itertools.product(
+            G2_NSEL, G2_CAPS, G2_DRIFT, G2_MOML, G2_SNAP, G2_VOL):
+        yield f"n{n}-{c}-d{d:02d}-m{m}-s{s}-v{v}"
 
 
 def win_metrics(eq):
@@ -126,11 +169,15 @@ def main():
     ap.add_argument('--arms', default='')
     ap.add_argument('--all', action='store_true',
                     help='교차 격자에서 앵커 일곱이 다 끝난 구성 전부')
+    ap.add_argument('--grid2', action='store_true',
+                    help='2차 격자(축 여섯) 전부. 교차 격자 파일을 안 읽고 이름을 직접 만든다')
     a = ap.parse_args()
 
     os.makedirs(OUT, exist_ok=True)
     if a.arms:
         arms = [x.strip() for x in a.arms.split(',') if x.strip()]
+    elif a.grid2:
+        arms = sorted(grid2_arms())
     elif a.all:
         agg = {}
         for line in open(CROSS, encoding='utf-8'):
