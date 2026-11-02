@@ -23,9 +23,16 @@
 낸다. 실제로 걸렸다 — universe_size 가 여기선 톱니(4/5)인데 상한을 50% 로 고정한
 2x2 측정에서는 1<2>3>4>5 단봉이었다(history #118). 민감도는 상한을 현행 1/3 에 두고
 종목 수만 바꾸는데, 그러면 투자 비중이 같이 움직인다(2개면 67%, 3개면 100%). 선정
-효과와 노출 효과가 한 축에 겹쳐서 톱니로 보인 것이다. 그래서 톱니로 찍힌 축은 그 값이
-다른 축과 곱해져 노출·비용을 바꾸는지 먼저 보고, 그렇다면 상대 축을 고정한 2x2 로 다시
-잰다. 모양만 보고 과적합이라고 적지 않는다.
+효과와 노출 효과가 한 축에 겹쳐서 톱니로 보인 것이다.
+
+그래서 축마다 성격도 같이 낸다. 노출을 올리면 연복리와 낙폭이 같이 커지고, 선정이
+좋아지면 연복리만 오르고 낙폭은 안 커진다. 축을 따라가며 연복리와 낙폭 절댓값의
+상관을 재서 +0.7 이상이면 노출축으로 부른다. 노출축의 모양은 액면 그대로 읽지 않고,
+상대 축을 고정한 2x2 로 다시 잰다. 모양만 보고 과적합이라고 적지 않는다.
+
+값이 숫자가 아닌 축(health_mode 처럼 이름 몇 개 중 고르는 것)은 모양을 안 본다.
+이웃이라는 게 없어서 톱니·단봉이 뜻을 갖지 않는다 — 글자순으로 늘어놓고 이웃 차이를
+세면 아무 말이나 나온다.
 
 실행: python3 spot_axis_shape.py [측정디렉토리]
 기본 측정: state/20261102-spot-long-noguard (가드를 끈 라이브 정합 민감도)
@@ -66,20 +73,34 @@ def by_value(rows, axis):
     out = {}
     for k, ms in g.items():
         v = json.loads(k)
-        # 정렬 가능한 축만 모양을 본다. 목록·사전형 값은 순서가 없어 이웃이 없다.
-        out[v if isinstance(v, (int, float)) else k] = dict(
+        # 수치 축만 모양을 본다. 이름 중에 고르는 축은 이웃이 없어 톱니가 뜻을 안 갖는다.
+        out[v if isinstance(v, (int, float)) and not isinstance(v, bool) else k] = dict(
             cal=float(np.mean([m['calmar'] for m in ms])),
             cagr=float(np.mean([m['cagr'] for m in ms])),
+            mdd=float(np.mean([abs(m['mdd']) for m in ms])),
             n=len(ms))
     return out
 
 
-def shape(vals, span):
-    """값→칼마 사전을 받아 모양 이름과 근거 수치를 돌려준다."""
+def nature(vals):
+    """노출축인가 선정축인가. 연복리와 낙폭이 같이 커지면 노출을 산 것이다."""
     try:
         ks = sorted(vals)
     except TypeError:
-        return 'ordered-불가', {}
+        return '—', float('nan')
+    a = np.asarray([vals[k]['cagr'] for k in ks], dtype=float)
+    b = np.asarray([vals[k]['mdd'] for k in ks], dtype=float)
+    if len(a) < 3 or a.std() < 1e-12 or b.std() < 1e-12:
+        return '—', float('nan')
+    r = float(np.corrcoef(a, b)[0, 1])
+    return ('노출' if r >= 0.7 else '선정'), r
+
+
+def shape(vals, span):
+    """값→칼마 사전을 받아 모양 이름과 근거 수치를 돌려준다."""
+    ks = sorted(vals)
+    if not all(isinstance(k, (int, float)) for k in ks):
+        return '범주형', {}
     cals = [vals[k]['cal'] for k in ks]
     width = max(cals) - min(cals)
     if width <= span:
@@ -106,27 +127,37 @@ def main():
     print(f"측정 {os.path.relpath(src, ROOT)} · 칸 {len(rows)} · 축 {len(axes)}")
     print(f"기준선 앵커 폭(칼마) {span:.3f} — 이보다 작은 차이는 잡음으로 본다\n")
 
-    print(f"  {'축':<22}{'값수':>5}{'폭':>8}{'최고값':>10}{'톱니/계단':>11}  모양")
+    print(f"  {'축':<22}{'값수':>5}{'폭':>8}{'최고값':>10}{'톱니/계단':>11}  {'모양':<6}{'성격':>6}{'상관':>8}")
     verdict = {}
+    tangled = []
     for ax in axes:
         vals = by_value(rows, ax)
         if len(vals) < 3:
             print(f"  {ax:<22}{len(vals):>5}       —         —          —  값이 셋 미만")
             continue
         name, info = shape(vals, span)
+        nat, r = nature(vals)
         verdict.setdefault(name, []).append(ax)
+        if nat == '노출':
+            tangled.append(ax)
         jag = f"{info.get('jag', 0)}/{info.get('steps', 0)}" if 'jag' in info else '—'
-        print(f"  {ax:<22}{len(vals):>5}{info['width']:>8.3f}"
-              f"{str(info['best']):>10}{jag:>11}  {name}")
+        w = f"{info['width']:.3f}" if 'width' in info else '—'
+        best = str(info.get('best', '—'))
+        rs = '—' if r != r else f"{r:+.2f}"
+        print(f"  {ax:<22}{len(vals):>5}{w:>8}{best:>10}{jag:>11}  {name:<6}{nat:>6}{rs:>8}")
 
     print("\n  모양별")
-    for name in ('단봉', '톱니', '단조', '평평', 'ordered-불가'):
+    for name in ('단봉', '톱니', '단조', '평평', '범주형'):
         if name in verdict:
             print(f"    {name}: {', '.join(verdict[name])}")
+    if tangled:
+        print(f"\n  노출축(모양을 액면으로 안 읽는다): {', '.join(tangled)}")
 
-    print("\n  쓰는 법. 단봉인 축만 값을 고를 자격이 있다. 톱니는 값 고르기 자체가")
-    print("  과적합이라 지금 값을 유지한다. 단조는 봉우리를 못 본 것이라 범위를 넓혀")
-    print("  다시 재기 전엔 끝값을 안 고른다. 평평은 격자에서 뺀다 — 칸만 늘린다.")
+    print("\n  쓰는 법. 단봉이면서 선정축인 것만 값을 고를 자격이 있다. 톱니는 값 고르기")
+    print("  자체가 과적합이라 지금 값을 유지한다. 단조는 봉우리를 못 본 것이라 범위를")
+    print("  넓혀 다시 재기 전엔 끝값을 안 고른다. 평평은 격자에서 뺀다 — 칸만 늘린다.")
+    print("  노출축은 상대 축을 고정한 2x2 로 다시 잰다 — 연복리가 오른 게 잘 골라서인지")
+    print("  현금을 덜 들어서인지 한 축만 움직인 측정으로는 안 갈린다.")
     return 0
 
 
