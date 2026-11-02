@@ -461,3 +461,32 @@
 2020~2021 에 그 몇 번이 잘 맞은 결과일 수 있고, 그렇다면 다음 구간에 재현된다는
 보장이 없다. 0.40 을 고르는 근거가 네 축에서 일관되게 나오는 것은 사실이지만,
 그 일관성의 뿌리가 얇은 사건 수라는 것은 채택 판단에 같이 올린다.
+
+## 바꾼다면 어디를 고치나 — 변경 범위 조사
+
+결정이 서면 바로 집행할 수 있게 미리 짚었다. 코드는 안 고쳤다.
+
+끄는 쪽은 이미 플래그가 있다. `trade/coin_live_engine.py:91` 의 `DRIFT_ENABLED = True` 를
+False 로 두면 `drift_fire` 가 강제로 False 가 되고 스냅샷 전용으로 돈다(1382행). 문턱을
+올리는 쪽은 90행 `DRIFT_THRESHOLD_SPOT = 0.10` 한 줄이다.
+
+프로젝트 규칙의 "코인 전략 변경 시 최소 동기화 대상" 에 비춰 같이 고칠 자리.
+
+  trade/coin_live_engine.py      90행 상수(또는 91행 플래그), 머리말 4·11·19행
+  trade/v24_shadow_today.py      49행 drift_threshold=0.10 (채택 백테스트 호출부)
+  strategies/cap_defend/recommend_personal.py   11행·556행 문구
+  strategies/cap_defend/recommend.py            같은 문구가 있으면 같이
+  trade/ops/check_params_drift.py               아래 참조
+  OPERATION_MANUAL.md / CLAUDE.md               현물 V24 절
+
+고칠 필요 없는 자리. `trade/executor_coin.py` 는 상수를 안 들고 엔진이 돌려준
+`result.drift_threshold` 만 찍는다(759·1033·1048·1050행). `trade/ops/signal_parity_daily.py`
+203행의 `drift_threshold=0.03` 은 선물 선정 대조용이고 거기서는 스냅 기계를 꺼 둬서
+(`n_snapshots=1, snap_interval_bars=1`) 드리프트가 발화하지 않는다.
+
+같이 메울 구멍 하나. 매일 09:15 에 도는 `check_params_drift.py` 의 현물 칸이
+드리프트 문턱을 안 본다. 47~53행 CANONICAL['spot']['params'] 는 `MEMBER_D_SMA42` 사전만
+대조하는데 그 사전에 드리프트가 없다. 즉 지금은 누가 `DRIFT_THRESHOLD_SPOT` 를 바꿔도
+경고가 안 뜬다. 선물 쪽은 `DRIFT_THRESHOLD_FUT` 가 모듈 상수라 사정이 같다.
+바꾸는 회차에 이 대조를 같이 넣는다 — 2026-06-06 주식 사고(라이브 모멘텀이 조용히
+어긋나 종목 선정이 16.8% 날 갈렸는데 경보가 없었다)가 정확히 이 계열이다.
