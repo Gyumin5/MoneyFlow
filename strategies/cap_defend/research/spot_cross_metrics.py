@@ -96,12 +96,19 @@ def main():
         print(f"  칼마 차이 {gap:.6f}" + ("  (같다)" if gap < 1e-6 else "  ← 벌어졌다. 설정을 다시 봐라"))
 
     print("\n축별 평균 칼마 / 연복리 / 낙폭")
-    pos = {'종목수': 0, '상한': 1, '드리프트': 2, '장기모멘텀': 3}
+    # 축은 자리가 아니라 조각의 머리글자로 가른다. 자리로 잡으면 1차 격자(조각 넷)에만
+    # 맞아서, 2차 격자 이름(n2-c50-d10-m127-s217-v90)을 줬을 때 뒤의 앵커 간격·변동성
+    # 기간 두 축이 에러 없이 집계에서 통째로 빠진다 — 인덱스 0~3 이 그대로 유효해서
+    # 아무 경고도 안 난다. 머리글자로 가르면 두 격자가 같은 코드로 돈다.
+    label = {'n': '종목수', 'c': '상한', 'd': '드리프트', 'm': '장기모멘텀',
+             's': '앵커간격', 'v': '변동성기간'}
     grid = [(n, a) for n, a in out if n != 'BASE']
-    for axis, i in pos.items():
-        buckets = {}
-        for name, a in grid:
-            buckets.setdefault(name.split('-')[i], []).append(a)
+    axes = {}
+    for name, a in grid:
+        for piece in name.split('-'):
+            axes.setdefault(label.get(piece[:1], piece[:1]), {}) \
+                .setdefault(piece, []).append(a)
+    for axis, buckets in axes.items():
         print(f"  [{axis}]")
         for k, v in sorted(buckets.items()):
             print(f"    {k:<8} 칼마 {np.mean([x['cal'] for x in v]):6.3f}  "
@@ -109,7 +116,7 @@ def main():
                   f"낙폭 {np.mean([x['mdd'] for x in v]):8.4f}  "
                   f"(구성 {len(v)}개)")
 
-    print("\n읽는 법. 축별 평균은 그 축의 값 하나를 고정하고 나머지 세 축을 전부 평균한 것이다.")
+    print("\n읽는 법. 축별 평균은 그 축의 값 하나를 고정하고 나머지 축을 전부 평균한 것이다.")
     print("  한 축이 혼자 결과를 끌면 거기서 보이고, 축끼리 얽히면 평균이 평평해진다.")
     print("  평균이 좋다고 채택 근거가 되지는 않는다 — 노출을 키우면 연복리가 오르고 낙폭도")
     print("  같이 커져서, 칼마만 보면 가려진다. 창 쌍대 판정을 먼저 통과한 구성만 본다.")
