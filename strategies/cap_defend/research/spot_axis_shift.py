@@ -48,11 +48,29 @@ def load(d):
     return rows
 
 
-def digest(rows):
-    """축별 폭과 기준선 앵커 폭."""
+def axis_values(rows):
+    """축마다 실제로 잰 값 집합. 두 측정의 축 목록이 같은지 보는 데 쓴다."""
+    out = {}
+    for r in rows:
+        if r['axis'] != '_baseline':
+            out.setdefault(r['axis'], set()).add(json.dumps(r['value']))
+    return out
+
+
+def digest(rows, only=None):
+    """축별 폭과 기준선 앵커 폭.
+
+    only 를 주면 그 축의 그 값들만 센다. 두 측정의 값 목록이 다를 때 공통 값으로만
+    다시 재려고 둔다 — 값이 많은 쪽은 폭(최고-최저)이 커지기 쉬워서, 목록이 다르면
+    그 축의 대비가 축 자체의 변화인지 목록이 넓어진 탓인지 안 갈린다.
+    """
     by = {}
     for r in rows:
-        by.setdefault((r['axis'], json.dumps(r['value'])), []).append(r['metrics'])
+        key = (r['axis'], json.dumps(r['value']))
+        if only is not None and r['axis'] != '_baseline':
+            if key[1] not in only.get(r['axis'], ()):
+                continue
+        by.setdefault(key, []).append(r['metrics'])
 
     base = [v for (ax, _val), v in by.items() if ax == '_baseline']
     anchor_cal = anchor_cagr = float('nan')
@@ -101,22 +119,40 @@ def main():
         print("민감도 재측정이 도는 중이면 끝난 뒤에 다시 불러라.")
         return 1
 
+    # 두 측정이 같은 값 목록을 쟀는지 먼저 본다. 다르면 그 축만 공통 값으로 다시 잰다.
+    av_o, av_n = axis_values(ro), axis_values(rn)
+    common = {ax: (av_o.get(ax, set()) & av_n.get(ax, set()))
+              for ax in set(av_o) | set(av_n)}
+    mismatch = {ax for ax in common
+                if av_o.get(ax, set()) != av_n.get(ax, set())}
+
     do, ac_o, ag_o = digest(ro)
     dn, ac_n, ag_n = digest(rn)
+    # 공통 값만으로 다시 잰 것. 목록이 같은 축은 위와 같은 값이 나온다.
+    do_c, _, _ = digest(ro, only=common)
+    dn_c, _, _ = digest(rn, only=common)
+
     print(f"옛 측정 {len(ro)}칸 · 새 측정 {len(rn)}칸")
+    if mismatch:
+        print(f"  [주의] 값 목록이 다른 축 {len(mismatch)}개: {', '.join(sorted(mismatch))}")
+        for ax in sorted(mismatch):
+            print(f"      {ax}: 옛 {len(av_o.get(ax, set()))}개 · 새"
+                  f" {len(av_n.get(ax, set()))}개 · 공통 {len(common[ax])}개")
+        print("      이 축은 아래 표의 '공통' 열로 읽는다 — 값이 많은 쪽이 폭도 커지기 쉽다.")
     # 축 하나가 덜 끝난 채로 평균을 내면 그 축의 폭이 실제보다 좁게 나온다.
     # 미완이면 수치를 결론으로 쓰지 않는다 — 도구가 도는지 보는 용도다.
-    if len(rn) < len(ro):
-        print(f"  [주의] 새 측정이 아직 {len(ro) - len(rn)}칸 모자란다."
+    if set(av_n) < set(av_o):
+        print(f"  [주의] 새 측정에 아직 없는 축: {', '.join(sorted(set(av_o) - set(av_n)))}."
               " 끝나기 전 수치는 결론으로 인용하지 않는다.")
     print(f"기준선 앵커 폭 — 칼마 {ac_o:.3f} → {ac_n:.3f},"
           f" 연복리 {ag_o:.4f} → {ag_n:.4f}\n")
 
-    print("축별 칼마 폭과 앵커폭 대비 (1 아래면 잡음과 못 가른다)")
+    print("\n축별 칼마 폭과 앵커폭 대비 (1 아래면 잡음과 못 가른다)")
+    print("판정은 두 측정이 공통으로 잰 값만으로 한다 — 목록이 다르면 비교가 안 선다.")
     print(f"  {'축':<20}{'옛폭':>8}{'옛대비':>8}{'새폭':>8}{'새대비':>8}  판정")
     rows = []
-    for ax in sorted(set(do) | set(dn)):
-        o, n = do.get(ax), dn.get(ax)
+    for ax in sorted(set(do_c) | set(dn_c)):
+        o, n = do_c.get(ax), dn_c.get(ax)
         so = o['cal_span'] if o else float('nan')
         sn = n['cal_span'] if n else float('nan')
         ro_ = so / ac_o if ac_o == ac_o and ac_o > 0 else float('nan')
@@ -140,22 +176,27 @@ def main():
                     verdict += f" (크게 커졌다 ×{chg:.2f})"
         else:
             verdict = "둘 다 잡음"
+        if ax in mismatch:
+            verdict += f" [공통 {len(common[ax])}값만]"
         rows.append((ax, so, ro_, sn, rn_, verdict))
     for ax, so, ro_, sn, rn_, v in sorted(rows, key=lambda t: -(t[4] if t[4] == t[4] else -1)):
         print(f"  {ax:<20}{so:8.3f}{ro_:8.2f}{sn:8.3f}{rn_:8.2f}  {v}")
 
-    print("\n축별 최고 칼마 값이 옮겨졌나")
+    print("\n축별 최고 칼마 값이 옮겨졌나 (여기는 각자 잰 값 전부로 본다)")
     print(f"  {'축':<20}{'옛최고값':>12}{'옛칼마':>9}{'새최고값':>12}{'새칼마':>9}")
     for ax in sorted(set(do) & set(dn)):
         o, n = do[ax], dn[ax]
         mark = "" if str(o['best_val']) == str(n['best_val']) else "  ← 옮겨졌다"
+        if ax in mismatch:
+            mark += "  (값 목록이 달라 이 이동은 목록 탓일 수 있다)"
         print(f"  {ax:<20}{str(o['best_val']):>12}{o['best_cal']:9.3f}"
               f"{str(n['best_val']):>12}{n['best_cal']:9.3f}{mark}")
 
     print("\n연복리 폭도 같이 본다 — 칼마만 보면 노출을 줄여 낙폭을 깎은 축이 좋아 보인다.")
+    print("(공통 값 기준)")
     print(f"  {'축':<20}{'옛연복리폭':>12}{'새연복리폭':>12}")
-    for ax in sorted(set(do) & set(dn)):
-        print(f"  {ax:<20}{do[ax]['cagr_span']:12.4f}{dn[ax]['cagr_span']:12.4f}")
+    for ax in sorted(set(do_c) & set(dn_c)):
+        print(f"  {ax:<20}{do_c[ax]['cagr_span']:12.4f}{dn_c[ax]['cagr_span']:12.4f}")
     return 0
 
 
