@@ -16,9 +16,10 @@ asset_type="spot"|"fut" 플래그로 분기. 차이는 파라미터로만:
 - 선정: 시총순 Top N → Greedy Absorption
 - 비중: EW + Cap 33%
 - 3-snapshot merge (앵커일: Day 1/10/19)
-- DD Exit (60d peak -25%)
-- Blacklist (-15% daily → 7일 제외)
-- Crash Breaker (BTC -10% → 3일 현금)
+- DD Exit / Blacklist / Crash Breaker — 기본값은 전부 꺼져 있다(2026-11-02).
+  라이브 현물 V24 와 선물 V25 에 전략 가드가 없어서다(CLAUDE.md "전략 가드 없음").
+  켜고 재려면 호출부가 dd_lookback·bl_drop·crash_threshold 를 명시로 넘긴다.
+  알고리즘 자체는 그대로 남아 있다 — 끈 것은 기본값뿐이다.
 - Drift 리밸런싱 (10% half-turnover)
 - PFD (플립 후 5일 재평가)
 - 격리마진 청산 (Low/High)
@@ -244,9 +245,14 @@ def run(bars, funding, interval='1h', leverage=1.0,
         mom_mid_days=0, mom_mid_bars=0,  # V25: 3-mom 지원 (mom_mid 추가)
         zscore_mom_bars=0, zscore_sharpe_bars=0,  # V25 selection='zscore' 룩백
         canary_hyst=0.015,
-        dd_lookback=60, dd_threshold=-0.25,
+        # 전략 가드 셋(DD 탈출·블랙리스트·급락 차단)은 기본이 꺼짐이다. 라이브 현물
+        # V24 와 선물 V25 에 이 가드가 없는데 엔진 기본값만 켜져 있어서, 안 넘긴
+        # 호출부가 아무 경고 없이 라이브와 다른 전략을 쟀다. 2026-11-02 하루에 네
+        # 자리가 같은 함정에 빠졌다(history #114). 켜고 재려면 명시로 넘긴다 —
+        # 가드 알고리즘과 dd_threshold·bl_days 는 그대로 둔다.
+        dd_lookback=0, dd_threshold=-0.25,
         dd_bars_override=0,  # 0이면 dd_lookback*bpd 사용
-        bl_drop=-0.15, bl_days=7,
+        bl_drop=0.0, bl_days=7,
         bl_bars_override=0,
         drift_threshold=0.10, post_flip_delay=5,
         daily_gate=False,
@@ -257,7 +263,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         n_snapshots=3,  # 스냅샷 수 (3=월3회, 6=월6회, 12=거의매일)
         snap_interval_bars=0,  # 0=달력 기반, >0=봉 기반 앵커 간격
         phase_offset_bars=0,  # 봉 기반 앵커 위상 오프셋 (0=기존 동작)
-        crash_threshold=-0.10,
+        crash_threshold=-10.0,
         crash_lookback_bars=0,  # 0=bpd(일간), >0=N봉 누적 수익률
         crash_cool_override=0,  # 0=3*bpd, >0=직접 봉 수
         bl_lookback_bars=0,  # 0=bpd(일간), >0=N봉 누적 수익률
