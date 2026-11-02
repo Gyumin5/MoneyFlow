@@ -565,6 +565,12 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
   정렬은 각 trace 항목의 date 직전 `all_dates` 항목(=prev_date=signal)으로 키잉. (43일 어긋남 주의.)
 - snap 머신 무력화: `n_snapshots=1, snap_interval_bars=1` → combined = 매봉 fresh 선정.
 - 가드 OFF (라이브 무가드 정합): `dd_lookback=0, bl_drop=0, crash_threshold=-10`.
+  2026-11-02 부터 이것이 `unified_backtest.run()` 의 기본값이다(커밋 7de5788) —
+  안 넘기면 라이브 정합으로 돈다. 그 전에는 기본값이 가드를 켠 채였고, 안 넘긴
+  호출부가 경고 없이 라이브와 다른 전략을 쟀다(history #114·#115). 옛 결과를
+  재현하려면 그 호출에 `dd_lookback=60, dd_threshold=-0.25, bl_drop=-0.15,
+  bl_days=7, crash_threshold=-0.10` 을 명시로 넘긴다. 가드를 켜서 재는 실험은
+  지금도 명시로 넘기면 그대로 돈다 — 알고리즘은 안 지웠다.
 - 선물 라이브는 `index[-2]`=signal (index[-1]=진행중봉) → bslice 를 d+1 까지 줘 정렬.
 
 체결층·리필 정합 (2026-10-18 운영자 지시로 맞췄다 — 선정층 패리티와 별개 축이다):
