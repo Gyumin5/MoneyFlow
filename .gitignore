@@ -44,6 +44,11 @@ trade/binance_history.db
 trade/binance_trade.log
 trade/executor_coin.log*
 trade/executor_stock.log*
+# 루트의 회전 로그. *.log 는 executor_stock.log.2026-10-30 처럼 날짜로 끝나는
+# 회전분을 못 걸러서 추적 후보로 뜬다.
+executor_coin.log*
+executor_stock.log*
+binance_trade.log*
 trade/universe_cg_cache.json
 trade/universe_upbit_cache.json
 trade/binance_exchinfo_cache.json
