@@ -54,9 +54,14 @@ SHIB UNI AAVE YFI COMP SUSHI CRV LEO
 START_MS = int(datetime(2014, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
 
-def _get(url, tries=6):
-    """공개 통로를 두드린다. 429 면 물러섰다 다시 친다."""
-    delay = 3.0
+def _get(url, tries=8):
+    """공개 통로를 두드린다. 429 면 물러섰다 다시 친다.
+
+    처음 물러서는 시간이 길다(20초). 짧게 여러 번 두드리면 차단이 풀리기 전에 다시 쳐서
+    차단 시간만 늘어난다 — 2026-11-02 에 무간격 90회로 그 상태를 만들었고, 그 뒤 2.5초
+    간격으로도 계속 429 였다.
+    """
+    delay = 20.0
     for attempt in range(tries):
         try:
             req = urllib.request.Request(url, headers=HDR)
@@ -65,7 +70,7 @@ def _get(url, tries=6):
         except urllib.error.HTTPError as e:
             if e.code == 429:
                 time.sleep(delay)
-                delay = min(delay * 2, 60)
+                delay = min(delay * 2, 180)
                 continue
             if e.code in (500, 502, 503, 504):
                 time.sleep(delay)
@@ -93,8 +98,10 @@ def probe(gap):
         try:
             d = _get(url)
         except Exception as e:
-            print(f"  {sym}: 실패 {str(e)[:50]}", flush=True)
-            found[sym] = None
+            # 실패는 기록하지 않는다. 속도 제한으로 못 받은 것을 "없는 종목" 으로 적으면
+            # 다음 회차가 그 거짓을 사실로 읽고 건너뛴다 — 2017년 자료가 통째로 사라진다.
+            print(f"  {sym}: 못 받음(다음 회차에 다시 본다) {str(e)[:50]}", flush=True)
+            time.sleep(gap)
             continue
         if d:
             first = datetime.fromtimestamp(d[0][0] / 1000, timezone.utc).date().isoformat()
@@ -186,8 +193,12 @@ def main():
     ap.add_argument('--probe', action='store_true')
     ap.add_argument('--fetch', action='store_true')
     ap.add_argument('--only', default='')
-    ap.add_argument('--gap', type=float, default=2.5, help="호출 사이 간격(초)")
+    ap.add_argument('--gap', type=float, default=5.0, help="호출 사이 간격(초)")
+    ap.add_argument('--wait', type=float, default=0, help="시작 전 기다릴 초 (차단 풀리기 대기)")
     a = ap.parse_args()
+    if a.wait > 0:
+        print(f"차단이 풀리기를 {a.wait:.0f}초 기다린다", flush=True)
+        time.sleep(a.wait)
     if a.probe:
         return probe(a.gap)
     if a.fetch:
