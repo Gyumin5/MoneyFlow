@@ -33,7 +33,10 @@ NEW = os.path.join(ROOT, 'state', '20261102-spot-long-noguard')
 
 
 def load(d):
-    p = os.path.join(d, 'cells.jsonl')
+    # 민감도 측정의 --out 은 디렉토리가 아니라 칸 파일 경로를 받는다. 기본 실행은
+    # <디렉토리>/cells.jsonl 을 만들고 --out 을 준 실행은 그 경로 자체에 쓰므로
+    # 둘 다 받는다. 2026-11-02 재측정이 파일 쪽이다.
+    p = d if os.path.isfile(d) else os.path.join(d, 'cells.jsonl')
     if not os.path.exists(p):
         return None
     rows = []
