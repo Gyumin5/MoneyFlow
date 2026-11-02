@@ -50,6 +50,15 @@ BASE = dict(
     n_snapshots=7, universe_size=3, cap=1/3, tx_cost=0.004,
     health_mode='mom2vol', vol_mode='daily', drift_threshold=0.10,
     snap_interval_bars=217,
+    # 라이브는 전략 가드가 없다(CLAUDE.md 현물 V24 절). 안 넘기면 엔진 기본값
+    # (dd_lookback=60 · bl_drop=-0.15 · crash_threshold=-0.10)이 켜진 채 돌아
+    # 라이브와 다른 전략을 잰다. 2026-11-02 에 같은 결함을 네 자리에서 찾았다 —
+    # 채택 호출부(history #107) · 창 판정기와 집중도(#114) · 교차 격자, 그리고 여기.
+    # 이 자리가 특히 아픈 것은 여기서 "어느 축이 움직이나" 를 보고 교차할 축 넷을
+    # 골랐기 때문이다. 안 고른 축(42일선 · 단기 모멘텀 · 변동성 상한 · 앵커 간격 ·
+    # 카나리 이격 · 스냅샷 개수)이 가드 없이는 달리 움직일 수 있다.
+    # state/20261102-spot-long 의 칸은 전부 가드 켠 값이라 인용하지 않는다.
+    dd_lookback=0, bl_drop=0, crash_threshold=-10,
 )
 
 START = '2020-10-01'
