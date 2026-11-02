@@ -34,7 +34,10 @@ sys.path.insert(0, HERE)
 
 import bt_coin_param_resweep as R  # noqa: E402
 
-OUT = os.path.join(CAP, '..', '..', 'state', '20261102-short-only-lev')
+LONG = '--long' in sys.argv   # 2017년까지 이어 붙인 일봉으로 돈다
+OUT = os.path.join(CAP, '..', '..', 'state',
+                   '20261102-short-only-lev-long' if LONG else '20261102-short-only-lev')
+START = '2017-01-01' if LONG else R.START
 
 # 숏 단독. 방향 전환 유예는 구현 결함이었던 것이 밝혀져 직접 전환으로 둔다(커밋 e94a8ba).
 _SH = dict(enable_short=True, short_only=True, short_entry_discount=0.02,
@@ -64,7 +67,7 @@ def _kw(anchor):
     kw = dict(R.SPOT_BASE)
     return dict(
         interval='D', asset_type='spot', leverage=1.0,
-        tx_cost=R.TX_SPOT, start_date=R.START, end_date=R.END,
+        tx_cost=R.TX_SPOT, start_date=START, end_date=R.END,
         vol_mode='daily', phase_offset_bars=R.PH_SPOT[anchor],
         post_flip_delay=5, selection='greedy', stop_kind='none', stop_pct=0.0,
         dd_lookback=60, dd_threshold=-99.0, bl_drop=-99.0, bl_days=7,
@@ -75,10 +78,13 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     os.environ['DRIFT_HEALTH_MODE'] = 'refill'
     from short_engine import run as bt
-    from unified_backtest import load_data
-
-    bars, fund = load_data('D')
-    print(f"자료 준비 끝. 구성 {len(ARMS)}개 × 앵커 {len(R.ANCHORS)}곳", flush=True)
+    if LONG:
+        from long_history import load_extended
+        bars, fund = load_extended(verbose=False)
+    else:
+        from unified_backtest import load_data
+        bars, fund = load_data('D')
+    print(f"구간 {START} 부터. 자료 준비 끝. 구성 {len(ARMS)}개 × 앵커 {len(R.ANCHORS)}곳", flush=True)
 
     path = os.path.join(OUT, 'cells.jsonl')
     done = set()
