@@ -39,9 +39,18 @@ CAP = os.path.dirname(HERE)
 sys.path.insert(0, CAP)
 sys.path.insert(0, HERE)
 
+# 채택 호출부(trade/v24_shadow_today.py)와 같은 설정으로 돌린다. 이 줄이 없으면
+# 엔진이 'off' 로 떨어져 드리프트 발화 때 종목을 안 갈아끼운다 — 라이브와 다른
+# 전략을 재게 된다(2026-11-02, 토론 run-20261102T022434Z 가 짚었다).
+# 2026-06-06 검증이 "문턱 0.10 에서 리필 ≡ 앵커전용" 이라고 적은 것은 2020-10 부터의
+# 5.4년 구간 얘기다. 9.8년에서는 세 문턱 모두 수가 달라진다 — 0.10 에서도 칼마
+# 1.647 → 1.561 (state/20261102-refill-check). 그래서 이 줄이 긴 구간에서는 필수다.
+os.environ.setdefault('DRIFT_HEALTH_MODE', 'refill')
+
 import unified_backtest as ub  # noqa: E402
 
-OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-cross')
+# 옛 'off' 결과는 state/20261102-spot-long-cross 에 그대로 두고 여기서는 안 읽는다.
+OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-cross-refill')
 START = '2017-01-01'
 END = '2026-11-01'
 PHASES = [0, 4, 8, 12, 16, 20, 24]

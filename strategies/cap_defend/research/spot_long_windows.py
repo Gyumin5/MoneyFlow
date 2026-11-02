@@ -52,8 +52,10 @@ os.environ.setdefault('DRIFT_HEALTH_MODE', 'refill')
 
 import unified_backtest as ub  # noqa: E402
 
-CROSS = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-cross', 'cells.jsonl')
-OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-windows')
+CROSS = os.path.join(CAP, '..', '..', 'state',
+                     '20261102-spot-long-cross-refill', 'cells.jsonl')
+# 옛 'off' 곡선은 state/20261102-spot-long-windows 에 그대로 두고 여기서는 안 읽는다.
+OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-windows-refill')
 START = '2017-01-01'
 END = '2026-11-01'
 PHASES = [0, 4, 8, 12, 16, 20, 24]
