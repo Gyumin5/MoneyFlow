@@ -65,11 +65,11 @@ BASE = dict(
     n_snapshots=7, universe_size=3, cap=1 / 3, tx_cost=0.004,
     health_mode='mom2vol', vol_mode='daily', drift_threshold=0.10,
     snap_interval_bars=217,
-    # 라이브는 전략 가드가 없다(CLAUDE.md 현물 V24 절). 안 넘기면 엔진 기본값
-    # (dd_lookback=60 · bl_drop=-0.15 · crash_threshold=-0.10)이 켜진 채 돌아
-    # 라이브와 다른 전략을 잰다. 2026-11-02 에 같은 결함을 채택 호출부(#107)와
-    # 창 판정기(#114)에서 잡았는데 이 격자에도 있었다. 아래 cells.jsonl 의
-    # 2026-11-02 이전 칸은 전부 가드 켠 값이라 다시 돌리기 전까지 인용하지 않는다.
+    # 라이브는 전략 가드가 없다(CLAUDE.md 현물 V24 절). 2026-11-02 오후부터는
+    # 엔진 기본값도 꺼짐이라(커밋 7de5788, history #115) 이 셋은 중복이다 —
+    # 그래도 남겨 둔다. 이 격자가 어느 조건으로 쟀는지를 파일 안에 적어 두는 줄이다.
+    # 아래 cells.jsonl 의 2026-11-02 이전 칸은 전부 가드 켠 값이라 인용하지 않는다
+    # (#107 · #114 와 같은 결함이 이 격자에도 있었다).
     dd_lookback=0, bl_drop=0, crash_threshold=-10,
 )
 

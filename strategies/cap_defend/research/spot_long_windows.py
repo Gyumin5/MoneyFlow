@@ -69,11 +69,12 @@ BASE = dict(
     n_snapshots=7, universe_size=3, cap=1 / 3, tx_cost=0.004,
     health_mode='mom2vol', vol_mode='daily', drift_threshold=0.10,
     snap_interval_bars=217,
-    # 라이브는 전략 가드가 없다(CLAUDE.md 현물 V24 절). 이 셋을 안 넘기면 엔진
-    # 기본값(dd_lookback=60 · bl_drop=-0.15 · crash_threshold=-0.10)이 켜진 채
-    # 돌아서 라이브와 다른 전략을 재게 된다. 2026-11-02 오전에 같은 결함을
-    # 채택 호출부에서 잡아 놓고(history #107) 이 판정기에는 안 넣어서, 그날
-    # 오후 세 관문이 통째로 가드 켠 곡선 위에서 돌았다(토론 run-20261102T062159Z).
+    # 라이브는 전략 가드가 없다(CLAUDE.md 현물 V24 절). 2026-11-02 오후부터는
+    # 엔진 기본값도 꺼짐이라(커밋 7de5788, history #115) 이 셋은 중복이다 —
+    # 그래도 남겨 둔다. 이 파일이 어느 조건으로 쟀는지를 파일 안에 적어 두는
+    # 줄이고, 기본값이 다시 바뀌어도 이 판정기는 안 흔들린다.
+    # 그 전 이력: 오전에 채택 호출부에서 같은 결함을 잡아 놓고(#107) 이 판정기에
+    # 안 넣어서, 그날 오후 세 관문이 통째로 가드 켠 곡선 위에서 돌았다(#114).
     dd_lookback=0, bl_drop=0, crash_threshold=-10,
 )
 
