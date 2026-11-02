@@ -171,6 +171,9 @@ def main():
                          '예: \'{"drift_threshold": 0.1}\'')
     ap.add_argument('--cost-mults', default='',
                     help='쉼표로 나눈 수수료 배수(기본 1,2,5). 봉우리 자리만 볼 때는 1 로 줄인다.')
+    ap.add_argument('--no-funding', action='store_true',
+                    help='선물 펀딩비를 끈다. 엔진은 코인별 요율 계열이 없으면 그냥 넘어가므로 '
+                         '빈 표를 주면 된다. 현물 엔진은 원래 안 쓰니 선물 전용이다.')
     a = ap.parse_args()
 
     cost_mults = ([float(x) for x in a.cost_mults.split(',') if x.strip()]
@@ -180,9 +183,12 @@ def main():
     if a.lev_fixed and a.engine == 'spot':
         print("현물에는 레버리지가 없다 — --lev-fixed 는 선물에만 쓴다", file=sys.stderr)
         return 2
-    if (a.lev_fixed or override) and not a.out:
-        print("--lev-fixed/--base-override 는 --out 을 따로 준다 — 기준 칸과 섞으면 안 된다",
-              file=sys.stderr)
+    if a.no_funding and a.engine == 'spot':
+        print("현물 엔진은 펀딩비를 안 쓴다 — --no-funding 은 선물에만 쓴다", file=sys.stderr)
+        return 2
+    if (a.lev_fixed or override or a.no_funding) and not a.out:
+        print("--lev-fixed/--base-override/--no-funding 은 --out 을 따로 준다 — "
+              "기준 칸과 섞으면 안 된다", file=sys.stderr)
         return 2
 
     out = a.out or OUT
@@ -195,8 +201,8 @@ def main():
     from long_history import load_extended
     bars, fund = load_extended(verbose=False)
 
-    cfg = hashlib.sha1(json.dumps([HYSTS, cost_mults, engines, a.lev_fixed, override],
-                                  sort_keys=True).encode()).hexdigest()[:12]
+    cfg = hashlib.sha1(json.dumps([HYSTS, cost_mults, engines, a.lev_fixed, override,
+                                   a.no_funding], sort_keys=True).encode()).hexdigest()[:12]
     done = set()
     if os.path.exists(out):
         for line in open(out, encoding='utf-8'):
@@ -217,6 +223,11 @@ def main():
           f"· 앵커 {len(phases)} · 칸 {total}", flush=True)
     if override:
         print(f"  BASE 덮어쓰기 {override}", flush=True)
+    if a.no_funding:
+        print("  선물 펀딩비 끔", flush=True)
+    # 엔진은 코인별 요율 계열을 못 찾으면 그 코인을 그냥 넘어간다. 빈 표를 주면
+    # 모든 코인이 그 길로 가므로 펀딩비가 0 이 된다.
+    fund_use = {} if a.no_funding else fund
 
     with open(out, 'a', encoding='utf-8') as fh:
         for eng in engines:
@@ -240,7 +251,7 @@ def main():
                         if (eng, h, mult, ph) in done:
                             continue
                         t0 = time.time()
-                        m, s = run_one(eng, bars, fund, lev_map, ph, h, tx, override)
+                        m, s = run_one(eng, bars, fund_use, lev_map, ph, h, tx, override)
                         fh.write(json.dumps(dict(engine=eng, hyst=h, mult=mult, tx=tx,
                                                  phase=ph, metrics=m, trade=s, cfg=cfg,
                                                  sec=round(time.time() - t0, 2)),
