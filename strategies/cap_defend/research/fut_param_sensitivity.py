@@ -184,7 +184,10 @@ def main():
             print(f"모르는 축: {', '.join(missing)}")
             return 1
 
-    out = a.out or os.path.join(HERE, '..', '..', 'state',
+    # HERE 는 research/ 라 루트는 세 단계 위다. 두 단계로 쓰면 strategies/state/ 에
+    # 떨어진다 — 2026-11-02 에 실제로 그렇게 떨어뜨렸다(gitignore 의 state/ 가 깊이
+    # 무관이라 커밋 사고는 안 났지만 산출물이 규약 밖에 생긴다).
+    out = a.out or os.path.join(HERE, '..', '..', '..', 'state',
                                 '20261102-fut-long-sens', 'cells.jsonl')
     os.makedirs(os.path.dirname(out), exist_ok=True)
     total = sum(len(v) for v in axes.values()) * len(phases) + len(phases)
