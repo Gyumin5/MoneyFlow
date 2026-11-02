@@ -2272,6 +2272,13 @@ tags: 현물, 측정결함, 가드정합, 드리프트
   claude-job-251229-spot-sens-noguard-1793602332 (553칸 × 4.6초). 커밋 43f0aa6.
 - 세 관문 경로의 나머지는 성하다: spot_edge_attribution.py 와 spot_source_split_judge.py 는
   엔진을 안 부르고 곡선만 읽으므로 재측정된 곡선을 그대로 받는다.
+- 선물은 해당 없다: backtest_futures_v25.py 의 run() 에 가드 인자가 아예 없다. 그래서
+  결함 범위는 unified_backtest.run() 을 부르는 현물 쪽 네 자리로 닫힌다.
+- 근본 원인은 엔진 기본값이다. 라이브 어느 전략도 가드를 안 쓰는데 run() 기본값이 켜진
+  채라(dd_lookback=60 · dd_threshold=-0.25 · bl_drop=-0.15 · bl_days=7 · crash_threshold=-0.10)
+  안 넘기면 경고 없이 다른 전략을 잰다. 기본값을 끌지, 안 넘기면 깨지게 할지를 토론에
+  걸었다(state/ai-debate/20261102T161404-...). 하루에 네 자리가 같은 함정에 빠진 것이
+  근거다 — 사람이 매번 기억하는 것으로는 안 닫힌다.
 - 교차 격자는 다시 안 돌린다: 창 판정기가 --all 로 같은 108 구성 + 기준선의 전 구간
   자산곡선을 curves.npz 에 담고, 교차 격자가 적는 것은 그 곡선의 네 지표다. 곡선에서
   지표를 뽑는 판정기를 만들어(spot_cross_metrics.py) 1.6시간짜리 측정을 한 번만 돌린다.
