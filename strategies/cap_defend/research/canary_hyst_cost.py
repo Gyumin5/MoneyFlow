@@ -101,12 +101,13 @@ def fixed_lev_map(f25, bars, lev_base, lev):
     return f25.build_K2_signal(bars, **kw)
 
 
-def run_one(engine, bars, fund, lev_map, ph, hyst, tx):
+def run_one(engine, bars, fund, lev_map, ph, hyst, tx, override=None):
     tr = []
     if engine == 'fut':
         import backtest_futures_v25 as f25
         from fut_param_sensitivity import BASE, metrics
         kw = dict(BASE)
+        kw.update(override or {})
         kw['canary_hyst'] = hyst
         kw['tx_cost'] = tx
         r = f25.run(bars, fund, leverage=lev_map, start_date=START, end_date=END,
@@ -115,6 +116,7 @@ def run_one(engine, bars, fund, lev_map, ph, hyst, tx):
         import unified_backtest as ub
         from spot_param_sensitivity import BASE, metrics  # type: ignore
         kw = dict(BASE)
+        kw.update(override or {})
         kw['canary_hyst'] = hyst
         kw['tx_cost'] = tx
         kw['phase_offset_bars'] = ph
@@ -163,13 +165,23 @@ def main():
     ap.add_argument('--lev-fixed', type=float, default=0.0,
                     help='선물 레버리지를 이 값으로 고정한다(0 이면 동적 L 그대로). '
                          '두 자산군이 반대로 서는 원인이 배수인지 가리는 용도다.')
+    ap.add_argument('--base-override', default='',
+                    help='BASE 를 덮어쓸 JSON. 축 하나씩 상대 자산군 값으로 바꿔 '
+                         '어디서 봉우리 자리가 넘어가는지 가린다. '
+                         '예: \'{"drift_threshold": 0.1}\'')
+    ap.add_argument('--cost-mults', default='',
+                    help='쉼표로 나눈 수수료 배수(기본 1,2,5). 봉우리 자리만 볼 때는 1 로 줄인다.')
     a = ap.parse_args()
+
+    cost_mults = ([float(x) for x in a.cost_mults.split(',') if x.strip()]
+                  if a.cost_mults else list(COST_MULT))
+    override = json.loads(a.base_override) if a.base_override else {}
 
     if a.lev_fixed and a.engine == 'spot':
         print("현물에는 레버리지가 없다 — --lev-fixed 는 선물에만 쓴다", file=sys.stderr)
         return 2
-    if a.lev_fixed and not a.out:
-        print("--lev-fixed 는 --out 을 따로 준다 — 동적 L 로 잰 칸과 섞으면 안 된다",
+    if (a.lev_fixed or override) and not a.out:
+        print("--lev-fixed/--base-override 는 --out 을 따로 준다 — 기준 칸과 섞으면 안 된다",
               file=sys.stderr)
         return 2
 
@@ -183,7 +195,7 @@ def main():
     from long_history import load_extended
     bars, fund = load_extended(verbose=False)
 
-    cfg = hashlib.sha1(json.dumps([HYSTS, COST_MULT, engines, a.lev_fixed],
+    cfg = hashlib.sha1(json.dumps([HYSTS, cost_mults, engines, a.lev_fixed, override],
                                   sort_keys=True).encode()).hexdigest()[:12]
     done = set()
     if os.path.exists(out):
@@ -200,9 +212,11 @@ def main():
             print(f"  이미 잰 칸 {len(done)} — 건너뛴다", flush=True)
 
     phases = [round(i * 19 / a.anchors) for i in range(a.anchors)]
-    total = len(engines) * len(HYSTS) * len(COST_MULT) * len(phases)
+    total = len(engines) * len(HYSTS) * len(cost_mults) * len(phases)
     print(f"엔진 {len(engines)} · 히스테리시스 {len(HYSTS)} · 비용 {len(COST_MULT)} "
           f"· 앵커 {len(phases)} · 칸 {total}", flush=True)
+    if override:
+        print(f"  BASE 덮어쓰기 {override}", flush=True)
 
     with open(out, 'a', encoding='utf-8') as fh:
         for eng in engines:
@@ -219,14 +233,14 @@ def main():
                 from spot_param_sensitivity import BASE  # type: ignore
             base_tx = float(BASE.get('tx_cost', 0.0006))
             for h in HYSTS:
-                for mult in COST_MULT:
+                for mult in cost_mults:
                     tx = base_tx * mult
                     m = s = None
                     for ph in phases:
                         if (eng, h, mult, ph) in done:
                             continue
                         t0 = time.time()
-                        m, s = run_one(eng, bars, fund, lev_map, ph, h, tx)
+                        m, s = run_one(eng, bars, fund, lev_map, ph, h, tx, override)
                         fh.write(json.dumps(dict(engine=eng, hyst=h, mult=mult, tx=tx,
                                                  phase=ph, metrics=m, trade=s, cfg=cfg,
                                                  sec=round(time.time() - t0, 2)),
