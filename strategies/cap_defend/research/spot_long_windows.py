@@ -54,8 +54,10 @@ import unified_backtest as ub  # noqa: E402
 
 CROSS = os.path.join(CAP, '..', '..', 'state',
                      '20261102-spot-long-cross-refill', 'cells.jsonl')
-# 옛 'off' 곡선은 state/20261102-spot-long-windows 에 그대로 두고 여기서는 안 읽는다.
-OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-windows-refill')
+# 옛 곡선은 두 벌 다 그대로 두고 여기서는 안 읽는다 — state/20261102-spot-long-windows
+# ('off' 리필), state/20261102-spot-long-windows-refill (리필은 맞지만 가드가 켜진 채).
+# 설정을 입증할 수 없는 캐시는 재사용하지 않는다(토론 run-20261102T062159Z).
+OUT = os.path.join(CAP, '..', '..', 'state', '20261102-spot-long-windows-noguard')
 START = '2017-01-01'
 END = '2026-11-01'
 PHASES = [0, 4, 8, 12, 16, 20, 24]
@@ -67,6 +69,12 @@ BASE = dict(
     n_snapshots=7, universe_size=3, cap=1 / 3, tx_cost=0.004,
     health_mode='mom2vol', vol_mode='daily', drift_threshold=0.10,
     snap_interval_bars=217,
+    # 라이브는 전략 가드가 없다(CLAUDE.md 현물 V24 절). 이 셋을 안 넘기면 엔진
+    # 기본값(dd_lookback=60 · bl_drop=-0.15 · crash_threshold=-0.10)이 켜진 채
+    # 돌아서 라이브와 다른 전략을 재게 된다. 2026-11-02 오전에 같은 결함을
+    # 채택 호출부에서 잡아 놓고(history #107) 이 판정기에는 안 넣어서, 그날
+    # 오후 세 관문이 통째로 가드 켠 곡선 위에서 돌았다(토론 run-20261102T062159Z).
+    dd_lookback=0, bl_drop=0, crash_threshold=-10,
 )
 
 # (창 길이, 이동폭) — 봉 단위. 일봉이라 504봉 ≈ 2년, 1008봉 ≈ 4년.

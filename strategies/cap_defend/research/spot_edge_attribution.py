@@ -65,17 +65,24 @@ def attribute(a, b, dates):
     hi_i = int(lo_i + np.argmax(cum[lo_i:]))
     rise = float(cum[hi_i] - cum[lo_i])
 
-    order = np.argsort(-np.abs(d))
-    top = order[:TOPN]
-    top_sum = float(np.sum(d[top]))
-    rest = total - top_sum
+    # 열흘을 빼는 방식이 둘이고 재는 것이 다르다. 섞으면 안 된다.
+    #  abs — 차이의 절댓값이 가장 큰 열흘. "변동이 큰 날" 을 본다.
+    #  pos — 후보가 가장 많이 앞선 열흘. "양의 우위가 소수 사건에 몰렸나" 를 본다.
+    # 판정에 쓰는 것은 pos 쪽이다. abs 로 재면 그 열흘에 큰 손실일이 섞여 들어가
+    # 제외 후 잔여가 오히려 커지고, 그걸 "사건에 안 몰렸다" 로 읽게 된다
+    # (2026-11-02 오후 판정에서 실제로 그렇게 읽었다, 토론 run-20261102T062159Z).
+    abs_top = np.argsort(-np.abs(d))[:TOPN]
+    abs_sum = float(np.sum(d[abs_top]))
+    pos_top = np.argsort(-d)[:TOPN]
+    pos_sum = float(np.sum(d[pos_top]))
 
     dd = dates[1:]          # 차이는 하루 밀린다
     return dict(
         total=total, rise=rise,
         rise_from=str(dd[lo_i].date()), rise_to=str(dd[hi_i].date()),
-        top_sum=top_sum, rest=rest,
-        top_days=[(str(dd[i].date()), float(d[i])) for i in top[:5]],
+        abs_sum=abs_sum, abs_rest=total - abs_sum,
+        pos_sum=pos_sum, pos_rest=total - pos_sum,
+        top_days=[(str(dd[i].date()), float(d[i])) for i in pos_top[:5]],
     )
 
 
@@ -98,23 +105,26 @@ def main():
 
     print("우세의 시점 집중도 (앵커 7곳 평균, 로그수익 차이 누적)")
     print(f"  {'구성':<22}{'누적차':>9}{'최대상승':>10}{'상승비중':>9}"
-          f"{'상위10일':>10}{'상위제외':>10}")
+          f"{'우위상위10':>11}{'우위제외':>10}{'변동제외':>10}")
     for name in arms:
         rs = [attribute(curves[(name, ph)], curves[('BASE', ph)], dates)
               for ph in PHASES if (name, ph) in curves]
         tot = float(np.mean([r['total'] for r in rs]))
         rise = float(np.mean([r['rise'] for r in rs]))
-        tops = float(np.mean([r['top_sum'] for r in rs]))
-        rest = float(np.mean([r['rest'] for r in rs]))
+        psum = float(np.mean([r['pos_sum'] for r in rs]))
+        prest = float(np.mean([r['pos_rest'] for r in rs]))
+        arest = float(np.mean([r['abs_rest'] for r in rs]))
         share = (100.0 * rise / tot) if abs(tot) > 1e-9 else float('nan')
         print(f"  {name:<22}{tot:9.3f}{rise:10.3f}{share:8.0f}%"
-              f"{tops:10.3f}{rest:10.3f}")
+              f"{psum:11.3f}{prest:10.3f}{arest:10.3f}")
 
-    print("\n읽는 법. 누적차는 5.8년 로그수익 차이 합이다 — 양수면 후보가 더 벌었다.")
-    print("  상위 10일을 빼고 남는 값(상위제외)이 0 이하면 그 우세는 열흘짜리다.")
+    print("\n읽는 법. 누적차는 9.8년 로그수익 차이 합이다 — 양수면 후보가 더 벌었다.")
+    print("  판정에 쓰는 칸은 우위제외다. 후보가 가장 많이 앞선 열흘을 빼고 남는 값이고,")
+    print("  0 이하면 그 우세는 열흘짜리라 전략의 성질이 아니다.")
+    print("  변동제외는 절댓값이 큰 열흘을 뺀 값이라 그 열흘에 손실일이 섞인다 — 참고만 한다.")
     print("  상승비중이 100% 를 크게 넘으면 나머지 구간에서는 오히려 지고 있었다는 뜻이다.")
 
-    print("\n앵커 0 에서 차이가 가장 큰 닷새")
+    print("\n앵커 0 에서 후보가 가장 많이 앞선 닷새")
     for name in arms:
         if (name, 0) not in curves:
             continue
