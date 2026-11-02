@@ -254,12 +254,13 @@ def run(bars, funding, interval='1h', leverage=1.0,
         short_stop_pct=0.12,
         short_catastrophic_stop_pct=0.25,
         short_catastrophic_cooldown_bars=5,
-        short_post_flip_delay=5,
         short_rebalance_mode='anchor_fixed_qty',  # | 'target_weight'
         short_cooldown_bars=5,        # 손절 뒤 그 종목 숏 재진입 금지 기간
-        funding_veto=False,
-        funding_veto_rate=-0.0001,    # 8시간당 환산 기준
-        cushion_buffer_mult=1.5,
+        # 숏 다리만 선물로 친다. 롱 다리는 채택본(V24 현물)과 같은 집행을 그대로 둔다 —
+        # 전체 호출을 선물 모드로 바꾸면 롱까지 달라져서 "숏을 더한 효과" 가 아니라
+        # "현물을 선물로 바꾼 효과" 를 재게 된다(토론 run-20261102T005717Z 1단계).
+        short_as_futures=True,
+        short_tx_cost=0.0006,         # 바이낸스 선물 편도. 롱은 tx_cost 그대로.
         cash_transit_bars=1,          # 방향 전환 사이에 강제로 비워 두는 봉 수
         allow_direct_flip=False,      # 참이면 현금 경유 없이 같은 봉에 방향을 뒤집는다
         flip_preserve_snapshots=False,  # 참이면 롱 복귀 때 스냅샷을 현금으로 안 지운다
@@ -314,8 +315,26 @@ def run(bars, funding, interval='1h', leverage=1.0,
         leverage = 1.0  # spot은 무조건 lev=1
 
     # slippage 조회 헬퍼 (tier vs none)
+    # 숏 다리는 선물이라 현물 호출에서도 선물 틱 슬리피지를 문다. 롱 다리는 호출이 준
+    # slippage_mode 그대로다 — 그래야 enable_short=False 가 정본과 같은 경로로 돈다.
     def _slip(coin):
+        if _short_acct():
+            return SLIPPAGE_MAP.get(coin, 0.0005)
         return 0.0 if slippage_mode == 'none' else SLIPPAGE_MAP.get(coin, 0.0005)
+
+    def _short_acct():
+        """지금 보유를 선물 회계로 다루나. 숏이고 short_as_futures 일 때만 참."""
+        return pos_dir < 0 and short_as_futures
+
+    def _fut_acct():
+        """펀딩·청산을 적용하나. 선물 호출이거나, 현물 호출이어도 숏 다리면 적용."""
+        return (not is_spot) or _short_acct()
+
+    def _tx():
+        return short_tx_cost if _short_acct() else tx_cost
+
+    def _lev():
+        return short_leverage if pos_dir < 0 else leverage
 
     # 배분 규모는 라이브와 같은 현금 버퍼로 잡는다(모듈 상단 CASH_BUFFER).
     # 예약 성질 확인: sum(margin_i + tx_i) = pv*(1-buffer)*(1 + leverage*tx_cost) < pv 이므로
@@ -360,9 +379,9 @@ def run(bars, funding, interval='1h', leverage=1.0,
     pos_dir = 1          # +1 롱, -1 숏. 보유가 없으면 의미 없음.
     sleeve_state = 'CASH'  # 'LONG' | 'CASH' | 'SHORT'
     cash_until_bar = -1    # 이 봉까지는 어느 방향으로도 진입하지 않는다(방향 전환 유예)
+    short_target = {'CASH': 1.0}  # 숏 목표 비중. 롱 스냅샷과 섞지 않는다.
     short_cooldown = {}    # {coin: 남은 봉 수} 손절 뒤 숏 재진입 금지
     short_entry_bar = None
-    short_pfd_done = True
     entry_prices = {}  # {coin: entry_price}
     entry_bar_index = {}  # {coin: first entry bar index}
     margins = {}  # {coin: margin}
@@ -508,7 +527,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             # 숏 손절은 되사는 주문이라 불리한 쪽이 위다.
             exit_p = max(cur_open, stop_price) * (1 + slip)
             pnl = pos_dir * holdings[coin] * (exit_p - entry_prices[coin])
-            tx = holdings[coin] * exit_p * tx_cost
+            tx = holdings[coin] * exit_p * _tx()
             capital += margins[coin] + pnl - tx
             del holdings[coin]; del entry_prices[coin]; del margins[coin]
             entry_bar_index.pop(coin, None)
@@ -523,7 +542,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
         cur_open = float(bars[coin]['Open'].iloc[ci])
         exit_p = min(cur_open, stop_price) * (1 - slip)
         pnl = pos_dir * holdings[coin] * (exit_p - entry_prices[coin])
-        tx = holdings[coin] * exit_p * tx_cost
+        tx = holdings[coin] * exit_p * _tx()
         capital += margins[coin] + pnl - tx
         del holdings[coin]; del entry_prices[coin]; del margins[coin]
         entry_bar_index.pop(coin, None)
@@ -580,7 +599,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             if cur <= 0:
                 continue
             tmgn = pv * w * margin_factor
-            tnotional = tmgn * leverage
+            tnotional = tmgn * _lev()
             tqty = tnotional / cur
             target_qty[coin] = tqty
             target_margin[coin] = tmgn
@@ -593,9 +612,9 @@ def run(bars, funding, interval='1h', leverage=1.0,
             slip = _slip(coin)
             if coin not in target_qty:
                 # 전량 매도
-                exit_p = cur * (1 - slip)
+                exit_p = cur * (1 - pos_dir * slip)
                 pnl = pos_dir * holdings[coin] * (exit_p - entry_prices[coin])
-                tx = holdings[coin] * cur * tx_cost
+                tx = holdings[coin] * cur * _tx()
                 capital += margins[coin] + pnl - tx
                 del holdings[coin]; del entry_prices[coin]; del margins[coin]
                 entry_bar_index.pop(coin, None)
@@ -606,9 +625,9 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     sell_qty = -delta
                     sell_frac = sell_qty / holdings[coin]
                     sell_margin = margins[coin] * sell_frac
-                    exit_p = cur * (1 - slip)
+                    exit_p = cur * (1 - pos_dir * slip)
                     pnl = pos_dir * sell_qty * (exit_p - entry_prices[coin])
-                    tx = sell_qty * cur * tx_cost
+                    tx = sell_qty * cur * _tx()
                     capital += sell_margin + pnl - tx
                     holdings[coin] -= sell_qty
                     margins[coin] -= sell_margin
@@ -621,11 +640,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 continue
             slip = _slip(coin)
             if coin not in holdings:
-                entry_p = cur * (1 + slip)
+                entry_p = cur * (1 + pos_dir * slip)
                 margin = target_margin[coin]
-                notional = margin * leverage
+                notional = margin * _lev()
                 qty = notional / entry_p
-                tx = notional * tx_cost
+                tx = notional * _tx()
                 if capital >= margin + tx:
                     capital -= margin + tx
                     holdings[coin] = qty
@@ -636,10 +655,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
             else:
                 delta = tqty - holdings[coin]
                 if delta > holdings[coin] * _band:
-                    entry_p = cur * (1 + slip)
+                    entry_p = cur * (1 + pos_dir * slip)
                     add_notional = delta * entry_p
-                    add_margin = add_notional / leverage
-                    tx = add_notional * tx_cost
+                    add_margin = add_notional / _lev()
+                    tx = add_notional * _tx()
                     if capital >= add_margin + tx:
                         capital -= add_margin + tx
                         total = holdings[coin] + delta
@@ -1008,7 +1027,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             slip = _slip(coin)
             exit_p = cur * (1 - pos_dir * slip)
             pnl = pos_dir * holdings[coin] * (exit_p - entry_prices[coin])
-            capital += margins[coin] + pnl - holdings[coin] * exit_p * tx_cost
+            capital += margins[coin] + pnl - holdings[coin] * exit_p * _tx()
             trade_count += 1
         holdings.clear(); entry_prices.clear(); margins.clear(); entry_bar_index.clear()
         capital = max(capital, 0)
@@ -1039,7 +1058,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 continue
 
             if short_side:
-                liq_price = _get_liq_price(coin) if not is_spot else None
+                liq_price = _get_liq_price(coin) if _fut_acct() else None
                 stop_price = _get_short_stop_price(coin, date)
                 hit_liq = liq_price is not None and touch >= liq_price
                 hit_stop = stop_price is not None and touch >= stop_price
@@ -1067,9 +1086,12 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     short_cooldown[coin] = short_cooldown_bars
                 liq_count += 1
 
-        # ── 펀딩비 (fut only) ──
+        # ── 펀딩비 ──
+        # 현물 호출이어도 숏 다리는 선물이라 펀딩을 문다(받기도 한다).
+        # 일봉 자료라 그날 치를 한 번에 적용한다 — 봉 안의 지급 시각과 실제 보유 시간은
+        # 일봉으로 복원할 수 없다. 보수적으로 종일 보유로 친다(한계로 기록).
         for coin in list(holdings.keys()):
-            if is_spot:
+            if not _fut_acct():
                 break
             fr_series = funding.get(coin)
             if fr_series is None:
@@ -1125,6 +1147,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     _liquidate_all(date)
                     rebal_count += 1
                 pos_dir = 1
+                if sleeve_state == 'SHORT':
+                    short_target = {'CASH': 1.0}
                 # 롱으로 돌아가는 길에서는 스냅샷을 지울지가 축이다. 지우면 스태거가
                 # 전환마다 무너지고, 안 지우면 카나리 전환 경로가 평소대로 다시 채운다.
                 if not (flip_preserve_snapshots and desired == 'LONG'):
@@ -1171,12 +1195,32 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     worst = max(worst, hi / ep - 1.0)
             if worst >= short_catastrophic_stop_pct:
                 hit = list(holdings.keys())
-                _liquidate_all(date)
+                # 체결가는 시가가 아니라 방아쇠다. 방아쇠는 그 봉의 고가가 당겼는데
+                # 시가로 닫으면 더 싼 값에 되사는 것이 되어 숏에 유리하게 틀린다.
+                # 종목마다 max(시가, 진입가×(1+폭)) 으로 닫고 불리한 쪽 슬리피지를 문다.
+                for coin in hit:
+                    cur = _get_fill_price(coin, date)
+                    if cur <= 0:
+                        ci = (bars[coin].index.get_indexer([date], method='ffill')[0]
+                              if coin in bars else -1)
+                        cur = get_close(bars, coin, ci)
+                    if cur <= 0:
+                        continue
+                    trig = entry_prices[coin] * (1.0 + short_catastrophic_stop_pct)
+                    exit_p = max(cur, trig) * (1 + _slip(coin))
+                    pnl = pos_dir * holdings[coin] * (exit_p - entry_prices[coin])
+                    capital += margins[coin] + pnl - holdings[coin] * exit_p * _tx()
+                    trade_count += 1
+                    stop_count += 1
+                holdings.clear(); entry_prices.clear()
+                margins.clear(); entry_bar_index.clear()
+                capital = max(capital, 0)
                 for coin in hit:
                     short_cooldown[coin] = short_catastrophic_cooldown_bars
                 sleeve_state = 'CASH'
                 pos_dir = 1
                 short_mode = False
+                short_target = {'CASH': 1.0}
                 cash_until_bar = bar_i + max(cash_transit_bars, short_catastrophic_cooldown_bars)
                 for si in range(n_snapshots):
                     snapshots[si] = {'CASH': 1.0}
@@ -1200,7 +1244,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     cur = get_close(bars, coin, ci)
                     if cur > 0:
                         pnl = pos_dir * holdings[coin] * (cur - entry_prices[coin])
-                        capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
+                        capital += margins[coin] + pnl - holdings[coin] * cur * _tx()
                 holdings.clear(); entry_prices.clear(); margins.clear(); entry_bar_index.clear()
                 for si in range(n_snapshots):
                     snapshots[si] = {'CASH': 1.0}
@@ -1224,7 +1268,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                         continue
                     slip = _slip(coin)
                     pnl = pos_dir * holdings[coin] * (cur * (1 - pos_dir * slip) - entry_prices[coin])
-                    capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
+                    capital += margins[coin] + pnl - holdings[coin] * cur * _tx()
                     del holdings[coin]; del entry_prices[coin]; del margins[coin]
                     entry_bar_index.pop(coin, None)
                     trade_count += 1
@@ -1246,7 +1290,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                         continue
                     slip = _slip(coin)
                     pnl = pos_dir * holdings[coin] * (cur * (1 - pos_dir * slip) - entry_prices[coin])
-                    capital += margins[coin] + pnl - holdings[coin] * cur * tx_cost
+                    capital += margins[coin] + pnl - holdings[coin] * cur * _tx()
                     del holdings[coin]; del entry_prices[coin]; del margins[coin]
                     entry_bar_index.pop(coin, None)
                     blacklist[coin] = bl_cooldown
@@ -1265,9 +1309,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
                               and (bar_i + phase_offset_bars) % snap_interval_bars == 0))
             if fresh_bar or anchor_bar:
                 sw = _compute_short_weights(prev_date)
-                if fresh_bar or sw != snapshots[0]:
-                    for si in range(n_snapshots):
-                        snapshots[si] = dict(sw)
+                # 숏 목표는 롱 스냅샷과 따로 둔다. 전에는 숏이 스냅샷 일곱 칸을 통째로
+                # 덮어써서, 숏을 한 번 서면 롱의 스태거 위상이 그 자리에서 사라졌다.
+                if fresh_bar or sw != short_target:
+                    short_target = dict(sw)
                     need_rebal = True
         elif bar_i <= sma_period + 1:
             # 첫 바
@@ -1320,7 +1365,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                                 need_rebal = True
 
         # ── Drift (daily_gate 시 일 1회만) ──
-        combined = _merge_snapshots(sig_date_for_health=prev_date)
+        combined = dict(short_target) if short_mode else _merge_snapshots(sig_date_for_health=prev_date)
         if not need_rebal and canary_on and drift_threshold > 0 and holdings and is_daily_bar:
             if _half_turnover(_current_weights(prev_date), combined) >= drift_threshold:
                 need_rebal = True
