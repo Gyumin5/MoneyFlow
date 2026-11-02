@@ -104,6 +104,11 @@ def main():
     do, ac_o, ag_o = digest(ro)
     dn, ac_n, ag_n = digest(rn)
     print(f"옛 측정 {len(ro)}칸 · 새 측정 {len(rn)}칸")
+    # 축 하나가 덜 끝난 채로 평균을 내면 그 축의 폭이 실제보다 좁게 나온다.
+    # 미완이면 수치를 결론으로 쓰지 않는다 — 도구가 도는지 보는 용도다.
+    if len(rn) < len(ro):
+        print(f"  [주의] 새 측정이 아직 {len(ro) - len(rn)}칸 모자란다."
+              " 끝나기 전 수치는 결론으로 인용하지 않는다.")
     print(f"기준선 앵커 폭 — 칼마 {ac_o:.3f} → {ac_n:.3f},"
           f" 연복리 {ag_o:.4f} → {ag_n:.4f}\n")
 
@@ -123,7 +128,16 @@ def main():
         elif rn_ < 1 <= ro_:
             verdict = "← 죽음 (교차에서 빼도 된다)"
         elif rn_ >= 1:
+            # 둘 다 1 을 넘어도 크기가 반 토막 나거나 두 배가 되면 축의 서열이
+            # 바뀐다. 1 을 넘었다는 사실만 적으면 그 변화가 표에 안 보여서,
+            # 눈으로 두 열을 다시 훑게 된다 — 이 도구를 만든 이유가 그것이다.
             verdict = "둘 다 유의"
+            if ro_ > 0:
+                chg = rn_ / ro_
+                if chg <= 0.5:
+                    verdict += f" (크게 줄었다 ×{chg:.2f})"
+                elif chg >= 2.0:
+                    verdict += f" (크게 커졌다 ×{chg:.2f})"
         else:
             verdict = "둘 다 잡음"
         rows.append((ax, so, ro_, sn, rn_, verdict))
