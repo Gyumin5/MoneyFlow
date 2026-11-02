@@ -18,10 +18,16 @@
 판정은 이 숫자 하나로 하지 않는다 — 관문 3(자료 출처 분할)이 2020-10 경계로
 구간을 갈라 같은 방향인지 보는 것이 실제 판정이다.
 
-실행: python3 universe_survivorship.py
+엔진 둘의 편향은 같다. 2026-11-02 에 재니 심볼표가 둘 다 102종목이고 차집합이 0 이다 —
+현물 백테스트도 선물 1시간 자료(data/futures)로 일봉을 만들기 때문이다. 그래서 선물
+생존편향을 따로 잴 이유가 없고, history #119 의 수치가 선물에도 그대로 간다. 자료
+폴더가 갈리면 그때부터 달라지므로 --engine both 가 매번 다시 확인한다.
+
+실행: python3 universe_survivorship.py [--engine spot|fut|both]
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -30,8 +36,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CAP = os.path.dirname(HERE)
 ROOT = os.path.abspath(os.path.join(CAP, '..', '..'))
 sys.path.insert(0, CAP)
-
-import unified_backtest as ub  # noqa: E402
 
 UNIV = os.path.join(ROOT, 'data', 'historical_universe.json')
 
@@ -45,14 +49,51 @@ NOT_TRADABLE = {
 }
 
 
+def ticker_map(engine):
+    """그 엔진이 실제로 가격 자료를 가진 종목. 둘은 다른 폴더를 본다.
+
+    현물은 일봉 자료 폴더, 선물은 바이낸스 선물 1시간 자료 폴더다. 선물은 상장이
+    늦은 종목이 많아 옛 구간에서 더 많이 빠질 수 있다 — 같은 유니버스 파일을 써도
+    남는 종목이 다르므로 편향 크기를 엔진마다 따로 재야 한다.
+    """
+    if engine == 'fut':
+        import backtest_futures_v25 as f25
+        return set(f25.TICKER_MAP)
+    import unified_backtest as ub
+    return set(ub.TICKER_MAP)
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--engine', default='spot', choices=['spot', 'fut', 'both'],
+                    help="어느 엔진의 심볼표로 재나")
+    a = ap.parse_args()
+    if a.engine == 'both':
+        s, f = ticker_map('spot'), ticker_map('fut')
+        print(f"심볼표 대조 — 현물 {len(s)}종목 · 선물 {len(f)}종목")
+        if s == f:
+            print("  두 심볼표가 같다. 같은 자료 폴더를 보므로 편향도 같다 —"
+                  " 아래 두 표는 같은 수치가 나와야 한다.\n")
+        else:
+            print(f"  갈렸다. 선물에만 {sorted(f - s)}")
+            print(f"           현물에만 {sorted(s - f)}")
+            print("  엔진마다 편향을 따로 읽어라.\n")
+        rc = 0
+        for e in ('spot', 'fut'):
+            print(f"\n{'=' * 60}\n  {e} 엔진\n{'=' * 60}")
+            rc |= report(e)
+        return rc
+    return report(a.engine)
+
+
+def report(engine):
     if not os.path.exists(UNIV):
         print(f"유니버스 파일이 없다: {UNIV}")
         return 1
     raw = json.load(open(UNIV, encoding='utf-8'))
-    have = set(ub.TICKER_MAP)
+    have = ticker_map(engine)
 
-    print(f"원본 {os.path.relpath(UNIV, ROOT)} · 월 {len(raw)}개\n")
+    print(f"원본 {os.path.relpath(UNIV, ROOT)} · 월 {len(raw)}개 · 심볼표 {len(have)}종목\n")
     print("  월          원본  대상외  실제대상  자료있음  편향수  편향비율")
     rows = []
     for ds in sorted(raw):
