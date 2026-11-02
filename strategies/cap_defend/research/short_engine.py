@@ -910,6 +910,107 @@ def run(bars, funding, interval='1h', leverage=1.0,
             w['CASH'] = cash_w
         return w
 
+    # ═══ 숏 (short_design_spec.md 3·4·5·7절) ═══
+
+    def _short_signal(sig_bar_idx):
+        """숏 진입·청산 신호. 전부 t-1 완료봉으로 잰다.
+
+        r = BTC종가 / SMA42, a = min(0.985, 1 - 이격문턱).
+        진입은 r <= a 이고(기울기 문을 켜면 SMA42 기울기도 음수여야 한다),
+        청산은 r >= a + 여유다. 기울기가 양수로 돌아선 것은 청산 신호가 아니다 —
+        진입을 막는 문일 뿐이다(명세 3절).
+        """
+        c = btc_close[:sig_bar_idx + 1]
+        sma_now = calc_sma(c, sma_period)
+        if sma_now <= 0 or len(c) == 0:
+            return False, False
+        r = c[-1] / sma_now
+        a = min(0.985, 1.0 - short_entry_discount)
+        slope_ok = True
+        if short_slope_gate:
+            j = sig_bar_idx - short_slope_days
+            if j < sma_period:
+                slope_ok = False
+            else:
+                sma_past = calc_sma(btc_close[:j + 1], sma_period)
+                slope_ok = sma_past > 0 and (sma_now / sma_past - 1.0) < 0
+        return (r <= a and slope_ok), (r >= a + short_exit_margin)
+
+    def _compute_short_weights(sig_date):
+        """숏 후보 선정. 롱 헬스의 거울이다 — 두 모멘텀이 음수이고 변동성이 상한 이하.
+
+        변동성 상한은 숏이라는 이유로 다시 안 연다(프로젝트 규칙: 0.05 가 로버스트 최적점,
+        양방향 재검증 끝). 손절 쿨다운에 걸린 종목은 뺀다.
+        총명목 노출은 short_gross_exposure_cap 으로 묶고, 종목별 상한은
+        min(short_per_coin_cap, G_cap/N) 이다(명세 6절). 못 채운 몫은 현금으로 남긴다.
+        """
+        mcap_order = get_mcap(sig_date)
+        min_bars = max(mom30, mom90, _vol_bars, sma_period)
+        _excluded = exclude_assets or frozenset()
+        cands = []
+        for coin in mcap_order:
+            if coin in blacklist or coin in _excluded:
+                continue
+            if short_cooldown.get(coin, 0) > 0:
+                continue
+            df = bars.get(coin)
+            if df is None:
+                continue
+            ci = df.index.get_indexer([sig_date], method='ffill')[0]
+            if ci < 0 or ci < min_bars:
+                continue
+            c = df['Close'].values[:ci + 1]
+            m_short = calc_mom(c, mom30)
+            m_long = calc_mom(c, mom90)
+            if vol_mode == 'bar':
+                vol = calc_vol_bars(c, _vol_bars, bars_per_year)
+            else:
+                vol = calc_vol_daily(c, bpd, lookback_bars=_vol_bars)
+            if short_health_mode == 'inv_mom2vol':
+                ok = m_short < 0 and m_long < 0 and vol <= vol_threshold
+            elif short_health_mode == 'failed_rally':
+                # 길게는 내리막인데 짧게 반등했다 다시 꺾인 것. 반등 실패형.
+                ok = m_long < 0 and m_short < 0 and vol <= vol_threshold and c[-1] < float(np.mean(c[-sma_period:]))
+            else:
+                ok = m_short < 0 and m_long < 0
+            if ok:
+                cands.append((m_short, coin))
+        if not cands:
+            return {'CASH': 1.0}
+        # 많이 떨어진 순. 동률은 심볼순이라 재현된다.
+        cands.sort(key=lambda t: (t[0], t[1]))
+        picks = [c for _, c in cands[:short_universe_size]]
+        n = len(picks)
+        per = min(short_cap, short_per_coin_cap,
+                  short_gross_exposure_cap / max(n, 1))
+        w = {c: per for c in picks}
+        used = per * n
+        if used < 1.0:
+            w['CASH'] = 1.0 - used
+        return w
+
+    def _liquidate_all(date, reason=''):
+        """전량 청산 후 현금. 방향 전환은 여기를 반드시 거친다(명세 7절).
+
+        라이브는 전량 청산 → 미체결 취소 → 잔량 0 확인 순인데, 백테스트에는 미체결이
+        없으므로 잔량 0 확인이 곧 holdings 를 비우는 것이다.
+        """
+        nonlocal capital, trade_count
+        for coin in list(holdings.keys()):
+            cur = _get_fill_price(coin, date)
+            if cur <= 0:
+                ci = bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1
+                cur = get_close(bars, coin, ci)
+            if cur <= 0:
+                continue
+            slip = _slip(coin)
+            exit_p = cur * (1 - pos_dir * slip)
+            pnl = pos_dir * holdings[coin] * (exit_p - entry_prices[coin])
+            capital += margins[coin] + pnl - holdings[coin] * exit_p * tx_cost
+            trade_count += 1
+        holdings.clear(); entry_prices.clear(); margins.clear(); entry_bar_index.clear()
+        capital = max(capital, 0)
+
     # ═══ 메인 루프 ═══
     for bar_i in range(sma_period + 1, len(all_dates)):
         date = all_dates[bar_i]
@@ -998,6 +1099,77 @@ def run(bars, funding, interval='1h', leverage=1.0,
         elif not canary_on and canary_flipped:
             canary_on_bar = None
 
+        # ── 숏 상태기계 (명세 7절) ──
+        # 롱이거나 현금이거나 숏이다. 방향을 바꿀 때는 전량 청산하고 최소 한 봉을
+        # 현금으로 보낸 뒤에만 반대로 들어간다. enable_short=False 면 이 블록은
+        # sleeve_state 만 따라 적고 아무것도 안 바꾼다(= 구성 B 가 A 와 같은 이유).
+        short_mode = False
+        if enable_short:
+            for _c in list(short_cooldown.keys()):
+                short_cooldown[_c] -= 1
+                if short_cooldown[_c] <= 0:
+                    del short_cooldown[_c]
+
+            s_entry, s_exit = _short_signal(btc_i_prev)
+            if canary_on:
+                desired = 'LONG'
+            elif sleeve_state == 'SHORT':
+                desired = 'CASH' if s_exit else 'SHORT'
+            else:
+                desired = 'SHORT' if s_entry else 'CASH'
+
+            if desired != sleeve_state:
+                if holdings:
+                    _liquidate_all(date)
+                    rebal_count += 1
+                pos_dir = 1
+                for si in range(n_snapshots):
+                    snapshots[si] = {'CASH': 1.0}
+                if sleeve_state != 'CASH':
+                    # 방향에서 나왔으면 현금을 한 봉 이상 거친다. 현금에서 방향으로
+                    # 가는 길은 유예가 없다 — 유예는 뒤집을 때만 건다.
+                    cash_until_bar = bar_i + cash_transit_bars
+                    sleeve_state = 'CASH'
+                elif bar_i > cash_until_bar:
+                    sleeve_state = desired
+                    if desired == 'SHORT':
+                        pos_dir = -1
+                        short_entry_bar = bar_i
+
+            if sleeve_state == 'SHORT':
+                pos_dir = -1
+                short_mode = True
+            else:
+                pos_dir = 1
+            # 숏이 서 있으면 롱 경로를 통째로 끈다. 두 방향이 같은 봉에 서지 않는다.
+            if short_mode:
+                canary_on = False
+                canary_flipped = False
+
+        # ── 숏 대재앙 손절 (명세 8절) ──
+        # 종목별 손절(+12%)과 별개로 슬리브를 통째로 닫는 자리다. 한 종목이라도
+        # 진입가 대비 이만큼 오르면 그 봉에 전부 닫고 쿨다운 동안 숏을 쉰다.
+        if short_mode and holdings and short_catastrophic_stop_pct > 0:
+            worst = 0.0
+            for coin in list(holdings.keys()):
+                ci = bars[coin].index.get_indexer([date], method='ffill')[0] if coin in bars else -1
+                hi = get_high(bars, coin, ci)
+                ep = entry_prices.get(coin, 0)
+                if hi > 0 and ep > 0:
+                    worst = max(worst, hi / ep - 1.0)
+            if worst >= short_catastrophic_stop_pct:
+                hit = list(holdings.keys())
+                _liquidate_all(date)
+                for coin in hit:
+                    short_cooldown[coin] = short_catastrophic_cooldown_bars
+                sleeve_state = 'CASH'
+                pos_dir = 1
+                short_mode = False
+                cash_until_bar = bar_i + max(cash_transit_bars, short_catastrophic_cooldown_bars)
+                for si in range(n_snapshots):
+                    snapshots[si] = {'CASH': 1.0}
+                rebal_count += 1
+
         # ── Blacklist 감소 ──
         for coin in list(blacklist.keys()):
             blacklist[coin] -= 1
@@ -1071,7 +1243,21 @@ def run(bars, funding, interval='1h', leverage=1.0,
         # ── 시그널 → 스냅샷 갱신 ──
         need_rebal = False
 
-        if bar_i <= sma_period + 1:
+        if short_mode:
+            # 숏은 앵커에서만 수량을 다시 잡는다(short_rebalance_mode='anchor_fixed_qty').
+            # 드리프트로 따라가지 않는다 — 가격이 오르면 저절로 노출이 커지는 쪽이라
+            # 그걸 매봉 되맞추면 지는 자리에서 계속 더 파는 동작이 된다(명세 2절 넷째).
+            fresh_bar = (short_entry_bar == bar_i)
+            anchor_bar = (short_rebalance_mode == 'target_weight'
+                          or (snap_interval_bars > 0
+                              and (bar_i + phase_offset_bars) % snap_interval_bars == 0))
+            if fresh_bar or anchor_bar:
+                sw = _compute_short_weights(prev_date)
+                if fresh_bar or sw != snapshots[0]:
+                    for si in range(n_snapshots):
+                        snapshots[si] = dict(sw)
+                    need_rebal = True
+        elif bar_i <= sma_period + 1:
             # 첫 바
             for si in range(n_snapshots):
                 if canary_on:
