@@ -213,7 +213,7 @@ def main():
 
     phases = [round(i * 19 / a.anchors) for i in range(a.anchors)]
     total = len(engines) * len(HYSTS) * len(cost_mults) * len(phases)
-    print(f"엔진 {len(engines)} · 히스테리시스 {len(HYSTS)} · 비용 {len(COST_MULT)} "
+    print(f"엔진 {len(engines)} · 히스테리시스 {len(HYSTS)} · 비용 {len(cost_mults)} "
           f"· 앵커 {len(phases)} · 칸 {total}", flush=True)
     if override:
         print(f"  BASE 덮어쓰기 {override}", flush=True)
