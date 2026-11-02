@@ -34,6 +34,7 @@ fut_param_sensitivity.py 가 레버리지 축 일곱을 같이 재지만, 그 �
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -181,12 +182,38 @@ def main():
     total = sum(len(v) for v in axes.values()) * len(phases) + len(phases)
     print(f"레버리지 축 {len(axes)} · 앵커 {len(phases)} · 칸 {total}", flush=True)
 
-    with open(out, 'w', encoding='utf-8') as fh:
+    # 이미 잰 칸은 다시 안 돈다. 1.3시간짜리가 중간에 죽으면 그때까지가 통째로 날아가던
+    # 자리다 — 줄마다 flush 해서 파일에는 남는데 재실행이 'w' 로 덮었다. 설정 지문을 같이
+    # 적어 BASE·LEV_BASE 가 바뀐 뒤의 옛 줄은 안 믿는다. 바뀌면 지문이 달라져 그 칸을 다시
+    # 돈다 — 안 그러면 다른 전략을 잰 수치가 한 파일에 섞인다.
+    cfg = hashlib.sha1(json.dumps([BASE, LEV_BASE, START, END],
+                                  sort_keys=True, default=str).encode()).hexdigest()[:12]
+    done = set()
+    if os.path.exists(out):
+        for line in open(out, encoding='utf-8'):
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # 죽는 순간 반쯤 쓰인 줄. 그 칸만 다시 돈다.
+            if d.get('cfg') == cfg:
+                done.add((d['axis'], json.dumps(d['value']), d['phase']))
+        if done:
+            print(f"  이미 잰 칸 {len(done)} — 건너뛴다", flush=True)
+
+    def skip(ax, v, ph):
+        return (ax, json.dumps(v), ph) in done
+
+    with open(out, 'a', encoding='utf-8') as fh:
         for ph in phases:
+            if skip('_baseline', None, ph):
+                continue
             t0 = time.time()
             m, e = run_cell(bars, fund, lev(), ph)
             fh.write(json.dumps(dict(axis='_baseline', value=None, phase=ph, metrics=m,
-                                     exposure=e, sec=round(time.time() - t0, 2)),
+                                     exposure=e, cfg=cfg,
+                                     sec=round(time.time() - t0, 2)),
                                 ensure_ascii=False) + '\n')
             fh.flush()
             print(f"  _baseline 위상 {ph}: 칼마 {m.get('calmar', 0):.3f} "
@@ -197,14 +224,17 @@ def main():
             for v in values:
                 m = e = None
                 for ph in phases:
+                    if skip(ax, v, ph):
+                        continue
                     t0 = time.time()
                     m, e = run_cell(bars, fund, lev(**{ax: v}), ph)
                     fh.write(json.dumps(dict(axis=ax, value=v, phase=ph, metrics=m,
-                                             exposure=e, sec=round(time.time() - t0, 2)),
+                                             exposure=e, cfg=cfg,
+                                             sec=round(time.time() - t0, 2)),
                                         ensure_ascii=False) + '\n')
                     fh.flush()
                 if m is None or e is None:
-                    continue
+                    continue  # 그 값은 앵커가 전부 끝나 있다
                 per = m.get('cagr', 0) / e['mean_notional'] if e['mean_notional'] > 1e-9 else 0
                 print(f"  {ax}={v}: 칼마 {m.get('calmar', 0):.3f} "
                       f"연복리 {m.get('cagr', 0):.4f} 명목 {e['mean_notional']:.4f} "
