@@ -104,7 +104,7 @@ def main():
     print(f"곡선 {L}봉 {dates[0].date()}~{dates[-1].date()}\n")
 
     print("우세의 시점 집중도 (앵커 7곳 평균, 로그수익 차이 누적)")
-    print(f"  {'구성':<22}{'누적차':>9}{'최대상승':>10}{'상승비중':>9}"
+    print(f"  {'구성':<26}{'누적차':>9}{'최대상승':>10}{'상승비중':>9}"
           f"{'우위상위10':>11}{'우위제외':>10}{'변동제외':>10}")
     for name in arms:
         rs = [attribute(curves[(name, ph)], curves[('BASE', ph)], dates)
@@ -115,7 +115,7 @@ def main():
         prest = float(np.mean([r['pos_rest'] for r in rs]))
         arest = float(np.mean([r['abs_rest'] for r in rs]))
         share = (100.0 * rise / tot) if abs(tot) > 1e-9 else float('nan')
-        print(f"  {name:<22}{tot:9.3f}{rise:10.3f}{share:8.0f}%"
+        print(f"  {name:<26}{tot:9.3f}{rise:10.3f}{share:8.0f}%"
               f"{psum:11.3f}{prest:10.3f}{arest:10.3f}")
 
     print("\n읽는 법. 누적차는 9.8년 로그수익 차이 합이다 — 양수면 후보가 더 벌었다.")
@@ -130,7 +130,7 @@ def main():
             continue
         r = attribute(curves[(name, 0)], curves[('BASE', 0)], dates)
         days = "  ".join(f"{d} {v:+.3f}" for d, v in r['top_days'])
-        print(f"  {name:<22}{days}")
+        print(f"  {name:<26}{days}")
         print(f"  {'':22}최대상승 {r['rise_from']} ~ {r['rise_to']}")
     return 0
 

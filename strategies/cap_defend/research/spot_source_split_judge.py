@@ -86,7 +86,7 @@ def main():
 
     print("\n자료 출처별 쌍대 판정 (앵커 7곳 합산)")
     print("  순위합은 1.0 이 전승, 1.5 가 동률, 2.0 이 전패다. n 은 창 수.")
-    print(f"  {'구성':<22}{'옛자료만':>20}{'걸친창':>20}{'새자료만':>20}")
+    print(f"  {'구성':<26}{'옛자료만':>20}{'걸친창':>20}{'새자료만':>20}")
     print(f"  {'':22}{'순위/승률/n':>20}{'순위/승률/n':>20}{'순위/승률/n':>20}")
 
     rows = []
@@ -103,7 +103,7 @@ def main():
             cells.append(f"{s['rank']:.3f}/{s['winpct']:4.1f}%/{s['n']:4d}"
                          if s['n'] else "        -")
         rows.append((name, sc))
-        print(f"  {name:<22}" + "".join(f"{c:>20}" for c in cells))
+        print(f"  {name:<26}" + "".join(f"{c:>20}" for c in cells))
 
     print("\n읽는 법. 새 자료만 묶음에서 순위합이 1.5 보다 충분히 낮으면 그 우세는")
     print("  접합 자료에 기대지 않는다. 옛 자료만에서만 낮고 새 자료만에서 1.5 근처면")
@@ -114,7 +114,7 @@ def main():
     for name, sc in rows:
         if sc['old']['n'] and sc['new']['n']:
             d = sc['new']['rank'] - sc['old']['rank']
-            print(f"  {name:<22}{d:+.3f}")
+            print(f"  {name:<26}{d:+.3f}")
     return 0
 
 
