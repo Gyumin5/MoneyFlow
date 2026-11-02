@@ -261,6 +261,8 @@ def run(bars, funding, interval='1h', leverage=1.0,
         funding_veto_rate=-0.0001,    # 8시간당 환산 기준
         cushion_buffer_mult=1.5,
         cash_transit_bars=1,          # 방향 전환 사이에 강제로 비워 두는 봉 수
+        allow_direct_flip=False,      # 참이면 현금 경유 없이 같은 봉에 방향을 뒤집는다
+        flip_preserve_snapshots=False,  # 참이면 롱 복귀 때 스냅샷을 현금으로 안 지운다
         universe_size=5, selection='greedy', cap=1/3,
         tx_cost=0.0004, maint_rate=0.004,
         asset_type='fut',  # 'spot' | 'fut'
@@ -1123,9 +1125,19 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     _liquidate_all(date)
                     rebal_count += 1
                 pos_dir = 1
-                for si in range(n_snapshots):
-                    snapshots[si] = {'CASH': 1.0}
-                if sleeve_state != 'CASH':
+                # 롱으로 돌아가는 길에서는 스냅샷을 지울지가 축이다. 지우면 스태거가
+                # 전환마다 무너지고, 안 지우면 카나리 전환 경로가 평소대로 다시 채운다.
+                if not (flip_preserve_snapshots and desired == 'LONG'):
+                    for si in range(n_snapshots):
+                        snapshots[si] = {'CASH': 1.0}
+                if allow_direct_flip:
+                    # 현금 경유를 건너뛴다. 같은 봉에 숏을 덮고 롱을 세우는 것은
+                    # 실거래에서 가능하므로, 한 봉 유예가 값을 하는지를 축으로 잰다.
+                    sleeve_state = desired
+                    if desired == 'SHORT':
+                        pos_dir = -1
+                        short_entry_bar = bar_i
+                elif sleeve_state != 'CASH':
                     # 방향에서 나왔으면 현금을 한 봉 이상 거친다. 현금에서 방향으로
                     # 가는 길은 유예가 없다 — 유예는 뒤집을 때만 건다.
                     cash_until_bar = bar_i + cash_transit_bars

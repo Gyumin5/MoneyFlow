@@ -29,6 +29,7 @@ import sys
 import time
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 import unified_backtest as ub  # noqa: E402
 
@@ -110,11 +111,24 @@ def main():
     ap.add_argument('--anchors', type=int, default=7, help="앵커(위상) 개수")
     ap.add_argument('--out', default='')
     ap.add_argument('--timing', action='store_true', help="기준선 한 칸만 돌려 시간을 잰다")
+    ap.add_argument('--long', action='store_true',
+                    help="2017년까지 이어 붙인 일봉으로 돈다(long_history.load_extended)")
+    ap.add_argument('--start', default='', help="시작일을 손으로 지정한다")
     a = ap.parse_args()
+
+    global START
+    if a.long and not a.start:
+        START = '2017-01-01'
+    if a.start:
+        START = a.start
 
     print(f"자료 로드 중 ({START} ~ {END})", flush=True)
     t0 = time.time()
-    bars, funding = ub.load_data('D')
+    if a.long:
+        from long_history import load_extended
+        bars, funding = load_extended(verbose=False)
+    else:
+        bars, funding = ub.load_data('D')
     print(f"  심볼 {len(bars)}개, {round(time.time()-t0,1)}초", flush=True)
 
     if a.timing:
