@@ -223,7 +223,15 @@ def worst_window_mdd(seg_list):
     return min(out) if out else 0.0
 
 
-def summary():
+def summary(cand=None):
+    """cand 를 주면 그 구성으로 판정선 다섯을 다시 돌린다.
+
+    기본값은 사전 등록된 0.40 이다. 다른 구성을 넣은 결과는 같은 곡선을 다시 쓰는
+    진단이지 사전 등록이 아니다 — 채택 근거로 쓰지 않고 그렇게 표시한다.
+    """
+    global CAND
+    if cand:
+        CAND = cand
     jpath = os.path.join(OUT, 'cells.jsonl')
     rows = [json.loads(l) for l in open(jpath, encoding='utf-8')]
     z = np.load(os.path.join(OUT, 'curves.npz'), allow_pickle=True)
@@ -353,6 +361,11 @@ def summary():
 
 if __name__ == '__main__':
     if '--summary' in sys.argv:
-        summary()
+        c = None
+        if '--cand' in sys.argv:
+            c = sys.argv[sys.argv.index('--cand') + 1]
+            print(f"※ 사전 등록 후보가 아닌 {c} 로 판정선을 돌린다 — 같은 곡선을 다시")
+            print("  쓰는 진단이다. 채택 근거로 쓰지 않는다.\n")
+        summary(c)
         raise SystemExit(0)
     raise SystemExit(main())
