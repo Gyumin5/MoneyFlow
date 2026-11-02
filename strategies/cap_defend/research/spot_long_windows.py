@@ -205,6 +205,23 @@ def main():
             n, ph = k.split('|')
             curves[(n, int(ph))] = z[k]
 
+    def save():
+        """같은 디렉토리에 새로 쓰고 rename 한다 — 저장 도중 죽어도 옛 파일이 남는다.
+
+        임시 이름이 .npz 로 끝나야 한다. np.savez_compressed 는 확장자가 없으면
+        제 손으로 붙이므로 'curves.npz.tmp' 를 주면 'curves.npz.tmp.npz' 를 만들고
+        rename 이 없는 파일을 찾는다(2026-11-02 에 실제로 그렇게 터뜨렸다).
+        """
+        tmp = path[:-4] + '.tmp.npz'
+        np.savez_compressed(tmp,
+                            **{f"{n}|{p}": v for (n, p), v in curves.items()})
+        os.replace(tmp, path)
+
+    # 중간 저장. 캐시를 읽는 코드가 위에 있는데 쓰기만 끝에 한 번이라 비대칭이었다 —
+    # 2,275칸짜리 격자가 네 시간째에 죽으면 전부 날아간다. 묶음마다 저장하면 재실행이
+    # 끝난 칸을 건너뛴다. 묶음을 열로 잡은 이유는 저장 자체가 공짜가 아니어서다
+    # (곡선 하나 3,549봉이라 전부 모이면 수십 메가바이트, 압축에 몇 초 걸린다).
+    done_arms = 0
     for name in arms:
         for ph in PHASES:
             if (name, ph) in curves:
@@ -216,9 +233,12 @@ def main():
                 continue
             curves[(name, ph)] = eq
             print(f"  {name} 위상 {ph}: {len(eq)}봉 {time.time()-t0:.1f}초", flush=True)
+        done_arms += 1
+        if done_arms % 10 == 0:
+            save()
+            print(f"  — 중간 저장 {len(curves)}곡선", flush=True)
 
-    np.savez_compressed(path,
-                        **{f"{n}|{p}": v for (n, p), v in curves.items()})
+    save()
     judge(curves, arms)
     return 0
 
