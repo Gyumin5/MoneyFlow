@@ -84,6 +84,23 @@ START = '2017-01-01'
 END = '2026-11-01'
 
 
+def fixed_lev_map(f25, bars, lev_base, lev):
+    """레버리지를 한 값으로 고정한 L 맵.
+
+    왜 둔다. 같은 카나리 축이 현물에서는 0.015 가 최고인데 선물에서는 0.005 가 최고다.
+    수수료 가설은 맞바꿈으로 기각했다(48e81aa). 남은 후보 중 레버리지가 가장 그럴듯하다 —
+    배수가 걸리면 카나리를 늦게 끄는 손실이 배수만큼 커지므로 선물은 빨리 꺼야 한다.
+    이 함수로 배수를 1 로 눕히고 같은 축을 다시 재서, 모양이 현물 쪽으로 넘어가면
+    배수가 원인이고 안 넘어가면 다른 축을 봐야 한다.
+
+    구현은 세 문턱을 같은 값으로 주는 것이다 — min/mid/max 가 같으면 어느 가지로
+    가든 그 값이 나온다. 맵의 모양(코인·날짜 키)은 그대로라 엔진 쪽은 안 건드린다.
+    """
+    kw = dict(lev_base)
+    kw['l_min'] = kw['l_mid'] = kw['l_max'] = float(lev)
+    return f25.build_K2_signal(bars, **kw)
+
+
 def run_one(engine, bars, fund, lev_map, ph, hyst, tx):
     tr = []
     if engine == 'fut':
@@ -143,7 +160,18 @@ def main():
     ap.add_argument('--anchors', type=int, default=7)
     ap.add_argument('--out', default='')
     ap.add_argument('--summary', action='store_true')
+    ap.add_argument('--lev-fixed', type=float, default=0.0,
+                    help='선물 레버리지를 이 값으로 고정한다(0 이면 동적 L 그대로). '
+                         '두 자산군이 반대로 서는 원인이 배수인지 가리는 용도다.')
     a = ap.parse_args()
+
+    if a.lev_fixed and a.engine == 'spot':
+        print("현물에는 레버리지가 없다 — --lev-fixed 는 선물에만 쓴다", file=sys.stderr)
+        return 2
+    if a.lev_fixed and not a.out:
+        print("--lev-fixed 는 --out 을 따로 준다 — 동적 L 로 잰 칸과 섞으면 안 된다",
+              file=sys.stderr)
+        return 2
 
     out = a.out or OUT
     if a.summary:
@@ -155,7 +183,7 @@ def main():
     from long_history import load_extended
     bars, fund = load_extended(verbose=False)
 
-    cfg = hashlib.sha1(json.dumps([HYSTS, COST_MULT, engines],
+    cfg = hashlib.sha1(json.dumps([HYSTS, COST_MULT, engines, a.lev_fixed],
                                   sort_keys=True).encode()).hexdigest()[:12]
     done = set()
     if os.path.exists(out):
@@ -181,7 +209,11 @@ def main():
             if eng == 'fut':
                 import backtest_futures_v25 as f25
                 from fut_param_sensitivity import LEV_BASE, BASE
-                lev_map = f25.build_K2_signal(bars, **LEV_BASE)
+                if a.lev_fixed:
+                    lev_map = fixed_lev_map(f25, bars, LEV_BASE, a.lev_fixed)
+                    print(f"  선물 레버리지 {a.lev_fixed} 배 고정", flush=True)
+                else:
+                    lev_map = f25.build_K2_signal(bars, **LEV_BASE)
             else:
                 lev_map = None
                 from spot_param_sensitivity import BASE  # type: ignore
