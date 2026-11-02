@@ -261,6 +261,16 @@ def run(bars, funding, interval='1h', leverage=1.0,
         # "현물을 선물로 바꾼 효과" 를 재게 된다(토론 run-20261102T005717Z 1단계).
         short_as_futures=True,
         short_tx_cost=0.0006,         # 바이낸스 선물 편도. 롱은 tx_cost 그대로.
+        short_only=False,             # 참이면 롱을 아예 안 든다(숏 단독 성적 측정용)
+        # 숏 레버리지. 'fixed' 면 short_leverage 고정, 'dynamic' 이면 V25 의 거울이다 —
+        # 비트코인이 42일선 아래로 깊을수록, 코인이 7일선 아래로 깊을수록 배수를 올린다.
+        short_lev_mode='fixed',       # 'fixed' | 'dynamic'
+        short_lev_min=2.0, short_lev_mid=3.0, short_lev_max=4.0,
+        short_btc_dev_mid=0.015,      # BTC/SMA42 <= 1-이 값 → mid
+        short_btc_dev_max=0.05,       # BTC/SMA42 <= 1-이 값 → max
+        short_k2_sma_days=7,
+        short_k2_dev_mid=0.025,       # close/SMA7 <= 1-이 값 → mid
+        short_k2_dev_max=0.075,       # close/SMA7 <= 1-이 값 → max
         cash_transit_bars=1,          # 방향 전환 사이에 강제로 비워 두는 봉 수
         allow_direct_flip=False,      # 참이면 현금 경유 없이 같은 봉에 방향을 뒤집는다
         flip_preserve_snapshots=False,  # 참이면 롱 복귀 때 스냅샷을 현금으로 안 지운다
@@ -333,8 +343,12 @@ def run(bars, funding, interval='1h', leverage=1.0,
     def _tx():
         return short_tx_cost if _short_acct() else tx_cost
 
-    def _lev():
-        return short_leverage if pos_dir < 0 else leverage
+    def _lev(coin=None):
+        if pos_dir < 0:
+            if short_lev_mode == 'dynamic' and coin is not None:
+                return short_lev_map.get(coin, short_lev_min)
+            return short_leverage
+        return leverage
 
     # 배분 규모는 라이브와 같은 현금 버퍼로 잡는다(모듈 상단 CASH_BUFFER).
     # 예약 성질 확인: sum(margin_i + tx_i) = pv*(1-buffer)*(1 + leverage*tx_cost) < pv 이므로
@@ -380,6 +394,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
     sleeve_state = 'CASH'  # 'LONG' | 'CASH' | 'SHORT'
     cash_until_bar = -1    # 이 봉까지는 어느 방향으로도 진입하지 않는다(방향 전환 유예)
     short_target = {'CASH': 1.0}  # 숏 목표 비중. 롱 스냅샷과 섞지 않는다.
+    short_lev_map = {}     # {coin: 배수} 동적 숏 배수. 신호봉에서 다시 잡는다.
     short_cooldown = {}    # {coin: 남은 봉 수} 손절 뒤 숏 재진입 금지
     short_entry_bar = None
     entry_prices = {}  # {coin: entry_price}
@@ -599,7 +614,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             if cur <= 0:
                 continue
             tmgn = pv * w * margin_factor
-            tnotional = tmgn * _lev()
+            tnotional = tmgn * _lev(coin)
             tqty = tnotional / cur
             target_qty[coin] = tqty
             target_margin[coin] = tmgn
@@ -642,7 +657,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
             if coin not in holdings:
                 entry_p = cur * (1 + pos_dir * slip)
                 margin = target_margin[coin]
-                notional = margin * _lev()
+                notional = margin * _lev(coin)
                 qty = notional / entry_p
                 tx = notional * _tx()
                 if capital >= margin + tx:
@@ -657,7 +672,7 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 if delta > holdings[coin] * _band:
                     entry_p = cur * (1 + pos_dir * slip)
                     add_notional = delta * entry_p
-                    add_margin = add_notional / _lev()
+                    add_margin = add_notional / _lev(coin)
                     tx = add_notional * _tx()
                     if capital >= add_margin + tx:
                         capital -= add_margin + tx
@@ -1010,6 +1025,41 @@ def run(bars, funding, interval='1h', leverage=1.0,
             w['CASH'] = 1.0 - used
         return w
 
+    def _calc_short_lev(sig_date, sig_btc_i, coins):
+        """동적 숏 배수. V25 롱 규칙의 거울이다.
+
+        롱은 42일선 위로 멀수록 배수를 올린다. 숏은 아래로 멀수록 올린다.
+        코인별 배수 = min(비트코인 상한, 그 코인의 7일선 이격 배수)로 V25 와 같은 꼴.
+        """
+        if short_lev_mode != 'dynamic':
+            return {c: short_leverage for c in coins}
+        bc = btc_close[:sig_btc_i + 1]
+        bsma = calc_sma(bc, sma_period)
+        r = (bc[-1] / bsma) if bsma > 0 else 1.0
+        if r <= 1.0 - short_btc_dev_max:
+            btc_cap = short_lev_max
+        elif r <= 1.0 - short_btc_dev_mid:
+            btc_cap = short_lev_mid
+        else:
+            btc_cap = short_lev_min
+        out = {}
+        k2n = max(int(short_k2_sma_days * bpd), 2)
+        for coin in coins:
+            df = bars.get(coin)
+            lv = short_lev_min
+            if df is not None:
+                ci = df.index.get_indexer([sig_date], method='ffill')[0]
+                if ci >= k2n:
+                    c = df['Close'].values[:ci + 1]
+                    sm = calc_sma(c, k2n)
+                    rr = (c[-1] / sm) if sm > 0 else 1.0
+                    if rr <= 1.0 - short_k2_dev_max:
+                        lv = short_lev_max
+                    elif rr <= 1.0 - short_k2_dev_mid:
+                        lv = short_lev_mid
+            out[coin] = min(btc_cap, lv)
+        return out
+
     def _liquidate_all(date, reason=''):
         """전량 청산 후 현금. 방향 전환은 여기를 반드시 거친다(명세 7절).
 
@@ -1135,6 +1185,11 @@ def run(bars, funding, interval='1h', leverage=1.0,
                     del short_cooldown[_c]
 
             s_entry, s_exit = _short_signal(btc_i_prev)
+            if short_only:
+                # 롱을 아예 안 든다. 숏 단독 성적을 재는 구성이라 카나리가 켜져도
+                # 현금에 머문다 — 롱 수익이 섞이면 숏의 몫이 안 보인다.
+                canary_on = False
+                canary_flipped = False
             if canary_on:
                 desired = 'LONG'
             elif sleeve_state == 'SHORT':
@@ -1314,6 +1369,10 @@ def run(bars, funding, interval='1h', leverage=1.0,
                 if fresh_bar or sw != short_target:
                     short_target = dict(sw)
                     need_rebal = True
+                if need_rebal:
+                    short_lev_map = _calc_short_lev(
+                        prev_date, btc_i_prev,
+                        [c for c in short_target if c != 'CASH'])
         elif bar_i <= sma_period + 1:
             # 첫 바
             for si in range(n_snapshots):
