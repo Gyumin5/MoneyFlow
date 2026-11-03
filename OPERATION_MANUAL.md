@@ -76,7 +76,7 @@ for coin in selected:                  # 개별 코인 단기 강도
   레버리지·마진모드 변경(및 위 L 하향 사전매도).
 - 주문 실패(`ORDER FAILED`)가 있으면 밴드와 무관하게 `rebalancing_needed` 를 유지한다 —
   거절 잔차가 넓어진 밴드 안에 묻혀 달성으로 선언되는 것을 막는다.
-- 드리프트 문턱(0.03)과 혼동 금지. 드리프트는 상시 발화 상태라(레버리지 4배에서 진입가 대비 ±1.5%)
+- 드리프트 문턱(0.015)과 혼동 금지. 드리프트는 상시 발화 상태라(레버리지 4배에서 진입가 대비 ±1.5%)
   실제 회전수를 정하는 값은 이 체결 밴드다.
 - 근거: `reports/2026-08-25-fut-rebal-band.html`, ADR `history.md` 2026-08-25.
   1% 로 좁히면 수익 동률·MDD 악화·체결 1.69배(연 264회 대 156회).
@@ -118,7 +118,7 @@ for coin in selected:                  # 개별 코인 단기 강도
 | 유니버스 | CoinGecko Top40 ∩ Binance spot ∩ Upbit KRW ∩ 253일 이상 ∩ 거래대금 조건 |
 | drift 발화 시 | refill v2 — 모멘텀 둘 다 음수(ms<0 AND ml<0)인 코인만 fresh healthy 로 교체 |
 | 가드 | 없음. Upbit warning/delisting 코인만 유니버스에서 즉시 제외 |
-| 거래비용 | 0.04% (BT), 실매매는 Upbit 실수수료 |
+| 거래비용 | 0.4% 편도 (BT — `trade/v24_shadow_today.py` 가 `tx_cost=0.004`), 실매매는 Upbit 실수수료 |
 | cash buffer | 1% |
 
 단독 sleeve BT(6.1yr, 2020-10-01~2026-11-01, 앵커 7곳 평균):

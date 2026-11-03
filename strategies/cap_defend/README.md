@@ -126,13 +126,13 @@ D_SMA42 sleeve, 매일 09:05:
   5. 마진모드 CROSSED, 스탑 없음, 캐시가드 없음
 ```
 
-### 자산배분 (V24/V25, 60/25/15)
+### 자산배분 (V24/V25, 60/20/20)
 
 ```
 매일 09:15 cron (recommend):
   1. 주식(한투) + 현물코인(업비트) + 선물(바이낸스) 잔고 조회
-  2. 실제 비중 계산 → 목표(60/25/15, per-sleeve buffer 7/1/1%) 대비 편차
-  3. T1(half_turnover ≥ 20pp) OR T3U_can(sleeve 상대미달 ≥20% AND 카나리 ON) → 텔레그램 알림
+  2. 실제 비중 계산 → 목표(60/20/20, per-sleeve buffer 7/1/1%) 대비 편차
+  3. T1(half_turnover ≥ 25pp) OR T3U_can(sleeve 상대미달 ≥20% AND 카나리 ON) → 텔레그램 알림
   4. 자동 송금·자동 cap 폐지 — 알림만, 사용자 수동 송금
 ```
 

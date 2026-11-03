@@ -14,7 +14,7 @@
 
 ### 자산배분
 
-- 주식 60% / 업비트(현물) 25% / 바이낸스(선물) 15%
+- 주식 60% / 업비트(현물) 20% / 바이낸스(선물) 20% (2026-11-01 에 60/25/15 에서 바꿨다)
 - per-sleeve cash buffer: 주식 7% / spot 1% / fut 1% (총 cash ≈ 5%)
 - 자산간 리밸런싱: 자동 송금·자동 cap 폐지. 트리거 발화 시 텔레그램 알림만 전송, 사용자가 수동 송금.
   - T1: half_turnover(sum|cur_w − tgt_w|/2) ≥ 25pp → 전체 리셋
@@ -101,7 +101,8 @@ sleeve:   D_SMA42 단일 (ENSEMBLE_WEIGHTS = {'D_SMA42': 1.0})
 비중:     universe_size=3, cap=1/3
 드리프트: drift_threshold=0.10 (자본금 기준 half-turnover). 발화 시 refill v2
 가드:     없음. Upbit warning/delisting 코인은 즉시 제외
-거래비용: 0.04% (BT), 실매매는 Upbit 실수수료
+거래비용: 0.4% 편도 (BT — 채택 호출부 trade/v24_shadow_today.py 가 tx_cost=0.004),
+          실매매는 Upbit 실수수료
 Cron:     매일 09:05 KST (일 1회)
 ```
 
