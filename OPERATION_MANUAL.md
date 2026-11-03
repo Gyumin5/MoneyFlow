@@ -84,17 +84,29 @@ for coin in selected:                  # 개별 코인 단기 강도
 
 ## 매 cron 실행 순서와 가드
 
-1. `verify_position_mode_oneway` — hedge 모드면 ABORT
+1. 상시 무결성 검사 — 계좌를 건드리기 전에, 매매 직전의 보유(`positions_before`)로 돈다.
+   위반이 잡히면 이번 실행은 매매를 안 한다. 체결 뒤로 미루면 우리 주문이 위반으로 잡히거나
+   (자기잠김) 주문을 낸 실행마다 검사를 걸러야 해서 사실상 꺼진다. 기준 스냅샷 갱신은
+   성공 판정과 분리되어 있다(2026-08-22). 포지션 조회가 실패하면 검사를 생략하고 소실로 단정하지 않는다
 2. `build_margin_plan` 으로 심볼별 작업계획을 한 번 만든다 — 조회 불명이 하나라도 있으면 ABORT.
    preflight·변경·사후검증이 전부 이 계획 하나를 쓴다
-3. 계획이 "변경 필요" 라 한 심볼만 preflight(그 심볼 포지션·주문 zero) → 통과하면 `ensure_margin_type`
-   이 CROSSED 로 설정하고 다시 검증한다. "변경 불필요" 심볼은 `verify_margin_type` 로 검증만 하고
-   설정을 시도하지 않는다 — 보유 중인 심볼에 set 을 걸면 바이낸스가 거부한다. 어느 쪽이든 어긋나면 ABORT
-4. 이미 목표 레버리지면 `set_leverage` 생략, 아니면 set → verify
-5. 어느 코인이든 verify 실패 → 매매 전체 ABORT (다음 cron 재시도)
-6. 상시 무결성 검사 — 이 실행이 계좌를 건드리기 전(positions_before)에, 그리고 계좌를 건드리지 않은
-   실행에서만 돈다. 기준 스냅샷 갱신은 성공 판정과 분리되어 있다(자기잠김 방지, 2026-08-22)
-7. `force_cancel_all_orders` → `execute_rebalance` (매도 먼저, 매수 나중)
+3. 변경이 필요한 것만 preflight. one-way 모드 변경은 계정 단위 규칙이라 계정 전체가 비어야 하고
+   (먼지도 불가), 마진모드 변경은 그 심볼만 비면 된다(무관 심볼 먼지는 허용). 둘 중 하나라도
+   잔존이 있으면 ABORT
+4. `ensure_position_mode_oneway` — hedge 면 one-way 로 바꾸고 다시 검증한다. 보장 실패면 ABORT.
+   3번의 계정 전체 zero 를 통과한 뒤라 포지션이 없을 때만 바뀐다
+5. 레버리지를 낮추는 코인은 비율만큼 먼저 reduceOnly 매도한다 — 안 그러면 `set_leverage` 가
+   증거금 증가로 -4131 거부를 낸다. 올리는 쪽은 그대로 두고 `execute_rebalance` 가 매수로 처리
+6. 코인별 마진모드. 계획이 "변경 필요" 라 한 심볼은 `ensure_margin_type` 이 CROSSED 로 설정하고
+   다시 검증한다. "변경 불필요" 심볼은 `verify_margin_type` 로 검증만 하고 설정을 시도하지 않는다 —
+   보유 중인 심볼에 set 을 걸면 바이낸스가 거부한다. 어느 쪽이든 어긋나면 ABORT
+7. 레버리지. 이미 목표면 `set_leverage` 를 생략한다 — 같은 값으로 불러도 성공을 주므로 매번
+   "계좌 변경" 으로 표시되고, 그러면 1번 검사가 매매 경로마다 걸러져 외부개입 탐지가 꺼진다.
+   생략했든 설정했든 그 뒤 `verify_leverage` 를 짧게 세 번 재조회한다(전파 지연 대비)
+8. 어느 코인이든 verify 실패 → 매매 전체 ABORT (다음 cron 재시도). 부분 유니버스 매매는
+   백테스트 가정(3 코인 균등) 위반이다
+9. `force_cancel_all_orders` → `execute_rebalance` (매도 먼저, 매수 나중). 취소 범위는 목표 심볼과
+   현재 보유 심볼의 합집합이고, 취소 실패도 ABORT 다 — 잔존 주문이 신규 주문과 충돌한다
 
 매매 게이트는 `fut_trade_gate()` 단일 판정이다. 빈 `target_lev_map` 을 무조건 차단하지 않는다 —
 산출 실패(lev_abort)만 차단하고, 전액 CASH 는 `liquidation_only` 로 통과시킨다(매수 루프 미진입 +
