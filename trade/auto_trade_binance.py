@@ -2624,6 +2624,54 @@ def _v25_create_lock(reason: str):
 
 STANDING_QTY_TOL = 0.005  # 0.5% — 부분청산/ADL 은 이보다 크게 어긋난다
 
+# 외부개입 관측 줄의 머리말. 검사 함수가 붙이고 호출부가 이 문자열로 가려내 알린다.
+# 상수 하나를 양쪽이 쓴다 — 문구를 고칠 때 한쪽만 바뀌면 알림이 조용히 멎는다.
+STANDING_ALERT_PREFIX = 'standing-alert:'
+
+# 텔레그램까지 올릴 등급 문턱. 명목이 자산의 이 비율을 넘으면 '높음'.
+# 문턱으로 탐지에서 빼지는 않는다 — 낮은 등급도 관측하고 로그·사건에 남긴다.
+# 절대 수량은 안 쓴다(코인마다 1 의 뜻이 다르다). 명목으로 보는 이유는 고배율 외부
+# 롱의 위험이 증거금이 아니라 명목에 있기 때문이다.
+STANDING_ALERT_WEIGHT = 0.01
+
+
+def _v25_baseline_kind(baseline: dict) -> str:
+    """기준 스냅샷 상태를 넷으로 가른다 — absent / malformed / empty / present.
+
+    하나로 묶으면(`if not base_pos`) 판정 불가와 "유효하게 비어 있음" 이 같아져서,
+    현금 100% 구간의 외부 롱이 검사 생략으로 조용히 통과한다.
+    """
+    b = baseline or {}
+    if not b.get('ts'):
+        return 'absent'
+    if 'positions' not in b or not isinstance(b.get('positions'), dict):
+        return 'malformed'
+    return 'empty' if not b['positions'] else 'present'
+
+
+def _v25_standing_new_long(coin: str, cur: Optional[dict], base_ts, kind: str) -> Optional[str]:
+    """기준에 없던 롱 하나를 관측 줄로 만든다. 롱이 아니면 None.
+
+    "기준 시점 이후에 생겼다" 와 "우리 주문이 아니다" 는 다르다 — 지연 체결, 체결 반영
+    전 조회, 주문 직후 종료, 기준 저장 실패가 같은 모양을 만든다. 그래서 단정하지 않고
+    기원 미확정으로 적는다.
+    """
+    try:
+        q = float((cur or {}).get('qty') or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if q <= 0:
+        return None
+    try:
+        w = abs(float((cur or {}).get('weight') or 0.0))
+    except (TypeError, ValueError):
+        w = 0.0
+    grade = '높음' if w >= STANDING_ALERT_WEIGHT else '낮음'
+    where = '기준 보유 0' if kind == 'empty' else '기준에 없는 심볼'
+    return (f"{STANDING_ALERT_PREFIX} {where} 대비 신규 롱 관측: {coin} {q} "
+            f"(자산 대비 명목 {w:.2%} · 등급 {grade} · 기준 {base_ts or '없음'})"
+            " — 주문 기원 미확정")
+
 
 def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], List[str]]:
     """무거래일에도 도는 read-only 무결성 검사. (critical, info) 반환.
@@ -2648,10 +2696,23 @@ def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], Lis
         if q < 0:
             crit.append(f"{coin} 숏 포지션 {q} — 이 전략은 숏을 만들지 않는다(외부 주문 의심)")
 
-    base_pos = (baseline or {}).get('positions') or {}
-    if not base_pos:
+    _kind = _v25_baseline_kind(baseline)
+    _bts = (baseline or {}).get('ts')
+    if _kind == 'absent':
         info.append('standing: 기준 스냅샷 없음 → 기준 대비 검사 생략 (롱 전용 검사는 했다)')
         return crit, info
+    if _kind == 'malformed':
+        info.append('standing: 기준 스냅샷 형식 깨짐(ts 는 있는데 positions 가 없거나 dict 가 '
+                    '아니다) → 기준 대비 검사 생략 (롱 전용 검사는 했다)')
+        return crit, info
+    if _kind == 'empty':
+        # 유효한 보유 0. 양수 수량은 전부 기준 시점 이후에 생긴 것이다.
+        for coin, cur in (positions or {}).items():
+            m = _v25_standing_new_long(coin, cur, _bts, 'empty')
+            if m:
+                info.append(m)
+        return crit, info
+    base_pos = baseline['positions']
     for coin, b in base_pos.items():
         cur = positions.get(coin)
         try:
@@ -2678,8 +2739,86 @@ def _v25_standing_check(positions: dict, baseline: dict) -> Tuple[List[str], Lis
             crit.append(f"{coin} 레버리지 {bl:g} → {cl:g} 외부 변경")
     for coin in positions:
         if coin not in base_pos:
-            info.append(f"{coin} 기준에 없는 포지션 (먼지/수동진입?)")
+            m = _v25_standing_new_long(coin, positions.get(coin), _bts, 'present')
+            info.append(m or f"{coin} 기준에 없는 포지션 (수량 0 이하)")
     return crit, info
+
+
+def _v25_standing_scope(baseline: dict) -> str:
+    """이번 회차의 검사 범위를 사람이 읽는 한 줄로. 건너뛴 것을 통과로 적지 않기 위해서다."""
+    kind = _v25_baseline_kind(baseline)
+    ts = (baseline or {}).get('ts') or '없음'
+    return {
+        'absent': '롱 전용만(기준 없음)',
+        'malformed': '롱 전용만(기준 형식 깨짐)',
+        'empty': f'기준 보유 0(기준 {ts})',
+        'present': f'기준 대비 전체(기준 {ts})',
+    }[kind]
+
+
+def _v25_standing_record(alerts: List[str]) -> int:
+    """외부개입 관측을 상태파일에 사건으로 남기고 미해결 건수를 돌려준다.
+
+    회차마다 로그 한 줄로 흘리면 "언제부터 있었나" 가 사라진다. 자동으로 지우지 않는다 —
+    수량이 0 이 되면 해결로 표시만 하고 기록은 남긴다. 다시 나타나면 재개로 적는다.
+    실패해도 매매를 막지 않는다(기록은 보조 축이다).
+    """
+    from datetime import datetime
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        h = _v25_read_health()
+        ev = h.get('standing_events')
+        if not isinstance(ev, dict):
+            ev = {}
+        seen = set()
+        for m in alerts:
+            key = m.split('관측:', 1)[-1].strip().split(' ')[0] if '관측:' in m else m[:40]
+            seen.add(key)
+            e = ev.get(key)
+            if not isinstance(e, dict):
+                e = {'first_seen': now, 'state': 'open'}
+            elif e.get('state') == 'resolved':
+                e['state'] = 'open'
+                e['reopened_at'] = now
+            e['last_seen'] = now
+            e['message'] = m[:300]
+            ev[key] = e
+        for key, e in ev.items():
+            if isinstance(e, dict) and key not in seen and e.get('state') == 'open':
+                e['state'] = 'resolved'
+                e['resolved_at'] = now
+        h['standing_events'] = ev
+        _v25_write_health(h)
+        return sum(1 for e in ev.values()
+                   if isinstance(e, dict) and e.get('state') == 'open')
+    except Exception as e:                              # noqa: BLE001
+        log.warning(f"  standing: 사건 기록 실패 — {e}")
+        return 0
+
+
+def _v25_standing_notify(alerts: List[str]) -> None:
+    """등급 높음 관측만 텔레그램으로 올린다. 알림이지 차단이 아니다.
+
+    crit 에 넣으면 lock 파일이 생겨 사람이 손으로 풀어야 하고, 오탐 한 번의 비용이
+    매매 정지다. 반대로 외부 접근이 사실이어도 자동 청산은 하지 않는다 — 되돌릴 수
+    없는 동작을 자동 판정에 걸지 않는다. 전송 예외는 매매 경로 밖에 둔다.
+    """
+    high = [m for m in alerts if '등급 높음' in m]
+    if not high:
+        return
+    msg = ("⚠️ V25 외부개입 의심 — 알림만, 매매는 계속한다\n  - "
+           + "\n  - ".join(high[:5]))
+    sent = False
+    try:
+        send_telegram(msg)
+        sent = True
+    except Exception as e:                              # noqa: BLE001
+        log.warning(f"  standing: 알림 전송 실패 — {e}")
+    try:
+        import server_alert_log
+        server_alert_log.record('binance_standing', msg, sent=sent)
+    except Exception:                                   # noqa: BLE001
+        pass
 
 
 def _v25_exec_reconcile(intent: dict, actual: dict, unsent_before: Optional[dict] = None) -> List[str]:
@@ -3841,8 +3980,16 @@ def main():
                 _standing_crit, _standing_info = _v25_standing_check(positions_before, _sbase)
                 for _m in _standing_info:
                     log.info(f"  standing: {_m}")
-                if not _standing_crit:
-                    log.info(f"  standing: 기준({_sbase.get('ts') or '없음'}) 대비 이상 없음")
+                # 관측 줄은 머리말로 가려낸다. 사건으로 남기고 등급 높음만 알린다.
+                _standing_alerts = [_m for _m in _standing_info
+                                    if _m.startswith(STANDING_ALERT_PREFIX)]
+                _standing_open = _v25_standing_record(_standing_alerts)
+                _standing_res = ('이상 없음' if not _standing_crit and not _standing_alerts
+                                 else f"위반 {len(_standing_crit)}건 · 관측 "
+                                      f"{len(_standing_alerts)}건")
+                log.info(f"  standing: 범위={_v25_standing_scope(_sbase)} · "
+                         f"결과={_standing_res} · 미해결 {_standing_open}건")
+                _v25_standing_notify(_standing_alerts)
             else:
                 log.warning("  standing: 포지션 조회 실패 → 무결성 검사 생략 (소실로 단정하지 않음)")
             if _standing_crit:
@@ -4291,11 +4438,14 @@ def main():
             _baseline = None
             if _v25_did_order and pos_after_ok:
                 _baseline = _snap_baseline()
-            elif pos_after_ok and not ((_v25_read_health().get('post_trade_baseline') or {})
-                                       .get('positions')):
-                # 기준이 없다(최초 실행 또는 무효화 후). 지금 상태로 심어 감시를 재개한다 —
-                # 비어 있는 채로 두면 검사가 영구 생략돼 감시 공백이 남는다(08-22 토론).
-                # 과거 구간의 개입은 판정할 수 없다는 걸 명시한다.
+            elif pos_after_ok and _v25_baseline_kind(
+                    _v25_read_health().get('post_trade_baseline') or {}) in ('absent', 'malformed'):
+                # 기준이 없거나 형식이 깨졌다(최초 실행 또는 무효화 후). 지금 상태로 심어
+                # 감시를 재개한다 — 비어 있는 채로 두면 검사가 영구 생략돼 감시 공백이
+                # 남는다(08-22 토론). 과거 구간의 개입은 판정할 수 없다는 걸 명시한다.
+                # 유효한 빈 기준(ts 가 있고 positions={})은 여기서 다시 심지 않는다.
+                # 매 회차 ts 를 새로 찍으면 "언제부터 비었나" 가 사라져서, 관측된 롱이
+                # 어느 구간에 생겼는지 못 가린다.
                 _baseline = _snap_baseline(reseeded=True)
                 log.warning("  standing: 기준 스냅샷 없음 → 현재 포지션으로 재시딩(감시 재개, "
                             "이전 구간 개입은 판정 불가)")

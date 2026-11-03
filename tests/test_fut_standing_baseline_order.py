@@ -291,6 +291,75 @@ def main():
           'notional' not in re.search(r"def _v25_standing_check([\s\S]{0,3000}?)return crit, info",
                                       src).group(1))
 
+    print("\n[9] 포지션 0 구간의 외부 롱 (2026-11-03 cd-d8)")
+    # 카나리가 꺼져 현금 100% 인 구간에서는 우리 보유가 0 이라 기준도 빈 채로 남는다.
+    # 옛 코드는 그 구간을 '기준 없음' 과 한 덩어리로 묶어 검사를 통째로 건너뛰었고,
+    # 로그에는 "기준 대비 이상 없음" 으로 찍었다 — 건너뛴 것이 통과로 읽혔다.
+    PFX = a.STANDING_ALERT_PREFIX
+    CUR_BTC = {'BTC': {'qty': 0.5, 'leverage': 20, 'isolated': False,
+                       'weight': 0.25, 'notional': 50000.0}}
+
+    c_empty, i_empty = a._v25_standing_check(
+        CUR_BTC, {'ts': '2026-11-02T00:05:25Z', 'positions': {}})
+    check("유효한 빈 기준 + 현재 롱 → 관측 줄이 올라온다",
+          any(m.startswith(PFX) and 'BTC' in m for m in i_empty),
+          str(i_empty))
+    check("관측은 알림이지 차단이 아니다 (crit 비어 있음)", c_empty == [], str(c_empty))
+    check("단정하지 않는다 — 기원 미확정으로 적는다",
+          any('주문 기원 미확정' in m for m in i_empty), str(i_empty))
+
+    c_abs, i_abs = a._v25_standing_check(CUR_BTC, {})
+    check("기준 부재는 판정 불가로 남고 관측 줄을 만들지 않는다",
+          not any(m.startswith(PFX) for m in i_abs)
+          and any('기준 스냅샷 없음' in m for m in i_abs), str(i_abs))
+
+    c_mal, i_mal = a._v25_standing_check(CUR_BTC, {'ts': '2026-11-02T00:05:25Z'})
+    check("기준 불완전은 부재와 구분해 적는다 (조용히 통과시키지 않는다)",
+          any('형식 깨짐' in m for m in i_mal)
+          and not any('기준 스냅샷 없음' in m for m in i_mal), str(i_mal))
+
+    _base_present = {'ts': '2026-11-02T00:05:25Z',
+                     'positions': {'ETH': {'qty': 10.0, 'leverage': 3, 'isolated': False}}}
+    _cur_both = dict(CUR_BTC)
+    _cur_both['ETH'] = {'qty': 10.0, 'leverage': 3, 'isolated': False, 'weight': 0.2}
+    c_new, i_new = a._v25_standing_check(_cur_both, _base_present)
+    check("보유 있는 기준의 새 심볼 롱도 같은 머리말로 올라온다",
+          any(m.startswith(PFX) and 'BTC' in m for m in i_new) and c_new == [],
+          str(i_new) + str(c_new))
+
+    _dust = {'BTC': {'qty': 0.00001, 'leverage': 20, 'isolated': False, 'weight': 0.0001}}
+    _, i_dust = a._v25_standing_check(_dust, {'ts': 'x', 'positions': {}})
+    check("먼지는 탐지에서 빼지 않고 등급만 낮춘다",
+          any(m.startswith(PFX) and '등급 낮음' in m for m in i_dust), str(i_dust))
+    check("등급 높음만 텔레그램으로 올라간다",
+          all('등급 높음' not in m for m in i_dust)
+          and any('등급 높음' in m for m in i_empty),
+          str(i_dust) + str(i_empty))
+
+    check("유효한 빈 기준은 무거래 회차에 재시딩되지 않는다 (ts 보존)",
+          "_v25_baseline_kind(" in src
+          and "in ('absent', 'malformed')" in src
+          and "not ((_v25_read_health().get('post_trade_baseline') or {})" not in src)
+    check("호출부가 건너뛴 것을 통과로 적지 않는다 (범위·결과·미해결 분리)",
+          '_v25_standing_scope(_sbase)' in src and '미해결 {_standing_open}건' in src
+          and '대비 이상 없음' not in src)
+    check("머리말은 상수 하나를 양쪽이 쓴다",
+          'STANDING_ALERT_PREFIX = ' in src
+          and src.count('_m.startswith(STANDING_ALERT_PREFIX)') == 1)
+
+    def _ev(path):
+        a._v25_write_health({})
+        n1 = a._v25_standing_record([f"{PFX} 기준 보유 0 대비 신규 롱 관측: BTC 0.5 (x)"])
+        h1 = json.load(open(path))
+        n2 = a._v25_standing_record([])
+        h2 = json.load(open(path))
+        return n1, n2, h1, h2
+    n1, n2, h1, h2 = _with_temp_health(_ev)
+    check("관측을 사건으로 남기고 미해결로 센다", n1 == 1 and 'BTC' in h1['standing_events'])
+    check("사라져도 지우지 않는다 — 해결로 표시만 한다",
+          n2 == 0 and h2['standing_events']['BTC']['state'] == 'resolved'
+          and 'first_seen' in h2['standing_events']['BTC'])
+
     print()
     if FAILS:
         print(f"FAIL {len(FAILS)} 건: {FAILS}")
