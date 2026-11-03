@@ -3227,5 +3227,7 @@ tags: 자산배분, 백테스트, 통화
   설계는 재시도 시 시간낭비 — 운영자가 "백테스트 자체가 거래소 의존적일 필요는 없다,
   전략 숫자를 찾는 게 중요하다"(9882)로 그 축을 접었다. 보유 코인-일의 27.5%가 업비트
   원화 마켓에 없는 코인이라는 것은 사실이지만 판정 근거가 아니다.
-- 검증: bash run_tests.sh 48파일 실패 0. 보고서
-  reports/2026-11-03-원화-기준-자산간-문턱.html, 규칙 state/20261103-krw-ledger/규칙.md.
+- 검증: 커밋 6268fa9 (bash run_tests.sh 48파일 실패 0). 보고서
+  reports/2026-11-03-원화-기준-자산간-문턱.html, 사전등록과 스크립트
+  strategies/cap_defend/research/krw_ledger_prereg.md · krw_*.py, 자재
+  state/20261103-krw-ledger/ (곡선 42개·채점 덤프, git 미추적).
