@@ -120,8 +120,13 @@ DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 �
 
 웹 접근
 - http://<서버주소>:8080/portfolio_result_gmoh.html (개인 포트폴리오)
-- http://<서버주소>:8080/v22_alloc_report.html (자산배분 분석)
+- http://<서버주소>:8080/portfolio_result.html (전체 포트폴리오)
 - http://<서버주소>:8080/strategy.html, /strategy_guide.html, /asset_dashboard.html
+
+`/v22_alloc_report.html` 은 2026-11-03 에 공개 목록에서 내렸다 — 2026-04-28 자 V22 세대
+보고서라 현행 자산배분(60/20/20)과 다른데 생성 코드가 없어 고칠 길이 없었다. 서버 파일
+`/home/ubuntu/v22_alloc_report.html` 은 지우지 않았고 사본을
+`/home/gmoh/backups/251229-reports/2026-11-03/` 에 해시와 같이 보존했다. 그 주소는 이제 404 다.
 
 주의: serve.py 의 `do_HEAD` 는 무조건 404 반환 (의도된 보안). curl `-I` 로 점검하면 실제 GET 이 200 이어도 404 로 보임. 항상 GET 으로 점검.
 
