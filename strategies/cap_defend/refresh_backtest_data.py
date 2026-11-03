@@ -37,13 +37,12 @@ def refresh_stock() -> None:
 
         fp = cache_dir / f"{ticker}.csv"
         existing = None
+        # 항상 전체를 다시 받는다. 증분으로 이어 붙이면 배당 재조정이 과거 행에
+        # 안 들어가 한 파일 안에 조정 기준 둘이 섞인다(history #148).
         start = "2014-01-01"
         if fp.exists():
             try:
                 existing = pd.read_csv(fp, parse_dates=["Date"])
-                if not existing.empty:
-                    last_date = pd.to_datetime(existing["Date"]).iloc[-1]
-                    start = (last_date - pd.Timedelta(days=7)).strftime("%Y-%m-%d")
             except Exception:
                 existing = None
 
@@ -60,14 +59,18 @@ def refresh_stock() -> None:
             new_df = series.rename(ticker).reset_index()
             new_df.columns = ["Date", ticker]
 
+            # 전체 교체다. 다만 응답이 기존보다 크게 짧으면 자료를 날리지 않는다 —
+            # 야후가 부분 응답을 줄 때 백테스트 자료가 통째로 사라지는 것을 막는다.
             if existing is not None and not existing.empty:
-                merged = pd.concat([existing, new_df], ignore_index=True)
-                merged["Date"] = pd.to_datetime(merged["Date"])
-                merged = merged.drop_duplicates("Date", keep="last").sort_values("Date")
-            else:
-                merged = new_df
+                if len(new_df) < len(existing) * 0.9:
+                    print(f"[stock] {ticker} 응답이 짧아 교체 안 함 "
+                          f"(새 {len(new_df)}행 < 기존 {len(existing)}행)")
+                    skipped += 1
+                    continue
 
-            merged.to_csv(fp, index=False)
+            new_df["Date"] = pd.to_datetime(new_df["Date"])
+            new_df = new_df.drop_duplicates("Date", keep="last").sort_values("Date")
+            new_df.to_csv(fp, index=False)
             updated += 1
         except Exception as exc:
             print(f"[stock] {ticker} failed: {exc}")
