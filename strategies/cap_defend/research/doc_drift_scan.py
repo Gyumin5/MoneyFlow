@@ -90,9 +90,10 @@ AXES = [
      r'Cal 4\.35|Cal 4\.63|CAGR \+?77\.6|CAGR \+?82|Cal 2\.17'),
 
     ('합성 성과',
-     'CLAUDE.md 정본: Cal 4.07 / CAGR 76.4% / MDD -18.8% / Sharpe 1.84',
+     'CLAUDE.md 정본: 원화 기준 Cal 3.95 / CAGR 81.0% / MDD -20.6% / Sharpe 1.76 '
+     '(달러 기준 3.82 / 72.4% / -19.1% / 1.63 은 같이 적어도 된다)',
      r'합성|alloc 60|3자산',
-     r'Cal 5\.72|Cal 3\.88|Cal 4\.68|CAGR 71\.2'),
+     r'Cal 5\.72|Cal 3\.88|Cal 4\.68|CAGR 71\.2|Cal 4\.07|CAGR 76\.4'),
 ]
 
 

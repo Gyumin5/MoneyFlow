@@ -567,7 +567,7 @@ VERSION_HISTORY = [
   · BTC cap: BTC/SMA42 ratio &gt; 1.05 → L4, &gt; 1.015 → L3, else L2
   · K2 per-coin: close/SMA7 ratio &gt; 1.075 → L4, &gt; 1.025 → L3, else L2
 • <b>마진모드:</b> CROSS (V24 ISOLATED → V25 CROSS)
-• 가드 없음 · BT Cal 8.12 단독 sleeve · alloc 60/20/20 Cal 4.07 (5.8yr, 송금지연 5영업일)
+• 가드 없음 · BT Cal 8.12 단독 sleeve · alloc 60/20/20 Cal 3.95 (원화 기준, 5.8yr, 송금지연 5영업일)
 
 <b>▶ 주식 (V25 — snap-based stagger sd=69, 2026-05-29 도입)</b>
 • <b>유니버스:</b> SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7종, R7)
@@ -582,7 +582,7 @@ VERSION_HISTORY = [
      """V24 선물 sleeve: D_SMA42 + 고정 L3 ISO. V25 도입으로 deprecated."""),
 ]
 
-STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.20, 0.20  # 합동 격자 1위 (2026-11-01): 60/25/15 → 60/20/20. 수익 1위/6656칸, Cal 4.07 CAGR 76.4% MDD -18.8% (5.8yr, 송금지연 5영업일)
+STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.20, 0.20  # 합동 격자 1위 (2026-11-01): 60/25/15 → 60/20/20, 수익 1위/6656칸. 성과는 원화 기준 Cal 3.95 CAGR 81.0% MDD -20.6% Sharpe 1.76 (5.8yr, 송금지연 5영업일, 2026-11-03 환산). 달러 기준 3.82/72.4%/-19.1%/1.63
 REBAL_HT_THRESHOLD = 0.25  # 2026-11-01: 비중과 같이 올린다. 20pp 로 두면 Cal 3.70 으로 현행(3.87)보다 나쁘다 — 비중과 문턱은 한 짝이다
 REBAL_T3U_REL = 0.20  # V25 (2026-05-28): T3U_can ≥ 20% (25% → 20%). 2026-11-01 합동 격자에서도 20% 유지가 1위
 
