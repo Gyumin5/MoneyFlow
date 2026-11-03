@@ -46,6 +46,11 @@
   - `OPERATION_MANUAL.md`
   - `CLAUDE.md`
   - 상태파일: `binance_state.json`
+- 세 자산 공통 — 공개 서빙 페이지 `strategies/cap_defend/strategy.html` 을 같이 고친다.
+  서버 8080 으로 외부에 열려 있고 `strategies/cap_defend/strategy_guide.html` 이 그 페이지로
+  안내한다. 손으로 쓴 정적 HTML 이라 전략을 바꿔도 저절로 안 따라온다 — 2026-11-03 에
+  서버본이 V15·V17 이고 집 사본이 V20 인 채 공개되고 있던 것이 그 결과다.
+  `tests/test_public_strategy_page.py` 가 정본 수치와 대조한다.
 - 앵커일, 버퍼, 상태키, 모니터 기준통화가 다르면 "같은 전략"이라고 쓰지 않는다.
 - 현행 전략의 앵커는 전부 봉 단위 스냅(snap_interval_bars)이다. `1/10/19`·`1/11/21` 같은 달력 앵커 표기는
   `legacy/` 와 `research/` 의 옛 스크립트에만 남아 있다 — 현행 스펙 근거로 인용하지 않는다.
@@ -118,6 +123,14 @@ V24 = 모든 자산 1D 단일 + drift trigger. 4h 멤버 제거, cron 1일 1회�
 - drift threshold 0.05 (V24 0.10 에서 강화)
 - 종목 교체 = 앵커일(69일) OR drift 5pp 발화일 (V25 주식 한정, 2026-06-06). drift 발화 시 그날 fresh selection(Z-score 랭킹→3-mom 필터→top3 cap)으로 snap picks 리필 후 merge→체결. last_rebal_date 보존(앵커 cadence 유지). 채택 BT(bt_stock_mom3) 정합. executor 플래그 STOCK_DRIFT_REFILL=True (False 면 anchor-only 복귀). V24 코인/선물의 "앵커일에만 교체" 원칙과 구분.
 - 가드 없음. EEM canary + 3-mom 필터 + 분산 = 유일 방어
+- V25 를 한 명령으로 재현하는 백테스트 진입점은 없다. `run_current_stock_backtest.py` 는
+  `CURRENT_V17` 설정으로 돌고 화면에도 V17 로 찍는다(2017~ 칼마 0.88) — 현행 성과로 인용하지
+  않는다. 쓰는 엔진 `stock_engine.py` 의 `SP` 에 3-mom 필터·트랜치(69/23)·drift·cap 비중이
+  없어서 값만 바꿔서는 안 된다. 라이브 신호는 `stock_strategy_v25.py` 순수함수가 정본이고,
+  채택 근거 계산은 `research/bt_stock_mom3.py` 그리드에 있다.
+  러너를 만드는 것은 2026-11-03 토론(run-20261103T053845Z)에서 보류했다 — 재개 조건은
+  주식 재측정·회귀검증·단독 성과표 산출이 실제로 필요해질 때이고, 그때는 검증된 채택 계산을
+  감싸는 얇은 단일 설정 러너로 만든다(SP 확장·새 엔진은 안 쓴다).
 - 5.4yr BT (window rank-sum 1518 × 11 anchors): C 안 (multi+mom cap+Cash) avg_rank 1.246 vs B (현행) 2.471
 
 ### 통일 아키텍처 (V25 도입)

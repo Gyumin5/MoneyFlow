@@ -1,915 +1,218 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ko">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cap Defend V20 Strategy Documentation</title>
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        background: #f5f7fa;
-        color: #333;
-        line-height: 1.6;
-      }
-      .container {
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 20px;
-      }
-      h1 {
-        text-align: center;
-        margin: 30px 0 10px;
-        font-size: 1.8em;
-        color: #1a73e8;
-      }
-      .subtitle {
-        text-align: center;
-        color: #888;
-        margin-bottom: 30px;
-        font-size: 0.95em;
-      }
-      .version-card {
-        background: white;
-        border-radius: 12px;
-        margin-bottom: 20px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        overflow: hidden;
-      }
-      .version-card.current {
-        border: 2px solid #1a73e8;
-      }
-      .version-card details {
-        border: none;
-      }
-      .version-header {
-        padding: 16px 20px;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        background: #fafafa;
-        user-select: none;
-      }
-      .version-header:hover {
-        background: #f0f4ff;
-      }
-      .badge {
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-weight: 700;
-        font-size: 0.95em;
-        white-space: nowrap;
-      }
-      .badge-current {
-        background: #1a73e8;
-        color: white;
-      }
-      .badge-old {
-        background: #e0e0e0;
-        color: #555;
-      }
-      .version-date {
-        color: #888;
-        font-size: 0.85em;
-        min-width: 70px;
-      }
-      .version-summary {
-        font-size: 0.92em;
-        color: #444;
-      }
-      .version-detail {
-        padding: 20px 24px;
-        font-size: 0.9em;
-        line-height: 1.8;
-        border-top: 1px solid #eee;
-      }
-      .version-detail b {
-        color: #333;
-      }
-      .section-title {
-        display: inline-block;
-        background: #f0f4ff;
-        padding: 4px 10px;
-        border-radius: 4px;
-        margin: 12px 0 6px;
-        font-weight: 700;
-        color: #1a73e8;
-        font-size: 0.95em;
-      }
-      .new-tag {
-        color: #d93025;
-        font-weight: 600;
-      }
-      .param {
-        font-family: "SF Mono", Monaco, monospace;
-        background: #f0f4ff;
-        padding: 1px 6px;
-        border-radius: 3px;
-        font-size: 0.9em;
-      }
-      .nav-link {
-        display: inline-block;
-        margin: 20px 0;
-        color: #1a73e8;
-        text-decoration: none;
-        font-size: 0.9em;
-      }
-      .nav-link:hover {
-        text-decoration: underline;
-      }
-      .hero-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 14px;
-        margin: 10px 0 26px;
-      }
-      .hero-card {
-        background: white;
-        border-radius: 10px;
-        padding: 16px 18px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-        border-top: 4px solid #cfd8dc;
-      }
-      .hero-live {
-        border-top-color: #1a73e8;
-      }
-      .hero-dev {
-        border-top-color: #ff8f00;
-        background: #fffdf7;
-      }
-      .hero-badge {
-        display: inline-block;
-        font-size: 0.72em;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        padding: 2px 8px;
-        border-radius: 4px;
-        background: #eef2f7;
-        color: #555;
-      }
-      .hero-live .hero-badge {
-        background: #1a73e8;
-        color: white;
-      }
-      .hero-dev .hero-badge {
-        background: #ff8f00;
-        color: white;
-      }
-      .hero-ver {
-        font-size: 1.6em;
-        font-weight: 700;
-        margin: 4px 0 10px;
-        color: #222;
-      }
-      .hero-line {
-        font-size: 0.88em;
-        color: #444;
-        margin: 3px 0;
-        line-height: 1.55;
-      }
-      .hero-perf {
-        margin-top: 10px;
-        padding-top: 10px;
-        border-top: 1px dashed #e0e0e0;
-        font-size: 0.84em;
-        color: #666;
-      }
-      @media (max-width: 600px) {
-        .hero-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-      .overview-details {
-        margin: 8px 0 24px;
-        background: white;
-        border-radius: 8px;
-        padding: 10px 14px;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
-      }
-      .overview-details > summary {
-        cursor: pointer;
-        font-weight: 600;
-        color: #1a73e8;
-        font-size: 0.92em;
-        padding: 4px 0;
-      }
-      .overview-table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 10px 0 6px;
-        background: white;
-        border-radius: 8px;
-        overflow: hidden;
-      }
-      .overview-table th {
-        background: #1a73e8;
-        color: white;
-        padding: 10px 14px;
-        text-align: left;
-        font-size: 0.85em;
-      }
-      .overview-table td {
-        padding: 10px 14px;
-        border-bottom: 1px solid #eee;
-        font-size: 0.85em;
-      }
-      .overview-table tr:last-child td {
-        border-bottom: none;
-      }
-      .check {
-        color: #0d904f;
-      }
-      .cross {
-        color: #999;
-      }
-      .backtest-box {
-        background: #f8f9ff;
-        border: 1px solid #d0d9ff;
-        border-radius: 8px;
-        padding: 14px 18px;
-        margin: 12px 0;
-        font-size: 0.88em;
-      }
-      .backtest-box .metric {
-        display: inline-block;
-        margin-right: 20px;
-        margin-bottom: 4px;
-      }
-      .backtest-box .metric b {
-        color: #1a73e8;
-      }
-      @media (max-width: 600px) {
-        .container {
-          padding: 12px;
-        }
-        .version-header {
-          flex-wrap: wrap;
-        }
-        .version-detail {
-          padding: 14px 16px;
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <h1>Cap Defend Strategy</h1>
-      <p class="subtitle">현재 운영 · 개발 버전 요약 + 히스토리</p>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cap Defend — 전략 설명</title>
+<style>
+:root{
+  --bg:#0f1115; --card:#171a21; --line:#272b35; --tx:#e6e8ee;
+  --dim:#9aa1b1; --ac:#5aa9ff; --ok:#49c17a; --wn:#e0a33e;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:0; background:var(--bg); color:var(--tx);
+  font-family:'Noto Sans CJK KR',system-ui,sans-serif;
+  font-size:16px; line-height:1.7; -webkit-text-size-adjust:100%;
+}
+.wrap{max-width:860px; margin:0 auto; padding:24px 16px 72px}
+header{border-bottom:1px solid var(--line); padding-bottom:20px; margin-bottom:28px}
+h1{font-size:26px; margin:0 0 6px; letter-spacing:-.01em}
+.sub{color:var(--dim); font-size:15px; margin:0}
+h2{font-size:20px; margin:36px 0 12px; padding-top:8px; border-top:1px solid var(--line)}
+h3{font-size:17px; margin:22px 0 8px; color:var(--ac)}
+p{margin:10px 0}
+ul{margin:10px 0; padding-left:20px}
+li{margin:6px 0}
+code,.m{font-family:'Noto Sans Mono CJK KR',monospace; font-size:14px;
+  background:#1e222b; padding:1px 5px; border-radius:4px}
+.card{background:var(--card); border:1px solid var(--line); border-radius:10px;
+  padding:16px; margin:14px 0}
+.grid{display:grid; grid-template-columns:1fr; gap:12px}
+table{width:100%; border-collapse:collapse; font-size:15px; margin:12px 0}
+th,td{border-bottom:1px solid var(--line); padding:9px 8px; text-align:left; vertical-align:top}
+th{color:var(--dim); font-weight:600; font-size:14px}
+.n{color:var(--dim); font-size:14px}
+.tag{display:inline-block; font-size:13px; padding:2px 9px; border-radius:999px;
+  border:1px solid var(--line); color:var(--dim); margin-right:6px}
+.ok{color:var(--ok)} .wn{color:var(--wn)}
+.scroll{overflow-x:auto}
+a{color:var(--ac)}
+@media (min-width:720px){ .grid{grid-template-columns:1fr 1fr} }
+</style>
+</head>
+<body>
+<div class="wrap">
 
-      <!-- ═══ 현재 전략 히어로 ═══ -->
-      <div class="hero-grid">
-        <div class="hero-card hero-live">
-          <div class="hero-badge">LIVE</div>
-          <div class="hero-ver">V19</div>
-          <div class="hero-line">코인 D봉 · SMA50+1.5% hyst · Mom30/90 · 3-tranche Day 1/11/21</div>
-          <div class="hero-line">주식 V17 · 선물 d005 앙상블 (5x)</div>
-          <div class="hero-line">자산배분 60/25/15 · 8pp drift 밴드</div>
-          <div class="hero-perf">Sharpe 1.60 · CAGR +67% · MDD -27% · Calmar 2.50 (코인 단독)</div>
-        </div>
-        <div class="hero-card hero-dev">
-          <div class="hero-badge">개발중</div>
-          <div class="hero-ver">V20</div>
-          <div class="hero-line">코인 D + 4h 앙상블 (50:50 EW)</div>
-          <div class="hero-line">DD/BL/Crash 제거 · 봉 기반 snap · 매시간 cron</div>
-          <div class="hero-line">유의종목 즉시 청산 · notional cap 20%/run</div>
-          <div class="hero-perf">주식/선물은 V19와 동일 유지</div>
-        </div>
-      </div>
+<header>
+<h1>Cap Defend</h1>
+<p class="sub">주식 · 코인현물 · 코인선물 세 갈래를 한 계좌 묶음으로 굴리는 추세추종 전략.
+현재 운영은 주식 V25 · 코인현물 V24 · 코인선물 V25 다.</p>
+</header>
 
-      <!-- ═══ 비교표 (접힘) ═══ -->
-      <details class="overview-details">
-        <summary>피처별 비교표 (V18 / V19 / V20)</summary>
-      <table class="overview-table">
-        <thead>
-          <tr>
-            <th>Feature</th>
-            <th>V18 (2026-03)</th>
-            <th>V19 (2026-04, live)</th>
-            <th>V20 (2026-04, 진행 중)</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><b>Stock / Futures</b></td>
-            <td colspan="3">V20도 주식/선물은 V19와 동일 (주식 V17 유지 + 선물 d005 앙상블)</td>
-          </tr>
-          <tr>
-            <td><b>Coin Bars</b></td>
-            <td>D봉 단독</td>
-            <td>D봉 단독</td>
-            <td class="check"><b>D + 4h 앙상블 (50:50 EW)</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Canary</b></td>
-            <td>BTC &gt; SMA50 + 1.5% Hyst</td>
-            <td>BTC &gt; SMA50 + 1.5% Hyst</td>
-            <td class="check"><b>멤버별 canary, 둘 다 OFF면 전량 KRW</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Health</b></td>
-            <td>Mom30+Mom90+Vol5%</td>
-            <td>Mom30+Mom90+Vol5%</td>
-            <td class="check"><b>D_SMA50: Mom30/90 · 4h_SMA240: Mom30/120</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Selection / Weighting</b></td>
-            <td>MCap Top 5 + Greedy / EW 33% cap</td>
-            <td>MCap Top 5 + Greedy / EW 33% cap</td>
-            <td class="check"><b>동일 (멤버별 독립 계산 후 앙상블)</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Snapshot / Anchor</b></td>
-            <td>3-tranche Day 1/11/21 (캘린더)</td>
-            <td>3-tranche Day 1/11/21 (캘린더)</td>
-            <td class="check"><b>봉 기반 snap — D_SMA50=30봉(≈30d) · 4h_SMA240=60봉(≈10d)</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin PFD</b></td>
-            <td>ON (5d)</td>
-            <td>제거</td>
-            <td class="check"><b>제거</b></td>
-          </tr>
-          <tr>
-            <td><b>DD / Blacklist / Crash</b></td>
-            <td>60d -25% / -15% 7d / BTC -10% 3d</td>
-            <td>동일</td>
-            <td class="check"><b>전부 제거 — canary + 극단갭만</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Gap Stop</b></td>
-            <td>—</td>
-            <td>—</td>
-            <td class="check"><b>D_SMA50: D -15% / 4h_SMA240: 4h -10% → 멤버별 exclusion</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin Cron / Idempotency</b></td>
-            <td>daily 09:20 KST</td>
-            <td>daily 09:20 KST</td>
-            <td class="check"><b>매시간 — 새 봉 없으면 auto-skip</b></td>
-          </tr>
-          <tr>
-            <td><b>Coin State File</b></td>
-            <td>trade_state.json</td>
-            <td>trade_state.json</td>
-            <td class="check"><b>trade_state_v20.json (V19와 분리)</b></td>
-          </tr>
-          <tr>
-            <td><b>TX Model</b></td>
-            <td>Delta Trading</td>
-            <td>Delta Trading</td>
-            <td class="check"><b>Delta Trading + notional cap 20%/run</b></td>
-          </tr>
-        </tbody>
-      </table>
-      </details>
+<h2>한 장 요약</h2>
 
-      <!-- V20 (현재 구현 중) -->
-      <div class="version-card current">
-        <details open>
-          <summary class="version-header">
-            <span class="badge badge-current">V20</span>
-            <span class="version-date">2026-04 (진행 중)</span>
-            <span class="version-summary"
-              >코인 D + 4h 앙상블, DD/BL/Crash 제거, 봉 기반 snap — 주식/선물은
-              V19와 동일</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>자산배분:</b> 주식 60% / 코인(현물) 25% / 선물 15% (V19와 동일,
-            8pp drift 밴드 리밸런싱)
+<div class="card">
+<p>세 갈래가 각자 자기 계좌 안에서만 매매한다. 공통 뼈대는 넷이다.</p>
+<ul>
+<li><b>카나리</b> — 시장 전체가 위험한지 하나의 기준 자산으로 먼저 가른다. 꺼지면 그 갈래는
+ 통째로 방어 자산이나 현금으로 간다.</li>
+<li><b>건강검사</b> — 켜져 있을 때도 모멘텀이 양수이고 변동성이 과하지 않은 것만 고른다.</li>
+<li><b>분산과 상한</b> — 세 종목까지, 한 종목이 3분의 1을 넘지 않는다.</li>
+<li><b>스냅샷 나눠 타기</b> — 종목 교체일을 여러 개로 쪼개 한 날에 몰아서 갈아타지 않는다.</li>
+</ul>
+<p>손절·급락 가드는 쓰지 않는다. 방어는 카나리와 건강검사와 분산 셋이 전부다.</p>
+</div>
 
-            <div class="section-title">&#9654; 코인(현물) 전략 (V20)</div>
+<h2>자산배분</h2>
 
-            <div class="backtest-box">
-              <span class="metric"><b>전환 이유</b></span>
-              <span class="metric"
-                >D봉 단독 → D+4h 앙상블로 "임계치 이벤트 탈동기화"</span
-              >
-              <span class="metric"
-                >1620 조합 그리드 결과 &sigma;(Sharpe) 낮추고 최근 구간 일관성
-                확보</span
-              >
-              <span class="metric"
-                >캘린더 앵커(Day 1/11/21) → 봉 기반 dynamic snap</span
-              >
-            </div>
+<table>
+<tr><th>갈래</th><th>목표 비중</th><th>계좌</th><th>계좌 안 현금</th></tr>
+<tr><td>주식</td><td>60%</td><td>한국투자증권</td><td>7%</td></tr>
+<tr><td>코인현물</td><td>20%</td><td>업비트</td><td>1%</td></tr>
+<tr><td>코인선물</td><td>20%</td><td>바이낸스</td><td>1%</td></tr>
+</table>
 
-            <ul>
-              <li>
-                <b>앙상블 구성:</b> 두 멤버 50:50 EW 합성
-                <ul>
-                  <li>
-                    <b>멤버1 D_SMA50 (일봉):</b> SMA(50) +
-                    <span class="param">1.5% hyst</span>, Mom(30)/Mom(90),
-                    Vol(90)&le;5% — snap_interval_bars=30 (≈30일),
-                    gap-excluded 30일
-                  </li>
-                  <li>
-                    <b>멤버2 4h_SMA240 (4시간봉):</b> SMA(240, ≈40일) +
-                    <span class="param">1.5% hyst</span>, Mom(30)/Mom(120),
-                    Vol(90)&le;5% — snap_interval_bars=60 (≈10일),
-                    gap-excluded 10일
-                  </li>
-                </ul>
-              </li>
-              <li>
-                <b>유니버스:</b> CoinGecko 시총 Top 100 → Upbit KRW
-                상장 + 253일 히스토리 + 30일 평균 거래대금 10억원+ → Top 40.
-                <b>새 D봉 열릴 때만</b> 갱신 (intrabar drift 방지)
-              </li>
-              <li>
-                <b>Selection / Weighting:</b> 시총순 Top 5 → Greedy Absorption,
-                EW + 33% cap — 멤버별로 독립 계산 후 최종 target은 평균
-              </li>
-              <li>
-                <b class="new-tag">[V20] 가드 간소화:</b>
-                <b>DD Exit / Blacklist / Crash / PFD / Drift 전부 제거</b> —
-                멤버별 canary OFF 시 해당 멤버 비중 전량 KRW로 전환하여 방어
-              </li>
-              <li>
-                <b class="new-tag">[V20] 극단갭 Stop:</b>
-                <ul>
-                  <li>D봉 -15% → 해당 멤버에서 30일 + 다음 snap까지 제외</li>
-                  <li>4h봉 -10% → 해당 멤버에서 10일 + 다음 snap까지 제외</li>
-                  <li>
-                    재편입: <span class="param">unban_ts 경과 AND snap_id &gt;
-                    reentry_after_snap_id</span> (AND 조건)
-                  </li>
-                </ul>
-              </li>
-              <li>
-                <b class="new-tag">[V20] 유의종목/거래정지:</b> 매 실행마다
-                업비트 market status 조회 → 즉시 시장가 청산 (3회 재시도). 실패
-                시 <span class="param">permanent_block</span> 등록 + 당일
-                실행 fail-closed
-              </li>
-              <li>
-                <b class="new-tag">[V20] 봉 기반 snap:</b> 캘린더 앵커 대신
-                <span class="param">bar_counter % snap_interval_bars ==
-                offset_i</span> 로 3-snapshot staggered 리밸런싱. D 멤버는
-                snap 3개가 ≈10일 간격, 4h 멤버는 ≈3.3일 간격
-              </li>
-              <li>
-                <b class="new-tag">[V20] 매시간 cron + idempotency:</b>
-                <span class="param">last_bar_ts</span> 비교로 새 봉 없으면
-                auto-skip. <span class="param">expected_last_closed_bar_ts</span>
-                strict equality freshness 체크
-              </li>
-              <li>
-                <b>신호 / 체결:</b> 신호 = Binance USDT 현물 kline (D≥500봉,
-                4h≥1500봉) / 체결 = Upbit KRW
-              </li>
-              <li>
-                <b>실행 제약:</b> TX 0.4% 편도 / 최소 주문 5,000 KRW / dust
-                &lt; 5,000 KRW → 전량 매도 / Cash buffer 2% / Notional cap
-                <b>20% per-run</b> (carryover 없음)
-              </li>
-              <li>
-                <b>상태 파일:</b>
-                <span class="param">trade_state_v20.json</span> (V19 live의
-                <span class="param">trade_state.json</span>과 완전 분리). 키:
-                멤버별(D_SMA50/4h_SMA240) snapshots / bar_counter / snap_id /
-                last_combined / excluded_coins(unban_ts +
-                reentry_after_snap_id) / permanent_block
-              </li>
-              <li>
-                <b>현금 키:</b> 엔진 내부 <span class="param">CASH</span> → 반환
-                직전 <span class="param">Cash</span>로 정규화 (executor 및
-                외부 모듈과 키 충돌 방지)
-              </li>
-            </ul>
+<p>비중이 어긋나면 알림만 보낸다. 자동 송금은 하지 않는다 — 계좌 사이 자금 이동은 사람이
+직접 한다. 알림이 뜨는 조건은 둘 중 하나다.</p>
 
-            <div class="section-title">&#9654; 주식 / 선물 (V19 live 그대로 유지)</div>
-            <ul>
-              <li>
-                <b>주식:</b> R7, EEM SMA200 + 0.5% hyst, Z-score Top 3 EW,
-                4-tranche Day 1/8/15/22, VT -3% Crash (V17d)
-              </li>
-              <li>
-                <b>선물:</b> d005 4전략 EW 25%씩, 5x 동적 레버리지 (3/4/5x),
-                prev_close -15% 스탑
-              </li>
-              <li>
-                <b>자산배분:</b> 60/25/15, 8pp drift 밴드 자동 체크
-              </li>
-            </ul>
-          </div>
-        </details>
-      </div>
+<ul>
+<li>반회전율이 25%포인트 이상 — 목표와 실제의 차이를 모두 더해 반으로 나눈 값</li>
+<li>어느 갈래가 목표 대비 20% 이상 모자라고, 동시에 그 갈래의 카나리가 켜져 있을 때</li>
+</ul>
 
-      <!-- V19 (직전 live) -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V19</span>
-            <span class="version-date">2026-04</span>
-            <span class="version-summary"
-              >코인 SMA50+1.5% hyst (Calmar 재최적화), PFD 제거 — 주식 V17 유지,
-              선물 d005 앙상블 추가</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>자산배분:</b> 주식 60% / 코인(현물) 25% / 선물 15% (밴드 8pp
-            drift 초과 시만 리밸런싱)
+<p class="n">두 번째 조건에 카나리를 붙인 이유는 방어 중인 갈래에 돈을 더 넣어 봐야
+현금으로 들고 있게 되기 때문이다.</p>
 
-            <div class="section-title">&#9654; 코인(현물) 전략 (V19, 직전 live)</div>
+<h2>코인현물 V24</h2>
 
-            <div class="backtest-box">
-              <span class="metric"><b>Sharpe</b> 1.60</span>
-              <span class="metric"><b>CAGR</b> +67.0%</span>
-              <span class="metric"><b>MDD</b> -26.8%</span>
-              <span class="metric"><b>Calmar</b> 2.50</span>
-              <span class="metric"
-                >2018~2026.03, 10-anchor avg, TX 0.4%, LA 수정</span
-              >
-            </div>
+<div class="grid">
+<div class="card">
+<h3>신호</h3>
+<ul>
+<li>카나리 — 비트코인 종가와 42일 이동평균. 위로 1.5% 넘으면 켜고 아래로 1.5% 밑돌면 끈다
+ (그 사이 구간은 직전 상태를 유지)</li>
+<li>건강검사 — 20일·127일 모멘텀이 둘 다 양수이고 90일 변동성이 5% 이하</li>
+<li>선정 — 시가총액 상위에서 통과한 것 중 셋, 각 3분의 1</li>
+</ul>
+</div>
+<div class="card">
+<h3>교체와 체결</h3>
+<ul>
+<li>스냅샷 7개, 교체 주기 217봉 — 7개가 서로 31봉씩 어긋나 있다</li>
+<li>반회전율이 10% 넘으면 그날도 교체(리필)</li>
+<li>카나리가 꺼졌다 켜진 뒤 다섯 봉째에 전 스냅샷을 한 번 다시 고른다</li>
+<li>매일 한 번, 일봉이 닫힌 직후 09:05 에 돈다</li>
+</ul>
+</div>
+</div>
 
-            <ul>
-              <li>
-                <b>유니버스:</b> CoinGecko 시총 <b>Top 40</b> &rarr; Upbit KRW
-                상장 교집합 + 253일 히스토리 + 30일 평균 거래대금 10억원+ +
-                스테이블코인 제외
-              </li>
-              <li>
-                <b class="new-tag">[V19] Canary (K8):</b>
-                BTC &gt; <b>SMA(50)</b> +
-                <span class="param">1.5% hysteresis</span> <br /><small
-                  >V17 SMA60+1% &rarr; V19 SMA50+1.5%. Calmar 기준 재최적화
-                  (2026-03-28). Plateau 48-52</small
-                >
-              </li>
-              <li>
-                <b>Health Filter (HK):</b>
-                <b>Mom(30) &gt; 0</b> AND <b>Mom(90) &gt; 0</b> AND
-                <b>Vol(90) &le; 5%</b>
-              </li>
-              <li>
-                <b>Selection (SG):</b> <b>시총순 Top 5</b> &rarr; Greedy
-                Absorption (헬스 탈락 시 다음 순위로 흡수)
-              </li>
-              <li>
-                <b>Weighting (WG):</b> <b>EW + 33% Cap</b> (그리디 흡수 후 남은
-                코인에 균등, 개별 한도 33%)
-              </li>
-              <li>
-                <b>Crash Breaker (G5):</b> BTC 일간 <b>-10%</b> &rarr;
-                <span class="param">3일간 현금 대기</span>
-              </li>
-              <li>
-                <b>DD Exit:</b> 60일 <b>종가</b> 고점 대비 <b>-25%</b> &rarr;
-                해당 코인만 매도 &rarr; 현금 유지 (재분배 아님) &rarr; 다음
-                앵커일에 새 종목
-              </li>
-              <li>
-                <b>Blacklist:</b> 전일 <b>-15%</b> &rarr;
-                <span class="param">7일간 유니버스 제외</span>
-              </li>
-              <li>
-                <b>3-Tranche:</b> Day <b>1 / 11 / 21</b>, 각 33%. 앵커일에만
-                종목 교체. Drift 10% 초과 시 재진입
-              </li>
-              <li>
-                <b class="new-tag">[V19] PFD 제거:</b> 포트폴리오 레벨에서
-                무차별 판단. 플립 후 재평가 단계 삭제
-              </li>
-              <li>
-                <b>실행:</b> TX 0.4% 편도 / 최소 주문 5,000 KRW / 지정가 +0.3%
-                후 5초 미체결 취소 / Cash buffer 2% / 신호 = Binance USDT close
-                / 체결 = Upbit KRW
-              </li>
-            </ul>
+<h2>코인선물 V25</h2>
 
-            <div class="section-title">&#9654; 주식 전략 (V17 유지)</div>
-            <ul>
-              <li>
-                <b>유니버스:</b> R7 (SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ)
-              </li>
-              <li>
-                <b>Canary:</b> EEM &gt; SMA(200),
-                <span class="param">0.5% hysteresis</span>
-              </li>
-              <li>
-                <b>Selection:</b> Z-score Top 3 = z(12M Mom) + z(Sharpe 252d)
-              </li>
-              <li><b>Weighting:</b> EW (33%씩)</li>
-              <li>
-                <b>방어:</b> IEF/BIL/BNDX/GLD/PDBC 중 6M return Top 3 EW
-              </li>
-              <li>
-                <b>Crash (V17d):</b> VT -3% daily &rarr; 전량 매도 &rarr; 최소
-                3영업일 + VT &gt; SMA(10) 회복 시 재진입
-              </li>
-              <li>
-                <b>4-Tranche:</b> Day 1/8/15/22, 각 25% (타이밍 분산,
-                &sigma;(Sharpe) 0.019)
-              </li>
-              <li>
-                <b>성과:</b> Sharpe 1.255, CAGR +13.3%, MDD -11.4% (2017~2025,
-                11-anchor avg, TX 0.2%)
-              </li>
-            </ul>
+<div class="grid">
+<div class="card">
+<h3>신호</h3>
+<ul>
+<li>카나리·선정 규칙은 현물과 같다 (42일 이동평균, 상위 셋, 3분의 1 상한)</li>
+<li>건강검사 모멘텀만 18일·127일</li>
+<li>스냅샷 5개, 교체 주기 95봉, 서로 19봉씩 어긋남</li>
+<li>반회전율 1.5% 넘으면 그날도 교체</li>
+</ul>
+</div>
+<div class="card">
+<h3>레버리지</h3>
+<ul>
+<li>코인마다 따로 정한다 — 비트코인 상한과 그 코인 자신의 값 중 낮은 쪽</li>
+<li>비트코인 상한: 42일선 대비 5% 위면 4배, 1.5% 위면 3배, 아니면 2배</li>
+<li>코인별: 7일선 대비 7.5% 위면 4배, 2.5% 위면 3배, 아니면 2배</li>
+<li>마진은 크로스, 손절은 두지 않는다</li>
+</ul>
+</div>
+</div>
 
-            <div class="section-title">&#9654; 선물 전략 (d005 앙상블, 신규)</div>
-            <ul>
-              <li>
-                <b>구성:</b> d005 4전략 EW(25%씩), 단일 계정 합산 비중 실행
-              </li>
-              <li>
-                <b>4h_d005:</b> SMA240, Mom20/720, daily vol 5%, snap60
-              </li>
-              <li><b>2h_b60_S240:</b> SMA240, Mom20/720, bar vol 60%, snap120</li>
-              <li><b>2h_b60_S120:</b> SMA120, Mom20/720, bar vol 60%, snap120</li>
-              <li><b>4h_b60_M20_120:</b> SMA240, Mom20/120, bar vol 60%, snap21</li>
-              <li>
-                <b>레버리지:</b> 5x 동적 (cap_mom_blend_543_cash, floor 3x / mid
-                4x / ceiling 5x)
-              </li>
-              <li>
-                <b>스탑:</b> prev_close -15%, cash_guard (CASH &ge; 34%일 때만)
-              </li>
-              <li>
-                <b>성과:</b> Sharpe 2.08, CAGR +227%, MDD -34%, Calmar 6.69
-                (2020.10~2026.03)
-              </li>
-            </ul>
+<h2>주식 V25</h2>
 
-            <div class="section-title">&#9654; 자산 배분 (신규)</div>
-            <ul>
-              <li>주식 60% / 현물 코인 25% / 선물 15%</li>
-              <li>
-                밴드 리밸런싱: <b>8pp drift 초과 시만</b> (매일 cron 체크, 텔레
-                알림)
-              </li>
-              <li>카나리 레짐 전환 없음 (자산 간 강제 이동 없음)</li>
-              <li>
-                통합 성과: Sharpe 2.12, CAGR +39%, MDD -12.2%, Calmar 3.21
-              </li>
-            </ul>
-          </div>
-        </details>
-      </div>
+<div class="card">
+<ul>
+<li>후보 일곱 — SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ</li>
+<li>방어 다섯 — IEF, BIL, BNDX, GLD, PDBC</li>
+<li>카나리 — EEM 종가와 200일선, 위아래 0.5% 완충</li>
+<li>선정 — 모멘텀과 위험조정수익 점수로 줄세운 뒤, 30일·72일·230일 모멘텀이 모두 양수인
+ 것만 남겨 상위 셋. 한 종목 3분의 1 상한이고 남는 몫은 현금</li>
+<li>스냅샷 3개, 교체 주기 69일, 서로 23일씩 어긋남. 반회전율 5% 넘으면 그날도 교체</li>
+<li>미국장 종료 뒤 평일 23:35 에 돈다</li>
+</ul>
+</div>
 
-      <!-- V18 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V18</span>
-            <span class="version-date">2026-03</span>
-            <span class="version-summary"
-              >3-snapshot 엔진 합성 (Day 1/11/21 고정), MCap Top5 → Greedy
-              Absorption + 33% Cap</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>코인:</b> SMA60 + 1% hyst (V17과 동일), Mom30+Mom90+Vol5%, 시총
-            Top5 → Greedy Absorption, EW + 33% Cap<br />
-            <b>트랜치:</b> 3-tranche Day 1/11/21 고정 (3-snapshot 합성 엔진)<br />
-            <b>PFD:</b> 유지 (5일 후 전 트랜치 재평가)<br />
-            <b>주식:</b> V17과 동일 (R7, Z-score Top3, 4-tranche, VT Crash)
-          </div>
-        </details>
-      </div>
+<h2>교체일이 겹치지 않게 짜여 있다</h2>
 
-      <!-- V17 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V17</span>
-            <span class="version-date">2026-03</span>
-            <span class="version-summary"
-              >주식 Z-score Top3 (Sh252) + VT Crash(V17d), 코인 Mom30 유지</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>주식:</b> R7, EEM canary + 0.5% hyst, Z-score Top 3 = z(12M Mom)
-            + z(Sharpe 252d), Defense Top 3 EW, VT -3% Crash + 동적 SMA10 복귀,
-            4-tranche Day 1/8/15/22<br />
-            <b>코인:</b> V16 동일 (SMA60+1%hyst, Mom30+Mom90+Vol5%, 시총 Top5
-            EW, DD/BL/Crash)<br />
-            <b>백테스트:</b> 주식 Sharpe 0.977 / 코인 Sharpe 1.645
-          </div>
-        </details>
-      </div>
+<p>세 갈래가 같은 날 한꺼번에 종목을 갈아타면 그날 시장 상황 하나에 전체가 휘둘린다.
+그래서 스냅샷 개수를 서로소로, 어긋나는 간격을 서로 다른 소수로 잡았다.</p>
 
-      <!-- V16 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V16</span>
-            <span class="version-date">2026-03</span>
-            <span class="version-summary"
-              >코인 Mom21 &rarr; Mom30, 주식 V15 유지</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>코인:</b> Health Mom21 &rarr; <b>Mom30</b>, 나머지 V14 동일<br />
-            <b>주식:</b> V15 동일 (R7, Z-score4+Sh63)<br />
-            <b>백테스트:</b> 코인 Sharpe 1.645
-          </div>
-        </details>
-      </div>
+<table>
+<tr><th>갈래</th><th>스냅샷 수</th><th>어긋나는 간격</th><th>교체 주기</th></tr>
+<tr><td>코인현물</td><td>7</td><td>31봉</td><td>217봉</td></tr>
+<tr><td>코인선물</td><td>5</td><td>19봉</td><td>95봉</td></tr>
+<tr><td>주식</td><td>3</td><td>23일</td><td>69일</td></tr>
+</table>
 
-      <!-- V15 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V15</span>
-            <span class="version-date">2026-03</span>
-            <span class="version-summary"
-              >R7 universe (+VNQ), Z-score Top 4, M+D2 trigger rebal, delta
-              trading</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>주식:</b> R7 (+VNQ), Z-score Top 4 (12M Mom + Sh63d) EW, Defense
-            Top 3 EW, M+D2 trigger + canary flip + delta trading<br />
-            <b>코인:</b> V14 동일 (SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총 Top5
-            EW, DD/BL/Crash)<br />
-            <b>백테스트:</b> 주식 Sharpe 1.281 (σ=0.033), CAGR +15.2%, MDD
-            -13.2% / 코인 Sharpe 1.605
-          </div>
-        </details>
-      </div>
+<h2>백테스트 성과</h2>
 
-      <!-- V14 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V14</span>
-            <span class="version-date">2026-03</span>
-            <span class="version-summary"
-              >R6 universe, Mom3+Sh3 union, full backtest-validated coin
-              strategy</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>주식:</b> R6 (SPY,QQQ,VEA,EEM,GLD,PDBC), EEM-only canary + 0.5%
-            hyst, Mom3+Sh3 union EW, Defense Top3<br />
-            <b>코인:</b> V15와 동일 (SMA60+1%hyst, Mom21+Mom90+Vol5%, 시총순
-            Top5 EW, DD/BL/Crash)<br />
-            <b>백테스트:</b> 주식 Sharpe 1.022 (σ=0.057), CAGR +12.0%, MDD
-            -15.2%
-          </div>
-        </details>
-      </div>
+<p>아래 값은 측정 조건이 서로 다르다. 한 줄씩 조건을 같이 읽는다.</p>
 
-      <!-- V13 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V13</span>
-            <span class="version-date">2026-03</span>
-            <span class="version-summary"
-              >Multi Bonus scoring, 1% Hysteresis signal flip, Monthly
-              rebalancing (month-end)</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+<div class="scroll">
+<table>
+<tr><th>대상</th><th>칼마</th><th>연복리</th><th>최대낙폭</th><th>샤프</th><th>측정 조건</th></tr>
+<tr><td>세 갈래 합성</td><td>4.07</td><td>+76.4%</td><td>-18.8%</td><td>1.84</td>
+ <td>5.8년. 배분 60/20/20, 알림 뒤 송금까지 5영업일 지연 가정</td></tr>
+<tr><td>코인현물 단독</td><td>1.69</td><td>+51.6%</td><td>-30.7%</td><td>1.54</td>
+ <td>6.1년(2020-10-01~2026-11-01). 스냅샷 7곳 평균, 거래비용 편도 0.4%</td></tr>
+<tr><td>코인선물 단독</td><td>8.12</td><td>+312%</td><td>-38.3%</td><td>—</td>
+ <td>5.6년. 거래비용 0.06%</td></tr>
+</table>
+</div>
 
-            <div class="section-title">&#9654; 주식 전략 (V11 기반)</div>
-            <ul>
-              <li>
-                <b>공격 유니버스 (12종):</b> SPY, QQQ, EFA, EEM, VT, VEA, GLD,
-                PDBC, QUAL, MTUM, IQLT, IMTM
-              </li>
-              <li><b>수비 유니버스 (5종):</b> IEF, BIL, BNDX, GLD, PDBC</li>
-              <li>
-                <b>Canary Signal:</b> VT AND EEM &gt; SMA200 &rarr; Risk-On,
-                아니면 Risk-Off
-              </li>
-              <li>
-                <b>Signal Flip Guard:</b>
-                1% Hysteresis &mdash; SMA200&times;1.01 이상일 때 Risk-On 진입,
-                SMA200&times;0.99 이하일 때 Risk-Off 진입
-              </li>
-              <li>
-                <b>공격 모드 선정:</b> 가중 모멘텀(<span class="param"
-                  >50%&times;3M + 30%&times;6M + 20%&times;12M</span
-                >) Top 3 + Sharpe(126d) Top 3 합집합 &rarr; 균등배분
-              </li>
-              <li>
-                <b>수비 모드 선정:</b> 수비 5종 중 6개월 수익률 최고 1개 (음수면
-                현금)
-              </li>
-            </ul>
+<p class="n">주식 단독 성과는 싣지 않는다. 현행 주식 설정을 한 명령으로 재현하는
+백테스트 진입점이 아직 없어서 측정 조건을 댈 수 없기 때문이다. 채택 근거는 구간을
+잘게 나눠 매긴 순위 합계로 정했다.</p>
 
-            <div class="section-title">&#9654; 코인 전략 (V12 기반)</div>
-            <ul>
-              <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW</li>
-              <li><b>Canary:</b> BTC &gt; SMA50 &rarr; 투자, 아니면 현금</li>
-              <li>
-                <b>Health Filter:</b> Price &gt; SMA30 AND Mom21 &gt; 0 AND
-                Vol90 &le; 10%
-              </li>
-              <li>
-                <b>Multi Bonus Scoring:</b>
-                <span class="param">Sharpe(126d) + Sharpe(252d)</span> +
-                RSI/MACD/BB bonuses
-              </li>
-              <li><b>선정:</b> Multi Bonus Score Top 5</li>
-              <li><b>배분:</b> 90일 역변동성 가중 (1/Vol)</li>
-            </ul>
-          </div>
-        </details>
-      </div>
+<p class="n">단독 성과와 합성 성과를 바로 비교하지 않는다. 단독은 그 갈래에 전액을 넣었을
+때의 값이고, 합성은 배분·현금버퍼·송금 지연이 전부 들어간 값이다.</p>
 
-      <!-- V12 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V12</span>
-            <span class="version-date">2026-01</span>
-            <span class="version-summary"
-              >Weighted momentum, Sharpe quality, inverse volatility weighting,
-              health check</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+<h2>운영</h2>
 
-            <div class="section-title">&#9654; 주식 전략 (V11 동일)</div>
-            <ul>
-              <li><b>Canary:</b> VT AND EEM &gt; SMA200 &rarr; Risk-On</li>
-              <li>
-                <b>공격:</b> 12종 유니버스, 가중 모멘텀(50/30/20%) Top 3 +
-                Sharpe(126d) Top 3 합집합, 균등배분
-              </li>
-              <li><b>수비:</b> 5종 중 6M 수익률 최고 1개 (음수면 현금)</li>
-            </ul>
+<div class="grid">
+<div class="card">
+<h3>매일 도는 것</h3>
+<ul>
+<li>09:05 — 코인현물·코인선물 매매</li>
+<li>09:15 — 리포트 두 장 생성, 배분 어긋남 확인</li>
+<li>11:40 — 신호 대조 감시</li>
+<li>23:35 평일 — 주식 매매</li>
+</ul>
+</div>
+<div class="card">
+<h3>안전장치</h3>
+<ul>
+<li>신호는 전일 완료봉으로만 낸다 — 당일 진행 중인 봉은 안 본다</li>
+<li>자료 기준일이 종목마다 어긋나면 그 회차를 쉰다</li>
+<li>주문 전 미체결을 먼저 정리하고, 매도를 끝낸 뒤 매수한다</li>
+<li>선물은 계좌를 건드리기 전에 외부 개입이 있었는지 먼저 본다</li>
+</ul>
+</div>
+</div>
 
-            <div class="section-title">&#9654; 코인 전략 (V12 신규)</div>
-            <ul>
-              <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW 필터</li>
-              <li><b>Canary:</b> BTC &gt; SMA50</li>
-              <li>
-                <b>Health Filter:</b> Price &gt; SMA30 AND Mom21 &gt; 0 AND
-                Vol90 &le; 10%
-              </li>
-              <li><b>Scoring:</b> Sharpe(126d) + Sharpe(252d)</li>
-              <li><b>선정:</b> Top 5</li>
-              <li><b>배분:</b> 90일 역변동성 가중 (1/Vol)</li>
-            </ul>
-          </div>
-        </details>
-      </div>
+<h2>쓰지 않는 것</h2>
 
-      <!-- V11 -->
-      <div class="version-card">
-        <details>
-          <summary class="version-header">
-            <span class="badge badge-old">V11</span>
-            <span class="version-date">2025-12</span>
-            <span class="version-summary"
-              >Dual canary, offensive Top3+Top3 union, defensive 6M best</span
-            >
-          </summary>
-          <div class="version-detail">
-            <b>자산배분:</b> 주식 60% / 코인 40% (현금 버퍼 2%)
+<ul>
+<li>손절·급락 가드 — 전부 걷어냈다. 방어는 카나리와 건강검사와 분산이 한다</li>
+<li>자동 송금 — 계좌 사이 이동은 알림만 보내고 사람이 한다</li>
+<li>레버리지 고정 — 선물은 시장 상태에 따라 2배에서 4배 사이에서 움직인다</li>
+</ul>
 
-            <div class="section-title">&#9654; 주식 전략 (V11 신규)</div>
-            <ul>
-              <li>
-                <b>Canary:</b> Dual Canary &mdash; VT AND EEM 둘 다 SMA200
-                이상이어야 Risk-On
-              </li>
-              <li><b>공격 유니버스:</b> 12종</li>
-              <li>
-                <b>공격 선정:</b>
-                가중모멘텀(50/30/20%) Top 3 + Sharpe(126d) Top 3 &rarr; 합집합,
-                균등배분
-              </li>
-              <li><b>수비:</b> 6개월 수익률 최고 1개 (음수면 현금)</li>
-            </ul>
+<p class="n">전략 정의의 정본은 저장소의 <span class="m">CLAUDE.md</span> 다.
+이 페이지와 어긋나면 그쪽이 맞다.</p>
 
-            <div class="section-title">&#9654; 코인 전략</div>
-            <ul>
-              <li><b>유니버스:</b> CoinGecko Top 50 + Upbit KRW</li>
-              <li><b>Canary:</b> BTC &gt; SMA50</li>
-              <li>
-                <b>Scoring:</b> Sharpe(126d) + Sharpe(252d), Top 5 균등배분
-              </li>
-            </ul>
-          </div>
-        </details>
-      </div>
-
-      <div
-        style="
-          text-align: center;
-          margin: 30px 0;
-          color: #aaa;
-          font-size: 0.8em;
-        "
-      >
-        Cap Defend Strategy Documentation &mdash; Updated 2026-04-13 (V19)
-      </div>
-    </div>
-  </body>
+</div>
+</body>
 </html>
