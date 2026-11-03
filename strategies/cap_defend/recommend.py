@@ -199,9 +199,9 @@ DEFENSIVE_STOCK_UNIVERSE = ['IEF', 'BIL', 'BNDX', 'GLD', 'PDBC']
 CANARY_ASSETS = ['EEM']
 STOCK_CANARY_MA_PERIOD = 200
 STOCK_CANARY_HYST = 0.005  # 0.5% hysteresis
+# V24 부터 주식 가드는 전면 제거다. STOCK_CRASH_TICKER 만 유니버스 가격
+# 내려받기용으로 남긴다 (recommend_personal.py 와 같은 모양).
 STOCK_CRASH_TICKER = 'VT'
-STOCK_CRASH_THRESHOLD = -0.03  # VT daily -3%
-STOCK_CRASH_COOL_DAYS = 3
 
 # Coin Configuration
 VOLATILITY_WINDOW = 90
@@ -499,64 +499,6 @@ def run_stock_strategy_v15(log, all_prices):
     """
     log.append("<h2>📈 주식 포트폴리오 분석 (V25: R7 + EEM SMA200 0.5% + Z-score 랭킹 + 3-mom 필터)</h2>")
     log.append(_stock_basis_html(all_prices))
-
-    # --- Crash Breaker (legacy 신호용 — V24 executor 는 무시) ---
-    vt = all_prices.get(STOCK_CRASH_TICKER)
-    stock_crash = False
-    crash_days_remaining = 0
-    crash_trigger_day_idx = -1
-    recovered_today = False
-
-    if vt is not None and len(vt) >= 10:
-        vt_rets = vt.pct_change()
-        vt_sma10 = vt.rolling(10).mean()
-
-        sim_len = min(60, len(vt))
-        for i in range(len(vt) - sim_len, len(vt)):
-            ret = vt_rets.iloc[i]
-            cur_vt = vt.iloc[i]
-            cur_sma = vt_sma10.iloc[i]
-            is_today = (i == len(vt) - 1)
-
-            if not np.isnan(ret) and ret <= STOCK_CRASH_THRESHOLD:
-                stock_crash = True
-                crash_days_remaining = STOCK_CRASH_COOL_DAYS
-                crash_trigger_day_idx = i
-                if is_today:
-                    recovered_today = False
-            elif stock_crash:
-                if crash_days_remaining > 0:
-                    crash_days_remaining -= 1
-                if crash_days_remaining == 0:
-                    if not np.isnan(cur_sma) and cur_vt > cur_sma:
-                        stock_crash = False
-                        if is_today:
-                            recovered_today = True
-                    else:
-                        crash_days_remaining = 1
-
-        vt_ret_today = vt_rets.iloc[-1] if not np.isnan(vt_rets.iloc[-1]) else 0
-        vt_cur_today = vt.iloc[-1]
-        sma_cur_today = vt_sma10.iloc[-1] if not np.isnan(vt_sma10.iloc[-1]) else 0
-
-        log.append(f"<p><b>[Crash Check]</b> {STOCK_CRASH_TICKER}: {vt_ret_today:+.2%} (임계 {STOCK_CRASH_THRESHOLD:.0%})</p>")
-        if stock_crash:
-            days_ago = (len(vt) - 1) - crash_trigger_day_idx if crash_trigger_day_idx >= 0 else 0
-            if days_ago == 0:
-                log.append(f"<div style='background:#fce8e6;border:2px solid #d93025;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#d93025;margin:0'>🚨 VT CRASH!</h3>"
-                           f"<p><b>최소 {STOCK_CRASH_COOL_DAYS}영업일 + VT &gt; SMA10 회복 시 재진입</b></p></div>")
-            elif days_ago < STOCK_CRASH_COOL_DAYS:
-                log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#e37400;margin:0'>⏸️ 쿨다운 중 ({crash_days_remaining}일)</h3></div>")
-            else:
-                log.append(f"<div style='background:#fef7e0;border:2px solid #f9ab00;padding:16px;border-radius:8px;margin:12px 0'>"
-                           f"<h3 style='color:#e37400;margin:0'>⏸️ 대기: VT &le; SMA10</h3></div>")
-        elif recovered_today:
-            log.append(f"<p style='color:#0d904f'><b>✅ Crash 복귀</b></p>")
-
-    if stock_crash:
-        return {CASH_ASSET: 1.0}, "🚨 CRASH (전량 현금)"
 
     eem = all_prices.get('EEM')
 

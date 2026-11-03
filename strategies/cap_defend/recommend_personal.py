@@ -585,6 +585,13 @@ VERSION_HISTORY = [
 STOCK_RATIO, COIN_RATIO, FUTURES_RATIO = 0.60, 0.20, 0.20  # 합동 격자 1위 (2026-11-01): 60/25/15 → 60/20/20. 수익 1위/6656칸, Cal 4.07 CAGR 76.4% MDD -18.8% (5.8yr, 송금지연 5영업일)
 REBAL_HT_THRESHOLD = 0.25  # 2026-11-01: 비중과 같이 올린다. 20pp 로 두면 Cal 3.70 으로 현행(3.87)보다 나쁘다 — 비중과 문턱은 한 짝이다
 REBAL_T3U_REL = 0.20  # V25 (2026-05-28): T3U_can ≥ 20% (25% → 20%). 2026-11-01 합동 격자에서도 20% 유지가 1위
+
+# 슬리브 내부 드리프트 문턱 — 일일 보고의 표시용이다. 매매는 각 엔진이 자기 값으로 한다.
+# 여기 적는 이유는 엔진을 import 하면 자격증명 모듈이 같이 딸려 와 집에서는 깨지기 때문이다.
+# 값이 엔진과 어긋나지 않는지는 trade/test_report_threshold_parity.py 가 지킨다 — 그 시험이
+# 두 엔진 파일을 직접 읽어 대조하므로 사본을 손으로 맞출 일이 없다.
+DRIFT_THRESHOLD_SPOT = 0.10   # 정본 trade/coin_live_engine.py
+DRIFT_THRESHOLD_FUT = 0.015   # 정본 trade/auto_trade_binance.py (2026-09-23: 0.03 → 0.015)
 CASH_ASSET = 'Cash'
 STOCK_CASH_BUFFER_DEFAULT = 0.07   # V24 (2026-05-26): stock 계좌 안에서 7% cash buffer (= 4.55% of total)
 SPOT_CASH_BUFFER_DEFAULT = 0.01    # V24 (2026-05-26): Upbit 1%
@@ -624,32 +631,46 @@ def alloc_acct_errors(accounts: dict) -> list:
     return out
 
 def get_cash_buffer(sleeve: str = 'stock'):
-    """sleeve 별 현금 버퍼 비율. V24 trade_state.json 에서 sleeve_cash_buffer 키 우선 읽기.
+    """sleeve 별 현금 버퍼 비율. 그 슬리브의 상태파일에서만 읽는다.
 
     sleeve: 'stock' | 'spot' | 'fut'.
+
+    파일을 슬리브마다 가르는 이유는 실행층이 그렇게 읽기 때문이다 —
+    executor_stock 은 kis_trade_state.json, executor_coin 은 trade_state.json,
+    auto_trade_binance 는 binance_state.json 의 state 를 본다. 여기서 셋을
+    현물 파일 하나로 읽으면 한쪽 버퍼를 바꾼 날 화면과 실제가 갈린다.
+    지금 두 경로의 값이 같은 것은 세 키가 현물 파일에 함께 남아 있기 때문이지
+    같은 곳을 보기 때문이 아니다.
+
+    키 순서도 실행층과 같다 — `<슬리브>_cash_buffer` 먼저, 없으면 그 파일의
+    `cash_buffer`, 그래도 없으면 코드 기본값.
     """
     default = {
         'stock': STOCK_CASH_BUFFER_DEFAULT,
         'spot': SPOT_CASH_BUFFER_DEFAULT,
         'fut': FUT_CASH_BUFFER_DEFAULT,
     }.get(sleeve, STOCK_CASH_BUFFER_DEFAULT)
+    fname = {
+        'stock': 'kis_trade_state.json',
+        'spot': 'trade_state.json',
+        'fut': 'binance_state.json',
+    }.get(sleeve, 'kis_trade_state.json')
     key = f'{sleeve}_cash_buffer'
-    for _p in (
-        os.path.join(APP_HOME, 'trade_state.json'),
-        'trade_state.json',
-    ):
+    for _p in (os.path.join(APP_HOME, fname), fname):
         try:
             with open(_p, 'r') as f:
                 d = json.load(f)
-                # 신규 키 우선, 없으면 legacy cash_buffer (stock 호환)
-                v = d.get(key)
-                if v is None and sleeve == 'stock':
-                    v = d.get('cash_buffer')
-                if v is not None:
-                    return float(v)
-                return default
         except Exception:
             continue
+        v = d.get(key)
+        if v is None:
+            v = d.get('cash_buffer')
+        if v is None:
+            return default
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
     return default
 STABLECOINS = ['USDT', 'USDC', 'BUSD', 'DAI', 'UST', 'TUSD', 'PAX', 'GUSD', 'FRAX', 'LUSD', 'MIM', 'USDN', 'FDUSD']
 
@@ -1386,11 +1407,11 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
             const REC_STOCK_TICKERS = """ + rec_stock_json + """;
             const STOCK_PRICES_USD = """ + stock_prices_json + """;
             const COIN_TOTAL_KRW = """ + str(coin_total_krw_val) + """;
-            const TARGET_STOCK_RATIO = 0.60;
-            const TARGET_COIN_RATIO = 0.20;
-            const TARGET_FUTURES_RATIO = 0.20;
-            const REBAL_HT = 0.25;           // 2026-11-01: T1 = half_turnover ≥ 25pp (비중 60/20/20 과 한 짝)
-            const REBAL_T3U_REL = 0.20;      // V25 (2026-05-28): T3U_can ≥ 20% (25% → 20%, BT 기준 V25 K2 우위 Cal +0.59)
+            const TARGET_STOCK_RATIO = """ + repr(STOCK_RATIO) + """;
+            const TARGET_COIN_RATIO = """ + repr(COIN_RATIO) + """;
+            const TARGET_FUTURES_RATIO = """ + repr(FUTURES_RATIO) + """;
+            const REBAL_HT = """ + repr(REBAL_HT_THRESHOLD) + """;
+            const REBAL_T3U_REL = """ + repr(REBAL_T3U_REL) + """;
             const SIGNAL_FLIPPED = """ + ("true" if signal_flipped else "false") + """;
             const RISK_ON = """ + ("true" if current_risk_on else "false") + """;
             const SERVER_OFFENSE_PICKS = """ + saved_holdings_json + """;  // 서버 공격 목표(보유 아님)
@@ -2278,9 +2299,9 @@ def save_html(log_global, final_port, s_port, c_port, s_stat, c_stat, turnover, 
                 const futKrw = Number(binance.total_krw || 0);
                 const allocTotal = stockKrw + spotKrw + futKrw;
                 if (allocTotal > 0) {{
-                    const T_STOCK = 0.60, T_SPOT = 0.25, T_FUT = 0.15;
-                    const REBAL_HT = 0.20;
-                    const REBAL_T3U = 0.20;
+                    const T_STOCK = {STOCK_RATIO}, T_SPOT = {COIN_RATIO}, T_FUT = {FUTURES_RATIO};
+                    const REBAL_HT = {REBAL_HT_THRESHOLD};
+                    const REBAL_T3U = {REBAL_T3U_REL};
                     const pStock = stockKrw / allocTotal;
                     const pSpot = spotKrw / allocTotal;
                     const pFut = futKrw / allocTotal;
@@ -3156,7 +3177,7 @@ if __name__ == "__main__":
             spot_acct_d = (accts.get("coin_upbit") or {}) if 'accts' in locals() else {}
             spot_total_d = float(spot_acct_d.get("total_krw", 0))
             ht_sp = _ht_from_holdings(spot_acct_d, spot_total_d, _apply_buffer(c_port or {}, 'spot'))
-            thr_sp = 0.10
+            thr_sp = DRIFT_THRESHOLD_SPOT
             if ht_sp is None:
                 drift_lines.append("  업비트: 잔고 없음")
             else:
@@ -3171,7 +3192,7 @@ if __name__ == "__main__":
             fut_total_d = float(fut_acct_d.get("total_krw", 0))
             fut_target = last_combined if 'last_combined' in locals() and last_combined else {}
             ht_f = _ht_from_holdings(fut_acct_d, fut_total_d, _apply_buffer(fut_target, 'fut') if fut_target else {})
-            thr_f = 0.03
+            thr_f = DRIFT_THRESHOLD_FUT
             if ht_f is None:
                 drift_lines.append("  바이낸스: 잔고 없음")
             elif not fut_target:
@@ -3180,7 +3201,7 @@ if __name__ == "__main__":
                 fire_f = ht_f >= thr_f
                 _p = ht_f / thr_f if thr_f > 0 else 0
                 _f_lbl, _f_ic = _trig_status(_p)
-                drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.0f}pp {_p*100:.0f}% [{_f_lbl}]")
+                drift_lines.append(f"  바이낸스: {_f_ic} ht {ht_f*100:.2f}/{thr_f*100:.1f}pp {_p*100:.0f}% [{_f_lbl}]")
             # 위 ht 는 (진입마진+미실현PnL)/equity 기준이라 이익난 고레버리지 종목이 목표보다
             # 높게 보인다. 실행이 실제로 맞추는 값은 명목이므로 코인별 명목 편차를 같이 적는다.
             # 편차가 체결 밴드(5%) 밖인 코인만 다음 실행에서 주문이 나간다.
