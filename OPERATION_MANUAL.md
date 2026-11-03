@@ -85,8 +85,11 @@ for coin in selected:                  # 개별 코인 단기 강도
 ## 매 cron 실행 순서와 가드
 
 1. `verify_position_mode_oneway` — hedge 모드면 ABORT
-2. 코인별 `verify_margin_type` — CROSSED 아니면 ABORT (자동 set 하지 않는다. 비정상 상황 알림)
-3. 마진 변경이 필요한 심볼만 preflight → `build_margin_plan` 단일 작업계획으로 변경·검증
+2. `build_margin_plan` 으로 심볼별 작업계획을 한 번 만든다 — 조회 불명이 하나라도 있으면 ABORT.
+   preflight·변경·사후검증이 전부 이 계획 하나를 쓴다
+3. 계획이 "변경 필요" 라 한 심볼만 preflight(그 심볼 포지션·주문 zero) → 통과하면 `ensure_margin_type`
+   이 CROSSED 로 설정하고 다시 검증한다. "변경 불필요" 심볼은 `verify_margin_type` 로 검증만 하고
+   설정을 시도하지 않는다 — 보유 중인 심볼에 set 을 걸면 바이낸스가 거부한다. 어느 쪽이든 어긋나면 ABORT
 4. 이미 목표 레버리지면 `set_leverage` 생략, 아니면 set → verify
 5. 어느 코인이든 verify 실패 → 매매 전체 ABORT (다음 cron 재시도)
 6. 상시 무결성 검사 — 이 실행이 계좌를 건드리기 전(positions_before)에, 그리고 계좌를 건드리지 않은
