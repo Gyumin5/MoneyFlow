@@ -211,7 +211,9 @@ MoneyFlow/
 | 09:05 매일 | `executor_coin.py` — 코인현물 V24 (1D, 일 1회) |
 | 09:05 매일 | `auto_trade_binance.py --trade` — 선물 V25 (1D, 일 1회) |
 | 09:15 매일 | `recommend.py` + `recommend_personal.py` — HTML 생성 + 자산배분 트리거 체크 + 텔레그램 |
+| 11:40 매일 | `parity_watch.py` — 집이 올린 신호 대조 영수증이 왔는지 본다 (매매 경로 아님) |
 | 23:35 평일 | `executor_stock.py` — 주식 V25 자동매매 (직접 전략 계산) |
+| 매시 정각 20~06시 | `balance_read_watch.py` — 계좌 조회가 살아 있는지 본다 (매매 경로 아님) |
 | */5 | `watchdog_serve.sh` — 서버 생존 체크 |
 
 상세 매핑·복구 절차는 [`SERVER_OPS.md`](./SERVER_OPS.md) 참조.
@@ -252,7 +254,8 @@ MoneyFlow/
 
 ## 한 줄 요약
 
-처음 받으면: `check_data_freshness.py` → `refresh_backtest_data.py` → 각 자산 백테스트 순서로 실행.
+처음 받으면 `strategies/cap_defend/` 안에서 `check_data_freshness.py` →
+`refresh_backtest_data.py` → 각 자산 백테스트 순서로 실행한다. 명령은 위 "빠른 시작" 에 있다.
 
 ## 문서 인덱스
 

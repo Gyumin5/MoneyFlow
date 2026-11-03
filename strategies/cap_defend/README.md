@@ -99,8 +99,10 @@ D_SMA42 단일 sleeve, 매일 09:05:
   2. mom2vol 헬스 (Vol90d cap 5%)
   3. Top3 + 1/3 cap (greedy 흡수)
   4. snap_interval=217봉 × n=7 snapshot merge → 단일 target
-  5. drift(half_turnover ≥ 0.10) 발화 시 refill v2, 아니면 앵커일에만 교체
-  6. Cash buffer 1%
+  5. 전환 후 재평가 post_flip_delay=5 — 카나리가 켜진 봉을 0 으로 세어 다섯 봉 뒤
+     첫 회차에 전 스냅샷을 한 번 다시 고른다 (전환 분기와 배타, 앵커 위상은 안 건드린다)
+  6. drift(half_turnover ≥ 0.10) 발화 시 refill v2, 아니면 앵커일에만 교체
+  7. Cash buffer 1%
 ```
 
 ### 주식 엔진 흐름 (V25)
