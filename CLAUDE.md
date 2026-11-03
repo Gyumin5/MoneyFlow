@@ -448,6 +448,8 @@ cd /home/gmoh/mon/251229 && bash run_tests.sh
 - `trade/ops/parity_watch.py` → `~/parity_watch.py` (집 감시의 침묵을 서버에서 잡는다. 매매 경로 아님)
 - `trade/ops/server_alert_log.py` → `~/server_alert_log.py` (서버가 보낸 경보를 적는다. 매매 경로 아님)
 - `trade/ops/server_alert_relay.py` → 집에서만 돈다 (10분마다 서버 경보를 이 세션에 주입)
+- `trade/ops/pull_state_backups.py` → 집에서만 돈다 (매시 30분, 서버 상태파일 백업을 집으로)
+- `trade/ops/check_state_backup_health.py` → 집에서만 돈다 (매시 40분, 그 수신이 멈췄는지 본다)
 - `trade/ops/crontab.txt` → `crontab -l` 사본
 
 ### 서버가 보낸 경보는 집 세션에 자동으로 들어온다
