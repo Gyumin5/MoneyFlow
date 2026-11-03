@@ -1,12 +1,15 @@
 """
-Cap Defend V24 Recommendation Script (Standard Version)
-=======================================================
-주식 V24: snap-based 3-tranche stagger (SNAP_PERIOD=69d, STAGGER=23d, N_SNAPS=3)
-- Universe: SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs)
-- Canary: EEM > SMA200 (2% hysteresis)
-- Selection: Z-score Top 3 (zscore(12M_mom) + zscore(Sharpe252d)), Equal Weight
+Cap Defend Recommendation Script (Standard Version)
+===================================================
+주식 V25: snap-based 3-tranche stagger (SNAP_PERIOD=69d, STAGGER=23d, N_SNAPS=3)
+- Universe: R7 = SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7 ETFs)
+- Canary: EEM > SMA200 (0.5% hysteresis)
+- Selection: Z-score(가중 Mom + Sharpe126) 랭킹 → 3-mom(30/72/230) 필터 → cap=1/3 + Cash
+  · 가중 Mom = 0.5×ret63 + 0.3×ret126 + 0.2×ret252 (순수 252 아니다)
 - Defense: Top 3 by 6M return from (IEF, BIL, BNDX, GLD, PDBC)
 - 가드 없음 (앙상블 분산이 유일 방어)
+- 정본은 strategies/cap_defend/stock_strategy_v25.py 다. 이 설명이 그것과
+  어긋나면 모듈 쪽이 맞다.
 
 코인 V24: D_SMA42 단일 멤버 (live engine: trade/coin_live_engine.py)
 - D_SMA42:   1D봉, SMA42, Mom20/127, snap 217봉×7, drift_threshold=0.10
@@ -486,8 +489,15 @@ def _stock_basis_html(all_prices) -> str:
 
 
 def run_stock_strategy_v15(log, all_prices):
-    """V24 Stock Strategy: R7 + EEM canary + Z-score3(Sh252) EW + Defense Top3 (executor 단계 가드 없음)"""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V24: R7+EEM+Zscore3+Sh252)</h2>")
+    """V25 주식 전략: R7 + EEM SMA200(0.5%) 카나리 + Z-score 랭킹(가중 Mom + Sharpe126)
+    → 3-mom 필터 → cap 1/3 + Cash + Defense Top3. 가드 없음.
+
+    함수 이름의 v15 는 옛 판본 표기다 — 실제 계산은 stock_strategy_v25 모듈을
+    부른다. 이름을 바꾸지 않은 것은 시험이 그 이름으로 함수를 떼어 내 돌리기
+    때문이고(tests/test_stock_signal_failure_contract.py), 이름 변경은 신호
+    경로 리팩토링이라 이 자리에서 할 일이 아니다.
+    """
+    log.append("<h2>📈 주식 포트폴리오 분석 (V25: R7 + EEM SMA200 0.5% + Z-score 랭킹 + 3-mom 필터)</h2>")
     log.append(_stock_basis_html(all_prices))
 
     # --- Crash Breaker (legacy 신호용 — V24 executor 는 무시) ---

@@ -1,11 +1,15 @@
 """
 Cap Defend V25 Recommendation Script
 ===================================
-V25 (2026-05-28 도입): 선물 sleeve K2 + 동적 per-coin L + CROSS 마진. 코인/주식 V24 유지.
+선물 V25 (2026-05-28 도입): sleeve K2 + 동적 per-coin L + CROSS 마진.
+주식 V25 (2026-05-29 도입). 코인 현물은 V24 유지.
 
-Stock V24 (snap-based 3-tranche stagger sd=69, stagger=23):
+Stock V25 (snap-based 3-tranche stagger sd=69, stagger=23):
+  - Universe R7 = SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ
+  - 카나리 EEM > SMA200 (0.5% hysteresis)
+  - 선정 Z-score(가중 Mom + Sharpe126) 랭킹 → 3-mom(30/72/230) 필터 → cap 1/3 + Cash
   - signal 생성은 recommend_personal.py 단계, executor 가 snap-based 3-tranche stagger 적용.
-  - 가드 없음.
+  - 가드 없음. 정본은 stock_strategy_v25.py 다.
 
 Coin V24: 1D 단일 멤버 D_SMA42 (live engine: trade/coin_live_engine.py)
   - D_SMA42: 1D봉, SMA42, Mom20/127, snap 217봉×7, drift_threshold=0.10
@@ -565,11 +569,11 @@ VERSION_HISTORY = [
 • <b>마진모드:</b> CROSS (V24 ISOLATED → V25 CROSS)
 • 가드 없음 · BT Cal 8.12 단독 sleeve · alloc 60/20/20 Cal 4.07 (5.8yr, 송금지연 5영업일)
 
-<b>▶ 주식 (V24 — snap-based stagger sd=69)</b>
-• <b>유니버스:</b> SPY, QQQ, VEA, EEM, EWJ, GLD, PDBC (7종, R7B)
-• <b>카나리:</b> EEM &gt; SMA300 (2.0% hysteresis)
-• <b>선정:</b> Z-score Top 3 (Mom + Sharpe126 합)
-• <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), EW 평균
+<b>▶ 주식 (V25 — snap-based stagger sd=69, 2026-05-29 도입)</b>
+• <b>유니버스:</b> SPY, QQQ, VEA, EEM, GLD, PDBC, VNQ (7종, R7)
+• <b>카나리:</b> EEM &gt; SMA200 (0.5% hysteresis)
+• <b>선정:</b> Z-score 랭킹(가중 Mom + Sharpe126) → 3-mom(30/72/230) 필터 → cap 1/3 + 현금
+• <b>스냅:</b> 69일 주기 × 3 snap 스태거 (23일 오프셋), 드리프트 5pp 발화일에도 교체
 • <b>가드:</b> 없음 (앙상블 분산 단독 방어)
 
 <b>▶ 자산배분:</b> 60/20/20 (주식계좌/현물/선물, 2026-11-01 갱신). 트리거: T1(ht≥25pp) OR T3U_can(max rel-under≥20% &amp; sleeve canary ON). 자산간 자동 rebal 제거 — 트리거 ON 시 텔레그램 알림만, 사용자 수동 송금. Per-sleeve cash buffer: stock 7% / spot 1% / fut 1% (total cash ≈ 5%)"""),
@@ -1027,8 +1031,16 @@ def calc_weighted_mom(s):
     return calc_ret(s, 252)
 
 def run_stock_strategy_v15(log, all_prices, target_date):
-    """V24 Stock Strategy: R7B universe (SPY/QQQ/VEA/EEM/EWJ/GLD/PDBC) + EEM SMA300 canary 2.0% + Z-score3(Sh126) EW + Defense Top2. 가드 없음 (앙상블 분산 단독 방어)."""
-    log.append("<h2>📈 주식 포트폴리오 분석 (V24: R7B + EEM SMA300 hyst2% + Zscore3 Sh126d, 가드 없음)</h2>")
+    """V25 주식 전략: R7 유니버스(SPY/QQQ/VEA/EEM/GLD/PDBC/VNQ) + EEM SMA200 카나리 0.5%
+    + Z-score 랭킹(가중 Mom + Sharpe126) → 3-mom(30/72/230) 필터 → cap 1/3 + 현금
+    + Defense. 가드 없음 (앙상블 분산 단독 방어).
+
+    함수 이름의 v15 는 옛 판본 표기다 — 실제 계산은 아래에서 stock_strategy_v25
+    모듈을 부른다. 이름을 바꾸지 않은 것은 시험이 그 이름으로 함수를 떼어 내
+    돌리기 때문이고(tests/test_stock_signal_failure_contract.py), 이름 변경은
+    신호 경로 리팩토링이라 이 자리에서 할 일이 아니다.
+    """
+    log.append("<h2>📈 주식 포트폴리오 분석 (V25: R7 + EEM SMA200 0.5% + Z-score 랭킹 + 3-mom 필터, 가드 없음)</h2>")
     eem = all_prices.get('EEM')
     # 계산 성공 여부를 meta 에 명시한다. 모드 이름 문자열로 되짚지 않는다 — 그 되짚기가
     # 계산 실패를 공격 국면의 전량 현금 목표로 둔갑시켰다(build_stock_signal_block 참조).
