@@ -41,6 +41,11 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target stock
 python3 strategies/cap_defend/run_current_stock_backtest.py
 ```
 
+이 스크립트는 V17 설정으로 돌고 화면에도 "V17" 로 찍힌다. 현행 V25 를 한 명령으로 재현하는
+진입점은 없다 — 라이브 신호는 `stock_strategy_v25.py` 순수함수로, 채택 근거 계산은
+`research/bt_stock_mom3.py` 그리드로 확인한다. 자세한 것은
+[stock_backtest_howto.md](./stock_backtest_howto.md).
+
 ### 선물
 
 데이터 갱신:

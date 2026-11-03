@@ -21,12 +21,24 @@ python3 refresh_backtest_data.py --target futures  # 선물 갱신
 ### 백테스트 실행
 
 ```bash
-python3 run_current_stock_backtest.py       # 주식 (전략 순수함수 stock_strategy_v25.py)
+python3 run_current_stock_backtest.py       # 주식 — V17 설정이다. 현행 V25 가 아니다(아래 "주식 V25 재현")
 python3 run_current_coin_v20_backtest.py    # 코인현물 — 라이브 MEMBERS import → 현재 V24 정의로 실행 (파일명만 v20)
 python3 backtest_futures_v25.py             # 선물 V25 (CROSS 청산 + 동적 L)
 ```
 
 코인현물 V24 정합 엔진은 `unified_backtest.py`(asset_type='spot'), 선물 V25 는 `backtest_futures_v25.py`.
+
+### 주식 V25 재현
+
+한 명령으로 V25 를 재현하는 진입점은 없다. `run_current_stock_backtest.py` 는 `CURRENT_V17`
+설정으로 돌고 화면에도 "V17" 로 찍힌다. 쓰는 엔진 `stock_engine.py` 의 설정 구조(`SP`)에
+V25 의 3-mom 필터·3트랜치(SNAP 69 / STAGGER 23)·drift 0.05·cap 1/3+Cash 가 아예 없어서
+값만 바꿔서 될 일이 아니다.
+
+- 라이브 신호 확인 — `stock_strategy_v25.py` 순수함수 (`recommend.py` 와 `executor_stock.py`
+  가 같은 함수를 부른다)
+- 채택 근거 계산 — `research/bt_stock_mom3.py` (3-mom 그리드, `bt_stock_window_rank.py` ·
+  `bt_stock_coin_v3.py` import). 단일 설정 러너가 아니라 창 순위합 그리드다.
 
 ---
 
@@ -49,7 +61,7 @@ python3 backtest_futures_v25.py             # 선물 V25 (CROSS 청산 + 동적 
 |------|------|
 | `run_current_coin_v20_backtest.py` | 코인현물 백테스트 (라이브 MEMBERS import → 현재 V24) |
 | `backtest_futures_v25.py` | 선물 V25 백테스트 |
-| `run_current_stock_backtest.py` | 주식 백테스트 |
+| `run_current_stock_backtest.py` | 주식 백테스트 — V17 설정. 현행 V25 진입점은 없다 |
 
 ### 데이터 관리
 
@@ -85,7 +97,9 @@ python3 backtest_futures_v25.py             # 선물 V25 (CROSS 청산 + 동적 
 
 ### 연구 파일
 
-[research/](./research/) — 최적화 스크립트, 실험 결과 파일. 공식 재현에는 불필요.
+[research/](./research/) — 최적화 스크립트, 실험 결과 파일. 코인현물·선물 재현에는 불필요하다.
+주식 V25 는 예외다 — 채택 근거 계산이 여기(`bt_stock_mom3.py` · `bt_stock_window_rank.py` ·
+`bt_stock_coin_v3.py`)에만 있다.
 
 ---
 

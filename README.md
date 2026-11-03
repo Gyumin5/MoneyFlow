@@ -47,7 +47,9 @@ python3 strategies/cap_defend/refresh_backtest_data.py --target futures
 ### 3. 백테스트 실행
 
 ```bash
-# 주식 V25 — 전략 순수함수는 stock_strategy_v25.py
+# 주식 — 이 스크립트는 V17 설정이다(화면에도 "V17" 로 찍힌다). 현행 V25 가 아니다.
+#   V25 를 그대로 재현하는 단일 진입점은 없다 — 채택 계산은 research/ 의 그리드 러너에 있다.
+#   아래 "주식 V25 재현" 절을 먼저 읽는다.
 python3 strategies/cap_defend/run_current_stock_backtest.py
 
 # 코인현물 V24 — unified_backtest.py(asset_type='spot')가 현행 엔진.
@@ -58,6 +60,20 @@ python3 strategies/cap_defend/run_current_coin_v20_backtest.py
 # 선물 V25 — CROSS 청산모델 + 동적 L
 python3 strategies/cap_defend/backtest_futures_v25.py
 ```
+
+### 3-1. 주식 V25 재현
+
+현행 주식 V25 를 한 명령으로 재현하는 진입점은 없다. 위 `run_current_stock_backtest.py` 는
+V17 설정(`CURRENT_V17`)으로 돌고, 쓰는 엔진 `stock_engine.py` 의 설정 구조에 V25 의 3-mom
+필터·3트랜치(69/23)·drift 0.05·cap 1/3+Cash 자체가 없다. 그대로 치면 V17 수치가 나온다.
+
+V25 를 확인하는 자리는 둘이다.
+
+- 라이브가 오늘 무엇을 고르나 — `strategies/cap_defend/stock_strategy_v25.py` 순수함수.
+  `recommend.py` 와 `executor_stock.py` 가 같은 함수를 부른다.
+- 채택 근거 계산 — `strategies/cap_defend/research/bt_stock_mom3.py`(3-mom 그리드,
+  `bt_stock_window_rank.py` · `bt_stock_coin_v3.py` 를 import). 단일 설정 러너가 아니라
+  그리드 전체를 창 순위합으로 줄세우는 스크립트다.
 
 ### 4. 연구 파이프라인
 
@@ -154,7 +170,7 @@ MoneyFlow/
 │   ├── stock_engine.py                주식 백테스트 엔진
 │   │
 │   │── 백테스트 진입점 ───────────────
-│   ├── run_current_stock_backtest.py  주식 백테스트 실행
+│   ├── run_current_stock_backtest.py  주식 백테스트 실행 (V17 설정 — 현행 V25 아님)
 │   ├── run_current_coin_v20_backtest.py 코인 백테스트 (라이브 MEMBERS import → V24)
 │   ├── run_current_futures_backtest.py 선물 백테스트 실행
 │   │
