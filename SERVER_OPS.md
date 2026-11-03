@@ -88,13 +88,21 @@ DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 �
 않았고 `~/bt_replay.log` 도 없어 한 번도 돈 적이 없다. 게다가 `strategies/cap_defend` 를 import 하는데
 서버에는 그 디렉토리가 없어 등록됐더라도 ImportError 로 죽는 구조였고, baseline 도 V24 고정 레버리지
 3배 시절 상수라 지금 돌리면 무조건 경보다. 스크립트를 지웠다.
-남는 공백은 세 슬리브 전부의 신호 수준 자동 감시다. (정정 2026-08-25: `v24_shadow_today.py` 가
-현물을 매일 본다고 적었던 건 사실이 아니다 — 그 스크립트는 어느 crontab 에도 없고 파라미터도
-V24 시절에서 멈춰 있다. 매일 도는 신호 감시는 어느 슬리브에도 없다.)
-대신 라이브 선정함수와 채택 BT 를 같은 가격으로 대조하는 기준선 하니스가 세 슬리브 모두 있다 —
-`strategies/cap_defend/research/parity_spot.py` · `parity_fut.py` · `parity_stock.py`(2026-08-25 신설).
-손으로 돌리는 것이고 상시 감시가 아니다. 이걸 매일 도는 감시로 올릴지, 입력 데이터 fingerprint 와
-버전 고정 회귀 테스트를 붙일지는 구현 비용이 있어 사용자 판단 대기 항목으로 `progress.md` 에 올려 뒀다.
+신호 수준 자동 감시는 선물과 주식에 있고 현물에는 없다. 집 크론 둘이 매일 돌고
+(09:20 `refresh`, 10:00 `parity`) 서버 `parity_watch.py` 가 11:40 에 그 영수증이 왔는지 본다.
+선물은 라이브 선정함수를 집에서 다시 돌려 최근 신호일을 대조하고, 주식은 서버가 실제로 낸
+`signal_state.json` 을 읽어 와 대조한다. 자동 회차가 보는 것은 이 둘뿐이다
+(`run_signal_parity.sh` 의 `for target in futures stock`).
+
+현물은 손으로 볼 때만 본다 — `--sleeve spotsnap` 이 현물 스냅 상태를 보고,
+`v24_shadow_today.py` 는 단발 도구라 어느 crontab 에도 없다. 그것을 "현물은 이미 본다" 로
+읽으면 안 된다. 라이브 선정함수와 채택 BT 를 같은 가격으로 대조하는 기준선 하니스는 세
+슬리브 모두 있다 — `strategies/cap_defend/research/parity_spot.py` · `parity_fut.py` ·
+`parity_stock.py`. 손으로 돌리는 것이고 상시 감시가 아니다.
+
+대조를 손으로 다시 돌릴 때는 반드시 `./trade/ops/run_signal_parity.sh parity` 로 부른다.
+`signal_parity_daily.py` 를 맨손으로 부르면 그날 로그도, 서버 영수증도, 나쁜 판정의 세션
+주입도 안 된다 — 집에서 고쳐 깨끗해져도 서버는 옛 영수증을 읽고 11:40 에 경보를 쏜다.
 
 설계 의도 (V24/V25 — 모든 자산 1D 단일)
 - 코인/선물은 D봉 닫힘 직후 09:05 동시 실행 (4h 멤버 제거, 1일 1회). bar-idempotency 로 같은 봉 중복 매매 방지
@@ -276,7 +284,9 @@ ssh ... 'fuser -k 8080/tcp; sleep 2; cd ~ && nohup python3 serve.py > http.log 2
 
 - API 키 (`config.py`): 절대 git 에 커밋 금지. .gitignore 등재 확인
 - ALLOWED_ORIGINS: trade_api_server 는 명시적 origin 만 허용
-- TRADE_PIN: 환경변수 `TRADE_PIN` 로 trade_api 보호 (실제값은 서버 crontab 에만, 문서·커밋 금지)
+- 인증은 `DASHBOARD_PIN` 하나다. `TRADE_PIN` 은 2026-07-21 에 폐지했다 — 다시 넣지 않는다.
+  모든 기동 경로가 `start_trade_api.sh` 를 거치고 그 스크립트가 env 의 단일 출처다.
+  하드코딩 재도입 금지, 실제값은 문서·채팅·커밋 어디에도 쓰지 않는다
 - serve.py: 화이트리스트 6개 HTML 만 서빙. HEAD 자동 404
 - ssh 접근: `~/.ssh/id_rsa` 키 기반. password 로그인 비활성
 
@@ -286,12 +296,3 @@ ssh ... 'fuser -k 8080/tcp; sleep 2; cd ~ && nohup python3 serve.py > http.log 2
 # 전체 헬스
 ssh -i ~/.ssh/id_rsa ubuntu@<서버주소> 'echo "==serve==" && curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/strategy.html; echo "==api==" && curl -s http://127.0.0.1:5000/health; echo "==signal age==" && python3 -c "import json,datetime as dt; t=json.load(open(\"/home/ubuntu/signal_state.json\"))[\"meta\"][\"updated_at\"]; print(t)"; echo "==watchdog tail==" && tail -3 ~/watchdog.log'
 ```
-
-## 8. 변경 이력
-
-- 2026-07-03 — 문서 stale 갱신: 제목/매뉴얼참조 V22→V25, cron 을 현행(코인/선물 09:05 매일·주식 23:35 평일, 4h 및 0~4시 retry 폐지)으로 정정, 상태파일 버전 표기(코인 V24/주식·선물 V25) 정정, TRADE_PIN 평문 제거.
-- 2026-05-28 — 선물 V25 도입 (동적 per-coin L + CROSSED 마진). 코인현물 V24 / 주식 V25 유지.
-- 2026-04-30 — V24 마이그레이션 (모든 자산 1D 단일 + drift trigger, cron 4h×6 → 1d×1).
-- 2026-04-29 — watchdog_serve.sh robust restart 패치 (SIGKILL fallback + fuser -k + 3회 실패 알림). 서버 좀비 케이스 자동 복구.
-- 2026-04-28 — V22 단일 표기 일괄 정리. recommend*.py, V17_OPERATION_MANUAL → V22_OPERATION_MANUAL 갱신.
-- 2026-04-27 — V22 마이그레이션 (코인/선물/주식 모두 1D+4h 2멤버 EW + 주식 snap-stagger).
