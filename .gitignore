@@ -87,3 +87,8 @@ proposed-progress.md
 history/active.md
 history/.active.md.lock
 data_research/
+
+# 보고서·세션 산출물은 추적하지 않는다 (2026-11-04 운영자 지시)
+# 이 저장소는 공개이고 보고서에는 계좌 금액이 들어간다. 파일은 그대로 두고 git 만 따라가지 않는다.
+reports/
+state/
