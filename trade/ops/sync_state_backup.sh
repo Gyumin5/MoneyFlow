@@ -15,7 +15,10 @@
 
 set -euo pipefail
 
-SERVER="${STATE_SYNC_SERVER:-ubuntu@<서버주소>}"
+# 주소는 저장소 밖 server.conf 에 있다 (공개 저장소라 추적하지 않는다)
+_CONF="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/server.conf"
+SERVER="${STATE_SYNC_SERVER:-$(grep -m1 "^SERVER=" "$_CONF" 2>/dev/null | cut -d= -f2-)}"
+if [ -z "${SERVER:-}" ]; then echo "운영 서버 주소를 찾지 못했다 — $_CONF 의 SERVER= 줄이나 환경변수 STATE_SYNC_SERVER 를 둔다" >&2; exit 2; fi
 KEY="${STATE_SYNC_KEY:-$HOME/.ssh/id_rsa}"
 REPO="${STATE_SYNC_REPO:-$HOME/moneyflow-config}"
 DEST="$REPO/state_backups/latest"

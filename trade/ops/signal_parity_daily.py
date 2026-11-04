@@ -59,7 +59,10 @@ sys.path.insert(0, os.path.join(_ROOT, 'trade'))
 # 적지 않고 그대로 부른다 — 옮겨 적으면 채택 근거와 감시가 서로 다른 코드가 된다.
 sys.path.insert(0, os.path.join(_ROOT, 'strategies', 'cap_defend', 'research'))
 
-SERVER = 'ubuntu@<서버주소>'
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+from server_target import get_server  # 주소는 저장소 밖 server.conf 에 있다
+SERVER = get_server()
 BT_START = '2020-10-01'
 
 # 백테스트 쪽에 넘길 선물 전략값은 여기서 따로 적지 않고 파라미터 대조표에서 가져온다.

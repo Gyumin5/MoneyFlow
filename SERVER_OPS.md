@@ -1,6 +1,6 @@
 # Server Operations — Cap Defend V25 (주식 V25 / 코인현물 V24 / 선물 V25)
 
-운영 서버: `<서버주소>`. 본 문서는 서버에서 실제로 도는 스크립트, cron, 헬스체크, 배포·복구 절차를 정리한다. 코드 truth 는 항상 서버 본 + 본 디렉토리(`trade/ops/`) 에 있고, 둘은 항상 일치해야 한다.
+운영 서버 주소는 저장소 루트의 `server.conf` 에 있다(git 미추적 — 이 저장소는 공개다). 아래 명령의 `$SERVER` 는 그 파일의 `SERVER=` 값이고, 스크립트는 `trade/ops/server_target.py` 로 읽는다. 본 문서는 서버에서 실제로 도는 스크립트, cron, 헬스체크, 배포·복구 절차를 정리한다. 코드 truth 는 항상 서버 본 + 본 디렉토리(`trade/ops/`) 에 있고, 둘은 항상 일치해야 한다.
 
 ## 1. 디렉토리 매핑
 
@@ -142,9 +142,9 @@ DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 �
 | signal 신선도 | `python3 -c "import json; print(json.load(open('signal_state.json'))['meta']['updated_at'])"` | 26시간 이내 |
 
 웹 접근
-- http://<서버주소>:8080/portfolio_result_gmoh.html (개인 포트폴리오)
-- http://<서버주소>:8080/portfolio_result.html (전체 포트폴리오)
-- http://<서버주소>:8080/strategy.html, /strategy_guide.html, /asset_dashboard.html
+- http://$HOST:8080/portfolio_result_gmoh.html (개인 포트폴리오)
+- http://$HOST:8080/portfolio_result.html (전체 포트폴리오)
+- http://$HOST:8080/strategy.html, /strategy_guide.html, /asset_dashboard.html
 
 `/v22_alloc_report.html` 은 2026-11-03 에 공개 목록에서 내렸다 — 2026-04-28 자 V22 세대
 보고서라 현행 자산배분(60/20/20)과 다른데 생성 코드가 없어 고칠 길이 없었다. 서버 파일
@@ -157,7 +157,7 @@ DASHBOARD_PIN 단일). 비밀값은 문서·채팅·커밋 어디에도 쓰지 �
 
 표준 절차
 1. 로컬 수정 + 문법/단위 테스트
-2. `scp -i ~/.ssh/id_rsa <local> ubuntu@<서버주소>:/home/ubuntu/<remote>`
+2. `scp -i ~/.ssh/id_rsa <local> $SERVER:/home/ubuntu/<remote>`
 3. 영향 영역 헬스체크 (위 표)
 4. API 서버 변경 시 재시작 (2026-07-21 인증 env 단일출처화 이후 — env 를 손으로 export 하지 않는다):
    ```
@@ -322,5 +322,5 @@ ssh ... 'fuser -k 8080/tcp; sleep 2; cd ~ && nohup python3 serve.py > http.log 2
 
 ```bash
 # 전체 헬스
-ssh -i ~/.ssh/id_rsa ubuntu@<서버주소> 'echo "==serve==" && curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/strategy.html; echo "==api==" && curl -s http://127.0.0.1:5000/health; echo "==signal age==" && python3 -c "import json,datetime as dt; t=json.load(open(\"/home/ubuntu/signal_state.json\"))[\"meta\"][\"updated_at\"]; print(t)"; echo "==watchdog tail==" && tail -3 ~/watchdog.log'
+ssh -i ~/.ssh/id_rsa $SERVER 'echo "==serve==" && curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080/strategy.html; echo "==api==" && curl -s http://127.0.0.1:5000/health; echo "==signal age==" && python3 -c "import json,datetime as dt; t=json.load(open(\"/home/ubuntu/signal_state.json\"))[\"meta\"][\"updated_at\"]; print(t)"; echo "==watchdog tail==" && tail -3 ~/watchdog.log'
 ```

@@ -36,7 +36,10 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-SERVER = 'ubuntu@<서버주소>'
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+from server_target import get_server  # 주소는 저장소 밖 server.conf 에 있다
+SERVER = get_server()
 SERVER_KEY = '/home/gmoh/.ssh/id_rsa'
 REMOTE_ROOT = '/home/ubuntu/state_backups'
 

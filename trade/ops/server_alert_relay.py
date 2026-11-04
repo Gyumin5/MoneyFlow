@@ -28,7 +28,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SEEN_PATH = os.path.join(REPO, 'state', 'server-alert-relay', 'seen.json')
 SEND = '/home/gmoh/dotfiles/bin/claude-userbot-send'
 SESSION = '251229'
-SERVER = 'ubuntu@<서버주소>'
+import sys as _sys, pathlib as _pl
+_sys.path.insert(0, str(_pl.Path(__file__).resolve().parent))
+from server_target import get_server  # 주소는 저장소 밖 server.conf 에 있다
+SERVER = get_server()
 SERVER_KEY = '/home/gmoh/.ssh/id_rsa'
 REMOTE_PATH = '/home/ubuntu/server_alerts.jsonl'
 
