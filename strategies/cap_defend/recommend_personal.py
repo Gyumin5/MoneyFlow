@@ -106,6 +106,26 @@ def send_telegram(msg, button_text=None, button_url=None):
     except Exception:
         return '실패'
 
+
+def _log_relay(source: str, text: str, sent: bool) -> None:
+    """집 중계기가 읽을 자리에 같은 글을 남긴다 (2026-11-07 운영자 지시).
+
+    왜 있나. 일간 리포트는 서버 자기 텔레그램 봇으로 운영자에게만 간다. 그래서 그 안의
+    조회 실패(예: 주식 계좌 403)를 집 세션이 못 보고, 운영자가 옮겨 적어야 알았다.
+    보낼 때 같은 글을 server_alerts.jsonl 에 한 줄 적으면 집 중계기(10분마다)가 세션에
+    넣는다. 서버 통로는 그대로 두고 중계는 덤이다.
+
+    적기가 실패해도 리포트 자체는 건드리지 않는다 — 모든 예외를 삼킨다.
+    """
+    try:
+        if '/home/ubuntu' not in sys.path:
+            sys.path.insert(0, '/home/ubuntu')
+        import server_alert_log
+        server_alert_log.record(source, text, sent=sent)
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
 # --- Configuration for Auto Turnover ---
 # Try local config.py first (remote server), then ../../config/upbit.py (local dev)
 ACCESS_KEY = ""
@@ -3337,6 +3357,7 @@ if __name__ == "__main__":
             print("⚠️ 텔레그램 일간 리포트 접수 확인 불가 (시간 초과)")
         else:
             print("🚨 텔레그램 일간 리포트 전송 실패")
+        _log_relay('daily_report', summary, sent=(_tg_sum == '접수'))
     except Exception as e:
         print(f"⚠️ 텔레그램 리포트 전송 실패: {e}")
 

@@ -74,9 +74,17 @@ def pick_new(records: list, seen_ids, now: datetime) -> list:
     return fresh[:MAX_PER_RUN]
 
 
+LABELS = {'daily_report': '일간 리포트 중계'}
+
+
 def compose(row: dict) -> str:
-    """세션에 넣을 글. 어디서 왔는지와 운영자가 이미 받았는지를 같이 적는다."""
-    head = f"[서버 경보 중계] {row.get('source', '?')} · {row.get('ts', '?')}"
+    """세션에 넣을 글. 어디서 왔는지와 운영자가 이미 받았는지를 같이 적는다.
+
+    머리말은 출처에 따라 가른다 — 매일 오는 일간 리포트를 "경보" 라고 적으면 세션이
+    매일 사고가 난 것으로 읽는다.
+    """
+    label = LABELS.get(row.get('source', ''), '서버 경보 중계')
+    head = f"[{label}] {row.get('source', '?')} · {row.get('ts', '?')}"
     tail = ('운영자는 서버 봇으로 이미 같은 글을 받았다.' if row.get('sent')
             else '서버 봇 전송은 실패했다 — 운영자는 이 글을 못 봤다.')
     return f"{head}\n{row.get('text', '')}\n\n{tail}"
