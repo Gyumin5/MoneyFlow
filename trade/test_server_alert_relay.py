@@ -108,6 +108,13 @@ check('주식 불일치' in sent_text, '6: 본문이 안 들어갔다')
 check('parity_watch' in sent_text, '6: 출처가 안 들어갔다')
 check('이미 같은 글을 받았다' in sent_text, '6: 운영자가 받았다는 표시가 없다')
 check('못 봤다' in unsent_text, '6: 운영자가 못 봤다는 표시가 없다')
+check('서버 경보 중계' in sent_text, '6: 경보 머리말이 아니다')
+
+# 6b. 머리말은 출처에 따라 가른다 — 매일 오는 일간 리포트를 경보라고 적으면
+#     세션이 매일 사고가 난 것으로 읽는다.
+report_text = rel.compose(row('b', now, '일간 리포트 (2026-11-07)', source='daily_report'))
+check('일간 리포트 중계' in report_text, '6b: 리포트 머리말이 안 갈렸다')
+check('서버 경보 중계' not in report_text, '6b: 리포트에 경보 머리말이 붙었다')
 
 # 7. 못 넣은 것은 본 것으로 치지 않는다 — 다음 회차에 다시 집는다.
 #    망도 ssh 도 안 탄다. 서버 읽기와 주입을 함수째 갈아끼우고 표식은 임시 파일로 돌린다.
